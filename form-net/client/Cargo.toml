@@ -16,7 +16,7 @@ repository = "https://github.com/tonarino/innernet"
 version = "1.6.1"
 
 [[bin]]
-name = "innernet"
+name = "formnet-client"
 path = "src/main.rs"
 
 [dependencies]
