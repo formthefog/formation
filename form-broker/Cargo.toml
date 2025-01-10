@@ -1,0 +1,18 @@
+[package]
+name = "conductor"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+serde = { version = "1.0.203", features = ["derive"] } 
+serde_json = "1.0.117"
+tokio = { version = "1.38.0", features = ["full"] }
+bytes = "1.6.0"
+async-trait = "0.1.80"
+log = "0.4"
+
+[[example]]
+name = "main"
+path = "examples/main.rs"

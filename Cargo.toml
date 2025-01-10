@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "form-broker",
   "form-vmm/api_client",
   "form-vmm/arch",
   "form-vmm/block",

@@ -2133,6 +2133,18 @@ dependencies = [
 [[package]]
 name = "conductor"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "log",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "conductor"
+version = "0.1.0"
 source = "git+https://github.com/versatus/conductor#187f52c26f1fe1075217a7245463f7bdb4644624"
 dependencies = [
  "async-trait",
@@ -2931,7 +2943,7 @@ dependencies = [
  "alloy 0.1.4",
  "base64 0.22.1",
  "chrono",
- "conductor",
+ "conductor 0.1.0 (git+https://github.com/versatus/conductor)",
  "form-traits",
  "form-types",
  "getset",
@@ -2959,7 +2971,7 @@ version = "0.1.0"
 dependencies = [
  "alloy 0.1.4",
  "async-trait",
- "conductor",
+ "conductor 0.1.0 (git+https://github.com/versatus/conductor)",
  "tokio",
  "tokio-serde",
 ]
@@ -2970,7 +2982,7 @@ version = "0.1.0"
 dependencies = [
  "alloy 0.1.4",
  "async-trait",
- "conductor",
+ "conductor 0.1.0 (git+https://github.com/versatus/conductor)",
  "derive_more 0.99.18",
  "form-traits",
  "log",
@@ -2988,7 +3000,7 @@ dependencies = [
  "api_client",
  "async-trait",
  "clap",
- "conductor",
+ "conductor 0.1.0 (git+https://github.com/versatus/conductor)",
  "dhat",
  "dialoguer 0.11.0",
  "dirs",
@@ -3046,7 +3058,7 @@ dependencies = [
  "bincode",
  "clap",
  "client",
- "conductor",
+ "conductor 0.1.0 (git+https://github.com/versatus/conductor)",
  "form-types",
  "formnet-server",
  "hex",
@@ -7893,7 +7905,7 @@ dependencies = [
  "bytes",
  "clap",
  "clap_derive",
- "conductor",
+ "conductor 0.1.0 (git+https://github.com/versatus/conductor)",
  "dialoguer 0.11.0",
  "form-types",
  "formnet",
