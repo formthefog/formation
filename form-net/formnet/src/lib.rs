@@ -8,7 +8,7 @@ use shared::{interface_config::ServerInfo, Cidr, CidrTree, Hostname, Peer, PeerC
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, sync::broadcast::Receiver};
 use wireguard_control::{Backend, Device, DeviceUpdate, InterfaceName, KeyPair, PeerConfigBuilder};
 use client::{data_store::DataStore, nat::{self, NatTraverse}, util::{self, all_installed, Api}};
-use innernet_server::{
+use formnet_server::{
     add_cidr, initialize::{create_database, populate_database, DbInitData, InitializeOpts}, open_database_connection, ConfigFile, DatabaseCidr, DatabasePeer, ServerConfig
 };
 use shared::wg::DeviceExt; 
@@ -455,7 +455,7 @@ async fn handle_join_request_from_admin_client(
             Err(e) => {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(JoinResponse::Error(format!("Failed to acquire config for innernet server: {}", e)))
+                    Json(JoinResponse::Error(format!("Failed to acquire config for formnet server: {}", e)))
                 )
             }
         }
@@ -469,7 +469,7 @@ async fn handle_join_request_from_admin_client(
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(JoinResponse::Error(format!("Failed to acquire CIDR list for innernet network: {e}")))
+                Json(JoinResponse::Error(format!("Failed to acquire CIDR list for formnet network: {e}")))
             )
         }
     };
@@ -479,7 +479,7 @@ async fn handle_join_request_from_admin_client(
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(JoinResponse::Error(format!("Failed to acquire Peer list for innernet network: {e}")))
+                Json(JoinResponse::Error(format!("Failed to acquire Peer list for formnet network: {e}")))
             )
         }
     };
@@ -519,7 +519,7 @@ async fn handle_join_request_from_admin_client(
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(JoinResponse::Error(format!("Failed to add peer to innernet: {e}")))
+                Json(JoinResponse::Error(format!("Failed to add peer to formnet: {e}")))
             )
         }
     }
@@ -752,7 +752,7 @@ fn fetch(
     }
     match api.http_form::<_, ()>("PUT", "/user/candidates", &candidates) {
         Err(ureq::Error::Status(404, _)) => {
-            log::warn!("your network is using an old version of innernet-server that doesn't support NAT traversal candidate reporting.")
+            log::warn!("your network is using an old version of formnet-server that doesn't support NAT traversal candidate reporting.")
         },
         Err(e) => return Err(e.into()),
         _ => {},
@@ -788,7 +788,7 @@ fn update_hosts_file(
     hosts_path: PathBuf,
     peers: &[Peer],
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-    let mut hosts_builder = HostsBuilder::new(format!("innernet {interface}"));
+    let mut hosts_builder = HostsBuilder::new(format!("formnet {interface}"));
     for peer in peers {
         hosts_builder.add_hostname(
             peer.contents.ip,

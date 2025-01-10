@@ -1,11 +1,10 @@
 //! A service to create and run innernet behind the scenes
 use clap::Parser;
-use innernet_server::initialize::InitializeOpts;
+use formnet_server::{serve, uninstall, ServerConfig, initialize::InitializeOpts};
 use reqwest::Client;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
-use innernet_server::{serve, uninstall, ServerConfig};
 use shared::interface_config::InterfaceConfig;
 use shared::{Cidr, CidrTree, NetworkOpts, Peer};
 use tokio::{net::TcpListener, sync::broadcast::Receiver};
@@ -268,7 +267,7 @@ async fn handle_message(
     Ok(())
 }
 
-// Create innernet from CLI, Config or Wizard 
+// Create formnet from CLI, Config or Wizard 
 // If done via wizard save to file
 // Listen for messages on topic "Network" from broker
 // Handle messages
