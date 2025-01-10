@@ -2133,18 +2133,6 @@ dependencies = [
 [[package]]
 name = "conductor"
 version = "0.1.0"
-dependencies = [
- "async-trait",
- "bytes",
- "log",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "conductor"
-version = "0.1.0"
 source = "git+https://github.com/versatus/conductor#187f52c26f1fe1075217a7245463f7bdb4644624"
 dependencies = [
  "async-trait",
@@ -2937,13 +2925,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
 
 [[package]]
+name = "form-broker"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "log",
+ "serde",
+ "serde_json",
+ "simple_logger 4.3.3",
+ "tokio",
+]
+
+[[package]]
 name = "form-p2p"
 version = "0.1.0"
 dependencies = [
  "alloy 0.1.4",
  "base64 0.22.1",
  "chrono",
- "conductor 0.1.0 (git+https://github.com/versatus/conductor)",
+ "conductor",
  "form-traits",
  "form-types",
  "getset",
@@ -2971,7 +2972,7 @@ version = "0.1.0"
 dependencies = [
  "alloy 0.1.4",
  "async-trait",
- "conductor 0.1.0 (git+https://github.com/versatus/conductor)",
+ "conductor",
  "tokio",
  "tokio-serde",
 ]
@@ -2982,7 +2983,7 @@ version = "0.1.0"
 dependencies = [
  "alloy 0.1.4",
  "async-trait",
- "conductor 0.1.0 (git+https://github.com/versatus/conductor)",
+ "conductor",
  "derive_more 0.99.18",
  "form-traits",
  "log",
@@ -3000,7 +3001,7 @@ dependencies = [
  "api_client",
  "async-trait",
  "clap",
- "conductor 0.1.0 (git+https://github.com/versatus/conductor)",
+ "conductor",
  "dhat",
  "dialoguer 0.11.0",
  "dirs",
@@ -3058,7 +3059,7 @@ dependencies = [
  "bincode",
  "clap",
  "client",
- "conductor 0.1.0 (git+https://github.com/versatus/conductor)",
+ "conductor",
  "form-types",
  "formnet-server",
  "hex",
@@ -7905,7 +7906,7 @@ dependencies = [
  "bytes",
  "clap",
  "clap_derive",
- "conductor 0.1.0 (git+https://github.com/versatus/conductor)",
+ "conductor",
  "dialoguer 0.11.0",
  "form-types",
  "formnet",
