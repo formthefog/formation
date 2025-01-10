@@ -1,0 +1,20 @@
+[package]
+authors = ["Jake McGinty <me@jakebot.org>"]
+categories = ["os::unix-apis"]
+description = "A helper to perform requests using the Linux netlink interface"
+edition = "2021"
+license = "MIT"
+name = "netlink-request"
+readme = "README.md"
+repository = "https://github.com/tonarino/innernet"
+publish = true
+version = "1.6.1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+netlink-sys = "0.8.5"
+netlink-packet-core = "0.7"
+netlink-packet-generic = "0.3.3"
+netlink-packet-route = "0.21"
+netlink-packet-utils = "0.5.2"
+nix = { version = "0.25", features = ["feature"] }
+once_cell = "1"

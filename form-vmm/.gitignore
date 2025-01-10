@@ -1,0 +1,15 @@
+/build
+/.cargo
+/target
+**/*.rs.bk
+**/Cargo.lock
+**/rusty-tags.vi
+/rpm/SOURCES
+/.vscode
+/vendor
+/tags
+/vm-images
+user-data
+meta-data
+create-cloud-init.sh
+/linux-cloud-hypervisor

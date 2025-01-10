@@ -1,0 +1,8 @@
+[package]
+authors = ["Jake McGinty <me@jakebot.org>"]
+edition = "2021"
+name = "publicip"
+publish = false
+version = "0.1.0"
+
+[dependencies]

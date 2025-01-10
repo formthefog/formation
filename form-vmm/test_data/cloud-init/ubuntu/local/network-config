@@ -1,0 +1,7 @@
+version: 2
+ethernets:
+  ens4:
+    match:
+       macaddress: 12:34:56:78:90:ab
+    addresses: [10.99.128.44/16]
+    gateway4: 10.99.128.1 
