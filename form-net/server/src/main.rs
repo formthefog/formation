@@ -6,7 +6,7 @@ use shared::{
 };
 use std::{env, path::PathBuf};
 
-use innernet_server::{
+use formnet_server::{
     add_cidr, add_peer, delete_cidr, enable_or_disable_peer,
     initialize::{self, InitializeOpts},
     rename_cidr, rename_peer, serve, uninstall, ServerConfig,
