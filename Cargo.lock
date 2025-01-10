@@ -2133,7 +2133,7 @@ dependencies = [
 [[package]]
 name = "conductor"
 version = "0.1.0"
-source = "git+https://github.com/versatus/conductor#187f52c26f1fe1075217a7245463f7bdb4644624"
+source = "git+https://github.com/versatus/conductor.git#187f52c26f1fe1075217a7245463f7bdb4644624"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3048,9 +3048,9 @@ dependencies = [
  "client",
  "conductor",
  "form-types",
+ "formnet-server",
  "hex",
  "hostsfile",
- "innernet-server",
  "ipnet",
  "log",
  "log4rs",
@@ -3064,6 +3064,41 @@ dependencies = [
  "simple_logger 5.0.0",
  "tokio",
  "ureq 2.12.1",
+ "wireguard-control",
+]
+
+[[package]]
+name = "formnet-server"
+version = "1.6.1"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "clap",
+ "clap_complete",
+ "colored",
+ "dialoguer 0.10.4",
+ "hyper 0.14.32",
+ "indoc",
+ "ipnet",
+ "libc",
+ "libsqlite3-sys",
+ "log",
+ "once_cell",
+ "parking_lot 0.12.3",
+ "pretty_env_logger",
+ "publicip",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "shared",
+ "socket2",
+ "subtle",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "toml 0.8.19",
+ "url 2.5.4",
  "wireguard-control",
 ]
 
@@ -3946,41 +3981,6 @@ name = "indoc"
 version = "2.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b248f5224d1d606005e02c97f5aa4e88eeb230488bcc03bc9ca4d7991399f2b5"
-
-[[package]]
-name = "innernet-server"
-version = "1.6.1"
-dependencies = [
- "anyhow",
- "bytes",
- "clap",
- "clap_complete",
- "colored",
- "dialoguer 0.10.4",
- "hyper 0.14.32",
- "indoc",
- "ipnet",
- "libc",
- "libsqlite3-sys",
- "log",
- "once_cell",
- "parking_lot 0.12.3",
- "pretty_env_logger",
- "publicip",
- "regex",
- "rusqlite",
- "serde",
- "serde_json",
- "shared",
- "socket2",
- "subtle",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "toml 0.8.19",
- "url 2.5.4",
- "wireguard-control",
-]
 
 [[package]]
 name = "instant"
