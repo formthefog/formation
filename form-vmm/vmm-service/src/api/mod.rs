@@ -305,6 +305,7 @@ async fn delete(
     };
 
     let _ = request_receive::<()>(channel, event).await?;
+
     Ok(Json(VmResponse {
         id: request.id, 
         name: request.name,
@@ -326,9 +327,10 @@ async fn get_vm(
     request_receive(channel, event).await
 }
 async fn list(
-    Json(request): Json<ListRequest>,
+    Json(_request): Json<ListRequest>,
     State(channel): State<Arc<Mutex<VmmApiChannel>>>,
 ) -> Result<Json<Vec<VmInfo>>, String> {
+
     let event = VmmEvent::GetList {
         requestor: "test".to_string(),
         recovery_id: 0
@@ -356,13 +358,13 @@ async fn request_receive<T: DeserializeOwned>(
     event: VmmEvent,
 ) -> Result<Json<T>, String> {
     let mut channel = channel.lock().await; 
-    channel.send(event).await.map_err(|e| e.to_string())?;
+    channel.send(event.clone()).await.map_err(|e| e.to_string())?;
     tokio::select! {
         Some(resp) = channel.recv() => {
             Ok(Json(resp))
         }
         _ = tokio::time::sleep(Duration::from_secs(5)) => {
-            Err("Ping request timed out awaiting response".to_string())
+            Err(format!("Request {event:?} timed out awaiting response"))
         }
     }
 }

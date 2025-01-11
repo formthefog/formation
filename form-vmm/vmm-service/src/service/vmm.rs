@@ -21,6 +21,7 @@ use seccompiler::SeccompAction;
 use tokio::task::JoinHandle;
 use form_types::{FormnetMessage, FormnetTopic, GenericPublisher, PeerType, VmmEvent, VmmSubscriber};
 use form_broker::{subscriber::SubStream, publisher::PubStream};
+use futures::future::join_all;
 use crate::{api::VmmApi, util::ensure_directory};
 use crate::util::add_tap_to_bridge;
 use crate::ChError;
@@ -690,7 +691,31 @@ impl VmManager {
                 self.delete(id).await?;
             }
             VmmEvent::Get { id, .. } => {
-                self.info(id).await?;
+                let resp = serde_json::to_string(&self.info(id).await?)?;
+                self.api_response_sender.send(
+                    resp
+                ).await?;
+            }
+            VmmEvent::GetList { .. } => {
+                let resp_futures = join_all(self.vm_monitors.iter().map(|(_id, vmm)| async {
+                    vmm.api.info().await
+                }).collect::<Vec<_>>()).await;
+                let resp = resp_futures.iter().filter_map(|info| {
+                    match info {
+                        Ok(ApiResponse::Success { code: _, content }) => {
+                            match content {
+                                Some(content) => Some(content.clone()),
+                                None => None
+                            }
+                        }
+                        _ => None
+                    }
+                }).collect::<Vec<_>>();
+
+                let resp = serde_json::to_string(&resp)?;
+                self.api_response_sender.send(
+                    resp
+                ).await?;
             }
             _ => {}
             
