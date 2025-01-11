@@ -1,12 +1,14 @@
 //! A service to create and run innernet behind the scenes
 use clap::Parser;
 use formnet_server::{serve, uninstall, ServerConfig, initialize::InitializeOpts};
+use ipnet::IpNet;
 use reqwest::Client;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 use shared::interface_config::InterfaceConfig;
-use shared::{Cidr, CidrTree, NetworkOpts, Peer};
+use shared::{Cidr, CidrTree, Endpoint, Interface, NetworkOpts, Peer};
 use tokio::{net::TcpListener, sync::broadcast::Receiver};
 use wireguard_control::{Backend, InterfaceName};
 use client::util::Api;
@@ -19,9 +21,15 @@ use formnet::*;
 #[derive(Debug, Parser)]
 struct Opts {
     #[arg(short, long, alias="bootstrap")]
-    dial: Option<String>,
+    to_dial: Option<String>,
     #[arg(short, long)]
     public_key: Option<String>,
+    #[arg(short, long, alias="port", default_value="51820")]
+    listen_port: u16,
+    #[arg(short, long, alias="addr")]
+    ip_addr: Option<String>,
+    #[arg(short, long, alias="url")]
+    domain: Option<String>
 }
 
 #[tokio::main]
@@ -32,11 +40,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
     let parser = Opts::parse();
     log::info!("{parser:?}");
 
-    let interface_handle = if let Some(to_dial) = parser.dial {
+    let interface_handle = if let Some(to_dial) = parser.to_dial {
         // A bootstrap node was provided, request that the 
         // new operator (local) be added to the network
         // as a peer.
         let client = Client::new();
+        //TODO: write keypair to file to save for later use
         let public_key = if let Some(ref pk) = parser.public_key {
             pk.clone()
         } else {
@@ -101,13 +110,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
     } else {
         // No bootstrap was provided create and serve formnet as server
         log::info!("Attempting to start formnet server, no bootstrap provided...");
+        
         let handle = tokio::spawn(async move {
             log::info!("Building server config...");
             let conf = ServerConfig { config_dir: SERVER_CONFIG_DIR.into(), data_dir: SERVER_DATA_DIR.into() };
             log::info!("Building init options...");
-            let init_opts = InitializeOpts::default(); 
+            let mut init_opts = InitializeOpts::default(); 
+            if let Some(ip_addr) = parser.ip_addr {
+                let addr: SocketAddr = format!("{ip_addr}:{}", parser.listen_port).parse()?;
+                init_opts.external_endpoint = Some(Endpoint::from(addr));
+                init_opts.listen_port = Some(parser.listen_port);
+                init_opts.auto_external_endpoint = false;
+            } else if let Some(domain_name) = parser.domain {
+                init_opts.external_endpoint = 
+                    Some(
+                        Endpoint::from_str(&format!("{domain_name}:{}", parser.listen_port))?
+                    );
+                init_opts.listen_port = Some(parser.listen_port);
+                init_opts.auto_external_endpoint = false;
+            } else {
+                init_opts.auto_external_endpoint = true;
+            }
+            let network_cidr = Some(
+                IpNet::V4("10.0.0.0/8".parse()?)
+            );
+            init_opts.network_cidr = network_cidr;
             log::info!("Acquiring interface name...");
             let interface_name = InterfaceName::from_str("formnet")?;
+            init_opts.network_name = Some(Interface::from(interface_name)); 
             log::info!("Building network opts...");
             let network_opts = NetworkOpts {
                 backend: Backend::Kernel,

@@ -30,6 +30,18 @@ pub struct Interface {
     name: InterfaceName,
 }
 
+impl From<InterfaceName> for Interface {
+    fn from(name: InterfaceName) -> Self {
+        Self { name } 
+    }
+}
+
+impl From<&InterfaceName> for Interface {
+    fn from(name: &InterfaceName) -> Self {
+        Self { name: *name }
+    }
+}
+
 impl FromStr for Interface {
     type Err = InvalidInterfaceName;
 

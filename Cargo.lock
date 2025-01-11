@@ -2925,6 +2925,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
 
 [[package]]
+name = "form-broker"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "log",
+ "serde",
+ "serde_json",
+ "simple_logger 4.3.3",
+ "tokio",
+]
+
+[[package]]
 name = "form-p2p"
 version = "0.1.0"
 dependencies = [
@@ -2970,8 +2983,8 @@ version = "0.1.0"
 dependencies = [
  "alloy 0.1.4",
  "async-trait",
- "conductor",
  "derive_more 0.99.18",
+ "form-broker",
  "form-traits",
  "log",
  "serde",
@@ -3064,6 +3077,7 @@ dependencies = [
  "simple_logger 5.0.0",
  "tokio",
  "ureq 2.12.1",
+ "url 2.5.4",
  "wireguard-control",
 ]
 
@@ -7893,8 +7907,8 @@ dependencies = [
  "bytes",
  "clap",
  "clap_derive",
- "conductor",
  "dialoguer 0.11.0",
+ "form-broker",
  "form-types",
  "formnet",
  "futures",

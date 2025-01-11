@@ -10,30 +10,24 @@ use hyperlocal::{UnixConnector, UnixClientExt, Uri};
 use serde::{Serialize, Deserialize, de::DeserializeOwned};
 use shared::interface_config::InterfaceConfig;
 use tokio::net::TcpListener;
-use std::sync::Arc;
 use libc::EFD_NONBLOCK;
-use tokio::io::unix::AsyncFd;
 use tokio::io::AsyncReadExt;
-use conductor::publisher::PubStream;
 use tokio::sync::mpsc;
 use tokio::sync::broadcast;
 use vmm_sys_util::signal::block_signal;
-use std::sync::mpsc::Sender;
-use vmm::{api::{ApiAction, ApiRequest, VmAddDevice, VmAddUserDevice, VmCoredumpData, VmCounters, VmInfo, VmReceiveMigrationData, VmRemoveDevice, VmResize, VmResizeZone, VmSendMigrationData, VmSnapshotConfig, VmmPingResponse}, config::RestoreConfig, vm_config::{DiskConfig, FsConfig, NetConfig, PmemConfig, VdpaConfig, VsockConfig}, PciDeviceInfo, VmmThreadHandle};
+use vmm::{api::{VmAddDevice, VmAddUserDevice, VmCoredumpData, VmCounters, VmInfo, VmReceiveMigrationData, VmRemoveDevice, VmResize, VmResizeZone, VmSendMigrationData, VmSnapshotConfig, VmmPingResponse}, config::RestoreConfig, vm_config::{DiskConfig, FsConfig, NetConfig, PmemConfig, VdpaConfig, VsockConfig}, PciDeviceInfo, VmmThreadHandle};
 use vmm_sys_util::eventfd::EventFd;
 use seccompiler::SeccompAction;
 use tokio::task::JoinHandle;
-use tokio::sync::Mutex;
-use form_types::{FormnetMessage, FormnetTopic, GenericPublisher, PeerType, VmmEvent};
+use form_types::{FormnetMessage, FormnetTopic, GenericPublisher, PeerType, VmmEvent, VmmSubscriber};
+use form_broker::{subscriber::SubStream, publisher::PubStream};
 use crate::{api::VmmApi, util::ensure_directory};
 use crate::util::add_tap_to_bridge;
 use crate::ChError;
-use crate::VmRuntime;
-use crate::VmState;
 use crate::{
     error::VmmError,
     config::create_vm_config,
-    instance::{config::VmInstanceConfig, manager::{InstanceManager, VmInstance}},
+    instance::config::VmInstanceConfig,
     ServiceConfig,
 };
 
@@ -367,21 +361,24 @@ impl FormVmApi {
 
 pub struct VmManager {
     // We need to stash threads & socket paths
-    config: ServiceConfig,
+    pub config: ServiceConfig,
     vm_monitors: HashMap<String, FormVmm>, 
     server: JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>>,
     tap_counter: u32,
     formnet_endpoint: String,
-    api_response_sender: tokio::sync::mpsc::Sender<String>
-    // Add subscriber to message broker
+    api_response_sender: tokio::sync::mpsc::Sender<String>,
+    subscriber: Option<VmmSubscriber>,
+    publisher_addr: Option<String>
 }
 
 impl VmManager {
-    pub fn new(
+    pub async fn new(
         event_sender: tokio::sync::mpsc::Sender<VmmEvent>,
         addr: SocketAddr,
         config: ServiceConfig,
         formnet_endpoint: String,
+        subscriber_uri: Option<&str>,
+        publisher_addr: Option<String>
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync + 'static>> {
         let (resp_tx, resp_rx) = tokio::sync::mpsc::channel(1024);
         let server = tokio::task::spawn(async move {
@@ -389,13 +386,27 @@ impl VmManager {
             server.start().await?;
             Ok::<(), Box<dyn std::error::Error + Send + Sync + 'static>>(())
         });
+
+        let subscriber = if let Some(uri) = subscriber_uri {
+            let subscriber = if let Ok(subscriber) = VmmSubscriber::new(uri).await {
+                Some(subscriber)
+            } else {
+                None
+            };
+            subscriber
+        } else {
+            None
+        };
+
         Ok(Self {
             config,
             vm_monitors: HashMap::new(),
             server, 
             tap_counter: 0,
             formnet_endpoint,
-            api_response_sender: resp_tx 
+            api_response_sender: resp_tx,
+            subscriber,
+            publisher_addr
         })
     }
 
@@ -580,17 +591,53 @@ impl VmManager {
         mut shutdown_rx: broadcast::Receiver<()>,
         mut api_rx: mpsc::Receiver<VmmEvent>
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-        loop {
-            tokio::select! {
-                res = shutdown_rx.recv() => {
-                    match res {
-                        Ok(()) => log::warn!("Received shutdown signal, shutting VmManager down"),
-                        Err(e) => log::error!("Received error from shutdown signal: {e}")
+        if let Some(mut subscriber) = self.subscriber.take() {
+            loop {
+                tokio::select! {
+                    res = shutdown_rx.recv() => {
+                        match res {
+                            Ok(()) => {
+                                log::warn!("Received shutdown signal, shutting VmManager down");
+                                self.server.abort();
+                                let _ = self.server.await;
+                            }
+                            Err(e) => log::error!("Received error from shutdown signal: {e}")
+                        }
+                        break;
                     }
-                    break;
+                    Some(event) = api_rx.recv() => {
+                        if let Err(e) = self.handle_vmm_event(&event).await {
+                            log::error!("Error while handling event: {event:?}: {e}"); 
+                        }
+                    }
+                    Ok(events) = subscriber.receive() => {
+                        for event in events {
+                            if let Err(e) = self.handle_vmm_event(&event).await {
+                                log::error!("Error while handling event: {event:?}: {e}");
+                            }
+                        }
+                    }
                 }
-                Some(event) = api_rx.recv() => {
-                    self.handle_vmm_event(event).await?;
+            }
+        } else {
+            loop {
+                tokio::select! {
+                    res = shutdown_rx.recv() => {
+                        match res {
+                            Ok(()) => {
+                                log::warn!("Received shutdown signal, shutting VmManager down");
+                                self.server.abort();
+                                let _ = self.server.await;
+                            }
+                            Err(e) => log::error!("Received error from shutdown signal: {e}")
+                        }
+                        break;
+                    }
+                    Some(event) = api_rx.recv() => {
+                        if let Err(e) = self.handle_vmm_event(&event).await {
+                            log::error!("Error while handling event: {event:?}: {e}"); 
+                        }
+                    }
                 }
             }
         }
@@ -598,10 +645,10 @@ impl VmManager {
         Ok(())
     }
 
-    async fn handle_vmm_event(&mut self, event: VmmEvent) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    async fn handle_vmm_event(&mut self, event: &VmmEvent) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
         match event {
             VmmEvent::Ping { name } => {
-                let resp = self.ping(name).await?;
+                let resp = self.ping(name.to_string()).await?;
                 self.api_response_sender.send(
                     serde_json::to_string(&resp)?
                 ).await?;
@@ -613,7 +660,7 @@ impl VmManager {
                 let invite = self.request_formnet_invite_for_vm_via_api(name).await?;
                 log::info!("Received formnet invite... Building VmInstanceConfig...");
 
-                let mut instance_config: VmInstanceConfig = (&event, &invite).try_into().map_err(|e: VmmError| {
+                let mut instance_config: VmInstanceConfig = (event, &invite).try_into().map_err(|e: VmmError| {
                     VmmError::Config(e.to_string())
                 })?;
 
@@ -630,14 +677,14 @@ impl VmManager {
             }
             VmmEvent::Stop { id, .. } => {
                 //TODO: verify ownership/authorization, etc.
-                self.pause(id).await?;
+                self.pause(id.to_string()).await?;
             }
             VmmEvent::Start {  id, .. } => {
                 //TODO: verify ownership/authorization, etc.
-                self.boot(id).await?;
+                self.boot(id.to_string()).await?;
             }
             VmmEvent::Delete { id, .. } => {
-                self.delete(id).await?;
+                self.delete(id.to_string()).await?;
             }
             _ => {}
             
@@ -670,15 +717,20 @@ impl VmManager {
         }
     }
 
+    #[allow(unused)]
     async fn request_formnet_invite_for_vm_via_broker(
         &self,
         name: String,
         callback: SocketAddr
     ) -> Result<InterfaceConfig, VmmError> {
         // Request a innernet invitation from local innernet peer
-        let mut publisher = GenericPublisher::new("127.0.0.1:5555").await.map_err(|e| {
-            VmmError::NetworkError(format!("Unable to publish message to setup networking: {e}"))
-        })?;
+        let mut publisher = if let Some(addr) = &self.publisher_addr {
+            GenericPublisher::new(addr).await.map_err(|e| {
+                VmmError::NetworkError(format!("Unable to publish message to setup networking: {e}"))
+            })?
+        } else {
+            return self.request_formnet_invite_for_vm_via_api(&name).await;
+        };
 
         let listener = TcpListener::bind(callback.clone()).await.map_err(|e| {
             VmmError::NetworkError(
@@ -731,297 +783,5 @@ impl VmManager {
     fn remove_vmm(&mut self, name: &str) -> VmmResult<()> {
         self.vm_monitors.remove(name);
         Ok(())
-    }
-}
-
-#[deprecated = "Use VmManager instead"]
-pub struct VmmService {
-    pub hypervisor: Arc<dyn hypervisor::Hypervisor>,
-    pub config: ServiceConfig,
-    pub tap_counter: u32,
-    instance_manager: Arc<Mutex<InstanceManager>>,
-    event_thread: Option<JoinHandle<Result<(), VmmError>>>, 
-    api_sender: Option<Sender<ApiRequest>>,
-    api_evt: EventFd,
-    exit_evt: EventFd,
-    shutdown_sender: broadcast::Sender<()>,
-    vmm_api: Option<VmmApi>,
-    api_task: Option<JoinHandle<Result<(), VmmError>>>, 
-}
-
-impl VmmService {
-    pub async fn new(config: ServiceConfig, event_sender: mpsc::Sender<VmmEvent>) -> Result<Self, VmmError> {
-        let hypervisor = hypervisor::new()
-            .map_err(VmmError::HypervisorInit)?;
-
-        let api_evt = EventFd::new(libc::EFD_NONBLOCK)
-            .map_err(|e| VmmError::SystemError(format!("Failed to create API eventfd: {}", e)))?;
-            
-        let exit_evt = EventFd::new(libc::EFD_NONBLOCK)
-            .map_err(|e| VmmError::SystemError(format!("Failed to create exit eventfd: {}", e)))?;
-
-        let (shutdown_sender, _) = broadcast::channel(1);
-        let (_api_tx, api_rx) = mpsc::channel(1024);
-
-        let addr = SocketAddr::from(([0, 0, 0, 0], 3002));
-
-        let vmm_api = VmmApi::new(
-            event_sender,
-            api_rx,
-            addr,
-        );
-
-        Ok(Self {
-            hypervisor,
-            config,
-            instance_manager: Arc::new(Mutex::new(InstanceManager::new())),
-            event_thread: None,
-            api_sender: None, 
-            api_evt,
-            exit_evt,
-            shutdown_sender,
-            tap_counter: 0,
-            vmm_api: Some(vmm_api),
-            api_task: None,
-        })
-    }
-
-    pub async fn start_vmm(
-        &mut self,
-        api_socket: String,
-    ) -> Result<Option<String>, Box<dyn std::error::Error>> {
-        // API socket initialization
-        let (api_socket_path, api_socket_fd) = (Some(api_socket), None); 
-
-        // Create channels and EventFDs
-        let (api_request_sender, api_request_receiver) = std::sync::mpsc::channel();
-        self.api_sender = Some(api_request_sender.clone());
-
-        let api_evt = EventFd::new(EFD_NONBLOCK).map_err(ChError::CreateApiEventFd)?;
-
-        // Signal handling
-        unsafe {
-            libc::signal(libc::SIGCHLD, libc::SIG_IGN);
-        }
-
-        for sig in &vmm::vm::Vm::HANDLED_SIGNALS {
-            let _ = block_signal(*sig).map_err(|e| eprintln!("Error blocking signals: {e}"));
-        }
-
-        for sig in &vmm::Vmm::HANDLED_SIGNALS {
-            let _ = block_signal(*sig).map_err(|e| eprintln!("Error blocking signals: {e}"));
-        }
-
-        // Initialize hypervisor
-        let hypervisor = hypervisor::new().map_err(ChError::CreateHypervisor)?;
-        let exit_evt = EventFd::new(EFD_NONBLOCK).map_err(ChError::CreateExitEventFd)?;
-
-        // Start the VMM thread
-        let vmm_thread_handle = vmm::start_vmm_thread(
-            vmm::VmmVersionInfo::new(env!("BUILD_VERSION"), env!("CARGO_PKG_VERSION")),
-            &api_socket_path,
-            api_socket_fd,
-            api_evt.try_clone().unwrap(),
-            api_request_sender.clone(),
-            api_request_receiver,
-            exit_evt.try_clone().unwrap(),
-            &SeccompAction::Trap,
-            hypervisor,
-            false,
-        )
-        .map_err(ChError::StartVmmThread)?;
-
-        // Wait for the VMM thread to finish
-        vmm_thread_handle
-            .thread_handle
-            .join()
-            .map_err(ChError::ThreadJoin)?
-            .map_err(ChError::VmmThread)?;
-
-        Ok(api_socket_path)
-    }
-
-    /// Start the VMM service
-    pub async fn start(&mut self) -> Result<(), VmmError> {
-        // Start DNS server
-        let instance_manager = self.instance_manager.clone();
-        let exit_evt = self.exit_evt.try_clone()
-            .map_err(|e| VmmError::SystemError(format!("Failed to clone exit event: {e}")))?;
-        let mut shutdown_receiver = self.shutdown_sender.subscribe();
-
-        if let Some(api) = self.vmm_api.take() {
-            log::info!("Starting API server on {}", api.addr());
-            let api_task = tokio::spawn(async move {
-                api.start().await
-            });
-            self.api_task = Some(api_task);
-        }
-
-        // Start the event processing loop
-        let event_thread = tokio::spawn(async move {
-            // Create async wrapper for exit evt
-            let exit_evt = tokio::io::unix::AsyncFd::new(exit_evt)
-                .map_err(|e| {
-                    VmmError::SystemError(format!("Unable to convert exit_evt file descriptor to Async File Descriptor {e}"))
-                })?;
-
-            loop {
-                tokio::select! {
-                    // Handle shutdown signal
-                    Ok(()) = shutdown_receiver.recv() => {
-                        log::info!("Received shutdown signal, stopping event loop");
-                        break;
-                    }
-
-                    // Handle VM exit events
-                    Ok(mut guard) = exit_evt.readable() => {
-                        match guard.try_io(|inner: &AsyncFd<EventFd>| inner.get_ref().read()) {
-                            Ok(Ok(_)) => {
-                                log::info!("VM exit event received");
-                                break;
-                            }
-                            Ok(Err(e)) => {
-                                log::error!("Error reading exit event: {e}");
-                                break;
-                            }
-                            Err(_would_block) => continue,
-                        }
-                    }
-                    
-                    // Process VM lifecycle events
-                    _ = Self::process_vm_lifecycle(instance_manager.clone()) => {}
-                }
-            }
-            Ok::<(), VmmError>(())
-        });
-
-        self.event_thread = Some(event_thread);
-
-        Ok(())
-    }
-
-    /// Creates a new VM instance
-    pub async fn create_vm(&self, config: &mut VmInstanceConfig) -> Result<VmInstance, VmmError> {
-        log::info!("Validating VmInstanceConfig");
-        config.validate()?;
-
-        log::info!("Converting VmInstanceConfig to VmConfig");
-        let vm_config = create_vm_config(&config);
-
-        log::info!("Acquiring API sender");
-        if let Some(api_sender) = &self.api_sender {
-            log::info!("Sending VmCreate event to API sender");
-            vmm::api::VmCreate.send(
-                self.api_evt.try_clone().unwrap(),
-                api_sender.clone(),
-                Box::new(vm_config),
-            ).map_err(|e| VmmError::VmOperation(e))?;
-
-            log::info!("Sent VmCreate event to API sender");
-            log::info!("Sending VmBoot event to API sender");
-            vmm::api::VmBoot.send(
-                self.api_evt.try_clone().unwrap(),
-                api_sender.clone(),
-                (),
-            ).map_err(|e| VmmError::VmOperation(e))?;
-            log::info!("Sent VmBoot event to API sender");
-
-            log::info!("Adding TAP device to bridge interface");
-            if let Err(e) = add_tap_to_bridge("br0", &config.tap_device.clone()).await {
-                log::error!("Error attempting to add tap device {} to bridge: {e}", &config.tap_device)
-            };
-
-            log::info!("Added TAP to bridge interface");
-            log::info!("Creating VM runtime...");
-            let vmrt = VmRuntime::new(config.clone());
-            log::info!("Created VM runtime...");
-            log::info!("VM Runtime created, acquiring instance...");
-            let instance = vmrt.instance().clone(); 
-            log::info!("Acquired instance from runtime...");
-            log::info!("Attempting to acquire lock on instance manager...");
-            log::info!("Attempting to add VM runtime to instance manager...");
-            self.instance_manager.lock().await.add_instance(vmrt).await?;
-            log::info!("Added VM runtime to instance manager...");
-            log::info!("Successfully created VM {}", instance.id());
-
-            Ok(instance)
-        } else {
-            Err(VmmError::SystemError("API sender not initialized".to_string()))
-        }
-    }
-
-    /// Stops a running  VM
-    pub async fn stop_vm(&self, id: &str) -> Result<(), VmmError> {
-        self.instance_manager.lock().await.stop_instance(id).await
-    }
-
-    /// Processes VM lifecycle events
-    async fn process_vm_lifecycle(instance_manager: Arc<Mutex<InstanceManager>>) {
-        let manager = instance_manager.lock().await;
-        for instance in manager.list_instances().await {
-            match instance.state() {
-                VmState::Failed => {
-                    log::warn!("VM {} in failed state - initiating cleanup", instance.id());
-                    if let Err(e) = manager.remove_instance(instance.id()).await {
-                        let id = instance.id();
-                        log::error!("Failed to clean up failed VM {id}: {e}");
-                    }
-                }
-                VmState::Stopped => {
-                    let id = instance.id();
-                    log::info!("VM {id} stoped - cleaning up resources");
-                    if let Err(e) = manager.remove_instance(id).await {
-                        log::error!("Failed to clean up stopped VM {id}: {e}");
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
-    /// Shuts down the `VmmService`
-    pub async fn shutdown(&mut self) -> Result<(), VmmError> {
-        log::info!("Initiating VMM service shutdown");
-
-        // Stop all running VMs
-        let mut manager = self.instance_manager.lock().await;
-        manager.shutdown_all().await?;
-
-        // Send shutdown signal to event loop
-        self.shutdown_sender.send(()).map_err(|e| {
-            VmmError::SystemError(format!("Failed to send shutdown signal: {e}"))
-        })?;
-
-        // Shutdown API server if running
-        if let Some(handle) = self.api_task.take() {
-            log::info!("Shutting down the API server");
-            handle.abort();
-            match handle.await {
-                Ok(_) => log::info!("API server shut down Successfully"),
-                Err(e) => log::error!("Error shutting down the API server: {e}"),
-            }
-        }
-
-
-        log::info!("VMM Service shutdown complete");
-        Ok(())
-    }
-}
-
-impl Drop for VmmService {
-    fn drop(&mut self) {
-        // Ensure clean shutdown in synvhronous context
-        if self.event_thread.is_some() {
-            log::warn!("VmmService dropped while event thread was running - some resources may not be cleaned up properly");
-            
-            // We can still do basic cleanup
-            if let Some(handle) = self.event_thread.take() {
-                handle.abort();
-            }
-
-            if let Some(handle) = self.api_task.take() {
-                handle.abort();
-            }
-        }
     }
 }

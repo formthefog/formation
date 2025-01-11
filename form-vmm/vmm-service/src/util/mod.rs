@@ -133,6 +133,7 @@ pub async fn fetch_and_prepare_images() -> Result<(), UtilError> {
             ensure_directory(dest_dir)?;
             download_image(url, &dest_string)?;
             if dest_string.ends_with(".img") {
+                log::info!("Found qcow2 image, converting to raw");
                 convert_qcow2_to_raw(&dest_string, &dest.parent().ok_or(
                     Box::new(
                         std::io::Error::new(
@@ -141,6 +142,7 @@ pub async fn fetch_and_prepare_images() -> Result<(), UtilError> {
                         )
                     ) as Box<dyn std::error::Error + Send + Sync + 'static>
                 )?.join("base.raw").display().to_string())?;
+                log::info!("Successfully converted qcow2 image to raw");
             } else if dest_string.ends_with(".xz") {
                 decompress_xz(&dest_string, &dest.parent().ok_or(
                     Box::new(
@@ -183,16 +185,11 @@ pub async fn fetch_and_prepare_images() -> Result<(), UtilError> {
     ];
 
     for img in base_imgs {
-        let loop_device = get_image_loop_device(&img.display().to_string())?;
         let netplan_to = PathBuf::from(PREP_MOUNT_POINT).join("etc/netplan").join(DEFAULT_NETPLAN_FILENAME);
         let formnet_install_to = PathBuf::from(PREP_MOUNT_POINT).join(DEFAULT_FORMNET_INSTALL);
         let formnet_up_to = PathBuf::from(PREP_MOUNT_POINT).join(DEFAULT_FORMNET_UP);
-        log::info!("Where to copy netplan config to: {}", netplan_to.display());
 
-        mount_partition(
-            &loop_device,
-            1
-        )?; 
+        mount_base_image(&img.display().to_string())?;
         copy_default_netplan(
             &PathBuf::from(
                 netplan_to
@@ -215,8 +212,7 @@ pub async fn fetch_and_prepare_images() -> Result<(), UtilError> {
             .join("formnet")
             .display().to_string()
         )?;
-        unmount_partition()?;
-        departition_loop_device(&loop_device)?;
+        unmount_base_image()?;
     }
 
     Ok(())
@@ -447,12 +443,23 @@ fn write_default_netplan() -> Result<(), UtilError> {
 fn copy_formnet_client(to: &str) -> Result<(), UtilError> {
     log::info!("Attempting to copy formnet binary from {FORMNET_BINARY} to {to}");
 
+    let to = PathBuf::from(to);
+    let parent = to.parent().ok_or(
+        Box::new(
+            std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Unable to find parent for formnet to directory"
+            )
+        )
+    )?;
+    ensure_directory(parent)?;
+
     std::fs::copy(
         FORMNET_BINARY,
-        to
+        to.clone()
     )?;
 
-    log::info!("Succesfully copied formnet binary from {FORMNET_BINARY} to {to}");
+    log::info!("Succesfully copied formnet binary from {FORMNET_BINARY} to {}", to.display());
     Ok(())
 }
 
@@ -495,9 +502,36 @@ pub async fn add_tap_to_bridge(bridge_name: &str, tap: &str) -> Result<(), UtilE
     Ok(())
 }
 
+fn mount_base_image(image_path: &str) -> Result<(), UtilError> {
+    log::info!("Mounting {image_path} to {PREP_MOUNT_POINT}");
+    let status = Command::new("guestmount")
+        .args(["-a", image_path, "-i", "--rw", PREP_MOUNT_POINT])
+        .status()?;
+
+    if !status.success() {
+        return Err(Box::new(std::io::Error::last_os_error()));
+    }
+
+    log::info!("Successfully mounted {image_path} to {PREP_MOUNT_POINT}");
+    Ok(())
+}
+
+fn unmount_base_image() -> Result<(), UtilError> {
+    log::info!("Unmounting base disk image from {PREP_MOUNT_POINT}");
+    let status = Command::new("guestunmount")
+        .arg(PREP_MOUNT_POINT)
+        .status()?;
+
+    if !status.success() {
+        return Err(Box::new(std::io::Error::last_os_error()));
+    }
+
+    Ok(())
+}
+
 fn get_image_loop_device(image_path: &str) -> Result<String, UtilError> {
     log::info!("Getting loop device from {image_path}");
-    let output = Command::new("losetup")
+    let output = Command::new("guestmount")
         .args(["--partscan", "--find", "--show", image_path])
         .output()?;
     if !output.status.success() {
