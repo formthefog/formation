@@ -24,7 +24,7 @@ use vmm_sys_util::eventfd::EventFd;
 use seccompiler::SeccompAction;
 use tokio::task::JoinHandle;
 use tokio::sync::Mutex;
-use form_types::{FormnetMessage, FormnetTopic, GenericPublisher, PeerType, VmmEvent};
+use form_types::{FormnetMessage, FormnetTopic, GenericPublisher, PeerType, VmmEvent, VmmSubscriber};
 use crate::{api::VmmApi, util::ensure_directory};
 use crate::util::add_tap_to_bridge;
 use crate::ChError;
@@ -372,16 +372,19 @@ pub struct VmManager {
     server: JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>>,
     tap_counter: u32,
     formnet_endpoint: String,
-    api_response_sender: tokio::sync::mpsc::Sender<String>
-    // Add subscriber to message broker
+    api_response_sender: tokio::sync::mpsc::Sender<String>,
+    subscriber: Option<VmmSubscriber>,
+    publisher_addr: Option<String>
 }
 
 impl VmManager {
-    pub fn new(
+    pub async fn new(
         event_sender: tokio::sync::mpsc::Sender<VmmEvent>,
         addr: SocketAddr,
         config: ServiceConfig,
         formnet_endpoint: String,
+        subscriber_uri: Option<&str>,
+        publisher_addr: Option<String>
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync + 'static>> {
         let (resp_tx, resp_rx) = tokio::sync::mpsc::channel(1024);
         let server = tokio::task::spawn(async move {
@@ -389,13 +392,27 @@ impl VmManager {
             server.start().await?;
             Ok::<(), Box<dyn std::error::Error + Send + Sync + 'static>>(())
         });
+
+        let subscriber = if let Some(uri) = subscriber_uri {
+            let subscriber = if let Ok(subscriber) = VmmSubscriber::new(uri).await {
+                Some(subscriber)
+            } else {
+                None
+            };
+            subscriber
+        } else {
+            None
+        };
+
         Ok(Self {
             config,
             vm_monitors: HashMap::new(),
             server, 
             tap_counter: 0,
             formnet_endpoint,
-            api_response_sender: resp_tx 
+            api_response_sender: resp_tx,
+            subscriber,
+            publisher_addr
         })
     }
 
@@ -670,6 +687,7 @@ impl VmManager {
         }
     }
 
+    #[allow(unused)]
     async fn request_formnet_invite_for_vm_via_broker(
         &self,
         name: String,

@@ -25,9 +25,9 @@ pub struct ServiceOptions {
     /// Path to config file
     pub config_path: Option<String>,
     /// Subscriber address for message broker
-    pub subscriber_addr: String,
+    pub subscriber_addr: Option<String>,
     /// Publisher address for message broker 
-    pub publisher_addr: String
+    pub publisher_addr: Option<String>
 }
 
 /// Options specific to configuration operations

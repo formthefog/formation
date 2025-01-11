@@ -4,7 +4,9 @@ use clap::Parser;
 #[derive(Parser)]
 struct Cli {
     #[clap(long, short)]
-    test_run: usize
+    test_run: usize,
+    #[clap(long, short, default_value_t=false)]
+    pubsub: bool,
 }
 
 #[tokio::main]
@@ -27,12 +29,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
     log::info!("Established endpoints...");
     log::info!("Building VM Manager...");
 
+    let (subscriber_uri, publisher_uri) = if parser.pubsub {
+        (Some("127.0.0.1:5556"), Some("127.0.0.1:5555".to_string()))
+    } else {
+        (None, None)
+    };
+
     let vm_manager = VmManager::new(
         event_tx,
         api_addr,
         service_config,
-        formnet_endpoint
-    )?;
+        formnet_endpoint,
+        subscriber_uri,
+        publisher_uri
+    ).await?;
 
     log::info!("Built VM Manager, sleeping for 5 seconds...");
     std::thread::sleep(std::time::Duration::from_secs(5));

@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // TODO: Handle debug flag if set
     match args.command {
-        CliCommand::Run { config, wizard, .. } => {
+        CliCommand::Run { config, wizard, sub_addr, pub_addr } => {
             let config = if wizard {
                 info!("Running configuration wizard");
                 run_config_wizard()?
@@ -37,7 +37,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1024);
             let handle = tokio::task::spawn(async move {
-                if let Err(e) = run_vm_manager(config, shutdown_rx).await {
+                if let Err(e) = run_vm_manager(
+                    config,
+                    shutdown_rx,
+                    sub_addr.as_deref(), 
+                    pub_addr
+                ).await {
                     log::error!("{e}");
                 }
             });
@@ -82,7 +87,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn run_vm_manager(config: ServiceConfig, shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+async fn run_vm_manager(
+    config: ServiceConfig,
+    shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+    subscriber_uri: Option<&str>,
+    publisher_uri: Option<String>
+) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     let (event_sender, event_receiver) = tokio::sync::mpsc::channel(1024);
     let api_addr = "0.0.0.0:3002".parse()?;
     let formnet_endpoint = "http://127.0.0.1:3001/join".to_string();
@@ -90,8 +100,10 @@ async fn run_vm_manager(config: ServiceConfig, shutdown_rx: tokio::sync::broadca
         event_sender,
         api_addr,
         config,
-        formnet_endpoint
-    )?;
+        formnet_endpoint,
+        subscriber_uri,
+        publisher_uri
+    ).await?;
 
     vm_manager.run(shutdown_rx, event_receiver).await 
 }

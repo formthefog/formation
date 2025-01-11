@@ -25,11 +25,11 @@ pub enum CliCommand {
 
         /// Message broker subscriber address
         #[arg(long, default_value = "127.0.0.1:5556")]
-        sub_addr: String,
+        sub_addr: Option<String>,
 
         /// Message broker Publish Address
         #[arg(long, default_value = "127.0.0.1:5555")]
-        pub_addr: String,
+        pub_addr: Option<String>,
 
         /// Run configuration wizard before starting service
         #[arg(short, long)]
