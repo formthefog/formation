@@ -103,14 +103,34 @@ impl VmmApi {
 
         log::info!("Establishing Routes");
         let app = Router::new()
-            .route("/vm/:id/ping", post(ping))
             .route("/health", get(health_check))
-            .route("/vm", post(create))
-            .route("/vm/:id/start", post(start_vm))
-            .route("/vm/:id/stop", post(stop_vm))
-            .route("/vm/:id/delete", post(delete_vm))
+            .route("/vm/create", post(create))
+            .route("/vm/:id/boot", post(start))
+            .route("/vm/:id/delete", post(delete))
+            .route("/vm/:id/pause", post(stop))
+            .route("/vm/:id/stop", post(stop))
+            .route("/vm/:id/reboot", post(reboot))
+            .route("/vm/:id/resume", post(start))
+            .route("/vm/:id/start", post(start))
+            .route("/vm/:id/on", post(start))
+            .route("/vm/:id/power_button", post(power_button))
+            .route("/vm/:id/commit", post(commit))
+            .route("/vm/:id/update", post(commit))
+            .route("/vm/:id/snapshot", post(snapshot))
+            .route("/vm/:id/coredump", post(coredump))
+            .route("/vm/:id/restore", post(restore))
+            .route("/vm/:id/resize_vcpu", post(resize_vcpu))
+            .route("/vm/:id/resize_memory", post(resize_memory))
+            .route("/vm/:id/add_device", post(add_device))
+            .route("/vm/:id/add_disk", post(add_disk))
+            .route("/vm/:id/add_fs", post(add_fs))
+            .route("/vm/:id/remove_device", post(remove_device))
+            .route("/vm/:id/migrate_to", post(migrate_to))
+            .route("/vm/:id/migrate_from", post(migrate_from))
+            .route("/vm/:id/ping", post(ping))
+            .route("/vm/:id/info", get(get_vm))
             .route("/vm/:id", get(get_vm))
-            .route("/vms", get(list_vms))
+            .route("/vms", get(list))
             .with_state(app_state);
 
         log::info!("Established route, binding to {}", &self.addr);
@@ -190,8 +210,22 @@ async fn ping(
     }
 }
 
-async fn start_vm() {}
-async fn stop_vm() {}
-async fn delete_vm() {}
+async fn start() {}
+async fn stop() {}
+async fn delete() {}
 async fn get_vm() {}
-async fn list_vms() {}
+async fn list() {}
+async fn power_button() {}
+async fn reboot() {}
+async fn commit() {}
+async fn snapshot() {}
+async fn coredump() {}
+async fn restore() {}
+async fn resize_vcpu() {}
+async fn resize_memory() {}
+async fn add_device() {}
+async fn add_disk() {}
+async fn add_fs() {}
+async fn remove_device() {}
+async fn migrate_to() {}
+async fn migrate_from() {}
