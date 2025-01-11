@@ -7,7 +7,7 @@ use axum::{
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
-use vmm::api::VmmPingResponse;
+use vmm::api::{VmInfo, VmmPingResponse};
 use std::{sync::Arc, time::Duration};
 use std::net::SocketAddr;
 
@@ -100,6 +100,14 @@ pub struct StopVmRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeleteVmRequest {
+    pub id: String,
+    pub name: String,
+    pub signature: Option<String>,
+    pub recovery_id: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetVmRequest {
     pub id: String,
     pub name: String,
     pub signature: Option<String>,
@@ -297,7 +305,19 @@ async fn delete(
     }))
 }
 
-async fn get_vm() {}
+async fn get_vm(
+    State(channel): State<Arc<Mutex<VmmApiChannel>>>,
+    Json(request): Json<GetVmRequest>,
+) -> Result<Json<VmInfo>, String>  {
+    let event = VmmEvent::Get {
+        id: request.id.clone(),
+        owner: "test".to_string(),
+        recovery_id: 0,
+        requestor: "node".to_string(),
+    };
+
+    request_receive(channel, event).await
+}
 async fn list() {}
 async fn power_button() {}
 async fn reboot() {}

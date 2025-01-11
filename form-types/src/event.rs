@@ -213,6 +213,12 @@ pub enum VmmEvent {
         id: String,
         requestor: String,
     },
+    Get {
+        owner: String,
+        recovery_id: u32,
+        id: String,
+        requestor: String,
+    },
     NetworkSetupComplete {
         invite: String
     },
