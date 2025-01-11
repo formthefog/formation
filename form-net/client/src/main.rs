@@ -47,7 +47,7 @@ macro_rules! println_pad {
 }
 
 #[derive(Clone, Debug, Parser)]
-#[command(name = "innernet", author, version, about)]
+#[command(name = "formnet-client", author, version, about)]
 struct Opts {
     #[clap(subcommand)]
     command: Option<Command>,

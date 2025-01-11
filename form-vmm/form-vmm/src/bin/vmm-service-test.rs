@@ -1,4 +1,4 @@
-use vmm_service::{api::{CreateVmRequest, VmResponse}, util::fetch_and_prepare_images, ServiceConfig, VmManager};
+use vmm_service::{api::CreateVmRequest, ServiceConfig, VmManager};
 use clap::Parser;
 
 #[derive(Parser)]
@@ -13,9 +13,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
     // Setup the logger
     simple_logger::init_with_level(log::Level::Info)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
-
-    log::info!("Fetching and preparing base ubuntu image");
-    fetch_and_prepare_images().await.unwrap();
 
     // Create the base service configuration
     log::info!("Building service config");

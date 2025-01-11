@@ -1,60 +1,12 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tokio::io::AsyncReadExt;
-use crate::{VmmService, VmInstanceConfig, VmmError};
-use form_types::{FormnetMessage, FormnetTopic, GenericPublisher, PeerType, VmmEvent};
+use crate::VmmError;
+use form_types::{FormnetMessage, FormnetTopic, GenericPublisher, PeerType};
 use shared::interface_config::InterfaceConfig;
 use tokio::net::TcpListener;
 use conductor::publisher::PubStream;
 
 #[allow(unused)]
-pub async fn handle_vmm_event(service: &mut VmmService, event: &VmmEvent) -> Result<(), VmmError> {
-    match event {
-        VmmEvent::Create { 
-            owner,
-            recovery_id,
-            requestor,
-            distro,
-            version,
-            user_data,
-            meta_data,
-            memory_mb,
-            vcpu_count,
-            name, 
-            custom_cmdline, 
-            rng_source, 
-            console_type 
-        } => {
-            log::info!("Building service config...");
-            let service_config = service.config.clone();
-            log::info!("Built service config... Requesting formnet invite...");
-            let invite = request_formnet_invite_for_vm(name.clone()).await?;
-            log::info!("Received formnet invite... Building VmInstanceConfig...");
-
-            let mut instance_config: VmInstanceConfig = (event, &invite).try_into().map_err(|e: VmmError| {
-                VmmError::Config(e.to_string())
-            })?;
-
-            log::info!("Built VmInstanceConfig... Adding TAP device name");
-            instance_config.tap_device = format!("vmnet{}", service.tap_counter);
-            log::info!("Added TAP device name... Incrementing TAP counter...");
-            service.tap_counter += 1;
-            log::info!("Incremented TAP counter... Attempting to create VM");
-            // TODO: return Future, and stash future in a `FuturesUnordered`
-            // to be awaited asynchronously.
-            service.create_vm(&mut instance_config).await?;
-            log::info!("Created VM");
-            Ok(())
-        }, 
-        VmmEvent::Start { owner, recovery_id, id, requestor } => todo!(), 
-        VmmEvent::Stop { owner, recovery_id, id, requestor } => todo!(),
-        VmmEvent::Delete { owner, recovery_id, id, requestor } => todo!(),
-        VmmEvent::Copy => todo!(),
-        VmmEvent::Migrate => todo!(),
-        VmmEvent::Snapshot => todo!(),
-        _ => todo!()
-    }
-}
-
 async fn request_formnet_invite_for_vm(name: String) -> Result<InterfaceConfig, VmmError> {
     // Request a innernet invitation from local innernet peer
     let mut publisher = GenericPublisher::new("127.0.0.1:5555").await.map_err(|e| {

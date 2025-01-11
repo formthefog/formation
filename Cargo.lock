@@ -3077,6 +3077,7 @@ dependencies = [
  "simple_logger 5.0.0",
  "tokio",
  "ureq 2.12.1",
+ "url 2.5.4",
  "wireguard-control",
 ]
 

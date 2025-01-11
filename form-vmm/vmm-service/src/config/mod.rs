@@ -9,7 +9,6 @@ use super::{VmInstanceConfig, ConsoleType};
 use vmm::vm_config::{
     ConsoleConfig,
     ConsoleOutputMode,
-    CpuFeatures, 
     CpusConfig, 
     DiskConfig, 
     MemoryConfig, 
@@ -69,7 +68,7 @@ pub fn create_vm_config(config: &VmInstanceConfig) -> VmConfig {
                 file: None,
                 mode: ConsoleOutputMode::Socket,
                 iommu: false,
-                socket: Some(PathBuf::from("/run/form-vm/test-vm-1-console.sock")), 
+                socket: Some(PathBuf::from(&format!("/run/form-vm/{}-console.sock", &config.name))), 
             },
             ConsoleConfig {
                 file: None,
@@ -83,7 +82,7 @@ pub fn create_vm_config(config: &VmInstanceConfig) -> VmConfig {
                 file: None,
                 mode: ConsoleOutputMode::Socket,
                 iommu: false,
-                socket: Some(PathBuf::from("/run/form-vm/test-vm-1-console.sock")), 
+                socket: Some(PathBuf::from(&format!("/run/form-vm/{}-console.sock", &config.name))), 
             },
             ConsoleConfig {
                 file: None,
