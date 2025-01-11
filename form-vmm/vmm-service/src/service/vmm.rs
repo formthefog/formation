@@ -360,7 +360,6 @@ impl FormVmApi {
 }
 
 pub struct VmManager {
-    // We need to stash threads & socket paths
     pub config: ServiceConfig,
     vm_monitors: HashMap<String, FormVmm>, 
     server: JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>>,
