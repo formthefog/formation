@@ -263,14 +263,38 @@ async fn stop(
     State(channel): State<Arc<Mutex<VmmApiChannel>>>,
     Json(request): Json<StopVmRequest>,
 ) -> Result<Json<VmResponse>, String> {
-    todo!()
+    let event = VmmEvent::Stop {
+        id: request.id.clone(),
+        owner: "test".to_string(),
+        recovery_id: 0,
+        requestor: "node".to_string(),
+    };
+
+    let _ = request_receive::<()>(channel, event).await?;
+    Ok(Json(VmResponse {
+        id: request.id, 
+        name: request.name,
+        state: "pending".to_string()
+    }))
 }
 
 async fn delete(
     State(channel): State<Arc<Mutex<VmmApiChannel>>>,
     Json(request): Json<DeleteVmRequest>,
 ) -> Result<Json<VmResponse>, String> {
-    todo!()
+    let event = VmmEvent::Delete {
+        id: request.id.clone(),
+        owner: "test".to_string(),
+        recovery_id: 0,
+        requestor: "node".to_string(),
+    };
+
+    let _ = request_receive::<()>(channel, event).await?;
+    Ok(Json(VmResponse {
+        id: request.id, 
+        name: request.name,
+        state: "pending".to_string()
+    }))
 }
 
 async fn get_vm() {}
