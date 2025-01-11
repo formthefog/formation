@@ -114,6 +114,13 @@ pub struct GetVmRequest {
     pub recovery_id: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListRequest {
+    pub requestor: String,
+    pub recovery_id: u32,
+}
+
+
 /// Response containing VM information
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VmResponse {
@@ -318,7 +325,17 @@ async fn get_vm(
 
     request_receive(channel, event).await
 }
-async fn list() {}
+async fn list(
+    Json(request): Json<ListRequest>,
+    State(channel): State<Arc<Mutex<VmmApiChannel>>>,
+) -> Result<Json<Vec<VmInfo>>, String> {
+    let event = VmmEvent::GetList {
+        requestor: "test".to_string(),
+        recovery_id: 0
+    };
+
+    request_receive(channel, event).await
+}
 async fn power_button() {}
 async fn reboot() {}
 async fn commit() {}
