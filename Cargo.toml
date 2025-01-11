@@ -1,4 +1,6 @@
+
 [workspace]
+resolver = "2"
 members = [
   "form-broker",
   "form-vmm/api_client",
@@ -57,3 +59,14 @@ virtio-queue = "0.14.0"
 vm-fdt = { git = "https://github.com/rust-vmm/vm-fdt", branch = "main" }
 vm-memory = "0.16.0"
 vmm-sys-util = "0.12.1"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
+
+[profile.profiling]
+debug = true
+inherits = "release"
+strip = false

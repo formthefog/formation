@@ -10,30 +10,24 @@ use hyperlocal::{UnixConnector, UnixClientExt, Uri};
 use serde::{Serialize, Deserialize, de::DeserializeOwned};
 use shared::interface_config::InterfaceConfig;
 use tokio::net::TcpListener;
-use std::sync::Arc;
 use libc::EFD_NONBLOCK;
-use tokio::io::unix::AsyncFd;
 use tokio::io::AsyncReadExt;
-use conductor::publisher::PubStream;
 use tokio::sync::mpsc;
 use tokio::sync::broadcast;
 use vmm_sys_util::signal::block_signal;
-use std::sync::mpsc::Sender;
-use vmm::{api::{ApiAction, ApiRequest, VmAddDevice, VmAddUserDevice, VmCoredumpData, VmCounters, VmInfo, VmReceiveMigrationData, VmRemoveDevice, VmResize, VmResizeZone, VmSendMigrationData, VmSnapshotConfig, VmmPingResponse}, config::RestoreConfig, vm_config::{DiskConfig, FsConfig, NetConfig, PmemConfig, VdpaConfig, VsockConfig}, PciDeviceInfo, VmmThreadHandle};
+use vmm::{api::{VmAddDevice, VmAddUserDevice, VmCoredumpData, VmCounters, VmInfo, VmReceiveMigrationData, VmRemoveDevice, VmResize, VmResizeZone, VmSendMigrationData, VmSnapshotConfig, VmmPingResponse}, config::RestoreConfig, vm_config::{DiskConfig, FsConfig, NetConfig, PmemConfig, VdpaConfig, VsockConfig}, PciDeviceInfo, VmmThreadHandle};
 use vmm_sys_util::eventfd::EventFd;
 use seccompiler::SeccompAction;
 use tokio::task::JoinHandle;
-use tokio::sync::Mutex;
 use form_types::{FormnetMessage, FormnetTopic, GenericPublisher, PeerType, VmmEvent, VmmSubscriber};
+use form_broker::{subscriber::SubStream, publisher::PubStream};
 use crate::{api::VmmApi, util::ensure_directory};
 use crate::util::add_tap_to_bridge;
 use crate::ChError;
-use crate::VmRuntime;
-use crate::VmState;
 use crate::{
     error::VmmError,
     config::create_vm_config,
-    instance::{config::VmInstanceConfig, manager::{InstanceManager, VmInstance}},
+    instance::config::VmInstanceConfig,
     ServiceConfig,
 };
 
@@ -367,7 +361,7 @@ impl FormVmApi {
 
 pub struct VmManager {
     // We need to stash threads & socket paths
-    config: ServiceConfig,
+    pub config: ServiceConfig,
     vm_monitors: HashMap<String, FormVmm>, 
     server: JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>>,
     tap_counter: u32,
@@ -597,17 +591,53 @@ impl VmManager {
         mut shutdown_rx: broadcast::Receiver<()>,
         mut api_rx: mpsc::Receiver<VmmEvent>
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-        loop {
-            tokio::select! {
-                res = shutdown_rx.recv() => {
-                    match res {
-                        Ok(()) => log::warn!("Received shutdown signal, shutting VmManager down"),
-                        Err(e) => log::error!("Received error from shutdown signal: {e}")
+        if let Some(mut subscriber) = self.subscriber.take() {
+            loop {
+                tokio::select! {
+                    res = shutdown_rx.recv() => {
+                        match res {
+                            Ok(()) => {
+                                log::warn!("Received shutdown signal, shutting VmManager down");
+                                self.server.abort();
+                                let _ = self.server.await;
+                            }
+                            Err(e) => log::error!("Received error from shutdown signal: {e}")
+                        }
+                        break;
                     }
-                    break;
+                    Some(event) = api_rx.recv() => {
+                        if let Err(e) = self.handle_vmm_event(&event).await {
+                            log::error!("Error while handling event: {event:?}: {e}"); 
+                        }
+                    }
+                    Ok(events) = subscriber.receive() => {
+                        for event in events {
+                            if let Err(e) = self.handle_vmm_event(&event).await {
+                                log::error!("Error while handling event: {event:?}: {e}");
+                            }
+                        }
+                    }
                 }
-                Some(event) = api_rx.recv() => {
-                    self.handle_vmm_event(event).await?;
+            }
+        } else {
+            loop {
+                tokio::select! {
+                    res = shutdown_rx.recv() => {
+                        match res {
+                            Ok(()) => {
+                                log::warn!("Received shutdown signal, shutting VmManager down");
+                                self.server.abort();
+                                let _ = self.server.await;
+                            }
+                            Err(e) => log::error!("Received error from shutdown signal: {e}")
+                        }
+                        break;
+                    }
+                    Some(event) = api_rx.recv() => {
+                        if let Err(e) = self.handle_vmm_event(&event).await {
+                            log::error!("Error while handling event: {event:?}: {e}"); 
+                        }
+                    }
                 }
             }
         }
@@ -615,10 +645,10 @@ impl VmManager {
         Ok(())
     }
 
-    async fn handle_vmm_event(&mut self, event: VmmEvent) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    async fn handle_vmm_event(&mut self, event: &VmmEvent) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
         match event {
             VmmEvent::Ping { name } => {
-                let resp = self.ping(name).await?;
+                let resp = self.ping(name.to_string()).await?;
                 self.api_response_sender.send(
                     serde_json::to_string(&resp)?
                 ).await?;
@@ -630,7 +660,7 @@ impl VmManager {
                 let invite = self.request_formnet_invite_for_vm_via_api(name).await?;
                 log::info!("Received formnet invite... Building VmInstanceConfig...");
 
-                let mut instance_config: VmInstanceConfig = (&event, &invite).try_into().map_err(|e: VmmError| {
+                let mut instance_config: VmInstanceConfig = (event, &invite).try_into().map_err(|e: VmmError| {
                     VmmError::Config(e.to_string())
                 })?;
 
@@ -647,14 +677,14 @@ impl VmManager {
             }
             VmmEvent::Stop { id, .. } => {
                 //TODO: verify ownership/authorization, etc.
-                self.pause(id).await?;
+                self.pause(id.to_string()).await?;
             }
             VmmEvent::Start {  id, .. } => {
                 //TODO: verify ownership/authorization, etc.
-                self.boot(id).await?;
+                self.boot(id.to_string()).await?;
             }
             VmmEvent::Delete { id, .. } => {
-                self.delete(id).await?;
+                self.delete(id.to_string()).await?;
             }
             _ => {}
             
@@ -694,9 +724,13 @@ impl VmManager {
         callback: SocketAddr
     ) -> Result<InterfaceConfig, VmmError> {
         // Request a innernet invitation from local innernet peer
-        let mut publisher = GenericPublisher::new("127.0.0.1:5555").await.map_err(|e| {
-            VmmError::NetworkError(format!("Unable to publish message to setup networking: {e}"))
-        })?;
+        let mut publisher = if let Some(addr) = &self.publisher_addr {
+            GenericPublisher::new(addr).await.map_err(|e| {
+                VmmError::NetworkError(format!("Unable to publish message to setup networking: {e}"))
+            })?
+        } else {
+            return self.request_formnet_invite_for_vm_via_api(&name).await;
+        };
 
         let listener = TcpListener::bind(callback.clone()).await.map_err(|e| {
             VmmError::NetworkError(

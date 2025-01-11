@@ -103,6 +103,7 @@ impl VmmApi {
 
         log::info!("Establishing Routes");
         let app = Router::new()
+            .route("/vm/:id/ping", post(ping))
             .route("/health", get(health_check))
             .route("/vm", post(create))
             .route("/vm/:id/start", post(start_vm))

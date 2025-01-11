@@ -13,4 +13,4 @@ tokio = { version = "1.38.0", features = ["full"] }
 async-trait = "0.1.80"
 log = "0.4"
 form-traits = { path = "../form-traits" }
-conductor = { git = "https://github.com/versatus/conductor" }
+form-broker = { path = "../form-broker" }

@@ -48,6 +48,7 @@ pub enum ChError {
 }
 
 #[derive(Error, Debug)]
+#[allow(unused)]
 enum FdTableError {
     #[error("Failed to create event fd: {0}")]
     CreateEventFd(std::io::Error),
