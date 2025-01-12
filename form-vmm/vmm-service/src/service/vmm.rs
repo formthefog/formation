@@ -704,7 +704,7 @@ impl VmManager {
                     match info {
                         Ok(ApiResponse::Success { code: _, content }) => {
                             match content {
-                                Some(content) => Some(content.clone()),
+                                Some(content) => Some(content),
                                 None => None
                             }
                         }

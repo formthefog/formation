@@ -12,7 +12,7 @@ use std::{sync::Arc, time::Duration};
 use std::net::SocketAddr;
 
 use crate::VmmError;
-use form_types::VmmEvent;
+use form_types::{PingVmmRequest, CreateVmRequest, StartVmRequest, StopVmRequest, DeleteVmRequest, GetVmRequest, VmmEvent};
 
 pub struct VmmApiChannel {
     event_sender: mpsc::Sender<VmmEvent>,
@@ -62,64 +62,6 @@ pub struct VmmApi {
     /// Server address
     addr: SocketAddr,
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PingVmmRequest {
-    name: String,
-}
-
-/// Request to create a new VM instance
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateVmRequest {
-    pub distro: String,
-    pub version: String,
-    pub memory_mb: u64,
-    pub vcpu_count: u8,
-    pub name: String,
-    pub user_data: Option<String>,
-    pub meta_data: Option<String>,
-    pub signature: Option<String>,
-    pub recovery_id: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StartVmRequest {
-    pub id: String,
-    pub name: String,
-    pub signature: Option<String>,
-    pub recovery_id: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StopVmRequest {
-    pub id: String,
-    pub name: String,
-    pub signature: Option<String>,
-    pub recovery_id: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeleteVmRequest {
-    pub id: String,
-    pub name: String,
-    pub signature: Option<String>,
-    pub recovery_id: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetVmRequest {
-    pub id: String,
-    pub name: String,
-    pub signature: Option<String>,
-    pub recovery_id: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ListRequest {
-    pub requestor: String,
-    pub recovery_id: u32,
-}
-
 
 /// Response containing VM information
 #[derive(Debug, Serialize, Deserialize)]
@@ -177,7 +119,7 @@ impl VmmApi {
             .route("/vm/:id/ping", post(ping))
             .route("/vm/:id/info", get(get_vm))
             .route("/vm/:id", get(get_vm))
-            .route("/vms", get(list))
+            .route("/vms/list", get(list))
             .with_state(app_state);
 
         log::info!("Established route, binding to {}", &self.addr);
@@ -327,7 +269,6 @@ async fn get_vm(
     request_receive(channel, event).await
 }
 async fn list(
-    Json(_request): Json<ListRequest>,
     State(channel): State<Arc<Mutex<VmmApiChannel>>>,
 ) -> Result<Json<Vec<VmInfo>>, String> {
 

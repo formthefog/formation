@@ -1,0 +1,11 @@
+[package]
+name = "form-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { "version" = "4.5", features=["derive"] }
+#TODO: Reduce dependencies to individual alloy crates
+# once we know what we will and wont need
+alloy = { "version" = "0.9", features = ["full"]}
+form-types = { path = "../form-types" }
