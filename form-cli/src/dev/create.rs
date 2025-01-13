@@ -1,4 +1,17 @@
+use std::{fs::OpenOptions, io::Read, path::Path};
+use alloy::signers::k256::ecdsa::{RecoveryId, SigningKey}; 
+use alloy_signer_local::{coins_bip39::English, LocalSigner, MnemonicBuilder};
 use clap::Args;
+use form_types::{CreateVmRequest, VmResponse};
+use reqwest::{Client, Response};
+use serde::{Serialize, Deserialize};
+use sha3::{Sha3_256, Digest};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Keypair {
+    signing_key: String,
+    verifying_key: String,
+}
 
 /// Create a new instance
 #[derive(Debug, Clone, Args)]
@@ -55,4 +68,128 @@ pub struct CreateCommmand {
     //TODO: Add support for HSM and other Enclave based key storage
     #[clap(long, short)]
     pub mnemonic: Option<String>,
+}
+
+impl CreateCommmand {
+    pub async fn handle(mut self, provider: &str) -> Result<VmResponse, String> {
+        //TODO: Replace with gRPC call
+        let resp = Client::new().post(provider).json(
+            &self.to_request()?
+        ).send().await.map_err(|e| e.to_string())?;
+        Ok(resp.json()?)
+    }
+
+    pub fn to_request(&mut self) -> Result<CreateVmRequest, String> {
+        let signing_key: SigningKey = self.get_signing_key()?;
+        let user_data = self.get_user_data();
+        let meta_data = self.get_metadata();
+        self.name = Some(self.name.take().ok_or_else(|| {
+            format!("{}_{}", random_word::gen(random_word::Lang::En), random_word::gen(random_word::Lang::En))
+        })?);
+        let (sig, rec) = self.sign_payload(signing_key)?;
+        Ok(CreateVmRequest {
+            distro: self.distro.clone(),
+            version: self.version.clone(),
+            memory_mb: self.memory_mb,
+            vcpu_count: self.vcpu_count,
+            name: self.name.take().unwrap(),
+            user_data,
+            meta_data,
+            signature: Some(sig),
+            recovery_id: rec.to_byte() as u32
+        })
+    }
+    pub fn get_signing_key(&self) -> Result<SigningKey, String> {
+        if let Some(pk) = &self.private_key {
+            Ok(SigningKey::from_slice(
+                    &hex::decode(pk)
+                        .map_err(|e| e.to_string())?
+                ).map_err(|e| e.to_string())?
+            )
+        } else if let Some(kf) = &self.keyfile {
+            let kp = Keypair::from_file(kf).map_err(|e| e.to_string())?;
+            Ok(SigningKey::from_slice(
+                    &hex::decode(kp.signing_key)
+                        .map_err(|e| e.to_string())?
+                ).map_err(|e| e.to_string())?
+            )
+        } else if let Some(mnemonic) = &self.mnemonic {
+            Ok(SigningKey::from_slice(&MnemonicBuilder::<English>::default()
+                .phrase(mnemonic)
+                .derivation_path("m/44'/60'/0'/0/0").map_err(|e| e.to_string())?
+                .build().map_err(|e| e.to_string())?.to_field_bytes().to_vec()
+            ).map_err(|e| e.to_string())?)
+                
+        } else {
+            Err("A signing key is required, use either private_key, mnemonic or keyfile CLI arg to provide a valid signing key".to_string())
+        }
+    }
+
+    fn sign_payload(&mut self, signing_key: SigningKey) -> Result<(String, RecoveryId), String> {
+        let data = self.build_payload()?;
+        let (sig, rec) = signing_key.sign_recoverable(&data).map_err(|e| e.to_string())?;
+        Ok((hex::encode(&sig.to_vec()), rec))
+    }
+
+    fn build_payload(&mut self) -> Result<Vec<u8>, String> {
+        let mut hasher = Sha3_256::new();
+        hasher.update(&self.distro);
+        hasher.update(&self.version);
+        // Name is always Some(String) at this point
+        hasher.update(self.name.take().unwrap());
+        hasher.update(self.memory_mb.to_be_bytes());
+        hasher.update(self.vcpu_count.to_be_bytes());
+        if let Some(user_data) = self.get_user_data() {
+            hasher.update(user_data)
+        }
+        if let Some(meta_data) = self.get_metadata() {
+            hasher.update(meta_data)
+        }
+
+        Ok(hasher.finalize().to_vec())
+    }
+
+    fn get_user_data(&self) -> Option<String> {
+        if let Some(user_data) = &self.user_data {
+            let mut buf = String::new();
+            let mut file = OpenOptions::new()
+                .read(true)
+                .write(false)
+                .open(user_data).ok()?;
+
+            file.read_to_string(&mut buf).ok()?;
+           return Some(buf)
+        }
+
+        None
+    }
+
+    fn get_metadata(&self) -> Option<String> {
+        if let Some(meta_data) = &self.user_data {
+            let mut buf = String::new();
+            let mut file = OpenOptions::new()
+                .read(true)
+                .write(false)
+                .open(meta_data).ok()?;
+
+            file.read_to_string(&mut buf).ok()?;
+           return Some(buf)
+        }
+
+        None
+    }
+}
+
+impl Keypair {
+    pub fn from_file(path: impl AsRef<Path>) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut buf = Vec::new();
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(false)
+            .open(path.as_ref())?;
+
+        file.read_to_end(&mut buf)?;
+
+        Ok(serde_json::from_slice(&buf)?)
+    }
 }

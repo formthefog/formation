@@ -12,7 +12,7 @@ use std::{sync::Arc, time::Duration};
 use std::net::SocketAddr;
 
 use crate::VmmError;
-use form_types::{PingVmmRequest, CreateVmRequest, StartVmRequest, StopVmRequest, DeleteVmRequest, GetVmRequest, VmmEvent};
+use form_types::{PingVmmRequest, CreateVmRequest, StartVmRequest, StopVmRequest, DeleteVmRequest, GetVmRequest, VmmEvent, VmResponse};
 
 pub struct VmmApiChannel {
     event_sender: mpsc::Sender<VmmEvent>,
@@ -61,14 +61,6 @@ pub struct VmmApi {
     channel: Arc<Mutex<VmmApiChannel>>,
     /// Server address
     addr: SocketAddr,
-}
-
-/// Response containing VM information
-#[derive(Debug, Serialize, Deserialize)]
-pub struct VmResponse {
-    pub id: String,
-    pub name: String,
-    pub state: String,
 }
 
 impl VmmApi {

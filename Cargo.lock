@@ -885,8 +885,8 @@ dependencies = [
  "alloy-primitives 0.7.7",
  "alloy-signer 0.1.4",
  "async-trait",
- "coins-bip32",
- "coins-bip39",
+ "coins-bip32 0.11.1",
+ "coins-bip39 0.11.1",
  "k256",
  "rand",
  "thiserror 1.0.69",
@@ -903,6 +903,8 @@ dependencies = [
  "alloy-primitives 0.8.18",
  "alloy-signer 0.9.2",
  "async-trait",
+ "coins-bip32 0.12.0",
+ "coins-bip39 0.12.0",
  "k256",
  "rand",
  "thiserror 2.0.10",
@@ -2192,7 +2194,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "66c43ff7fd9ff522219058808a259e61423335767b1071d5b346de60d9219657"
 dependencies = [
  "bs58",
- "coins-core",
+ "coins-core 0.11.1",
+ "digest 0.10.7",
+ "hmac",
+ "k256",
+ "serde",
+ "sha2",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "coins-bip32"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2073678591747aed4000dd468b97b14d7007f7936851d3f2f01846899f5ebf08"
+dependencies = [
+ "bs58",
+ "coins-core 0.12.0",
  "digest 0.10.7",
  "hmac",
  "k256",
@@ -2208,7 +2226,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c4587c0b4064da887ed39a6522f577267d57e58bdd583178cd877d721b56a2e"
 dependencies = [
  "bitvec",
- "coins-bip32",
+ "coins-bip32 0.11.1",
+ "hmac",
+ "once_cell",
+ "pbkdf2",
+ "rand",
+ "sha2",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "coins-bip39"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74b169b26623ff17e9db37a539fe4f15342080df39f129ef7631df7683d6d9d4"
+dependencies = [
+ "bitvec",
+ "coins-bip32 0.12.0",
  "hmac",
  "once_cell",
  "pbkdf2",
@@ -2222,6 +2256,25 @@ name = "coins-core"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6b3aeeec621f4daec552e9d28befd58020a78cfc364827d06a753e8bc13c6c4b"
+dependencies = [
+ "base64 0.21.7",
+ "bech32",
+ "bs58",
+ "const-hex",
+ "digest 0.10.7",
+ "generic-array",
+ "ripemd",
+ "serde",
+ "sha2",
+ "sha3",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "coins-core"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62b962ad8545e43a28e14e87377812ba9ae748dd4fd963f4c10e9fcc6d13475b"
 dependencies = [
  "base64 0.21.7",
  "bech32",
@@ -3083,8 +3136,16 @@ name = "form-cli"
 version = "0.1.0"
 dependencies = [
  "alloy 0.9.2",
+ "alloy-signer-local 0.9.2",
  "clap",
  "form-types",
+ "hex",
+ "random_word",
+ "reqwest 0.12.12",
+ "serde",
+ "serde_json",
+ "sha3",
+ "tokio",
 ]
 
 [[package]]
