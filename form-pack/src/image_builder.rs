@@ -486,7 +486,7 @@ WantedBy=multi-user.target  # Start on system boot
     Ok(())
 }
 
-fn copy_dir_recursively(
+pub fn copy_dir_recursively(
     source: impl AsRef<Path>,
     dest: impl AsRef<Path>
 ) -> Result<(), Box<dyn std::error::Error>> {
