@@ -3251,14 +3251,18 @@ dependencies = [
  "base64 0.22.1",
  "bollard",
  "flate2",
+ "futures-util",
  "lazy_static",
  "rand",
+ "reqwest 0.12.12",
  "serde",
  "serde_json",
  "sha-crypt",
  "sha3",
  "tar",
  "tempfile",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
