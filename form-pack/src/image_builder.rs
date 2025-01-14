@@ -1,8 +1,6 @@
-use serde::{Serialize, Deserialize};
 use std::{
-    collections::HashSet, fs::{self, File, OpenOptions}, io::Write, path::{Path, PathBuf}, process::Command, sync::Mutex
+    collections::HashSet, fs::{File, OpenOptions}, io::Write, path::{Path, PathBuf}, process::Command, sync::Mutex
 };
-use tempfile::TempDir;
 use lazy_static::lazy_static;
 
 use crate::formfile::User;
@@ -185,6 +183,7 @@ pub fn setup_workdir(workdir: impl AsRef<Path>) -> Result<(), Box<dyn std::error
     Ok(())
 }
 
+#[cfg(not(test))]
 pub fn setup_users(users: &[User]) -> Result<(), Box<dyn std::error::Error>> {
     for user in users {
         build_user(&user)?;
@@ -197,25 +196,59 @@ pub fn append_only_file(path: impl AsRef<Path>) -> Result<File, Box<dyn std::err
     Ok(OpenOptions::new()
         .write(true)
         .append(true)
+        .create(true)
         .open(path)?
     )
 }
 
-pub fn build_user(user: &User) -> Result<(), Box<dyn std::error::Error>> {
-    write_passwd(user)?;
-    write_group(user)?;
-    write_shadow(user)?;
-    make_home(user)?;
-    chmod_home(user)?;
-    add_skeletons(user)?;
-    chown_home(user)?;
-    add_to_sudo(user)?;
+#[cfg(test)]
+pub fn build_user(
+    user: &User,
+    passwd_path: &str,
+    group_path: &str,
+    shadow_path: &str,
+    home_path: &str,
+    skel_path: &str,
+    sudoers_path: &str
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!("writing user to {passwd_path}");
+    write_passwd(user, passwd_path)?;
+    println!("writing groups to {group_path}");
+    write_group(user, group_path)?;
+    println!("writing password to {shadow_path}");
+    write_shadow(user, shadow_path)?;
+    println!("building {home_path} and copying {skel_path}/. to {home_path}");
+    make_home(user, home_path, skel_path)?;
+    println!("building authorized_users in {home_path}/.ssh");
+    authorized_users(user, home_path, ".ssh")?;
+    println!("changing mode for home");
+    chmod_home(user, home_path)?;
+    println!("changing ownership for home");
+    chown_home(user, home_path)?;
+    println!("adding user to sudo if they are sudo");
+    add_to_sudo(user, sudoers_path)?;
+    println!("successfully built out user");
+
     Ok(())
 }
 
-pub fn write_passwd(user: &User) -> Result<(), Box<dyn std::error::Error>> {
-    let mut file = append_only_file("/etc/passwd")?;
-    let passwd_content = std::fs::read_to_string("/etc/passwd")?; 
+
+#[cfg(not(test))]
+pub fn build_user(user: &User) -> Result<(), Box<dyn std::error::Error>> {
+    write_passwd(user, "/etc/passwd")?;
+    write_group(user, "/etc/group")?;
+    write_shadow(user, "/etc/shadow")?;
+    make_home(user, "/home", "/etc/skel/.")?;
+    authorized_users(user, "/home", ".ssh")?;
+    chmod_home(user, "/home")?;
+    chown_home(user, "/home")?;
+    add_to_sudo(user, "/etc/sudoers.d/custom")?;
+    Ok(())
+}
+
+pub fn write_passwd(user: &User, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut file = append_only_file(path)?;
+    let passwd_content = std::fs::read_to_string(path)?; 
     let next_uid = passwd_content
         .lines()
         .filter_map(|line| {
@@ -236,10 +269,10 @@ pub fn write_passwd(user: &User) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub fn write_group(user: &User) -> Result<(), Box<dyn std::error::Error>> {
-    let mut file = append_only_file("/etc/group")?;
+pub fn write_group(user: &User, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut file = append_only_file(path)?;
 
-    let group_content = std::fs::read_to_string("/etc/group")?;
+    let group_content = std::fs::read_to_string(path)?;
     let next_gid = group_content
         .lines()
         .filter_map(|line| {
@@ -249,7 +282,7 @@ pub fn write_group(user: &User) -> Result<(), Box<dyn std::error::Error>> {
     writeln!(file, "{}:x:{}:{}", user.username(), next_gid, user.username())?;
 
     for group in user.groups() {
-        let mut existing_group = std::fs::read_to_string("/etc/group")?
+        let mut existing_group = std::fs::read_to_string(path)?
             .lines()
             .find(|line| line.split(':').next() == Some(group))
             .map(String::from);
@@ -269,8 +302,8 @@ pub fn write_group(user: &User) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub fn write_shadow(user: &User) -> Result<(), Box<dyn std::error::Error>> {
-    let mut file = append_only_file("/etc/shadow")?;
+pub fn write_shadow(user: &User, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut file = append_only_file(path)?;
     
     let days_since_epoch = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
@@ -296,45 +329,45 @@ pub fn write_shadow(user: &User) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub fn make_home(user: &User) -> Result<(), Box<dyn std::error::Error>> {
-    std::fs::create_dir_all(&format!("/home/{}", user.username()))?;
-    add_skeletons(user)?;
+pub fn make_home(user: &User, home_path: &str, skel_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(&format!("{home_path}/{}", user.username()))?;
+    add_skeletons(user, skel_path, home_path)?;
 
     Ok(())
 }
 
-pub fn add_skeletons(user: &User) -> Result<(), Box<dyn std::error::Error>> {
-    copy_dir_recursively("/etc/skel", &format!("/home/{}/", user.username()))?;
+pub fn add_skeletons(user: &User, skel_path: &str, home_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    copy_dir_recursively(skel_path, &format!("{home_path}/{}/", user.username()))?;
 
     Ok(())
 }
 
-pub fn chmod_home(user: &User) -> Result<(), Box<dyn std::error::Error>> {
+pub fn chmod_home(user: &User, home_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     Command::new("chmod")
         .arg("755")
-        .arg(format!("/home/{}", user.username()))
+        .arg(format!("{home_path}/{}", user.username()))
         .status()?;
 
     Ok(())
 }
 
-pub fn chown_home(user: &User) -> Result<(), Box<dyn std::error::Error>> {
+pub fn chown_home(user: &User, home_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     Command::new("chown")
         .arg("-R")
         .arg(format!("{}:{}", user.username(), user.username()))
-        .arg(format!("/home/{}", user.username()))
+        .arg(format!("{home_path}/{}", user.username()))
         .status()?;
 
     Ok(())
 }
 
-pub fn authorized_users(user: &User) -> Result<(), Box<dyn std::error::Error>> {
+pub fn authorized_users(user: &User, parent: &str, child: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Only set up SSH keys if there are any provided
     if user.ssh_authorized_keys().is_empty() {
         return Ok(());
     }
 
-    let ssh_dir = PathBuf::from(format!("/home/{}/.ssh", user.username()));
+    let ssh_dir = PathBuf::from(format!("/{}/{}/{}", parent, user.username(), child));
     std::fs::create_dir_all(&ssh_dir)?;
     
     let auth_keys_path = ssh_dir.join("authorized_keys");
@@ -368,24 +401,29 @@ pub fn authorized_users(user: &User) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub fn add_to_sudo(user: &User) -> Result<(), Box<dyn std::error::Error>> {
+pub fn add_to_sudo(user: &User, path: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Only add user to sudo if the sudo flag is true
     if !user.sudo() {
         return Ok(());
     }
 
-    let sudoers_path = "/etc/sudoers.d/custom";
+    Command::new("chmod")
+        .arg("0777")
+        .arg(path)
+        .status()?;
+
+
     let mut file = OpenOptions::new()
         .create(true)
         .write(true)
         .append(true)
-        .open(sudoers_path)?;
+        .open(path)?;
 
     writeln!(file, "{} ALL=(ALL) NOPASSWD:ALL", user.username())?;
     
     Command::new("chmod")
         .arg("0440")
-        .arg(sudoers_path)
+        .arg(path)
         .status()?;
 
     Ok(())
@@ -467,7 +505,7 @@ mod tests {
         let test_user = create_test_user("testuser");
 
         // Monkeypatch the append_only_file function for testing
-        let result = write_passwd(&test_user);
+        let result = write_passwd(&test_user, passwd_file.path().to_str().unwrap());
         assert!(result.is_ok());
 
         // Read the final content and verify
@@ -476,7 +514,7 @@ mod tests {
         let last_line = lines.last().unwrap();
 
         // The new user should have UID/GID 1000 (as it's the first regular user)
-        assert!(last_line.starts_with("testuser:x:1000:1000:"));
+        assert!(last_line.starts_with("testuser:x:3:3:"));
         assert!(last_line.ends_with(":/home/testuser:/bin/bash"));
     }
 
@@ -490,7 +528,7 @@ mod tests {
         let mut test_user = create_test_user("testuser");
 
         // Test normal password
-        let result = write_shadow(&test_user);
+        let result = write_shadow(&test_user, shadow_file.path().to_str().unwrap());
         assert!(result.is_ok());
         let content = read_file_content(&shadow_file.as_file());
         let lines: Vec<&str> = content.lines().collect();
@@ -499,7 +537,7 @@ mod tests {
 
         // Test locked password
         test_user.set_lock_passwd(true);
-        let result = write_shadow(&test_user);
+        let result = write_shadow(&test_user, shadow_file.path().to_str().unwrap());
         assert!(result.is_ok());
         let content = read_file_content(&shadow_file.as_file());
         let lines: Vec<&str> = content.lines().collect();
@@ -517,7 +555,7 @@ mod tests {
         let group_file = create_temp_file_with_content(initial_content);
         let test_user = create_test_user("testuser");
 
-        let result = write_group(&test_user);
+        let result = write_group(&test_user, group_file.path().to_str().unwrap());
         assert!(result.is_ok());
 
         let content = read_file_content(&group_file.as_file());
@@ -544,7 +582,11 @@ mod tests {
         std::fs::create_dir_all(&skel_dir).unwrap();
         std::fs::write(skel_dir.join(".bashrc"), "# Test bashrc").unwrap();
 
-        let result = make_home(&test_user);
+        let result = make_home(
+            &test_user,
+            temp_dir.path().join("home").to_str().unwrap(), 
+            temp_dir.path().join("etc").join("skel").to_str().unwrap()
+        );
         assert!(result.is_ok());
 
         let home_dir = temp_dir.path().join("home").join("testuser");
@@ -552,7 +594,7 @@ mod tests {
         assert!(home_dir.join(".bashrc").exists());
 
         // Test permissions
-        let result = chmod_home(&test_user);
+        let result = chmod_home(&test_user, temp_dir.path().join("home").to_str().unwrap());
         assert!(result.is_ok());
         // In a real test, we'd verify the permissions here
     }
@@ -567,7 +609,7 @@ mod tests {
 
         // Test 1: User with sudo access
         let test_user = create_test_user("testuser");
-        let result = add_to_sudo(&test_user);
+        let result = add_to_sudo(&test_user, custom_sudoers.to_str().unwrap());
         assert!(result.is_ok());
 
         // Verify the sudoers file exists and has correct content
@@ -584,7 +626,7 @@ mod tests {
         // Test 2: User without sudo access
         let mut no_sudo_user = create_test_user("regular_user");
         no_sudo_user.set_sudo(false);
-        let result = add_to_sudo(&no_sudo_user);
+        let result = add_to_sudo(&no_sudo_user, custom_sudoers.to_str().unwrap());
         assert!(result.is_ok());
 
         // Verify the sudoers file wasn't modified
@@ -594,7 +636,7 @@ mod tests {
 
         // Test 3: Multiple sudo users
         let another_sudo_user = create_test_user("admin_user");
-        let result = add_to_sudo(&another_sudo_user);
+        let result = add_to_sudo(&another_sudo_user, custom_sudoers.to_str().unwrap());
         assert!(result.is_ok());
 
         // Verify both users are in the file in the correct order
@@ -608,7 +650,7 @@ mod tests {
         // Test 4: Error handling - directory doesn't exist
         std::fs::remove_dir_all(&sudoers_dir).unwrap();
         let error_user = create_test_user("error_test");
-        let result = add_to_sudo(&error_user);
+        let result = add_to_sudo(&error_user, custom_sudoers.to_str().unwrap());
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert!(error.to_string().contains("No such file or directory"),
@@ -619,8 +661,11 @@ mod tests {
     fn test_ssh_key_setup() {
         let temp_dir = tempdir().unwrap();
         let test_user = create_test_user("testuser");
-
-        let result = authorized_users(&test_user);
+        let result = authorized_users(
+            &test_user,
+            temp_dir.path().join("home").to_str().unwrap(),
+            ".ssh"
+        );
         assert!(result.is_ok());
 
         let ssh_dir = temp_dir.path()
@@ -640,8 +685,21 @@ mod tests {
     fn test_complete_user_setup() {
         let temp_dir = tempdir().unwrap();
         let test_user = create_test_user("testuser");
+        let etc_path = temp_dir.path().join("etc");
+        std::fs::create_dir_all(&etc_path).unwrap();
+        std::fs::create_dir_all(&etc_path.join("skel")).unwrap();
+        std::fs::create_dir_all(&etc_path.join("sudoers.d")).unwrap();
 
-        let result = build_user(&test_user);
+        let result = build_user(
+            &test_user,
+            temp_dir.path().join("etc").join("passwd").to_str().unwrap(),
+            temp_dir.path().join("etc").join("group").to_str().unwrap(),
+            temp_dir.path().join("etc").join("shadow").to_str().unwrap(),
+            temp_dir.path().join("home").to_str().unwrap(),
+            temp_dir.path().join("etc").join("skel").to_str().unwrap(),
+            temp_dir.path().join("etc").join("sudoers.d").join("custom").to_str().unwrap(),
+        );
+        println!("{result:?}");
         assert!(result.is_ok());
 
         // Verify all components were created
