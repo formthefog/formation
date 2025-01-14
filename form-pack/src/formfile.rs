@@ -1096,6 +1096,52 @@ pub enum EnvScope {
 pub struct Entrypoint {
     command: String,
     args: Vec<String>,
+    // Add log options
+    // Add env options
+}
+
+pub struct EntrypointBuilder {
+    pub command: Option<String>,
+    pub args: Option<Vec<String>> 
+}
+
+impl Default for EntrypointBuilder {
+    fn default() -> Self {
+        Self { command: None, args: None }
+    }
+}
+
+impl EntrypointBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn command(mut self, command: &str) -> Self {
+        self.command = Some(command.to_string());
+        self
+    }
+
+    pub fn args(mut self, args: Vec<String>) -> Self {
+        self.args = Some(args);
+        self
+    }
+
+    pub fn build(self) -> Entrypoint {
+        Entrypoint {
+            command: self.command.unwrap_or(String::new()),
+            args: self.args.unwrap_or(Vec::new())
+        }
+    }
+}
+
+impl Entrypoint {
+    pub fn command(&self) -> &str {
+        &self.command
+    }
+
+    pub fn args(&self) -> &[String] {
+        &self.args
+    }
 }
 
 #[cfg(test)]

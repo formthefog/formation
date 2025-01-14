@@ -3,7 +3,7 @@ use std::{
 };
 use lazy_static::lazy_static;
 
-use crate::formfile::User;
+use crate::formfile::{Entrypoint, User};
 
 pub const MAX_NBD_DEVICES: usize = 8;
 pub const BUILD_MOUNT_PATH: &str = "/mnt/cloudimg";
@@ -211,23 +211,14 @@ pub fn build_user(
     skel_path: &str,
     sudoers_path: &str
 ) -> Result<(), Box<dyn std::error::Error>> {
-    println!("writing user to {passwd_path}");
     write_passwd(user, passwd_path)?;
-    println!("writing groups to {group_path}");
     write_group(user, group_path)?;
-    println!("writing password to {shadow_path}");
     write_shadow(user, shadow_path)?;
-    println!("building {home_path} and copying {skel_path}/. to {home_path}");
     make_home(user, home_path, skel_path)?;
-    println!("building authorized_users in {home_path}/.ssh");
     authorized_users(user, home_path, ".ssh")?;
-    println!("changing mode for home");
     chmod_home(user, home_path)?;
-    println!("changing ownership for home");
     chown_home(user, home_path)?;
-    println!("adding user to sudo if they are sudo");
     add_to_sudo(user, sudoers_path)?;
-    println!("successfully built out user");
 
     Ok(())
 }
@@ -429,8 +420,70 @@ pub fn add_to_sudo(user: &User, path: &str) -> Result<(), Box<dyn std::error::Er
     Ok(())
 }
 
-pub fn build_entrypoint(user: &User) -> Result<(), Box<dyn std::error::Error>> {
-    todo!()
+pub fn build_entrypoint(
+    entrypoint: &Entrypoint,
+    service_path: &str,
+    wants: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let service_name = "form-app.service";
+    let service_path_full = PathBuf::from(service_path).join(service_name);
+
+    let exec_start = if entrypoint.args().is_empty() {
+        if entrypoint.command().is_empty() {
+            return Ok(())
+        }
+        entrypoint.command().to_string()
+    } else {
+        format!("{} {}", entrypoint.command(), entrypoint.args().join(" "))
+    };
+
+    println!("OPENING SERVICE FILE");
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&service_path_full)?;
+
+    // Write our systemd unit configuration
+    // We're following systemd best practices for long-running application services
+    println!("WRITING TO SERVICE FILE");
+    write!(file, r#"[Unit]
+Description=Form Network Application Service
+After=network.target       # Ensure network is available
+Wants=network-online.target  # Prefer full network connectivity
+
+[Service]
+Type=simple               # Process directly runs the application
+ExecStart={}             # Our application command
+Restart=always           # Automatic restart on failure
+RestartSec=3             # Wait 3 seconds before restart
+StandardOutput=journal    # Log output to system journal
+StandardError=journal     # Log errors to system journal
+SyslogIdentifier=form-app
+
+# Security hardening options
+NoNewPrivileges=true     # Prevent privilege escalation
+ProtectSystem=full       # Read-only access to system files
+ProtectHome=true         # No access to home directories
+PrivateTmp=true          # Private /tmp directory
+
+[Install]
+WantedBy=multi-user.target  # Start on system boot
+"#, exec_start)?;
+
+    println!("CHANGING PERMISSIONS TO SERVICE FILE");
+    Command::new("chmod")
+        .arg("644")
+        .arg(&service_path_full)
+        .status()?;
+
+    let wants_dir = PathBuf::from(&format!("{}/{wants}", service_path));
+    std::fs::create_dir_all(&wants_dir)?;
+    let symlink_path = wants_dir.join(service_name);
+    println!("SYMLINKING WANTS DIR TO SERVICE FILE");
+    std::os::unix::fs::symlink(&service_path_full, &symlink_path)?;
+
+    Ok(())
 }
 
 fn copy_dir_recursively(
@@ -454,7 +507,7 @@ fn copy_dir_recursively(
 
 #[cfg(test)]
 mod tests {
-    use crate::formfile::UserBuilder;
+    use crate::formfile::{EntrypointBuilder, UserBuilder};
 
     use super::*;
     use std::{collections::HashMap, io::{Read, Seek, SeekFrom}, os::unix::fs::PermissionsExt};
@@ -709,5 +762,102 @@ mod tests {
         
         // Verify user entries in system files
         // In a real test environment, we'd check all the file contents
+    }
+
+    #[test]
+    fn test_build_entrypoint_service_creation() -> Result<(), Box<dyn std::error::Error>> {
+        // Create a temporary directory to simulate our chroot environment
+        let temp_dir = tempdir()?;
+        let root_path = temp_dir.path();
+
+        // Create the necessary directory structure
+        // /etc/systemd/system for the service file
+        let systemd_system_dir = root_path.join("etc/systemd/system");
+        std::fs::create_dir_all(&systemd_system_dir)?;
+        
+        // /etc/systemd/system/multi-user.target.wants for the symlink
+        let wants_dir = systemd_system_dir.join("multi-user.target.wants");
+        std::fs::create_dir_all(&wants_dir)?;
+
+        // Create an entrypoint with a realistic application setup
+        let entrypoint = EntrypointBuilder::new()
+            .command("/usr/local/bin/myapp")
+            .args(vec!["--port".to_string(), "8080".to_string()])
+            .build();
+
+        let result = build_entrypoint(&entrypoint, systemd_system_dir.to_str().unwrap(), "multi-user.target.wants");
+        assert!(result.is_ok());
+
+        // Verify the service file exists and has correct content
+        let service_path = systemd_system_dir.join("form-app.service");
+        assert!(service_path.exists(), "Service file was not created");
+
+        let service_content = std::fs::read_to_string(&service_path)?;
+
+        // Verify the essential parts of the service file
+        assert!(service_content.contains("[Unit]"), "Missing Unit section");
+        assert!(service_content.contains("[Service]"), "Missing Service section");
+        assert!(service_content.contains("[Install]"), "Missing Install section");
+
+        // Verify the specific configuration we care about
+        assert!(service_content.contains("Description=Form Network Application Service"),
+            "Missing or incorrect description");
+        assert!(service_content.contains("ExecStart=/usr/local/bin/myapp --port 8080"),
+            "Incorrect ExecStart command");
+        assert!(service_content.contains("Restart=always"),
+            "Missing or incorrect restart policy");
+        assert!(service_content.contains("Type=simple"),
+            "Missing or incorrect service type");
+
+        // Verify security settings
+        assert!(service_content.contains("NoNewPrivileges=true"),
+            "Missing NoNewPrivileges security setting");
+        assert!(service_content.contains("ProtectSystem=full"),
+            "Missing ProtectSystem security setting");
+        assert!(service_content.contains("ProtectHome=true"),
+            "Missing ProtectHome security setting");
+
+        // Verify the service file permissions
+        let metadata = std::fs::metadata(&service_path)?;
+        let permissions = metadata.permissions();
+        #[cfg(unix)]
+        assert_eq!(permissions.mode() & 0o777, 0o644,
+            "Service file has incorrect permissions");
+
+        // Verify the symlink exists and points to the correct location
+        let symlink_path = wants_dir.join("form-app.service");
+        assert!(symlink_path.exists(), "Symlink was not created");
+
+        // On Unix systems, verify it's actually a symlink and points to the right place
+        #[cfg(unix)]
+        {
+            assert!(std::fs::symlink_metadata(&symlink_path)?.file_type().is_symlink(),
+                "File exists but is not a symlink");
+            
+            let link_target = std::fs::read_link(&symlink_path)?;
+            assert_eq!(link_target, temp_dir.path().join("etc").join("systemd").join("system").join("form-app.service"),
+                "Symlink points to incorrect target");
+        }
+
+        // Test error cases - try to create service in non-existent directory
+        let bad_temp_dir = tempdir()?;
+        let bad_path = bad_temp_dir.path();
+        // Don't create the systemd directory structure
+        let bad_entrypoint = EntrypointBuilder::new()
+            .command("/usr/local/bin/myapp")
+            .args(vec![])
+            .build();
+
+        let result = build_entrypoint(
+            &bad_entrypoint,
+            bad_path.join("systemd").join("system").to_str().unwrap(), 
+            "multi-user.target.wants"
+        );
+
+        assert!(result.is_err(), "Should fail when systemd directory doesn't exist");
+        assert!(result.unwrap_err().to_string().contains("No such file or directory"),
+            "Unexpected error message for missing directory");
+
+        Ok(())
     }
 }
