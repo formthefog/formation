@@ -9,6 +9,7 @@ pub struct FormfileParser {
     system_config: Vec<SystemConfigOpt>,
     users: Vec<User>,
     workdir: Option<PathBuf>,
+    entrypoint: Entrypoint,
 }
 
 impl FormfileParser {
@@ -19,6 +20,10 @@ impl FormfileParser {
             system_config: Vec::new(),
             users: Vec::new(),
             workdir: None,
+            entrypoint: Entrypoint {
+                command: String::new(),
+                args: Vec::new()
+            }
         }
     }
 
@@ -80,6 +85,7 @@ impl FormfileParser {
             "MEMORY" | "MEM" | "MBS" => self.parse_memory(args)?,
             "DISK" | "STORAGE" => self.parse_disk(args)?,
             "WORKDIR" => self.parse_workdir(args)?,
+            "ENTRYPOINT" => self.parse_entrypoint(args)?,
             _ => {}
         }
 
@@ -87,7 +93,113 @@ impl FormfileParser {
         Ok(())
     }
 
-    pub fn parse_workdir(&mut self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    fn split_command_string(&self, input: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let mut result = Vec::new();
+        let mut current = String::new();
+        let mut in_quotes = false;
+        let mut chars = input.chars().peekable();
+
+        while let Some(c) = chars.next() {
+            match c {
+                '"' => {
+                    in_quotes = !in_quotes;
+                }
+                ' ' => {
+                    if !current.is_empty() {
+                        result.push(current.clone());
+                        current.clear();
+                    }
+                }
+                _ => {
+                    current.push(c);
+                }
+            }
+        }
+
+        if in_quotes {
+            return Err(
+                Box::new(
+                    std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("Unclosed quotes in ENTRYPOINT on line {}", self.current_line)
+                    )
+                )
+            );
+        }
+
+        if !current.is_empty() {
+            result.push(current);
+        }
+
+        Ok(result)
+    }
+
+    pub fn parse_entrypoint(
+        &mut self,
+        args: &str
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let trimmed = args.trim();
+
+        if trimmed.is_empty() {
+            return Ok(())
+        }
+        
+        // Handle JSON array format: ["command", "arg1", "arg2"]
+        if trimmed.starts_with('[') {
+            if !trimmed.ends_with(']') {
+                return Err(
+                    Box::new(
+                        std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            format!(
+                                "Malformed JSON array in ENTRYPOIONT - missing closing bracket on line {}",
+                                self.current_line
+                            )
+                        )
+                    )
+                );
+            }
+
+            let mut parts: Vec<String> = serde_json::from_str(&trimmed).map_err(|e| {
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Invalid JSON in ENTRYPOINT array on line {}: {}", self.current_line, e)
+                ))
+            })?;
+            
+            if parts.is_empty() {
+                return Ok(())
+            }
+
+            let command = parts.remove(0).clone();
+            let args = parts;
+
+            self.instructions.push(BuildInstruction::Entrypoint(Entrypoint {
+                command,
+                args,
+            }));
+        } else {
+            let mut parts = self.split_command_string(trimmed)?; 
+            if parts.is_empty() {
+                return Ok(())
+            }
+
+            let command = parts.remove(0).clone();
+            let args = parts.clone();
+
+            self.instructions.push(BuildInstruction::Entrypoint(Entrypoint {
+                command,
+                args,
+            }));
+        }
+
+        Ok(())
+    }
+
+    pub fn parse_workdir(
+        &mut self,
+        path: &str
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let path = path.trim();
 
         if !path.starts_with('/') {
@@ -1255,5 +1367,105 @@ mod tests {
         assert!(formfile.build_instructions.iter().any(|i| matches!(i, BuildInstruction::Run(_))));
 
         Ok(())
+    }
+
+    #[test]
+    fn test_entrypoint_empty_cases() {
+        let mut parser = FormfileParser::new();
+        
+        // Test completely empty ENTRYPOINT
+        let result = parser.parse_entrypoint("");
+        println!("{result:?}");
+        assert!(result.is_ok());
+        assert!(parser.instructions.is_empty());
+        
+        // Test whitespace-only ENTRYPOINT
+        let mut parser = FormfileParser::new();
+        let result = parser.parse_entrypoint("   ");
+        println!("{result:?}");
+        assert!(result.is_ok());
+        assert!(parser.instructions.is_empty());
+        
+        // Test empty JSON array
+        let mut parser = FormfileParser::new();
+        let result = parser.parse_entrypoint("[]");
+        println!("{result:?}");
+        assert!(result.is_ok());
+        assert!(parser.instructions.is_empty());
+        
+        // Test JSON array with whitespace
+        let mut parser = FormfileParser::new();
+        let result = parser.parse_entrypoint("[    ]");
+        println!("{result:?}");
+        assert!(result.is_ok());
+        assert!(parser.instructions.is_empty());
+    }
+
+    #[test]
+    fn test_entrypoint_json_array_format() {
+        let mut parser = FormfileParser::new();
+        
+        // Test valid JSON array format
+        let result = parser.parse_entrypoint(r#"["npm", "/app/server.js"]"#);
+        assert!(result.is_ok());
+        
+        if let Some(BuildInstruction::Entrypoint(entrypoint)) = parser.instructions.last() {
+            assert_eq!(entrypoint.command, "npm");
+            assert_eq!(entrypoint.args, vec!["/app/server.js"]);
+        } else {
+            panic!("Expected Entrypoint instruction");
+        }
+
+        // Test with multiple arguments
+        let mut parser = FormfileParser::new();
+        let result = parser.parse_entrypoint(r#"["/usr/bin/python3", "-m", "flask", "run"]"#);
+        assert!(result.is_ok());
+        
+        if let Some(BuildInstruction::Entrypoint(entrypoint)) = parser.instructions.last() {
+            assert_eq!(entrypoint.command, "/usr/bin/python3");
+            assert_eq!(entrypoint.args, vec!["-m", "flask", "run"]);
+        }
+    }
+
+    #[test]
+    fn test_entrypoint_shell_format() {
+        let mut parser = FormfileParser::new();
+        
+        // Test basic shell format
+        let result = parser.parse_entrypoint("npm /app/server.js");
+        assert!(result.is_ok());
+        
+        if let Some(BuildInstruction::Entrypoint(entrypoint)) = parser.instructions.last() {
+            assert_eq!(entrypoint.command, "npm");
+            assert_eq!(entrypoint.args, vec!["/app/server.js"]);
+        }
+
+        // Test with quoted arguments
+        let mut parser = FormfileParser::new();
+        let result = parser.parse_entrypoint(r#"python3 -m "flask run""#);
+        assert!(result.is_ok());
+        
+        if let Some(BuildInstruction::Entrypoint(entrypoint)) = parser.instructions.last() {
+            assert_eq!(entrypoint.command, "python3");
+            assert_eq!(entrypoint.args, vec!["-m", "flask", "run"]);
+        }
+    }
+
+    #[test]
+    fn test_entrypoint_malformed_json() {
+        let mut parser = FormfileParser::new();
+        
+        // Test malformed JSON that should error
+        let result = parser.parse_entrypoint(r#"["unclosed"#);
+        println!("Result: {result:?}");
+        assert!(result.is_err());
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("missing closing bracket"),"Unexpected error message: {}", error);
+        
+        // Test invalid JSON content
+        let result = parser.parse_entrypoint(r#"[not, valid, json]"#);
+        assert!(result.is_err());
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("Invalid JSON in ENTRYPOINT array"), "Unexpected error message: {}", error);
     }
 }
