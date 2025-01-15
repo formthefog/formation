@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand, Args, ArgGroup};
-use vmm_service::{api::CreateVmRequest, Distro};
+use vmm_service::Distro;
+use form_types::CreateVmRequest;
 
 #[derive(Debug, Parser)]
 #[command(name = "form", about = "Formation Developer Client")]

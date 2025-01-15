@@ -21,6 +21,7 @@ use seccompiler::SeccompAction;
 use tokio::task::JoinHandle;
 use form_types::{FormnetMessage, FormnetTopic, GenericPublisher, PeerType, VmmEvent, VmmSubscriber};
 use form_broker::{subscriber::SubStream, publisher::PubStream};
+use futures::future::join_all;
 use crate::{api::VmmApi, util::ensure_directory};
 use crate::util::add_tap_to_bridge;
 use crate::ChError;
@@ -360,7 +361,6 @@ impl FormVmApi {
 }
 
 pub struct VmManager {
-    // We need to stash threads & socket paths
     pub config: ServiceConfig,
     vm_monitors: HashMap<String, FormVmm>, 
     server: JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>>,
@@ -524,7 +524,7 @@ impl VmManager {
         log::info!("Inserting Form VMM into vm_monitoris map");
         self.vm_monitors.insert(config.name.clone(), vmm);
         log::info!("Calling `boot` on FormVmm");
-        self.boot(config.name.clone()).await?;
+        self.boot(&config.name).await?;
 
         if let Err(e) = add_tap_to_bridge("br0", &config.tap_device.clone()).await {
             log::error!("Error attempting to add tap device {} to bridge: {e}", &config.tap_device)
@@ -534,32 +534,32 @@ impl VmManager {
         Ok(())
     }
 
-    pub async fn boot(&mut self, name: String) -> ApiResult<()> {
-        self.get_vmm(&name)?.api.boot().await
+    pub async fn boot(&mut self, name: &String) -> ApiResult<()> {
+        self.get_vmm(name)?.api.boot().await
     }
     
-    pub async fn ping(&self, name: String) -> ApiResult<VmmPingResponse> {
-        self.get_vmm(&name)?.api.ping().await
+    pub async fn ping(&self, name: &String) -> ApiResult<VmmPingResponse> {
+        self.get_vmm(name)?.api.ping().await
     }
 
-    pub async fn shutdown(&self, name: String) -> ApiResult<()> {
-        self.get_vmm(&name)?.api.shutdown().await
+    pub async fn shutdown(&self, name: &String) -> ApiResult<()> {
+        self.get_vmm(name)?.api.shutdown().await
     }
 
-    pub async fn pause(&self, name: String) -> ApiResult<()> {
-        self.get_vmm(&name)?.api.pause().await
+    pub async fn pause(&self, name: &String) -> ApiResult<()> {
+        self.get_vmm(name)?.api.pause().await
     }
 
-    pub async fn resume(&self, name: String) -> ApiResult<()> {
-        self.get_vmm(&name)?.api.resume().await
+    pub async fn resume(&self, name: &String) -> ApiResult<()> {
+        self.get_vmm(name)?.api.resume().await
     }
 
-    pub async fn reboot(&self, name: String) -> ApiResult<()> {
-        self.get_vmm(&name)?.api.reboot().await
+    pub async fn reboot(&self, name: &String) -> ApiResult<()> {
+        self.get_vmm(name)?.api.reboot().await
     }
 
-    pub async fn delete(&mut self, name: String) -> ApiResult<()> {
-        let api = &self.get_vmm(&name)?.api;
+    pub async fn delete(&mut self, name: &String) -> ApiResult<()> {
+        let api = &self.get_vmm(name)?.api;
         let resp = api.delete().await?;
         match &resp {
             ApiResponse::SuccessNoContent { .. } => {
@@ -582,8 +582,12 @@ impl VmManager {
         }
     }
 
+    pub async fn info(&self, name: &String) -> ApiResult<VmInfo> {
+        self.get_vmm(name)?.api.info().await
+    }
+
     pub async fn power_button(&self, name: &String) -> ApiResult<()> {
-        self.get_vmm(&name)?.api.power_button().await
+        self.get_vmm(name)?.api.power_button().await
     }
 
     pub async fn run(
@@ -648,7 +652,7 @@ impl VmManager {
     async fn handle_vmm_event(&mut self, event: &VmmEvent) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
         match event {
             VmmEvent::Ping { name } => {
-                let resp = self.ping(name.to_string()).await?;
+                let resp = self.ping(name).await?;
                 self.api_response_sender.send(
                     serde_json::to_string(&resp)?
                 ).await?;
@@ -677,14 +681,41 @@ impl VmManager {
             }
             VmmEvent::Stop { id, .. } => {
                 //TODO: verify ownership/authorization, etc.
-                self.pause(id.to_string()).await?;
+                self.pause(id).await?;
             }
             VmmEvent::Start {  id, .. } => {
                 //TODO: verify ownership/authorization, etc.
-                self.boot(id.to_string()).await?;
+                self.boot(id).await?;
             }
             VmmEvent::Delete { id, .. } => {
-                self.delete(id.to_string()).await?;
+                self.delete(id).await?;
+            }
+            VmmEvent::Get { id, .. } => {
+                let resp = serde_json::to_string(&self.info(id).await?)?;
+                self.api_response_sender.send(
+                    resp
+                ).await?;
+            }
+            VmmEvent::GetList { .. } => {
+                let resp_futures = join_all(self.vm_monitors.iter().map(|(_id, vmm)| async {
+                    vmm.api.info().await
+                }).collect::<Vec<_>>()).await;
+                let resp = resp_futures.iter().filter_map(|info| {
+                    match info {
+                        Ok(ApiResponse::Success { code: _, content }) => {
+                            match content {
+                                Some(content) => Some(content),
+                                None => None
+                            }
+                        }
+                        _ => None
+                    }
+                }).collect::<Vec<_>>();
+
+                let resp = serde_json::to_string(&resp)?;
+                self.api_response_sender.send(
+                    resp
+                ).await?;
             }
             _ => {}
             

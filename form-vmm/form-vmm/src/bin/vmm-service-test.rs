@@ -1,4 +1,5 @@
-use vmm_service::{api::CreateVmRequest, ServiceConfig, VmManager};
+use vmm_service::{ServiceConfig, VmManager};
+use form_types::CreateVmRequest;
 use clap::Parser;
 
 #[derive(Parser)]
