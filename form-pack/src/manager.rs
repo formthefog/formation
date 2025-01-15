@@ -240,7 +240,7 @@ impl FormPackMonitor {
     pub async fn start_build_server(&mut self, container_id: &str, port: u16) -> Result<(), Box<dyn std::error::Error>> {
         let port = port.to_string();
         let exec_opts = CreateExecOptions {
-            cmd: Some(vec!["/bin/bash/form-build-server", "--port", &port]),
+            cmd: Some(vec!["form-build-server", "--port", &port]),
             attach_stdout: Some(true),
             attach_stderr: Some(true),
             env: Some(vec!["RUST_LOG=info"]),

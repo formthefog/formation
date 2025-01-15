@@ -3254,6 +3254,9 @@ dependencies = [
  "clap",
  "flate2",
  "futures-util",
+ "hyper 1.5.2",
+ "hyper-util",
+ "hyperlocal",
  "lazy_static",
  "rand",
  "reqwest 0.12.12",
@@ -3264,6 +3267,7 @@ dependencies = [
  "tar",
  "tempfile",
  "tokio",
+ "tower 0.5.2",
  "uuid",
 ]
 

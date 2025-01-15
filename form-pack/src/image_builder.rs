@@ -1,11 +1,13 @@
 use std::{
-    collections::HashSet, fs::{File, OpenOptions}, io::Write, path::{Path, PathBuf}, process::Command, sync::Arc
+    collections::HashSet, fs::{File, OpenOptions}, io::Write, os::unix::fs::PermissionsExt, path::{Path, PathBuf}, process::Command, sync::Arc
 };
 use axum::{routing::post, Json, Router};
 use lazy_static::lazy_static;
 use serde_json::Value;
 use serde::{Serialize, Deserialize};
 use tokio::sync::Mutex;
+use tokio::net::UnixListener;
+use hyperlocal::UnixListenerExt;
 use crate::formfile::{BuildInstruction, Entrypoint, EnvScope, EnvVariable, Formfile, User};
 
 macro_rules! try_failure {
@@ -36,7 +38,13 @@ pub fn routes() -> Router {
         .route("/formfile", post(handle_formfile))
 }
 
+pub async fn serve_socket(_socket_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    todo!()
+}
+
 pub async fn serve(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
+    println!("Attempting to bind to {addr}");
+
     let router = routes();
     let listener = tokio::net::TcpListener::bind(
         addr
@@ -63,6 +71,7 @@ async fn handle_formfile(
     try_failure!(std::fs::create_dir_all(formfile.workdir.clone()));
     try_failure!(build_artifacts_in_image());
     try_failure!(update_apt_get());
+
     for user in &formfile.users {
         #[cfg(not(test))]
         try_failure!(build_user(user));
