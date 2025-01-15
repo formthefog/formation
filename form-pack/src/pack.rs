@@ -2,7 +2,15 @@ use std::{path::{Path, PathBuf}, fs, io};
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use tar::Builder;
-use crate::image_builder::copy_dir_recursively;
+use serde::{Serialize, Deserialize};
+use crate::{formfile::Formfile, image_builder::copy_dir_recursively};
+
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FormPack {
+    pub formfile: Formfile,
+    pub artifacts: Vec<u8>,
+}
 
 pub struct Pack {
     context_dir: PathBuf,
@@ -23,14 +31,14 @@ impl Pack {
 
     pub fn prepare_artifacts(
         &self,
-        copy_instructions: &[PathBuf],
+        copy_instructions: &[(PathBuf, PathBuf)],
     ) -> Result<PathBuf, Box<dyn std::error::Error>> {
         if copy_instructions.is_empty() {
             copy_dir_recursively(&self.context_dir, &self.artifact_dir)?;
         } else {
-            for path in copy_instructions {
-                let source = self.context_dir.join(path);
-                let dest = self.artifact_dir.join(path);
+            for (from, _) in copy_instructions {
+                let source = self.context_dir.join(from);
+                let dest = self.artifact_dir.join(from);
 
                 if source.is_dir() {
                     fs::create_dir_all(&dest)?;

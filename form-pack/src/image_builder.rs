@@ -1,15 +1,103 @@
 use std::{
-    collections::HashSet, fs::{File, OpenOptions}, io::Write, path::{Path, PathBuf}, process::Command, sync::Mutex
+    collections::HashSet, fs::{File, OpenOptions}, io::Write, path::{Path, PathBuf}, process::Command, sync::Arc
 };
+use axum::{routing::post, Json, Router};
 use lazy_static::lazy_static;
+use serde_json::Value;
+use serde::{Serialize, Deserialize};
+use tokio::sync::Mutex;
+use crate::formfile::{BuildInstruction, Entrypoint, EnvScope, EnvVariable, Formfile, User};
 
-use crate::formfile::{Entrypoint, User};
+macro_rules! try_failure {
+    ($expr:expr) => {
+        match $expr {
+            Ok(value) => value,
+            Err(_) => return Json(FormfileResponse::Failure),
+        }
+    };
+}
 
 pub const MAX_NBD_DEVICES: usize = 8;
 pub const BUILD_MOUNT_PATH: &str = "/mnt/cloudimg";
 
 lazy_static! {
     static ref NBD_MANAGER: Mutex<NbdDeviceManager> = Mutex::new(NbdDeviceManager::new());
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum FormfileResponse {
+    Success,
+    Failure
+}
+
+pub fn routes() -> Router {
+    Router::new()
+        .route("/ping", post(handle_ping))
+        .route("/formfile", post(handle_formfile))
+}
+
+pub async fn serve(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let router = routes();
+    let listener = tokio::net::TcpListener::bind(
+        addr
+    ).await?;
+
+    if let Err(e) = axum::serve(listener, router).await {
+        eprintln!("Error in FormPackManager API Server: {e}");
+    }
+
+    Ok(())
+}
+
+async fn handle_ping() -> Json<Value> {
+    return Json(serde_json::json!({"ping": "pong"}));
+}
+
+async fn handle_formfile(
+    Json(formfile): Json<Formfile>,
+) -> Json<FormfileResponse> {
+    let mut formfile = formfile;
+    let device = try_failure!(NbdDevice::new(&PathBuf::from(BUILD_MOUNT_PATH)).await); 
+    try_failure!(mount_nbd_device(device));
+    try_failure!(chroot_into_mount());
+    try_failure!(std::fs::create_dir_all(formfile.workdir.clone()));
+    try_failure!(build_artifacts_in_image());
+    try_failure!(update_apt_get());
+    for user in &formfile.users {
+        #[cfg(not(test))]
+        try_failure!(build_user(user));
+    }
+
+    let no_copy = formfile.build_instructions.iter().any(|inst| {
+        match inst {
+            BuildInstruction::Copy(..) => true,
+            _ => false,
+        }}
+    );
+
+    if no_copy {
+        formfile.build_instructions.push(
+            BuildInstruction::Copy(
+                PathBuf::from("/artifacts"),
+                PathBuf::from("/workdir") 
+            )
+        )
+    }
+
+    for instruction in &formfile.build_instructions {
+        match instruction {
+            BuildInstruction::Install(opts) => try_failure!(install_packages(&opts.packages)),
+            BuildInstruction::Run(command) => try_failure!(run_command(&command)), 
+            BuildInstruction::Copy(from, to) => try_failure!(copy_file(from, to)),
+            BuildInstruction::Entrypoint(entrypoint) => try_failure!(
+                build_entrypoint(entrypoint, "/etc/systemd/system", "multi-user.target.wants")
+            ),
+            BuildInstruction::Env(envvar) => try_failure!(add_env_var(envvar.clone())), 
+            BuildInstruction::Expose(_) => {} 
+        }
+    }
+
+    return Json(FormfileResponse::Success);
 }
 
 struct NbdDeviceManager {
@@ -46,8 +134,8 @@ pub struct NbdDevice {
 }
 
 impl NbdDevice {
-    pub fn new(image: &Path) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut manager = NBD_MANAGER.lock()?;
+    pub async fn new(image: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut manager = NBD_MANAGER.lock().await;
 
         //TODO: Place the request in a queue and/or send to a different node
         //to have built
@@ -120,17 +208,17 @@ impl Drop for NbdDevice {
             eprintln!("Failed to disconnect NBD device: {e}");
         }
 
-        // Release t he device number back to the pool
-        NBD_MANAGER.lock().unwrap().release_device(self.device_id);
+        // Release the device number back to the pool
+        NBD_MANAGER.blocking_lock().release_device(self.device_id);
+        println!("Performing cleanup in background task");
         eprintln!("Released NBD device {}", self.device_id);
     }
 }
 
 pub fn mount_nbd_device(device: NbdDevice) -> Result<(), Box<dyn std::error::Error>> {
-    let mount_path = BUILD_MOUNT_PATH.to_string();
     Command::new("mount")
         .arg(device.device.clone())
-        .arg(mount_path)
+        .arg(BUILD_MOUNT_PATH)
         .status()?;
 
     Ok(())
@@ -152,11 +240,45 @@ pub fn chroot_into_mount() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+pub fn build_artifacts_in_image() -> Result<(), Box<dyn std::error::Error>> {
+    let artifacts_path = PathBuf::from("/artifacts");
+    let mount_artifacts_path = PathBuf::from(BUILD_MOUNT_PATH).join("artifacts");
+    std::fs::create_dir_all(mount_artifacts_path.clone())?;
+    copy_dir_recursively(artifacts_path, mount_artifacts_path)
+}
+
 pub fn install_packages(packages: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     Command::new("apt-get")
         .arg("install")
         .args(packages)
         .status()?;
+
+    Ok(())
+}
+pub fn run_command(command: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut parts: Vec<&str> = command.split_whitespace().map(|s| s).collect();
+    if parts.is_empty() {
+        return Ok(())
+    }
+    
+    // Guaranteed to be Some at this point
+    let command = parts.remove(0);
+    let args = &parts[..];
+
+    std::process::Command::new(&command)
+        .args(args)
+        .status()?;
+
+    Ok(())
+}
+
+pub fn copy_file(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<(), Box<dyn std::error::Error>> {
+    let artifacts_from = PathBuf::from("/artifacts").join(from);
+    if to.as_ref().is_dir() {
+        copy_dir_recursively(&artifacts_from, &to)?;
+    } else {
+        std::fs::copy(artifacts_from, to)?;
+    };
 
     Ok(())
 }
@@ -420,6 +542,41 @@ pub fn add_to_sudo(user: &User, path: &str) -> Result<(), Box<dyn std::error::Er
     Ok(())
 }
 
+pub fn add_env_var(envvar: EnvVariable) -> Result<(), Box<dyn std::error::Error>> {
+    let scope = envvar.scope;
+    match scope {
+        EnvScope::System => {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .append(true)
+                .create(true)
+                .open("/etc/profile")?;
+
+            writeln!(file, "{}", format!("{}={}", envvar.key, envvar.value))?;
+        },
+        EnvScope::User(user) => {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .append(true)
+                .create(true)
+                .open(&format!("/home/{}/.bashrc", user))?;
+
+            writeln!(file, "{}", format!("{}={}", envvar.key, envvar.value))?;
+        },
+        EnvScope::Service(service) => {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .append(true)
+                .create(true)
+                .open(&format!("/etc/{}.env", service))?;
+
+            writeln!(file, "{}", format!("{}={}", envvar.key, envvar.value))?;
+        }, 
+    }
+
+    Ok(())
+}
+
 pub fn build_entrypoint(
     entrypoint: &Entrypoint,
     service_path: &str,
@@ -457,6 +614,7 @@ Type=simple               # Process directly runs the application
 ExecStart={}             # Our application command
 Restart=always           # Automatic restart on failure
 RestartSec=3             # Wait 3 seconds before restart
+EnvironmnetFile=/etc/form-app.env
 StandardOutput=journal    # Log output to system journal
 StandardError=journal     # Log errors to system journal
 SyslogIdentifier=form-app

@@ -67,17 +67,8 @@ impl FormfileParser {
             )?;
 
         match instruction {
-            "RUN" => {
-                self.instructions.push(
-                    BuildInstruction::Run(args.to_string())
-                );
-            },
-            "COPY" => {
-                let path = PathBuf::from(args);
-                self.instructions.push(
-                    BuildInstruction::Copy(path)
-                );
-            },
+            "RUN" => self.parse_run(args)?,
+            "COPY" => self.parse_copy(args)?,
             "INSTALL" => self.parse_install(args)?,
             "ENV" => self.parse_env(args)?,
             "USER" => self.parse_user(args)?,
@@ -89,7 +80,42 @@ impl FormfileParser {
             _ => {}
         }
 
+        Ok(())
+    }
 
+    fn parse_run(&mut self, args: &str) -> Result<(), Box<dyn std::error::Error>> {
+        self.instructions.push(
+            BuildInstruction::Run(args.to_string())
+        );
+        Ok(())
+    }
+
+    fn parse_copy(&mut self, args: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let parts: Vec<&str> = args.split_whitespace().map(|s| s).collect();
+        if parts.len() < 2 {
+            return Err(
+                Box::new(
+                    std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("COPY command on line {} has less than 2 args, COPY must have a from and to args", self.current_line)
+                )
+            ));
+        }
+
+        if parts.len() < 2 {
+            return Err(
+                Box::new(
+                    std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("COPY command on line {} has less than 2 args, COPY must have a from and to args", self.current_line)
+                )
+            ));
+        }
+        let from = parts[0];
+        let to = parts[1];
+        self.instructions.push(
+            BuildInstruction::Copy(PathBuf::from(from), PathBuf::from(to))
+        );
         Ok(())
     }
 
@@ -878,7 +904,7 @@ pub enum BuildInstruction {
     /// if none is provided a default . will be added, and ALL files
     /// from the directory will be copied into the artifacts directory,
     /// tarballed and then copied into the WORKDIR
-    Copy(PathBuf),
+    Copy(PathBuf, PathBuf),
     /// Install system packages, this can be done with Run command as well,
     /// however, this particular command ONLY installs packages using apt-get
     Install(InstallOpts),
@@ -892,7 +918,7 @@ pub enum BuildInstruction {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstallOpts {
-    packages: Vec<String>
+    pub packages: Vec<String>
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1408,7 +1434,7 @@ mod tests {
         assert_eq!(formfile.users[0].username, "webdev");
         
         // Verify build instructions
-        assert!(formfile.build_instructions.iter().any(|i| matches!(i, BuildInstruction::Copy(_))));
+        assert!(formfile.build_instructions.iter().any(|i| matches!(i, BuildInstruction::Copy(..))));
         assert!(formfile.build_instructions.iter().any(|i| matches!(i, BuildInstruction::Install(_))));
         assert!(formfile.build_instructions.iter().any(|i| matches!(i, BuildInstruction::Run(_))));
 
