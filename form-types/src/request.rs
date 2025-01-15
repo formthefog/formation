@@ -66,3 +66,9 @@ pub struct VmResponse {
     pub name: String,
     pub state: String,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum VmmResponse {
+    Success(VmResponse),
+    Failure(String),
+}

@@ -1,9 +1,9 @@
 use std::{fs::OpenOptions, io::Read, path::Path};
 use alloy::signers::k256::ecdsa::{RecoveryId, SigningKey}; 
-use alloy_signer_local::{coins_bip39::English, LocalSigner, MnemonicBuilder};
+use alloy_signer_local::{coins_bip39::English, MnemonicBuilder};
 use clap::Args;
 use form_types::{CreateVmRequest, VmResponse};
-use reqwest::{Client, Response};
+use reqwest::Client;
 use serde::{Serialize, Deserialize};
 use sha3::{Sha3_256, Digest};
 
@@ -76,7 +76,7 @@ impl CreateCommmand {
         let resp = Client::new().post(provider).json(
             &self.to_request()?
         ).send().await.map_err(|e| e.to_string())?;
-        Ok(resp.json()?)
+        Ok(resp.json().await.map_err(|e| e.to_string())?)
     }
 
     pub fn to_request(&mut self) -> Result<CreateVmRequest, String> {

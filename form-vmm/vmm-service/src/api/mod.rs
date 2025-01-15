@@ -4,7 +4,7 @@ use axum::{
     Json,
     extract::State,
 };
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::de::DeserializeOwned; 
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use vmm::api::{VmInfo, VmmPingResponse};
@@ -12,7 +12,7 @@ use std::{sync::Arc, time::Duration};
 use std::net::SocketAddr;
 
 use crate::VmmError;
-use form_types::{PingVmmRequest, CreateVmRequest, StartVmRequest, StopVmRequest, DeleteVmRequest, GetVmRequest, VmmEvent, VmResponse};
+use form_types::{CreateVmRequest, DeleteVmRequest, GetVmRequest, PingVmmRequest, StartVmRequest, StopVmRequest, VmResponse, VmmEvent, VmmResponse};
 
 pub struct VmmApiChannel {
     event_sender: mpsc::Sender<VmmEvent>,
@@ -155,7 +155,7 @@ async fn ping(
 async fn create(
     State(channel): State<Arc<Mutex<VmmApiChannel>>>,
     Json(request): Json<CreateVmRequest>,
-) -> Result<Json<VmResponse>, String> {
+) -> Json<VmmResponse> {
     log::info!(
         "Received VM create request: name={}, distro={}, version={}",
         request.name, request.distro, request.version
@@ -180,9 +180,11 @@ async fn create(
         console_type: None,
     };
 
-    let _ = request_receive::<()>(channel, event).await?;
+    if let Err(e) = request_receive::<()>(channel, event).await {
+        return Json(VmmResponse::Failure(e.to_string()));
+    }
 
-    Ok(Json(VmResponse {
+    Json(VmmResponse::Success(VmResponse {
         id: "pending".to_string(),
         name: request.name,
         state: "pending".to_string()
@@ -193,25 +195,28 @@ async fn create(
 async fn start(
     State(channel): State<Arc<Mutex<VmmApiChannel>>>,
     Json(request): Json<StartVmRequest>,
-) -> Result<Json<VmResponse>, String> {
+) -> Json<VmmResponse> {
     let event = VmmEvent::Start {
         id: request.id.clone(),
         owner: "test".to_string(),
         recovery_id: 0,
         requestor: "node".to_string(),
     };
-    let _ = request_receive::<()>(channel, event).await?;
-    Ok(Json(VmResponse {
-        id: request.id, 
-        name: request.name,
-        state: "pending".to_string()
+    if let Err(e) = request_receive::<()>(channel, event).await {
+        return Json(VmmResponse::Failure(e.to_string()))
+    }
+    Json(VmmResponse::Success(
+        VmResponse {
+            id: request.id, 
+            name: request.name,
+            state: "pending".to_string()
     }))
 }
 
 async fn stop(
     State(channel): State<Arc<Mutex<VmmApiChannel>>>,
     Json(request): Json<StopVmRequest>,
-) -> Result<Json<VmResponse>, String> {
+) -> Json<VmmResponse> {
     let event = VmmEvent::Stop {
         id: request.id.clone(),
         owner: "test".to_string(),
@@ -219,18 +224,21 @@ async fn stop(
         requestor: "node".to_string(),
     };
 
-    let _ = request_receive::<()>(channel, event).await?;
-    Ok(Json(VmResponse {
-        id: request.id, 
-        name: request.name,
-        state: "pending".to_string()
+    if let Err(e) = request_receive::<()>(channel, event).await {
+        return Json(VmmResponse::Failure(e.to_string()))
+    }
+    Json(VmmResponse::Success(
+        VmResponse {
+            id: request.id, 
+            name: request.name,
+            state: "pending".to_string()
     }))
 }
 
 async fn delete(
     State(channel): State<Arc<Mutex<VmmApiChannel>>>,
     Json(request): Json<DeleteVmRequest>,
-) -> Result<Json<VmResponse>, String> {
+) -> Json<VmmResponse> {
     let event = VmmEvent::Delete {
         id: request.id.clone(),
         owner: "test".to_string(),
@@ -238,12 +246,15 @@ async fn delete(
         requestor: "node".to_string(),
     };
 
-    let _ = request_receive::<()>(channel, event).await?;
+    if let Err(e) = request_receive::<()>(channel, event).await {
+        return Json(VmmResponse::Failure(e.to_string()))
+    }
 
-    Ok(Json(VmResponse {
-        id: request.id, 
-        name: request.name,
-        state: "pending".to_string()
+    Json(VmmResponse::Success(
+        VmResponse {
+            id: request.id, 
+            name: request.name,
+            state: "pending".to_string()
     }))
 }
 
