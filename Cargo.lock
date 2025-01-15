@@ -3248,8 +3248,10 @@ dependencies = [
 name = "form-pack"
 version = "0.1.0"
 dependencies = [
+ "axum 0.7.9",
  "base64 0.22.1",
  "bollard",
+ "clap",
  "flate2",
  "futures-util",
  "lazy_static",
