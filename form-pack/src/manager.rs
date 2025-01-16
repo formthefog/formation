@@ -1,14 +1,12 @@
 use std::collections::HashMap;
 use std::io::Write;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::fs::{self, OpenOptions};
 use std::thread::sleep;
 use std::time::Duration;
 use std::sync::Arc;
-use futures_util::stream::FuturesUnordered;
 use tokio::sync::broadcast::Receiver;
-use tokio::sync::oneshot::Sender;
 use tokio::sync::Mutex;
 use axum::{Router, routing::post, Json, extract::State};
 use bollard::container::{Config, CreateContainerOptions, UploadToContainerOptions};
@@ -29,8 +27,6 @@ pub enum PackResponse {
 }
 
 pub struct FormPackManager {
-    // Monitor ID to monitor
-    monitors: HashMap<String, FormPackMonitor>,
     // 8080
     min_port: u16,
     // 8180
@@ -43,12 +39,43 @@ pub struct FormPackManager {
 impl FormPackManager {
     pub fn new(addr: SocketAddr) -> Self {
         Self {
-            monitors: HashMap::new(),
             min_port: 8080,
             max_port: 8180,
             active_ports: HashMap::new(),
             addr
         }
+    }
+
+    /// Finds and allocates the lowest available port within the allowed range
+    pub fn allocate_port(&mut self, monitor_id: String) -> Option<u16> {
+        // Start from min_port and find the first port that's not in use
+        for port in self.min_port..=self.max_port {
+            if !self.active_ports.contains_key(&port) {
+                self.active_ports.insert(port, monitor_id);
+                return Some(port);
+            }
+        }
+        None // No ports available
+    }
+
+    /// Deallocates a port when a monitor is done with it
+    pub fn deallocate_port(&mut self, port: u16) -> Option<String> {
+        self.active_ports.remove(&port)
+    }
+
+    /// Checks if a specific port is available
+    pub fn is_port_available(&self, port: u16) -> bool {
+        port >= self.min_port && port <= self.max_port && !self.active_ports.contains_key(&port)
+    }
+
+    /// Gets the monitor ID associated with a port
+    pub fn get_monitor_id(&self, port: u16) -> Option<&String> {
+        self.active_ports.get(&port)
+    }
+
+    /// Gets the number of currently active ports
+    pub fn active_port_count(&self) -> usize {
+        self.active_ports.len()
     }
 
     pub async fn run(self, mut shutdown: Receiver<()>) -> Result<(), Box<dyn std::error::Error>> {
@@ -117,33 +144,42 @@ async fn handle_pack(
         return Json(PackResponse::Failure);
     }
 
-    let manager = manager.lock().await;
+    let mut mngr = manager.lock().await;
+    // Generate a unique monitor ID
+    let monitor_id = uuid::Uuid::new_v4().to_string();
 
-    let next_port = manager.active_ports.keys().max().unwrap_or(&8080) + 1; 
-    if next_port > manager.max_port {
-        return Json(PackResponse::Failure);
-    }
-
-    let mut monitor = if let Ok(monitor) = FormPackMonitor::new(
-        &format!("http://127.0.0.1:{next_port}")
-    ).await {
-        monitor
+    let port = if let Some(port) = mngr.allocate_port(monitor_id.clone()) {
+        port
     } else {
         return Json(PackResponse::Failure);
     };
 
-    match monitor.build_image(
+    let mut monitor = if let Ok(monitor) = FormPackMonitor::new(
+        &format!("http://127.0.0.1:{port}")
+    ).await {
+        monitor
+    } else {
+        mngr.deallocate_port(port);
+        return Json(PackResponse::Failure);
+    };
+
+    drop(mngr);
+
+    let final_resp = match monitor.build_image(
         formfile,
         packdir.path().join("artifacts.tar.gz"),
-        next_port
+        port
     ).await {
         Ok(_res) => {
-            return Json(PackResponse::Success);
+            Json(PackResponse::Success)
         }
         Err(_) => {
-            return Json(PackResponse::Failure)
+            Json(PackResponse::Failure)
         }
-    }
+    };
+
+    manager.lock().await.deallocate_port(port);
+    final_resp
 }
 
 
@@ -240,7 +276,11 @@ impl FormPackMonitor {
         };
 
         let tar_contents = fs::read(artifacts)?;
-        self.docker.upload_to_container(container_id, Some(options), tar_contents.into()).await?;
+        self.docker.upload_to_container(
+            container_id,
+            Some(options),
+            tar_contents.into()
+        ).await?;
 
         Ok(())
     }

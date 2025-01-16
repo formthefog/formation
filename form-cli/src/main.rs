@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use form_cli::{create::CreateCommmand, delete::DeleteCommand, info::GetCommand, start::StartCommand, stop::StopCommand};
+use form_cli::{create::PackCommand, delete::DeleteCommand, info::GetCommand, start::StartCommand, stop::StopCommand, WalletCommand};
 
 #[derive(Debug, Parser)]
 pub struct Form {
@@ -11,13 +11,20 @@ pub struct Form {
 
 #[derive(Debug, Subcommand)]
 pub enum FormCommand {
-    Wallet,
-    Create(CreateCommmand),
+    #[clap(subcommand)]
+    Wallet(WalletCommand),
+    #[clap(subcommand)]
+    Pack(PackCommand),
+    #[clap(subcommand)]
+    Manage(ManageCommand),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ManageCommand {
     Start(StartCommand),
     Stop(StopCommand),
     Delete(DeleteCommand),
     Get(GetCommand),
-    // TODO: make list specific to an owner/authorized user or org.
     List,
 }
 
@@ -27,11 +34,16 @@ async fn main() -> Result<(), String> {
     println!("{parser:?}");
 
     match parser.command {
-        FormCommand::Create(create_command) => {
-           let resp = create_command.handle(&parser.provider).await?;
-           println!("Response: {resp:?}");
+        FormCommand::Pack(pack_command) => {
+            match pack_command {
+                PackCommand::Build(build_command) => {
+                   let resp = build_command.handle(&parser.provider).await?;
+                   println!("Response: {resp:?}");
+                }
+                _ => {}
+            }
         }
-        FormCommand::Wallet => {}
+        FormCommand::Wallet(command) => {}
         _ => {}
     }
 

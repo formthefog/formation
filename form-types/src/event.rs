@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 
 use alloy::primitives::Address;
+use form_pack::formfile::Formfile;
 use serde::{Serialize, Deserialize};
 use uuid::Uuid;
 use form_traits::{Event as EventTrait, IntoEvent};
@@ -184,12 +185,7 @@ pub enum VmmEvent {
         owner: String,
         recovery_id: u32,
         requestor: String,
-        distro: String,
-        version: String,
-        user_data: Option<String>,
-        meta_data: Option<String>,
-        memory_mb: u64,
-        vcpu_count: u8,
+        formfile: Formfile,
         name: String,
         custom_cmdline: Option<String>,
         rng_source: Option<String>,

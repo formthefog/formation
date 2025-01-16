@@ -1,3 +1,4 @@
+use form_pack::formfile::Formfile;
 use serde::{Serialize, Deserialize};
 use clap::Args;
 
@@ -10,13 +11,8 @@ pub struct PingVmmRequest {
 /// Request to create a new VM instance
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateVmRequest {
-    pub distro: String,
-    pub version: String,
-    pub memory_mb: u64,
-    pub vcpu_count: u8,
     pub name: String,
-    pub user_data: Option<String>,
-    pub meta_data: Option<String>,
+    pub formfile: Formfile,
     pub signature: Option<String>,
     pub recovery_id: u32,
 }

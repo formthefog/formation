@@ -1,11 +1,14 @@
-use std::{fs::OpenOptions, io::Read, path::Path};
+use std::{fs::OpenOptions, io::Read, path::{Path, PathBuf}};
 use alloy::signers::k256::ecdsa::{RecoveryId, SigningKey}; 
 use alloy_signer_local::{coins_bip39::English, MnemonicBuilder};
-use clap::Args;
+use clap::{Args, Subcommand};
+use form_pack::formfile::{Formfile, FormfileParser};
 use form_types::{CreateVmRequest, VmResponse};
+use random_word::Lang;
 use reqwest::Client;
 use serde::{Serialize, Deserialize};
 use sha3::{Sha3_256, Digest};
+use vmm_service::util::default_formfile;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Keypair {
@@ -13,42 +16,20 @@ pub struct Keypair {
     verifying_key: String,
 }
 
+#[derive(Debug, Subcommand)]
+pub enum PackCommand {
+    Build(BuildCommand),
+    Validate(ValidateCommand),
+    Ship(ShipCommand),
+}
+
 /// Create a new instance
 #[derive(Debug, Clone, Args)]
-pub struct CreateCommmand {
-    /// The Linux Distro you would like your instance to use 
-    #[clap(long, short, default_value="ubuntu")]
-    pub distro: String,
-    /// The version of the distro of your choice. If it is not a valid version 
-    /// it will be rejected
-    #[clap(long, short, default_value="22.04")]
-    pub version: String,
-    /// The amount of memory in megabytes you'd like to have allocated to your
-    /// instance.
-    #[clap(long, short='b', default_value_t=512)]
-    pub memory_mb: u64,
-    /// The number of virtual CPUs you would like to have allocated to your
-    /// instance
-    #[clap(long, short='c', default_value_t=1)]
-    pub vcpu_count: u8,
-    /// A human readable name you'd like your instance to have, if left
-    /// blank, a random name will be assigned
+pub struct BuildCommand {
+    #[clap(long, short, default_value_os_t = default_formfile())]
+    pub formfile: PathBuf,
     #[clap(long, short)]
     pub name: Option<String>,
-    /// The path to a user-data.yaml file, must be compatible with cloud-init
-    /// (see https://cloudinit.readthedocs.io/en/latest/reference/examples.html for examples)
-    /// You can use the cloud-init-wizard command to build a valid custom cloud-init file.
-    //TODO: Add feature to provide common config files like Dockerfile type formats and 
-    // auto convert them to valid cloud-init user data
-    #[clap(long, short)]
-    pub user_data: Option<String>,
-    /// The path to a meta-data.yaml file, must be compatible with cloud-init
-    /// (see https://cloudinit.readthedocs.io/en/latest/reference/examples.html) 
-    /// You can use the cloud-init-wizard command to build a valid custom cloud-init file.
-    //TODO: Add feature to provide common config files like Dockerfile type formats and 
-    // auto convert them to valid cloud-init user data
-    #[clap(long, short='t')]
-    pub meta_data: Option<String>,
     /// A hexadecimal or base64 representation of a valid private key for 
     /// signing the request. Given this is the create command, this will
     /// be how the network derives ownership of the instance. Authorization
@@ -70,7 +51,7 @@ pub struct CreateCommmand {
     pub mnemonic: Option<String>,
 }
 
-impl CreateCommmand {
+impl BuildCommand {
     pub async fn handle(mut self, provider: &str) -> Result<VmResponse, String> {
         //TODO: Replace with gRPC call
         let resp = Client::new().post(provider).json(
@@ -81,24 +62,33 @@ impl CreateCommmand {
 
     pub fn to_request(&mut self) -> Result<CreateVmRequest, String> {
         let signing_key: SigningKey = self.get_signing_key()?;
-        let user_data = self.get_user_data();
-        let meta_data = self.get_metadata();
         self.name = Some(self.name.take().ok_or_else(|| {
             format!("{}_{}", random_word::gen(random_word::Lang::En), random_word::gen(random_word::Lang::En))
         })?);
+
         let (sig, rec) = self.sign_payload(signing_key)?;
+        let formfile = self.parse_formfile()?;
+        let name = self.name.clone().unwrap_or_else(|| {
+            format!("{}_{}", random_word::gen(Lang::En), random_word::gen(Lang::En))
+        });
+
         Ok(CreateVmRequest {
-            distro: self.distro.clone(),
-            version: self.version.clone(),
-            memory_mb: self.memory_mb,
-            vcpu_count: self.vcpu_count,
-            name: self.name.take().unwrap(),
-            user_data,
-            meta_data,
+            formfile,
+            name,
             signature: Some(sig),
             recovery_id: rec.to_byte() as u32
         })
     }
+
+    pub fn parse_formfile(&mut self) -> Result<Formfile, String> {
+        let content = std::fs::read_to_string(
+            self.formfile.clone()
+        ).map_err(|e| e.to_string())?;
+        let mut parser = FormfileParser::new();
+        Ok(parser.parse(&content).map_err(|e| e.to_string())?)
+
+    }
+
     pub fn get_signing_key(&self) -> Result<SigningKey, String> {
         if let Some(pk) = &self.private_key {
             Ok(SigningKey::from_slice(
@@ -133,52 +123,17 @@ impl CreateCommmand {
 
     fn build_payload(&mut self) -> Result<Vec<u8>, String> {
         let mut hasher = Sha3_256::new();
-        hasher.update(&self.distro);
-        hasher.update(&self.version);
         // Name is always Some(String) at this point
         hasher.update(self.name.take().unwrap());
-        hasher.update(self.memory_mb.to_be_bytes());
-        hasher.update(self.vcpu_count.to_be_bytes());
-        if let Some(user_data) = self.get_user_data() {
-            hasher.update(user_data)
-        }
-        if let Some(meta_data) = self.get_metadata() {
-            hasher.update(meta_data)
-        }
-
+        hasher.update(self.parse_formfile()?.to_json());
         Ok(hasher.finalize().to_vec())
     }
-
-    fn get_user_data(&self) -> Option<String> {
-        if let Some(user_data) = &self.user_data {
-            let mut buf = String::new();
-            let mut file = OpenOptions::new()
-                .read(true)
-                .write(false)
-                .open(user_data).ok()?;
-
-            file.read_to_string(&mut buf).ok()?;
-           return Some(buf)
-        }
-
-        None
-    }
-
-    fn get_metadata(&self) -> Option<String> {
-        if let Some(meta_data) = &self.user_data {
-            let mut buf = String::new();
-            let mut file = OpenOptions::new()
-                .read(true)
-                .write(false)
-                .open(meta_data).ok()?;
-
-            file.read_to_string(&mut buf).ok()?;
-           return Some(buf)
-        }
-
-        None
-    }
 }
+
+#[derive(Debug, Args)]
+pub struct ValidateCommand;
+#[derive(Debug, Args)]
+pub struct ShipCommand;
 
 impl Keypair {
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, Box<dyn std::error::Error>> {

@@ -1,4 +1,5 @@
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
+use serde_json::Value;
 use sha_crypt::{sha512_crypt_b64, Sha512Params};
 use serde::{Serialize, Deserialize};
 use std::{collections::{HashMap, HashSet}, path::{Component, PathBuf}};
@@ -894,6 +895,37 @@ pub struct Formfile {
     pub workdir: PathBuf
 }
 
+impl Formfile {
+    pub fn to_json(&self) -> String {
+        serde_json::json!({
+            "formfile": {
+                "build_instructions": self.build_instructions.iter().map(|inst| inst.to_json()).collect::<Vec<String>>(),
+                "system_config": self.system_config.iter().map(|opt| opt.to_json()).collect::<Vec<String>>(),
+                "users": self.users.iter().map(|user| user.to_json()).collect::<Vec<String>>(),
+                "workdir": self.workdir.to_string_lossy(),
+            }
+        }).to_string()
+    }
+
+    pub fn get_memory(&self) -> usize {
+        self.system_config.iter().find_map(|opt| {
+            match opt {
+                SystemConfigOpt::Memory(mbs) => Some(mbs),
+                _ => None,
+            }
+        }).unwrap_or_else(|| &512).clone()
+    }
+
+    pub fn get_vcpus(&self) -> u8 {
+        self.system_config.iter().find_map(|opt| {
+            match opt {
+                SystemConfigOpt::Cpu(vcpus) => Some(vcpus),
+                _ => None,
+            }
+        }).unwrap_or_else(|| &1).clone()
+    }
+}
+
 /// Instructions that are executed during teh image build phase
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BuildInstruction {
@@ -916,6 +948,62 @@ pub enum BuildInstruction {
     Expose(HashSet<u16>)
 }
 
+impl BuildInstruction {
+    pub fn to_json(&self) -> String {
+        let mut build_inst_map = serde_json::Map::new();
+        let mut map = serde_json::Map::new();
+        match self {
+            Self::Run(run) => {
+                build_inst_map.insert("run".to_string(), serde_json::json!(run));
+                map.insert("build_instruction".to_string(), serde_json::json!(build_inst_map));
+                Value::Object(map).to_string()
+            }
+            Self::Copy(from, to) => {
+                build_inst_map.insert("copy".to_string(), serde_json::json!([from.to_string_lossy(), to.to_string_lossy()])); 
+                map.insert("build_instruction".to_string(), serde_json::json!(build_inst_map));
+                Value::Object(map).to_string()
+            }
+            Self::Install(opts) => {
+                build_inst_map.insert("install".to_string(), serde_json::json!({"packages": opts.packages}));
+                map.insert("build_instruction".to_string(), serde_json::json!(build_inst_map));
+                Value::Object(map).to_string()
+            }
+            Self::Env(var) => {
+                build_inst_map.insert("key".to_string(), serde_json::json!(var.key));
+                build_inst_map.insert("value".to_string(), serde_json::json!(var.key));
+
+                match &var.scope {
+                    EnvScope::System => {
+                        build_inst_map.insert("scope".to_string(), serde_json::json!("system"));
+                    }
+                    EnvScope::User(ref user) => {
+                        build_inst_map.insert("scope".to_string(), serde_json::json!({"user": user}));
+                    }
+                    EnvScope::Service(ref service) => {
+                        build_inst_map.insert("scope".to_string(), serde_json::json!({"service": service}));
+                    }
+                } 
+                
+                map.insert("build_instruction".to_string(), serde_json::json!(build_inst_map));
+                Value::Object(map).to_string()
+            }
+            Self::Entrypoint(entrypoint) => {
+                build_inst_map.insert("command".to_string(), serde_json::json!(entrypoint.command));
+                build_inst_map.insert("args".to_string(), serde_json::json!(entrypoint.args));
+                map.insert("build_instruction".to_string(), serde_json::json!(build_inst_map));
+                Value::Object(map).to_string()
+            }
+            Self::Expose(ports) => {
+                let mut ports_vec = ports.iter().cloned().collect::<Vec<u16>>();
+                ports_vec.sort();
+                build_inst_map.insert("expose".to_string(), serde_json::json!(ports_vec));
+                map.insert("build_instruction".to_string(), serde_json::json!(build_inst_map));
+                Value::Object(map).to_string()
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstallOpts {
     pub packages: Vec<String>
@@ -927,6 +1015,26 @@ pub enum SystemConfigOpt {
     Memory(usize),
     Disk(u16),
     // Devices (GPUs, etc.)
+}
+
+impl SystemConfigOpt {
+    pub fn to_json(&self) -> String {
+        let mut map = serde_json::Map::new();
+        let mut opts_map = serde_json::Map::new();
+        match self {
+            Self::Cpu(vcpus) => {
+                opts_map.insert("cpu".to_string(), serde_json::json!(vcpus));
+            }
+            Self::Memory(mbs) => {
+                opts_map.insert("memory".to_string(), serde_json::json!(mbs));
+            }
+            Self::Disk(gbs) => {
+                opts_map.insert("disk".to_string(), serde_json::json!(gbs));
+            }
+        }
+        map.insert("system_config".to_string(), serde_json::json!(opts_map));
+        Value::Object(map).to_string()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -942,6 +1050,25 @@ pub struct User {
     chpasswd_expire: bool,
     chpasswd_list: HashMap<String, String>,
     groups: Vec<String>
+}
+
+impl User {
+    pub fn to_json(&self) -> String {
+        let mut map = serde_json::Map::new();
+        let mut user_opt_map = serde_json::Map::new();
+        user_opt_map.insert("username".to_string(), serde_json::json!(self.username));
+        user_opt_map.insert("passwd".to_string(), serde_json::json!(self.passwd));
+        user_opt_map.insert("username".to_string(), serde_json::json!(self.ssh_authorized_keys));
+        user_opt_map.insert("username".to_string(), serde_json::json!(self.lock_passwd));
+        user_opt_map.insert("username".to_string(), serde_json::json!(self.sudo));
+        user_opt_map.insert("username".to_string(), serde_json::json!(self.ssh_pwauth));
+        user_opt_map.insert("username".to_string(), serde_json::json!(self.disable_root));
+        user_opt_map.insert("username".to_string(), serde_json::json!(self.chpasswd_expire));
+        user_opt_map.insert("username".to_string(), serde_json::json!(self.chpasswd_list.iter().collect::<Vec<(&String, &String)>>().sort()));
+        user_opt_map.insert("username".to_string(), serde_json::json!(self.groups()));
+        map.insert("user".to_string(), serde_json::json!(user_opt_map));
+        Value::Object(map).to_string()
+    }
 }
 
 pub struct UserBuilder {

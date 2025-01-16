@@ -157,8 +157,8 @@ async fn create(
     Json(request): Json<CreateVmRequest>,
 ) -> Json<VmmResponse> {
     log::info!(
-        "Received VM create request: name={}, distro={}, version={}",
-        request.name, request.distro, request.version
+        "Received VM create request: name={}",
+        request.name
     );
     // Convert request into a VmmEvent::Create
     // TODO: Recover owner from signature
@@ -168,12 +168,7 @@ async fn create(
         owner: "test".to_string(),
         recovery_id: 0,
         requestor: "test-api".to_string(),
-        distro: request.distro,
-        version: request.version,
-        user_data: request.user_data,
-        meta_data: request.meta_data,
-        memory_mb: request.memory_mb,
-        vcpu_count: request.vcpu_count,
+        formfile: request.formfile,
         name: request.name.clone(),
         custom_cmdline: None,
         rng_source: None,

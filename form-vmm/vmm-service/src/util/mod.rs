@@ -589,20 +589,6 @@ fn departition_loop_device(loop_device: &str) -> Result<(), UtilError> {
     Ok(())
 }
 
-pub fn copy_distro_base(distro: Distro, version: &str, name: &str) -> Result<String, UtilError> {
-    let instance_disk_directory = PathBuf::from(BASE_DIRECTORY).join(name);
-    std::fs::create_dir_all(
-        instance_disk_directory.clone()
-    )?;
-
-    std::fs::copy(
-        distro.rootfs_disk_path(version),
-        instance_disk_directory.join("disk.raw")
-    )?;
-
-    return Ok(instance_disk_directory.join("disk.raw").display().to_string())
-}
-
 pub fn get_fs_partition(loop_device: &str) -> Result<String, UtilError> {
     let output = std::process::Command::new("lsblk")
         .args(["--json", loop_device])
@@ -695,3 +681,8 @@ pub fn try_convert_size_to_bytes(size: &str) -> Result<u128, UtilError> {
 pub fn is_unit_type<T: ?Sized + Any>() -> bool {
     TypeId::of::<T>() == TypeId::of::<()>()
 }
+
+pub fn default_formfile() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".").join("Formfile"))
+}
+

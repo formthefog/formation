@@ -1,4 +1,6 @@
-use vmm_service::{ServiceConfig, VmManager};
+use std::path::PathBuf;
+use vmm_service::{ServiceConfig, VmManager, util::default_formfile};
+use form_pack::formfile::FormfileParser;
 use form_types::CreateVmRequest;
 use clap::Parser;
 
@@ -8,6 +10,8 @@ struct Cli {
     test_run: usize,
     #[clap(long, short, default_value_t=false)]
     pubsub: bool,
+    #[clap(long, short, default_value_os_t=default_formfile())]
+    formfile: PathBuf
 }
 
 #[tokio::main]
@@ -62,16 +66,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
 
     std::thread::sleep(std::time::Duration::from_secs(5));
 
+    let formfile = {
+        let contents = std::fs::read_to_string(parser.formfile)?;
+        FormfileParser::new().parse(&contents).map_err(|e| {
+            Box::new(
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Unable to parse Formfile: {e}")
+                )
+            )
+        })?
+    };
     log::info!("Building CreateVmRequest...");
     let create_vm_request = CreateVmRequest {
-        distro: "ubuntu".to_string(),
-        version: "22.04".to_string(),
-        memory_mb: 1024,
-        vcpu_count: 4,
         name: format!("test-vm-{}", parser.test_run),
-        meta_data: None,
-        user_data: None,
         recovery_id: 0,
+        formfile,
         signature: Some("test-signature".to_string())
     };
 

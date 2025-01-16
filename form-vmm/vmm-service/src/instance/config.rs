@@ -5,12 +5,11 @@ use net_util::MacAddr;
 use serde::{Deserialize, Serialize};
 use shared::interface_config::InterfaceConfig;
 use crate::error::VmmError;
-use crate::Distro;
-use crate::CloudInit;
 use form_types::VmmEvent;
 use rand::{thread_rng, Rng};
 use gabble::Gab;
-use crate::util::copy_distro_base;
+
+pub const IMAGE_DIR: &str = "/var/lib/formation/vm-images";
 
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,8 +48,6 @@ impl Default for VmInstanceConfig {
 }
 
 impl VmInstanceConfig {
-    pub const CLOUD_INIT_BASE: &str = "/var/lib/formation/vm-images/default/cloud_init";
-
     pub fn validate(&self) -> Result<(), VmmError> {
         // Validate paths exist
         if !self.kernel_path.exists() {
@@ -117,59 +114,35 @@ impl TryFrom<(&VmmEvent, &InterfaceConfig)> for VmInstanceConfig {
     fn try_from(event: (&VmmEvent, &InterfaceConfig)) -> Result<Self, Self::Error> {
         match &event.0 {
             VmmEvent::Create { 
-                owner,
+                owner: _,
                 recovery_id: _,
                 requestor: _,
-                distro,
-                version,
-                user_data,
-                meta_data,
-                memory_mb,
-                vcpu_count,
+                formfile,
                 name,
                 custom_cmdline,
                 rng_source,
                 console_type 
             } => { 
 
-                let distro = Distro::from_str(distro).map_err(|e| {
-                    VmmError::Config(e.to_string())
-                })?;
-
-                let rootfs_path = copy_distro_base(distro.clone(), version, name).map_err(|e| {
-                    VmmError::Config(
-                        format!("unable to create instance disk image for instance {}: {e}", name)
-                    )
-                })?;
-
+                let rootfs_path = PathBuf::from(IMAGE_DIR).join(name); 
                 let console_type = if let Some(ct) = console_type {
                     ConsoleType::from_str(ct)?
                 } else {
                     ConsoleType::Virtio
                 };
 
-                let cloud_init = CloudInit::from_base64(
-                    distro,
-                    user_data.as_deref(),
-                    meta_data.as_deref(), 
-                    event.1.clone(),
-                ).map_err(|e| {
-                    VmmError::Config(e.to_string())
-                })?;
-
-                let output_path = PathBuf::from(
-                    Self::CLOUD_INIT_BASE
-                ).join(owner).join(name);
-
-                cloud_init.create_image(&output_path).map_err(|e| {
-                    VmmError::Config(e.to_string())
-                })?;
+                let memory_mb = formfile.get_memory();
+                let vcpu_count = formfile.get_vcpus();
 
                 Ok(VmInstanceConfig {
-                    rootfs_path: rootfs_path.into(),
-                    memory_mb: *memory_mb,
-                    vcpu_count: *vcpu_count,
-                    cloud_init_path: Some(output_path.to_path_buf()),
+                    rootfs_path,
+                    memory_mb: memory_mb.try_into().map_err(|_| {
+                        VmmError::Config(
+                            "unable to convert memory into u64".to_string()
+                        )
+                    })?,
+                    vcpu_count,
+                    cloud_init_path: None, 
                     name: name.clone(),
                     custom_cmdline: custom_cmdline.clone(),
                     rng_source: rng_source.clone(),

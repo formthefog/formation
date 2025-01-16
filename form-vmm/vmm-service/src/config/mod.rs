@@ -21,8 +21,7 @@ use vmm::vm_config::{
 
 pub fn create_vm_config(config: &VmInstanceConfig) -> VmConfig {
 
-    // Add cloud-init disk if provided
-    let mut disks = vec![DiskConfig {
+    let disks = vec![DiskConfig {
         // This needs to be a copied disk, raw cannot use backing file
         path: Some(config.rootfs_path.clone()),
         readonly: false,
@@ -42,26 +41,6 @@ pub fn create_vm_config(config: &VmInstanceConfig) -> VmConfig {
         disable_aio: false,       // New field
     }];
 
-    disks.push(DiskConfig {
-        path: config.cloud_init_path.clone(),
-        readonly: true,
-        direct: true,
-        vhost_user: false,
-        vhost_socket: None,
-        rate_limiter_config: None,
-        queue_size: 256,
-        num_queues: 1,
-        queue_affinity: None,
-        id: None,
-        rate_limit_group: None,
-        pci_segment: 0,
-        iommu: false,
-        serial: None,
-        disable_io_uring: false,  // New field
-        disable_aio: false,       // New field
-    });
-
-    // Configure console based on type
     let (serial, console) = match config.console_type {
         ConsoleType::Serial => (
             ConsoleConfig {

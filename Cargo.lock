@@ -3209,6 +3209,7 @@ dependencies = [
  "clap_complete",
  "colored",
  "dialoguer 0.10.4",
+ "form-pack",
  "form-types",
  "hex",
  "random_word",
@@ -3217,6 +3218,7 @@ dependencies = [
  "serde_json",
  "sha3",
  "tokio",
+ "vmm-service",
 ]
 
 [[package]]
@@ -3296,6 +3298,7 @@ dependencies = [
  "clap",
  "derive_more 0.99.18",
  "form-broker",
+ "form-pack",
  "form-traits",
  "log",
  "serde",
@@ -3319,6 +3322,7 @@ dependencies = [
  "env_logger 0.10.2",
  "epoll",
  "event_monitor",
+ "form-pack",
  "form-traits",
  "form-types",
  "http-body-util",
@@ -6634,6 +6638,7 @@ version = "1.0.135"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b0d7ba2887406110130a978386c4e1befb98c674b4fba677954e4db976630d9"
 dependencies = [
+ "indexmap 2.7.0",
  "itoa",
  "memchr",
  "ryu",
