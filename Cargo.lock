@@ -8308,6 +8308,7 @@ dependencies = [
  "clap_derive",
  "dialoguer 0.11.0",
  "form-broker",
+ "form-pack",
  "form-types",
  "formnet",
  "futures",

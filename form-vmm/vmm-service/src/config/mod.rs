@@ -152,7 +152,7 @@ pub struct ServicePaths;
 
 impl ServicePaths {
     /// Base path for all VMM service related files
-    pub const BASE_DIR: &'static str = "/var/lib/form";
+    pub const BASE_DIR: &'static str = "/var/lib/formation";
     /// Path for kernel image(s)
     pub const KERNEL_DIR: &'static str = "kernel"; 
     /// Path for base disk images
@@ -176,6 +176,8 @@ pub struct ServiceConfig {
     pub limits: ResourceLimits,
     /// Default VM parameters
     pub default_vm_params: DefaultVmParams,
+    /// Address that the FormPackManager API s listening on
+    pub pack_manager: String,
 }
 
 impl ServiceConfig {
@@ -362,6 +364,7 @@ impl Default for ServiceConfig {
             network: NetworkConfig::default(),
             limits: ResourceLimits::default(),
             default_vm_params: DefaultVmParams::default(),
+            pack_manager: "127.0.0.1:51520".to_string(),
         }
     }
 }

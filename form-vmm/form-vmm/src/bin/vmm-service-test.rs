@@ -11,7 +11,9 @@ struct Cli {
     #[clap(long, short, default_value_t=false)]
     pubsub: bool,
     #[clap(long, short, default_value_os_t=default_formfile())]
-    formfile: PathBuf
+    formfile: PathBuf,
+    #[clap(long, short, default_value_t=String::from("127.0.0.1:51520"))]
+    pack_manager: String
 }
 
 #[tokio::main]
@@ -46,7 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
         service_config,
         formnet_endpoint,
         subscriber_uri,
-        publisher_uri
+        publisher_uri,
     ).await?;
 
     log::info!("Built VM Manager, sleeping for 5 seconds...");

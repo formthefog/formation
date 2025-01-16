@@ -1,6 +1,7 @@
 // src/service/vmm.rs
 use std::{collections::HashMap, path::PathBuf};
 use std::net::SocketAddr;
+use form_pack::manager::PackResponse;
 use formnet::{JoinRequest, JoinResponse, VmJoinRequest};
 use http_body_util::{BodyExt, Full};
 use hyper::StatusCode;
@@ -368,7 +369,8 @@ pub struct VmManager {
     formnet_endpoint: String,
     api_response_sender: tokio::sync::mpsc::Sender<String>,
     subscriber: Option<VmmSubscriber>,
-    publisher_addr: Option<String>
+    publisher_addr: Option<String>,
+    pack_manager: SocketAddr, 
 }
 
 impl VmManager {
@@ -378,7 +380,7 @@ impl VmManager {
         config: ServiceConfig,
         formnet_endpoint: String,
         subscriber_uri: Option<&str>,
-        publisher_addr: Option<String>
+        publisher_addr: Option<String>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync + 'static>> {
         let (resp_tx, resp_rx) = tokio::sync::mpsc::channel(1024);
         let server = tokio::task::spawn(async move {
@@ -399,14 +401,15 @@ impl VmManager {
         };
 
         Ok(Self {
-            config,
+            config: config.clone(),
             vm_monitors: HashMap::new(),
             server, 
             tap_counter: 0,
             formnet_endpoint,
             api_response_sender: resp_tx,
             subscriber,
-            publisher_addr
+            publisher_addr,
+            pack_manager: config.pack_manager.parse()?,
         })
     }
 
@@ -659,25 +662,38 @@ impl VmManager {
             }
             VmmEvent::Create { 
                 ref name, 
+                ref formfile,
                 ..
             } => {
                 let invite = self.request_formnet_invite_for_vm_via_api(name).await?;
                 log::info!("Received formnet invite... Building VmInstanceConfig...");
+                if let PackResponse::Success = reqwest::Client::new()
+                    .post(format!("http://{}/build", self.pack_manager))
+                    .json(formfile)
+                    .send().await?.json::<PackResponse>().await? {
 
-                let mut instance_config: VmInstanceConfig = (event, &invite).try_into().map_err(|e: VmmError| {
-                    VmmError::Config(e.to_string())
-                })?;
+                    let mut instance_config: VmInstanceConfig = (event, &invite).try_into().map_err(|e: VmmError| {
+                        VmmError::Config(e.to_string())
+                    })?;
 
-                log::info!("Built VmInstanceConfig... Adding TAP device name");
-                instance_config.tap_device = format!("vmnet{}", self.tap_counter);
-                instance_config.ip_addr = format!("11.0.0.{}", self.tap_counter + 2);
-                log::info!("Added TAP device name... Incrementing TAP counter...");
-                self.tap_counter += 1;
-                log::info!("Incremented TAP counter... Attempting to create VM");
-                // TODO: return Future, and stash future in a `FuturesUnordered`
-                // to be awaited asynchronously.
-                self.create(&mut instance_config).await?;
-                log::info!("Created VM");
+                    log::info!("Built VmInstanceConfig... Adding TAP device name");
+                    instance_config.tap_device = format!("vmnet{}", self.tap_counter);
+                    instance_config.ip_addr = format!("11.0.0.{}", self.tap_counter + 2);
+                    log::info!("Added TAP device name... Incrementing TAP counter...");
+                    self.tap_counter += 1;
+                    log::info!("Incremented TAP counter... Attempting to create VM");
+                    // TODO: return Future, and stash future in a `FuturesUnordered`
+                    // to be awaited asynchronously.
+                    self.create(&mut instance_config).await?;
+                    log::info!("Created VM");
+                } else {
+                    log::error!("Unable to build Formpack");
+                    return Err(Box::new(
+                        VmmError::Config(
+                            "Formpack build failed".to_string()
+                        )
+                    ))
+                }
             }
             VmmEvent::Stop { id, .. } => {
                 //TODO: verify ownership/authorization, etc.

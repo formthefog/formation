@@ -102,7 +102,7 @@ async fn run_vm_manager(
         config,
         formnet_endpoint,
         subscriber_uri,
-        publisher_uri
+        publisher_uri,
     ).await?;
 
     vm_manager.run(shutdown_rx, event_receiver).await 
