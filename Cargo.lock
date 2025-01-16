@@ -3253,6 +3253,7 @@ dependencies = [
  "bollard",
  "clap",
  "flate2",
+ "futures",
  "futures-util",
  "hyper 1.5.2",
  "hyper-util",

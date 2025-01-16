@@ -4,7 +4,8 @@ use tokio::sync::broadcast::channel;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let manager = FormPackManager::new();
+    let addr = "0.0.0.0:51520".parse()?;
+    let manager = FormPackManager::new(addr);
     let (tx, rx) = channel(1);
     tokio::task::spawn(async move {
         if let Err(e) = manager.run(rx).await {

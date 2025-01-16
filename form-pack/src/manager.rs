@@ -6,10 +6,13 @@ use std::fs::{self, OpenOptions};
 use std::thread::sleep;
 use std::time::Duration;
 use std::sync::Arc;
+use futures_util::stream::FuturesUnordered;
 use tokio::sync::broadcast::Receiver;
+use tokio::sync::oneshot::Sender;
 use tokio::sync::Mutex;
 use axum::{Router, routing::post, Json, extract::State};
 use bollard::container::{Config, CreateContainerOptions, UploadToContainerOptions};
+use bollard::models::{HostConfig, DeviceMapping};
 use bollard::exec::CreateExecOptions;
 use bollard::Docker;
 use reqwest::Client;
@@ -38,19 +41,13 @@ pub struct FormPackManager {
 }
 
 impl FormPackManager {
-    pub fn new() -> Self {
+    pub fn new(addr: SocketAddr) -> Self {
         Self {
             monitors: HashMap::new(),
             min_port: 8080,
             max_port: 8180,
             active_ports: HashMap::new(),
-            // TODO: Make configurable
-            addr: SocketAddr::new(
-                IpAddr::V4(
-                    Ipv4Addr::new(0, 0, 0, 0)
-                ),
-                55120
-            )
+            addr
         }
     }
 
@@ -184,7 +181,7 @@ impl FormPackMonitor {
         &mut self,
         formfile: Formfile,
         artifacts: PathBuf,
-        port: u16
+        port: u16,
     ) -> Result<PathBuf, Box<dyn std::error::Error>> {
         let container_id = self.container_id.take().ok_or(
             Box::new(
@@ -210,10 +207,20 @@ impl FormPackMonitor {
             platform: None,
         });
 
+        let host_config = HostConfig {
+            devices: Some(vec![DeviceMapping {
+                path_on_host: Some("/dev/kvm".to_string()),
+                path_in_container: Some("/dev/kvm".to_string()),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+
         let config = Config {
             image: Some("form-builder:latest"),
             cmd: Some(vec!["/bin/bash"]),
             tty: Some(true),
+            host_config: Some(host_config),
             ..Default::default()
         };
 
