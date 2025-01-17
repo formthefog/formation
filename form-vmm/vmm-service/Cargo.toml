@@ -6,6 +6,7 @@ edition = "2021"
 [features]
 pvmemcontrol = []
 guest_debug = []
+dev = []
 
 [dependencies]
 thiserror = "2.0.3"

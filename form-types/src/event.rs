@@ -182,41 +182,60 @@ pub enum VmmEvent {
         name: String,
     },
     Create { 
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         owner: String,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         recovery_id: u32,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         requestor: String,
         formfile: Formfile,
         name: String,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         custom_cmdline: Option<String>,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         rng_source: Option<String>,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         console_type: Option<String>, 
     },
     Start {
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         owner: String,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         recovery_id: u32,
         id: String,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         requestor: String,
     },
     Stop {
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         owner: String,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         recovery_id: u32, 
         id: String,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         requestor: String,
     },
     Delete {
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         owner: String,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         recovery_id: u32,
         id: String,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         requestor: String,
     },
     Get {
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         owner: String,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         recovery_id: u32,
         id: String,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         requestor: String,
     },
     GetList {
         requestor: String,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         recovery_id: u32,
     },
     NetworkSetupComplete {

@@ -114,23 +114,11 @@ impl TryFrom<(&VmmEvent, &InterfaceConfig)> for VmInstanceConfig {
     fn try_from(event: (&VmmEvent, &InterfaceConfig)) -> Result<Self, Self::Error> {
         match &event.0 {
             VmmEvent::Create { 
-                owner: _,
-                recovery_id: _,
-                requestor: _,
                 formfile,
                 name,
-                custom_cmdline,
-                rng_source,
-                console_type 
             } => { 
 
-                let rootfs_path = PathBuf::from(IMAGE_DIR).join(name); 
-                let console_type = if let Some(ct) = console_type {
-                    ConsoleType::from_str(ct)?
-                } else {
-                    ConsoleType::Virtio
-                };
-
+                let rootfs_path = PathBuf::from(IMAGE_DIR).join(name).with_extension("raw"); 
                 let memory_mb = formfile.get_memory();
                 let vcpu_count = formfile.get_vcpus();
 
@@ -142,11 +130,7 @@ impl TryFrom<(&VmmEvent, &InterfaceConfig)> for VmInstanceConfig {
                         )
                     })?,
                     vcpu_count,
-                    cloud_init_path: None, 
                     name: name.clone(),
-                    custom_cmdline: custom_cmdline.clone(),
-                    rng_source: rng_source.clone(),
-                    console_type,
                     ..Default::default()
                 })
             },

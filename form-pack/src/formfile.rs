@@ -6,25 +6,22 @@ use std::{collections::{HashMap, HashSet}, path::{Component, PathBuf}};
 
 pub struct FormfileParser {
     current_line: usize,
+    name: Option<String>,
     instructions: Vec<BuildInstruction>,
     system_config: Vec<SystemConfigOpt>,
     users: Vec<User>,
     workdir: Option<PathBuf>,
-    entrypoint: Entrypoint,
 }
 
 impl FormfileParser {
     pub fn new() -> Self {
         Self {
             current_line: 0,
+            name: None,
             instructions: Vec::new(),
             system_config: Vec::new(),
             users: Vec::new(),
             workdir: None,
-            entrypoint: Entrypoint {
-                command: String::new(),
-                args: Vec::new()
-            }
         }
     }
 
@@ -68,6 +65,7 @@ impl FormfileParser {
             )?;
 
         match instruction {
+            "NAME" => self.parse_name(args)?,
             "RUN" => self.parse_run(args)?,
             "COPY" => self.parse_copy(args)?,
             "INSTALL" => self.parse_install(args)?,
@@ -81,6 +79,11 @@ impl FormfileParser {
             _ => {}
         }
 
+        Ok(())
+    }
+
+    fn parse_name(&mut self, args: &str) -> Result<(), Box<dyn std::error::Error>> {
+        self.name = Some(args.to_string());
         Ok(())
     }
 
@@ -871,7 +874,17 @@ impl FormfileParser {
     }
 
     pub fn build_formfile(&self) -> Result<Formfile, Box<dyn std::error::Error>> {
+        let name = if let Some(name) = &self.name {
+            name.to_string()
+        } else {
+            format!(
+                "{}_{}",
+                random_word::gen(random_word::Lang::En),
+                random_word::gen(random_word::Lang::En)
+            )
+        };
         Ok(Formfile {
+            name,
             build_instructions: self.instructions.clone(),
             system_config: self.system_config.clone(),
             users: self.users.clone(),
@@ -885,6 +898,7 @@ impl FormfileParser {
 /// and configurations
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Formfile {
+    pub name: String,
     ///  Build time instructions that modify the image
     pub build_instructions: Vec<BuildInstruction>,
     /// System configuration for the VM
@@ -899,6 +913,7 @@ impl Formfile {
     pub fn to_json(&self) -> String {
         serde_json::json!({
             "formfile": {
+                "name": self.name,
                 "build_instructions": self.build_instructions.iter().map(|inst| inst.to_json()).collect::<Vec<String>>(),
                 "system_config": self.system_config.iter().map(|opt| opt.to_json()).collect::<Vec<String>>(),
                 "users": self.users.iter().map(|user| user.to_json()).collect::<Vec<String>>(),

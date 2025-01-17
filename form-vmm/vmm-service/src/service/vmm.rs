@@ -1,7 +1,6 @@
 // src/service/vmm.rs
 use std::{collections::HashMap, path::PathBuf};
 use std::net::SocketAddr;
-use form_pack::manager::PackResponse;
 use formnet::{JoinRequest, JoinResponse, VmJoinRequest};
 use http_body_util::{BodyExt, Full};
 use hyper::StatusCode;
@@ -25,7 +24,7 @@ use form_broker::{subscriber::SubStream, publisher::PubStream};
 use futures::future::join_all;
 use crate::{api::VmmApi, util::ensure_directory};
 use crate::util::add_tap_to_bridge;
-use crate::ChError;
+use crate::{ChError, IMAGE_DIR};
 use crate::{
     error::VmmError,
     config::create_vm_config,
@@ -370,7 +369,6 @@ pub struct VmManager {
     api_response_sender: tokio::sync::mpsc::Sender<String>,
     subscriber: Option<VmmSubscriber>,
     publisher_addr: Option<String>,
-    pack_manager: SocketAddr, 
 }
 
 impl VmManager {
@@ -409,7 +407,6 @@ impl VmManager {
             api_response_sender: resp_tx,
             subscriber,
             publisher_addr,
-            pack_manager: config.pack_manager.parse()?,
         })
     }
 
@@ -432,7 +429,7 @@ impl VmManager {
             )?;
             (Some(format!("{path}/form-vm/{}.sock", config.name)), None)
         } else {
-            let sock_path = format!("run/form-vmm/{}.sock", config.name);
+            let sock_path = format!("/run/form-vmm/{}.sock", config.name);
             ensure_directory(
                 PathBuf::from(&sock_path).parent().ok_or(
                     Box::new(
@@ -662,16 +659,11 @@ impl VmManager {
             }
             VmmEvent::Create { 
                 ref name, 
-                ref formfile,
                 ..
             } => {
                 let invite = self.request_formnet_invite_for_vm_via_api(name).await?;
-                log::info!("Received formnet invite... Building VmInstanceConfig...");
-                if let PackResponse::Success = reqwest::Client::new()
-                    .post(format!("http://{}/build", self.pack_manager))
-                    .json(formfile)
-                    .send().await?.json::<PackResponse>().await? {
-
+                log::info!("Received formnet invite... Building InstanceConfig...");
+                if PathBuf::from(IMAGE_DIR).join(name).exists() {
                     let mut instance_config: VmInstanceConfig = (event, &invite).try_into().map_err(|e: VmmError| {
                         VmmError::Config(e.to_string())
                     })?;
@@ -687,10 +679,10 @@ impl VmManager {
                     self.create(&mut instance_config).await?;
                     log::info!("Created VM");
                 } else {
-                    log::error!("Unable to build Formpack");
+                    log::error!("Unable to find Formpack");
                     return Err(Box::new(
                         VmmError::Config(
-                            "Formpack build failed".to_string()
+                            "Formpack doesn't exist".to_string()
                         )
                     ))
                 }

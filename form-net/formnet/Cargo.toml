@@ -21,7 +21,7 @@ name = "formnet"
 path = "src/main.rs"
 
 [[bin]]
-name = "formnet-client"
+name = "formnet-cli"
 path = "src/client.rs"
 
 

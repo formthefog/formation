@@ -364,7 +364,7 @@ impl Default for ServiceConfig {
             network: NetworkConfig::default(),
             limits: ResourceLimits::default(),
             default_vm_params: DefaultVmParams::default(),
-            pack_manager: "127.0.0.1:51520".to_string(),
+            pack_manager: "pack-manager:51520".to_string(),
         }
     }
 }

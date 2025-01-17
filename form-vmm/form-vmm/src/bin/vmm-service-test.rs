@@ -10,7 +10,7 @@ struct Cli {
     test_run: usize,
     #[clap(long, short, default_value_t=false)]
     pubsub: bool,
-    #[clap(long, short, default_value_os_t=default_formfile())]
+    #[clap(long, short, default_value_os_t=default_formfile(PathBuf::from("./")))]
     formfile: PathBuf,
     #[clap(long, short, default_value_t=String::from("127.0.0.1:51520"))]
     pack_manager: String

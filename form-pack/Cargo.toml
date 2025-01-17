@@ -29,8 +29,9 @@ futures = "0.3.31"
 futures-util = "0.3"
 uuid = { version = "1", features = ["v4"] }
 reqwest = { version = "0.12", features = ["json"] }
-axum = "0.7.9" 
+axum = { version = "0.7.9", features = ["multipart"] } 
 hyper = { version = "1.5", features = ["server"] }
 tower = { version = "0.5", features = ["make"] } 
 hyper-util = { version = "0.1", features = ["server"] }
 hyperlocal = "0.9"
+random_word = { version = "0.4.3", features = ["en"] }

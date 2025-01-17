@@ -11,7 +11,7 @@ pub struct Cli {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let parser = Cli::parse();
 
-    let addr = format!("127.0.0.1:{}", parser.port);
+    let addr = format!("0.0.0.0:{}", parser.port);
 
     serve(&addr).await?;
 

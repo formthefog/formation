@@ -2,7 +2,6 @@ use clap::Parser;
 use log::info;
 use vmm_service::{CliArgs, CliCommand, VmManager}; 
 use vmm_service::{config::wizard::run_config_wizard, ServiceConfig};
-use vmm_service::util::fetch_and_prepare_images;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -10,18 +9,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     simple_logger::init_with_level(log::Level::Info)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
-    log::info!("Attempting to fetch and prepare cloud images for VMs");
-    // If we're unable to fetch and prepare the images we should panic and
-    // exit the program.
-    //TODO: Make this condition on it not being the binary for Docker, Nix or other
-    //IaC/Prepackaged image.
-    fetch_and_prepare_images().await.unwrap();
-
-
     // Parse command line args
     let args = CliArgs::parse();
 
-    // TODO: Handle debug flag if set
     match args.command {
         CliCommand::Run { config, wizard, sub_addr, pub_addr } => {
             let config = if wizard {

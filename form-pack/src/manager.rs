@@ -1,24 +1,31 @@
-use std::collections::HashMap;
-use std::io::Write;
+use std::io::{Cursor, Read, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
+use std::sync::Arc;
 use std::thread::sleep;
 use std::time::Duration;
-use std::sync::Arc;
+use axum::extract::State;
+use flate2::read::GzDecoder;
+use futures::{StreamExt, TryStreamExt};
 use tokio::sync::broadcast::Receiver;
-use tokio::sync::Mutex;
-use axum::{Router, routing::post, Json, extract::State};
-use bollard::container::{Config, CreateContainerOptions, UploadToContainerOptions};
-use bollard::models::{HostConfig, DeviceMapping};
+use axum::{Router, routing::post, Json, extract::Multipart};
+use bollard::container::{Config, CreateContainerOptions, DownloadFromContainerOptions, UploadToContainerOptions};
+use bollard::models::{HostConfig, DeviceMapping, PortBinding};
 use bollard::exec::CreateExecOptions;
 use bollard::Docker;
 use reqwest::Client;
 use serde_json::Value;
 use serde::{Serialize, Deserialize};
 use tempfile::tempdir;
-use crate::pack::FormPack;
+use tokio::sync::Mutex;
+use crate::image_builder::IMAGE_PATH;
 use crate::formfile::Formfile;
+
+pub const VM_IMAGE_PATH: &str = "/var/lib/formation/vm-images/";
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FormVmmService(SocketAddr);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum PackResponse {
@@ -26,62 +33,29 @@ pub enum PackResponse {
     Failure
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PackRequest {
+    name: String,
+    formfile: Formfile,
+}
+
 pub struct FormPackManager {
-    // 8080
-    min_port: u16,
-    // 8180
-    max_port: u16,
-    // Server port to monitor ID
-    active_ports: HashMap<u16, String>,
+    vmm_service: Option<FormVmmService>,
     addr: SocketAddr
 }
 
 impl FormPackManager {
-    pub fn new(addr: SocketAddr) -> Self {
+    pub fn new(vmm_service: Option<FormVmmService>, addr: SocketAddr) -> Self {
         Self {
-            min_port: 8080,
-            max_port: 8180,
-            active_ports: HashMap::new(),
+            vmm_service,
             addr
         }
-    }
-
-    /// Finds and allocates the lowest available port within the allowed range
-    pub fn allocate_port(&mut self, monitor_id: String) -> Option<u16> {
-        // Start from min_port and find the first port that's not in use
-        for port in self.min_port..=self.max_port {
-            if !self.active_ports.contains_key(&port) {
-                self.active_ports.insert(port, monitor_id);
-                return Some(port);
-            }
-        }
-        None // No ports available
-    }
-
-    /// Deallocates a port when a monitor is done with it
-    pub fn deallocate_port(&mut self, port: u16) -> Option<String> {
-        self.active_ports.remove(&port)
-    }
-
-    /// Checks if a specific port is available
-    pub fn is_port_available(&self, port: u16) -> bool {
-        port >= self.min_port && port <= self.max_port && !self.active_ports.contains_key(&port)
-    }
-
-    /// Gets the monitor ID associated with a port
-    pub fn get_monitor_id(&self, port: u16) -> Option<&String> {
-        self.active_ports.get(&port)
-    }
-
-    /// Gets the number of currently active ports
-    pub fn active_port_count(&self) -> usize {
-        self.active_ports.len()
     }
 
     pub async fn run(self, mut shutdown: Receiver<()>) -> Result<(), Box<dyn std::error::Error>> {
         let addr = self.addr.to_string();
         tokio::select! {
-            res = serve(&addr, Arc::new(Mutex::new(self))) => {
+            res = serve(&addr, self) => {
                 return res
             }
             _ = shutdown.recv() => {
@@ -92,21 +66,24 @@ impl FormPackManager {
     }
 }
 
-async fn build_routes(state: Arc<Mutex<FormPackManager>>) -> Router {
+async fn build_routes(manager: Arc<Mutex<FormPackManager>>) -> Router {
     Router::new()
         .route("/ping", post(handle_ping))
         .route("/build", post(handle_pack))
-        .with_state(state)
+        .with_state(manager)
 }
 
-async fn serve(addr: &str, state: Arc<Mutex<FormPackManager>>) -> Result<(), Box<dyn std::error::Error>> {
-    let routes = build_routes(state).await;
+async fn serve(addr: &str, manager: FormPackManager) -> Result<(), Box<dyn std::error::Error>> {
+    println!("Building routes...");
+    let routes = build_routes(Arc::new(Mutex::new(manager))).await;
 
+    println!("binding listener to addr: {addr}");
     let listener = tokio::net::TcpListener::bind(
         addr
     ).await?;
 
 
+    println!("serving server on: {addr}");
     if let Err(e) = axum::serve(listener, routes).await {
         eprintln!("Error in FormPackManager API Server: {e}");
     }
@@ -115,96 +92,134 @@ async fn serve(addr: &str, state: Arc<Mutex<FormPackManager>>) -> Result<(), Box
 }
 
 async fn handle_ping() -> Json<Value> {
+    println!("Received ping request, responding");
     Json(serde_json::json!({"ping": "pong"}))
 }
 
 async fn handle_pack(
     State(manager): State<Arc<Mutex<FormPackManager>>>,
-    Json(pack): Json<FormPack>
+    mut multipart: Multipart
 ) -> Json<PackResponse> {
-    let FormPack { formfile, artifacts } = pack; 
 
+    println!("Received a multipart Form, attempting to extract data...");
     let packdir = if let Ok(td) = tempdir() {
         td
     } else {
         return Json(PackResponse::Failure);
     };
+    println!("Created temporary directory to put artifacts into...");
+    let artifacts_path = packdir.path().join("artifacts.tar.gz");
+    let metadata_path = packdir.path().join("formfile.json");
 
-    let mut file = if let Ok(f) = OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .open(packdir.path().join("artifacts.tar.gz")) {
-            f
-    } else {
-        return Json(PackResponse::Failure);
-    };
+    while let Some(field) = multipart.next_field().await.unwrap_or(None) {
+        let name = field.name().unwrap_or_default();
 
-    if let Err(_) = file.write_all(&artifacts) {
-        return Json(PackResponse::Failure);
+        if name == "metadata" {
+            let data = match field.text().await {
+                Ok(text) => text,
+                Err(_) => return Json(PackResponse::Failure)
+            };
+
+            println!("Extracted metadata field...");
+            if let Err(_) = std::fs::write(&metadata_path, data) {
+                return Json(PackResponse::Failure);
+            }
+            println!("Wrote metadata to file...");
+        } else if name == "artifacts" {
+            let mut file = if let Ok(f) = OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(packdir.path().join("artifacts.tar.gz")) {
+                    f
+            } else {
+                return Json(PackResponse::Failure);
+            };
+
+            println!("Created file for artifacts...");
+            let mut field_stream = field.into_stream();
+            println!("Converted artifacts field into stream...");
+            while let Some(chunk) = field_stream.next().await {
+                println!("Attempting to write stream chunks into file...");
+                match chunk {
+                    Ok(data) => {
+                        if let Err(_) = file.write_all(&data) {
+                            return Json(PackResponse::Failure)
+                        }
+                    }
+                    Err(_) => return Json(PackResponse::Failure),
+                }
+            }
+            println!("Wrote artifacts to file...");
+        }
     }
 
-    let mut mngr = manager.lock().await;
-    // Generate a unique monitor ID
-    let monitor_id = uuid::Uuid::new_v4().to_string();
-
-    let port = if let Some(port) = mngr.allocate_port(monitor_id.clone()) {
-        port
-    } else {
-        return Json(PackResponse::Failure);
+    println!("Reading metadata into Formfile struct...");
+    let formfile: Formfile = match std::fs::read_to_string(&metadata_path)
+        .and_then(|s| serde_json::from_str(&s)
+            .map_err(|_| {
+                std::io::Error::from(
+                    std::io::ErrorKind::InvalidData
+                )
+            })
+        ) {
+            Ok(ff) => ff,
+            Err(_) => return Json(PackResponse::Failure)
     };
 
-    let mut monitor = if let Ok(monitor) = FormPackMonitor::new(
-        &format!("http://127.0.0.1:{port}")
+    println!("Building FormPackMonitor for {} build...", formfile.name);
+    let mut monitor = match FormPackMonitor::new(
+        manager.lock().await.vmm_service.clone()
     ).await {
-        monitor
-    } else {
-        mngr.deallocate_port(port);
-        return Json(PackResponse::Failure);
-    };
-
-    drop(mngr);
-
-    let final_resp = match monitor.build_image(
-        formfile,
-        packdir.path().join("artifacts.tar.gz"),
-        port
-    ).await {
-        Ok(_res) => {
-            Json(PackResponse::Success)
+        Ok(monitor) => monitor,
+        Err(e) => {
+            println!("Error building monitor: {e}");
+            return Json(PackResponse::Failure);
         }
-        Err(_) => {
+    }; 
+
+    println!("Attmpting to build image for {}...", formfile.name);
+    match monitor.build_image(
+        formfile,
+        artifacts_path,
+    ).await {
+        Ok(_res) => Json(PackResponse::Success),
+        Err(e) => {
+            println!("Error building image: {e}");
             Json(PackResponse::Failure)
         }
-    };
-
-    manager.lock().await.deallocate_port(port);
-    final_resp
+    }
 }
 
 
 pub struct FormPackMonitor {
     docker: Docker,
     container_id: Option<String>,
+    container_name: Option<String>,
     build_server_id: Option<String>,
     build_server_uri: String,
     build_server_client: Client,
+    vmm_service: Option<FormVmmService>,
 }
 
 impl FormPackMonitor {
-    pub async fn new(
-        build_server_uri: &str
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    pub async fn new(vmm_service: Option<FormVmmService>) -> Result<Self, Box<dyn std::error::Error>> {
+        println!("Building default monitor...");
         let mut monitor = Self {
             docker: Docker::connect_with_local_defaults()?,
             container_id: None,
+            container_name: None,
             build_server_id: None,
-            build_server_uri: build_server_uri.to_string(),
-            build_server_client: Client::new()
+            build_server_uri: String::new(),
+            build_server_client: Client::new(),
+            vmm_service,
         };
 
-        let container_id = monitor.start_build_container().await?;
+        println!("Attempting to start build container...");
+        let (container_id, container_name, container_ip) = monitor.start_build_container().await?;
         monitor.container_id = Some(container_id.clone());
+        monitor.container_name = Some(container_name.clone());
+        monitor.build_server_uri = format!("http://{container_ip}:{}", 8080);
 
         Ok(monitor)
     }
@@ -217,8 +232,7 @@ impl FormPackMonitor {
         &mut self,
         formfile: Formfile,
         artifacts: PathBuf,
-        port: u16,
-    ) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let container_id = self.container_id.take().ok_or(
             Box::new(
                 std::io::Error::new(
@@ -227,42 +241,96 @@ impl FormPackMonitor {
                 )
             )
         )?;
+        println!("Build server for {} is {container_id}", formfile.name);
 
+        println!("Uploading artifacts to {container_id}");
         self.upload_artifacts(&container_id, artifacts).await?;
-        self.start_build_server(&container_id, port).await?;
+        println!("Starting build server for {}", formfile.name);
+        self.start_build_server(&container_id).await?;
+        println!("Requesting image build for {}", formfile.name);
         self.execute_build(&formfile).await?;
-
-        let image_path = self.extract_disk_image(&container_id).await?;
+        self.extract_disk_image(&container_id, formfile.name.clone()).await?;
+        println!("Image build completed for {} successfully, cleaning up {container_id}...", formfile.name);
         self.cleanup().await?;
-        Ok(image_path)
+
+        Ok(())
     }
 
-    pub async fn start_build_container(&self) -> Result<String, Box<dyn std::error::Error>> {
+    pub async fn start_build_container(&self) -> Result<(String, String, String), Box<dyn std::error::Error>> {
+        let container_name = format!("form-pack-builder-{}", uuid::Uuid::new_v4());
         let options = Some(CreateContainerOptions {
-            name: format!("form-builder-{}", uuid::Uuid::new_v4()),
+            name: container_name.clone(), 
             platform: None,
         });
 
+        let ports = Some([(
+            "8080/tcp".to_string(),
+            Some(vec![PortBinding {
+                host_ip: Some("0.0.0.0".to_string()),
+                host_port: Some("8080".to_string())
+            }]),
+        )].into_iter().collect());
+
         let host_config = HostConfig {
+            port_bindings: ports,
             devices: Some(vec![DeviceMapping {
                 path_on_host: Some("/dev/kvm".to_string()),
                 path_in_container: Some("/dev/kvm".to_string()),
-                ..Default::default()
+                cgroup_permissions: Some("rwm".to_string())
             }]),
             ..Default::default()
         };
 
+        println!("Build HostConfig: {host_config:?}");
         let config = Config {
-            image: Some("form-builder:latest"),
-            cmd: Some(vec!["/bin/bash"]),
+            image: Some("form-build-server:latest"),
+            cmd: None, 
             tty: Some(true),
             host_config: Some(host_config),
             ..Default::default()
         };
 
+        println!("Build Config: {config:?}");
+
+        println!("Calling create container...");
         let container = self.docker.create_container(options, config).await?;
+        println!("Calling start container...");
         self.docker.start_container::<String>(&container.id, None).await?;
-        Ok(container.id)
+        let container_ip = self.docker.inspect_container(&container_name, None)
+                .await?
+                .network_settings.ok_or(
+                    Box::new(
+                        std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            "Unable to acquire container network settings"
+                        )
+                    )
+                )?.networks.ok_or(
+                    Box::new(
+                        std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            "Unable to acquire container networks"
+                        )
+                    )
+                )?.iter().find(|(k, _)| {
+                    *k == "bridge"
+                }).ok_or(
+                    Box::new(
+                        std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            "Unable to find bridge network"
+                        )
+                    )
+                )?.1.ip_address.clone().ok_or(
+                    Box::new(
+                        std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            "Unable to find IP Address"
+                        )
+                    )
+
+                )?;
+        Ok((container.id, container_name, container_ip))
     }
 
     pub async fn upload_artifacts(
@@ -285,10 +353,9 @@ impl FormPackMonitor {
         Ok(())
     }
 
-    pub async fn start_build_server(&mut self, container_id: &str, port: u16) -> Result<(), Box<dyn std::error::Error>> {
-        let port = port.to_string();
+    pub async fn start_build_server(&mut self, container_id: &str) -> Result<(), Box<dyn std::error::Error>> {
         let exec_opts = CreateExecOptions {
-            cmd: Some(vec!["form-build-server", "--port", &port]),
+            cmd: Some(vec!["form-build-server", "-p", "8080"]),
             attach_stdout: Some(true),
             attach_stderr: Some(true),
             env: Some(vec!["RUST_LOG=info"]),
@@ -297,14 +364,17 @@ impl FormPackMonitor {
             ..Default::default()
         };
 
+        println!("Creating exec {exec_opts:?} to run on {container_id}");
         let exec = self.docker.create_exec(container_id, exec_opts).await?;
         self.build_server_id = Some(exec.id.clone());
+        println!("starting exec on {container_id}");
         self.docker.start_exec(&exec.id, None).await?;
 
         sleep(Duration::from_secs(2));
 
         let max_retries = 5;
         let mut current_retry = 0;
+        let mut ping_resp = None;
 
         while current_retry < max_retries {
             match self.build_server_client
@@ -312,6 +382,7 @@ impl FormPackMonitor {
                 .send()
                 .await {
                     Ok(resp) if resp.status().is_success() => {
+                        ping_resp = Some(resp);
                         return Ok(())
                     }
                     _ => {
@@ -321,27 +392,96 @@ impl FormPackMonitor {
                 }
         }
 
-        Ok(())
+        match ping_resp {
+            Some(r) => {
+                println!("Received response from ping: {r:?}");
+                return Ok(())
+            },
+            None => return Err(
+                Box::new(
+                    std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "Build server never started, no response from ping request"
+                    )
+                )
+            )
+        }
+
     }
 
     pub async fn execute_build(
         &self,
         formfile: &Formfile,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let _resp = self.build_server_client
+        println!("Sending Formfile {formfile:?} for {} to build_server: {}", formfile.name, self.build_server_uri);
+        let resp = self.build_server_client
             .post(format!("{}/formfile", self.build_server_uri))
             .json(formfile)
             .send()
             .await?;
+
+        println!("Received response: {resp:?}");
 
         Ok(())
     }
 
     pub async fn extract_disk_image(
         &self,
-        _container_id: &str
-    ) -> Result<PathBuf, Box<dyn std::error::Error>> {
-        todo!()
+        container_name: &str,
+        vm_name: String,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let options = Some(
+            DownloadFromContainerOptions {
+                path: IMAGE_PATH
+            }
+        );
+        let mut buf = Vec::new();
+        let mut stream = self.docker.download_from_container(container_name, options);
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            buf.extend_from_slice(&chunk);
+        }
+
+        let data: Box<dyn Read> = {
+            if is_gzip(&buf) {
+                Box::new(GzDecoder::new(Cursor::new(buf)))
+            } else {
+                Box::new(Cursor::new(buf))
+            }
+        };
+
+        let mut archive = tar::Archive::new(data);
+        let mut entries = archive.entries()?;
+        let mut num_entries = 0;
+
+        while let Some(entry) = entries.next() {
+            let mut entry = entry?;
+            num_entries += 1;
+
+            if num_entries > 1 {
+                return Err(
+                    Box::new(
+                        std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            "Archive should only have 1 entry for the disk image"
+                        )
+                    )
+                )
+            }
+
+            let output_path = format!("/var/lib/formation/vm-images/{vm_name}.raw");
+            let mut output_file = File::create(output_path)?;
+            std::io::copy(&mut entry, &mut output_file)?;
+        }
+
+        if num_entries == 0 {
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Archive is empty"
+            )))
+        }
+        
+        return Ok(())
     }
 
     pub async fn cleanup(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -355,4 +495,8 @@ impl FormPackMonitor {
 
         Ok(())
     }
+}
+
+fn is_gzip(data: &[u8]) -> bool {
+    data.starts_with(&[0x1F, 0x8B]) // Gzip magic number
 }

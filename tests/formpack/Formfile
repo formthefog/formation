@@ -1,0 +1,17 @@
+NAME hello-server
+
+USER username:bigdog passwd:bigdog123 sudo:true
+
+VCPU 1
+
+MEM 512
+
+DISK 5
+
+COPY ./hello.py /app
+
+INSTALL python3
+
+WORKDIR /app
+
+ENTRYPOINT ["python3", "/app/hello.py"]

@@ -160,19 +160,9 @@ async fn create(
         "Received VM create request: name={}",
         request.name
     );
-    // Convert request into a VmmEvent::Create
-    // TODO: Recover owner from signature
-    // TODO: Check against balance 
-    // TODO: Generate ID
     let event = VmmEvent::Create {
-        owner: "test".to_string(),
-        recovery_id: 0,
-        requestor: "test-api".to_string(),
         formfile: request.formfile,
         name: request.name.clone(),
-        custom_cmdline: None,
-        rng_source: None,
-        console_type: None,
     };
 
     if let Err(e) = request_receive::<()>(channel, event).await {
@@ -193,9 +183,6 @@ async fn start(
 ) -> Json<VmmResponse> {
     let event = VmmEvent::Start {
         id: request.id.clone(),
-        owner: "test".to_string(),
-        recovery_id: 0,
-        requestor: "node".to_string(),
     };
     if let Err(e) = request_receive::<()>(channel, event).await {
         return Json(VmmResponse::Failure(e.to_string()))
@@ -214,9 +201,6 @@ async fn stop(
 ) -> Json<VmmResponse> {
     let event = VmmEvent::Stop {
         id: request.id.clone(),
-        owner: "test".to_string(),
-        recovery_id: 0,
-        requestor: "node".to_string(),
     };
 
     if let Err(e) = request_receive::<()>(channel, event).await {
@@ -236,9 +220,6 @@ async fn delete(
 ) -> Json<VmmResponse> {
     let event = VmmEvent::Delete {
         id: request.id.clone(),
-        owner: "test".to_string(),
-        recovery_id: 0,
-        requestor: "node".to_string(),
     };
 
     if let Err(e) = request_receive::<()>(channel, event).await {
@@ -259,9 +240,6 @@ async fn get_vm(
 ) -> Result<Json<VmInfo>, String>  {
     let event = VmmEvent::Get {
         id: request.id.clone(),
-        owner: "test".to_string(),
-        recovery_id: 0,
-        requestor: "node".to_string(),
     };
 
     request_receive(channel, event).await
@@ -272,7 +250,6 @@ async fn list(
 
     let event = VmmEvent::GetList {
         requestor: "test".to_string(),
-        recovery_id: 0
     };
 
     request_receive(channel, event).await

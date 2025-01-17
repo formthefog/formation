@@ -3,7 +3,7 @@ use form_cli::{create::PackCommand, delete::DeleteCommand, info::GetCommand, sta
 
 #[derive(Debug, Parser)]
 pub struct Form {
-    #[clap(long, short, default_value="127.0.0.1:3001")]
+    #[clap(long, short, default_value="http://127.0.0.1:3001")]
     provider: String, 
     #[clap(subcommand)]
     pub command: FormCommand 
@@ -29,7 +29,7 @@ pub enum ManageCommand {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), String> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let parser = Form::parse();
     println!("{parser:?}");
 
@@ -37,13 +37,16 @@ async fn main() -> Result<(), String> {
         FormCommand::Pack(pack_command) => {
             match pack_command {
                 PackCommand::Build(build_command) => {
-                   let resp = build_command.handle(&parser.provider).await?;
-                   println!("Response: {resp:?}");
+                    let resp = build_command.handle(&parser.provider).await?;
+                    println!("Response: {resp:?}");
+                }
+                PackCommand::DryRun(dry_run_command) => {
+                    let resp = dry_run_command.handle().await?;
+                    println!("Response: {resp:?}");
                 }
                 _ => {}
             }
         }
-        FormCommand::Wallet(command) => {}
         _ => {}
     }
 

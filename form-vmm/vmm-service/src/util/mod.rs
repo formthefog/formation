@@ -682,7 +682,7 @@ pub fn is_unit_type<T: ?Sized + Any>() -> bool {
     TypeId::of::<T>() == TypeId::of::<()>()
 }
 
-pub fn default_formfile() -> PathBuf {
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".").join("Formfile"))
+pub fn default_formfile(context: PathBuf) -> PathBuf {
+    context.join("Formfile")
 }
 
