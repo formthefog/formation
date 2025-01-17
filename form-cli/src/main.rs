@@ -1,5 +1,9 @@
 use clap::{Parser, Subcommand};
-use form_cli::{create::PackCommand, delete::DeleteCommand, info::GetCommand, start::StartCommand, stop::StopCommand, WalletCommand};
+use form_cli::{
+    PackCommand, 
+    ManageCommand,
+    WalletCommand,
+};
 
 #[derive(Debug, Parser)]
 pub struct Form {
@@ -19,15 +23,6 @@ pub enum FormCommand {
     Manage(ManageCommand),
 }
 
-#[derive(Debug, Subcommand)]
-pub enum ManageCommand {
-    Start(StartCommand),
-    Stop(StopCommand),
-    Delete(DeleteCommand),
-    Get(GetCommand),
-    List,
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let parser = Form::parse();
@@ -42,6 +37,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 PackCommand::DryRun(dry_run_command) => {
                     let resp = dry_run_command.handle().await?;
+                    println!("Response: {resp:?}");
+                }
+                PackCommand::Validate(validate_command) => {
+                    let resp = validate_command.handle().await?;
                     println!("Response: {resp:?}");
                 }
                 _ => {}

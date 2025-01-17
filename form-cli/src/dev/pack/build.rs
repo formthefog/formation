@@ -1,67 +1,14 @@
-use std::{fs::OpenOptions, io::Read, path::{Path, PathBuf}};
-use clap::{Args, Subcommand};
-use form_pack::{formfile::{BuildInstruction, Formfile, FormfileParser}, image_builder::FormfileResponse, manager::PackResponse};
-use form_pack::pack::Pack;
-use reqwest::{multipart::Form, Client};
-use serde::{Serialize, Deserialize};
+use clap::Args;
 use vmm_service::util::default_formfile;
+use std::path::PathBuf;
+use reqwest::{Client, multipart::Form};
+use form_pack::{
+    formfile::{BuildInstruction, Formfile, FormfileParser}, 
+    manager::PackResponse
+};
+use form_pack::pack::Pack;
+use crate::default_context;
 
-fn default_context() -> PathBuf {
-    std::env::current_dir().unwrap_or_else(|_| ".".into())
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Keypair {
-    signing_key: String,
-    verifying_key: String,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum PackCommand {
-    Build(BuildCommand),
-    Validate(ValidateCommand),
-    Ship(ShipCommand),
-    DryRun(DryRunCommand),
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct DryRunCommand {
-    /// Path to the context directory (e.g., . for current directory)
-    /// This should be the directory containing the Formfile and other artifacts
-    /// however, you can provide a path to the Formfile.
-    #[clap(default_value_os_t = default_context())]
-    pub context_dir: PathBuf,
-    /// The endpoint to hit 
-    #[clap(default_value="http://172.17.0.2:8080")]
-    pub build_server: String,
-    /// The directory where the form pack artifacts can be found
-    #[clap(long, short, default_value_os_t = default_formfile(default_context()))]
-    pub formfile: PathBuf,
-}
-
-impl DryRunCommand {
-    pub async fn handle(mut self) -> Result<FormfileResponse, Box<dyn std::error::Error>> {
-        let formfile = self.parse_formfile()?;
-        let resp = Client::new()
-            .post(&format!("{}/formfile", self.build_server))
-            .json(&formfile)
-            .send()
-            .await?
-            .json()
-            .await?;
-
-        Ok(resp)
-    }
-
-    pub fn parse_formfile(&mut self) -> Result<Formfile, String> {
-        let content = std::fs::read_to_string(
-            self.formfile.clone()
-        ).map_err(|e| e.to_string())?;
-        let mut parser = FormfileParser::new();
-        Ok(parser.parse(&content).map_err(|e| e.to_string())?)
-
-    }
-}
 
 /// Create a new instance
 #[derive(Debug, Clone, Args)]
@@ -190,24 +137,5 @@ impl BuildCommand {
         hasher.update(self.name.take().unwrap());
         hasher.update(self.parse_formfile()?.to_json());
         Ok(hasher.finalize().to_vec())
-    }
-}
-
-#[derive(Debug, Args)]
-pub struct ValidateCommand;
-#[derive(Debug, Args)]
-pub struct ShipCommand;
-
-impl Keypair {
-    pub fn from_file(path: impl AsRef<Path>) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut buf = Vec::new();
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(false)
-            .open(path.as_ref())?;
-
-        file.read_to_end(&mut buf)?;
-
-        Ok(serde_json::from_slice(&buf)?)
     }
 }

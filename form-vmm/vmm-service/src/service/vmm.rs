@@ -663,14 +663,15 @@ impl VmManager {
             } => {
                 let invite = self.request_formnet_invite_for_vm_via_api(name).await?;
                 log::info!("Received formnet invite... Building InstanceConfig...");
-                if PathBuf::from(IMAGE_DIR).join(name).exists() {
-                    let mut instance_config: VmInstanceConfig = (event, &invite).try_into().map_err(|e: VmmError| {
-                        VmmError::Config(e.to_string())
-                    })?;
+                if PathBuf::from(IMAGE_DIR).join(name).with_extension("raw").exists() {
+                    let mut instance_config: VmInstanceConfig = (event, &invite).try_into()
+                        .map_err(|e: VmmError| {
+                            VmmError::Config(e.to_string())
+                        })?;
 
                     log::info!("Built VmInstanceConfig... Adding TAP device name");
                     instance_config.tap_device = format!("vmnet{}", self.tap_counter);
-                    instance_config.ip_addr = format!("11.0.0.{}", self.tap_counter + 2);
+                    instance_config.ip_addr = format!("172.18.0.{}", self.tap_counter + 2);
                     log::info!("Added TAP device name... Incrementing TAP counter...");
                     self.tap_counter += 1;
                     log::info!("Incremented TAP counter... Attempting to create VM");
