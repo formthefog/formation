@@ -46,11 +46,11 @@ pub struct BuildCommand {
 }
 
 impl BuildCommand {
-    pub async fn handle(mut self, provider: &str) -> Result<PackResponse, Box<dyn std::error::Error>> {
+    pub async fn handle(mut self, provider: &str, formpack_port: u16) -> Result<PackResponse, Box<dyn std::error::Error>> {
         let form = self.pack_build_request().await?;
         println!("Successfully built multipart Form, sending to server");
         let resp: PackResponse = Client::new()
-            .post(format!("{provider}/build"))
+            .post(format!("http://{provider}:{formpack_port}/build"))
             .multipart(form)
             .send()
             .await?

@@ -172,7 +172,7 @@ async fn create(
     Json(VmmResponse::Success(VmResponse {
         id: "pending".to_string(),
         name: request.name,
-        state: "pending".to_string()
+        state: "PENDING".to_string()
     }))
 
 }

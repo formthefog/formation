@@ -29,7 +29,6 @@ use crate::{
     error::VmmError,
     config::create_vm_config,
     instance::config::VmInstanceConfig,
-    ServiceConfig,
 };
 
 type VmmResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
@@ -361,7 +360,6 @@ impl FormVmApi {
 }
 
 pub struct VmManager {
-    pub config: ServiceConfig,
     vm_monitors: HashMap<String, FormVmm>, 
     server: JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>>,
     tap_counter: u32,
@@ -375,7 +373,6 @@ impl VmManager {
     pub async fn new(
         event_sender: tokio::sync::mpsc::Sender<VmmEvent>,
         addr: SocketAddr,
-        config: ServiceConfig,
         formnet_endpoint: String,
         subscriber_uri: Option<&str>,
         publisher_addr: Option<String>,
@@ -399,7 +396,6 @@ impl VmManager {
         };
 
         Ok(Self {
-            config: config.clone(),
             vm_monitors: HashMap::new(),
             server, 
             tap_counter: 0,
@@ -472,7 +468,7 @@ impl VmManager {
         let hypervisor = hypervisor::new().map_err(|e| Box::new(VmmError::SystemError(
             format!("Unable to create hypervisor: {e}")
         )))?;
-        log::info!("Createed new hypervisor");
+        log::info!("Created new hypervisor");
         let exit_evt = EventFd::new(EFD_NONBLOCK).map_err(|e| {
             Box::new(VmmError::Config(
                 format!("Unable to create EventFd: {e}")
@@ -683,7 +679,19 @@ impl VmManager {
                     log::error!("Unable to find Formpack");
                     return Err(Box::new(
                         VmmError::Config(
-                            "Formpack doesn't exist".to_string()
+                            format!(r#"
+Formpack for {name} doesn't exist:
+
+    Have you succesfully built your Formpack yet? 
+
+    Run 
+
+        ```form pack build .``` 
+
+    from inside your project root directory 
+    and ensure the build is successful before
+    calling `form pack ship`
+"#)
                         )
                     ))
                 }

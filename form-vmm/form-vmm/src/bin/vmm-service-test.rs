@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use vmm_service::{ServiceConfig, VmManager, util::default_formfile};
+use vmm_service::{VmManager, util::default_formfile};
 use form_pack::formfile::FormfileParser;
 use form_types::CreateVmRequest;
 use clap::Parser;
@@ -24,8 +24,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
     // Create the base service configuration
+    /*
     log::info!("Building service config");
     let service_config = ServiceConfig::default();
+    */
 
     log::info!("Establishing event and shutdown transactions");
     let (event_tx, event_rx) = tokio::sync::mpsc::channel(1024);
@@ -45,7 +47,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
     let vm_manager = VmManager::new(
         event_tx,
         api_addr,
-        service_config,
         formnet_endpoint,
         subscriber_uri,
         publisher_uri,

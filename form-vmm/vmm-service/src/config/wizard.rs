@@ -1,3 +1,4 @@
+/*
 use std::path::PathBuf;
 use dialoguer::{Input, Confirm};
 use crate::{ServiceConfig, ServicePaths, DefaultVmParams, ResourceLimits, DirectoryConfig, config::NetworkConfig};
@@ -268,3 +269,4 @@ fn print_config_summary(config: &ServiceConfig) {
     println!("  vCPUs: {}", config.default_vm_params.vcpu_count);
     println!("  Disk Size: {}GB", config.default_vm_params.disk_size_gb);
 }
+*/

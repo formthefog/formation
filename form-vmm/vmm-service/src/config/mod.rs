@@ -155,21 +155,14 @@ impl ServicePaths {
     pub const BASE_DIR: &'static str = "/var/lib/formation";
     /// Path for kernel image(s)
     pub const KERNEL_DIR: &'static str = "kernel"; 
-    /// Path for base disk images
-    pub const IMAGES_DIR: &'static str = "images";
-    /// Path for cloud-init images
-    pub const CLOUD_INIT_DIR: &'static str = "cloud-init"; 
-    /// Path for working copies of disk images
-    pub const WORKING_DIR: &'static str = "working";
 }
 
+/*
 /// Global configuration for the VMM service
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceConfig {
     /// Base directory for VM-related files
     pub base_dir: PathBuf,
-    /// Directory structure for various VM components
-    pub directories: DirectoryConfig,
     /// Network configuration
     pub network: NetworkConfig,
     /// Resource limits
@@ -255,18 +248,7 @@ impl ServiceConfig {
         Ok(())
     }
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DirectoryConfig {
-    /// Directory for kernel images
-    pub kernel_dir: PathBuf,
-    /// Directory for base OS images
-    pub images_dir: PathBuf,
-    /// Directory for CloudInit images
-    pub cloud_init_dir: PathBuf,
-    /// Directory for working copies of images
-    pub working_dir: PathBuf
-}
+*/
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkConfig {
@@ -308,17 +290,16 @@ pub struct DefaultVmParams {
     pub disk_size_gb: u64,
 }
 
+/*
 impl Default for DirectoryConfig {
     fn default() -> Self {
         let base_dir = PathBuf::from(ServicePaths::BASE_DIR);
         Self {
             kernel_dir: base_dir.join(ServicePaths::KERNEL_DIR),
-            images_dir: base_dir.join(ServicePaths::IMAGES_DIR),
-            cloud_init_dir: base_dir.join(ServicePaths::CLOUD_INIT_DIR),
-            working_dir: base_dir.join(ServicePaths::WORKING_DIR),
         }
     }
 }
+*/
 
 impl Default for NetworkConfig {
     fn default() -> Self {
@@ -356,11 +337,11 @@ impl Default for DefaultVmParams {
     }
 }
 
+/*
 impl Default for ServiceConfig {
     fn default() -> Self {
         Self {
             base_dir: PathBuf::from(ServicePaths::BASE_DIR),
-            directories: DirectoryConfig::default(),
             network: NetworkConfig::default(),
             limits: ResourceLimits::default(),
             default_vm_params: DefaultVmParams::default(),
@@ -368,3 +349,4 @@ impl Default for ServiceConfig {
         }
     }
 }
+*/

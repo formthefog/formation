@@ -7,8 +7,12 @@ use form_cli::{
 
 #[derive(Debug, Parser)]
 pub struct Form {
-    #[clap(long, short, default_value="http://127.0.0.1:3001")]
+    #[clap(default_value="127.0.0.1")]
     provider: String, 
+    #[clap(default_value="3003")]
+    formpack_port: u16, 
+    #[clap(default_value="3002")]
+    vmm_port: u16,
     #[clap(subcommand)]
     pub command: FormCommand 
 }
@@ -26,13 +30,11 @@ pub enum FormCommand {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let parser = Form::parse();
-    println!("{parser:?}");
-
     match parser.command {
         FormCommand::Pack(pack_command) => {
             match pack_command {
                 PackCommand::Build(build_command) => {
-                    let resp = build_command.handle(&parser.provider).await?;
+                    let resp = build_command.handle(&parser.provider, parser.formpack_port).await?;
                     println!("Response: {resp:?}");
                 }
                 PackCommand::DryRun(dry_run_command) => {
@@ -41,9 +43,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 PackCommand::Validate(validate_command) => {
                     let resp = validate_command.handle().await?;
+                    for line in resp.lines() {
+                        println!("{line}")
+                    }
+                }
+                PackCommand::Ship(ship_command) => {
+                    let provider = parser.provider;
+                    let vmm_port = parser.vmm_port;
+                    let resp = ship_command.handle(&provider, vmm_port).await?;
                     println!("Response: {resp:?}");
                 }
-                _ => {}
             }
         }
         _ => {}

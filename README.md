@@ -1,10 +1,18 @@
 # Formation 
 
-#### A public, decentralized, verfiable, and self-replicating protocol for trustless, confidential Virtual private servers, coordinating as a Fog Compute network to power the Age of Autonomy.
+#### A public verfiable and self-replicating protocol for trustless confidential virtual private servers (VPS), coordinating as a Fog Compute network to power the Age of Autonomy.
 
 <hr>
 
+## Special Thanks
+
+>"If I have seen further, it is by standing on the shoulders of giants" - Sir Isaac Newton 
+
+This project leans heavily on the great work from [Rust-VMM](https://github.com/rust-vmm), [Cloud-Hypervisor](https://github.com/cloud-hypervisor/cloud-hypervisor), [Innernet](https://github.com/tonarino/innernet) and [DStack-VM](https://github.com/amiller/dstack-vm) without which the timeline for this project would have extended many more years.
+
 ## Contributing to Formation
+
+As an Open Source project, we not only encourage, but rely on you to contribute to the project. Before you begin contributing please be sure to read, in full, the CONTRIBUTING file in this repository.
 
 ### WARNING! 
 <hr>
@@ -30,18 +38,47 @@ It also requires that you provide the `kvm` device to the container, as the Form
 
 Running the image as described above will bootstrap you into an unofficial developer network. To join the official devnet please join our discord, navigate to the **Operators channel** and reach out to the core team there for more information on how to participate. 
 
-##### Run Single Node Local Test
-<hr>
+### Run Single Node Local Test
 <hr>
 
-##### Run Multinode Local Test 
+For a single node local test, we provide the `formation-minimal` docker image.
+
+`formation-minimal`, unlike the `formation` image, does not provide the form-p2p
+service, and therefore is not able to connect to the broader network. Further, `formation-minimal` does not register the node running it with the orchestration smart contract, and is therefore unable to be bootstrapped into the network, or verify the workloads it is responsible for. 
+
+Nonetheless, it is valuable, as an operator or developer, to run locally for testing purposes, and makes the process of contributing to the protocol easier, faster, and more convenient. It also provides a minimal test environment for app developers planning to deploy to the broader network, and allows them to test their applications in a more production like scenario before deploying.
+
+Similar to the formation image, you do need to provide `formation-minimal` with `kvm`, it does need to run in privilege mode, it still needs access to the docker socket, however, given that it is designed for a local test network it may not be necessary to run it on the host network, unless you plan on attempting to access instances or applications from a different machine or network.
+
+To run a single local formation node, run the following command:
+
+```bash
+docker run --privileged --device=/dev/kvm \
+    -v /var/run/docker.sock:/var/run/docker.sock -dit formation-minimal:latest
+```
 
 <hr>
+
+### Run Multinode Local Test 
+
+<hr>
+
+To run multiple local nodes, effectively building a localized test network, you will want to run the complete `formation` image, but you will have to do so on the docker bridge network or a custom docker network, which means that in order to gain access to instances, applications and nodes on the network from outside the local machine & network, you will need to set up port forwarding on the router, and customized rules in the local machines networking configuration.
+
 <hr>
 
 ##### Join Official Developer Network
 
 <hr>
+
+To join the official developer network, we suggest you avoid using the docker images, and instead run the full suite of services on a clean ubuntu 22.04 installation, on hardware with a bare minimum of 32 physical cores, 64 GB of RAM, and at least 8TB of storage, though much more storage is preferred in order to enable larger workloads and applications with significantly larger data requirements. 
+
+To participate as an official developer network node, join our [discord]() navigate
+to the operator channel, and let our core team know you would like to participate as a devnet node operator. The devnet operator cohort is small, and is compensated, however there is a significant 
+time commitment as the protocol will be iterated on, stopped and restarted frequently, and there will be coordinated live test scenarios that devnet operators will be asked to participate in,
+all in an effort to ensure the network is hardened and ready for a more public and open testnet phase as the protocol will be iterated on, stopped and restarted frequently, and there will be coordinated live test scenarios that devnet operators will be asked to participate in,
+all in an effort to ensure the network is hardened and ready for a more public and open testnet phase..
+
 <hr>
 
 ## Initializing a Developer Kit
@@ -125,12 +162,67 @@ If you run into an issue, please report it via github issues or join our discord
 
 ## Accessing your Instance
 
+After you have successfully deployed an instance to our network, if you either:
+
+- Provided a password as part of a Formfile `USER` command set `ssh_pwauth` to `true` 
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;OR
+
+- provided an ssh key as part of a Formfile `USER` command under the `ssh_authorized_keys`
+
+you will be able to gain full, secure access your instance over `ssh`.
+
+
+There are 2 different ways to access your instance over `ssh`
+
+1. If you chose to permanently join the formnet mesh when initializing your form dev kit, you can simply user
+your favorite or any standard `ssh` tool, and provide one of the IP addresses
+of your instance replicas. You can also set up DNS within formnet and use the domain name {{name}}.dev.formation.cloud
+to access your instance via ssh
+```bash
+ssh <username>@10.128.0.54
+```
+OR
+
+```bash
+ssh <username>@<app-name>.dev.formation.cloud
+```
+
+2. Alternatively, if you did not choose to join the formnet mesh permanently, or at all, you can use the
+`form ssh` command.
+
+```bash
+form ssh <username>@10.128.0.54
+```
+
+OR
+
+```bash
+form ssh <username>&<app-name>.dev.formation.cloud
+```
+
+Any of these options will allow you to gain secure ssh access to your instances.
+SSH Access to instances deployed to the Formation network always happens over a secure, end to end encrypted VPN tunnel via formnet
+not only do you gain the security of ssh, but another layer of security is provided via the VPN tunnel, given that these instances are hosted by untrusted, non-permissioned nodes in the network. This makes snooping on your ssh packets impossible, as the requesst does not get routed "through" the host, but rather through the VPN tunnel over the mesh network, which uses wireguard underneath the hood.
+
 <hr>
 
-## Committing Changes
+## Committing Changes to an Instance or Application
+
+One of the great features of the Formation network is that the instances in the network offer auto-redundancy and self replication, however, changes made to an instance via ssh or other forms of console access do not automatically get mirrored to redundant copies (yet). In order to ensure all of your replicas are in sync, it is required that after making changes during an ssh or console session, you `commit` the changes using the `form commit` command.
+
+```bash
+form commit 10.128.0.54
+```
+
+This will make a call to a small agent running inside the instance that will then inform the host's VMM service that it has been altered, and the developer wishes to commit these changes to the replicas. 
+
+In the future, this will be phased out and replaced with an auto-replication process to enhance the developer experience, and the resiliency of the applications deployed to our network, however this feature is not included in the current release.
 
 <hr>
 
 ## Roadmap
+
+#### **COMING SOON**
 
 <hr>
