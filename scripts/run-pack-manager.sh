@@ -1,3 +1,3 @@
 #!/bin/bash
 
-/usr/local/bin/pack-manager -i localhost -p 3003
+/usr/local/bin/form-pack-manager -i all -p 3003

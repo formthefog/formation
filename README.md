@@ -28,13 +28,39 @@ There are a few different ways that you can run a Formation node and participate
 The easiest way to get started is to simply run our Docker image in privileged mode with --network=host.
 
 ```bash
-docker run --privileged --network=host --device=/dev/kvm \
-    -v /var/run/docker.sock:/var/run/docker.sock -dit formation:latest
+docker run --rm --privileged --network=host \
+    --device=/dev/kvm \
+    --device=/dev/vhost-net \
+    --device=/dev/null \
+    --device=/dev/zero \
+    --device=/dev/random \
+    --device=/dev/urandom \
+    -v /lib/modules:/lib/modules:ro \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    --mount type=tmpfs,destination=/dev/hugepages,tmpfs-mode=1770 \
+    -dit formation:latest
 ```
 
 The **Formation** docker image requires that it be run in *privileged* mode, and while privileged mode is outside the scope of this particular document, we highly suggest you take the time to understand the implications of such. 
 
-It also requires that you provide the `kvm` device to the container, as the Formation Virtual Machine Manager, Monitors and Hypervisor relies on KVM under the hood. Lastly, for now, we highly suggest your run it with the host network. The way that Formation provisions developers secure, confidential access to their instances is over a private VPN tunnel mesh network that runs wireguard under the hood. Configuring public access to the mesh network over the docker bridge network is still experimental, and you are likely to run into some headaches as a result. If you're looking to contribute to the project, and have expertise in container networking, linux networking, and would like to help make this process simpler so that the Formation node image can run without the host network access, please see the **Contributing to Formation** section above.
+It also requires that you provide the `kvm` device and other devices, as it 
+needs access to host hypervisor and devices to run virtual machines, some of 
+these are likely able to be left out, but as best practice, and for the sake 
+of thoroughness and the reduction of operator headaches, we suggest that you do 
+provide the devices, as well as the hosts kernel modules to the container, 
+as the Formation Virtual Machine Manager, Monitors and Hypervisor 
+relies on KVM & other devices under the hood. 
+
+Lastly, for now, we highly suggest your run it with the host network. 
+The way that Formation provisions developers secure, confidential access 
+to their instances is over a private VPN tunnel mesh network that runs 
+wireguard under the hood. Configuring public access to the mesh network 
+over the docker bridge network is still experimental, and you are likely to 
+run into some headaches as a result. If you're looking to contribute to the 
+project, and have expertise in container networking, linux networking, and 
+would like to help make this process simpler so that the Formation node 
+image can run without the host network access, please see the 
+**Contributing to Formation** section above.
 
 Running the image as described above will bootstrap you into an unofficial developer network. To join the official devnet please join our discord, navigate to the **Operators channel** and reach out to the core team there for more information on how to participate. 
 
@@ -53,8 +79,18 @@ Similar to the formation image, you do need to provide `formation-minimal` with 
 To run a single local formation node, run the following command:
 
 ```bash
-docker run --privileged --device=/dev/kvm \
-    -v /var/run/docker.sock:/var/run/docker.sock -dit formation-minimal:latest
+docker run --rm --privileged --network=host \
+    --device=/dev/kvm \
+    --device=/dev/vhost-net \
+    --device=/dev/null \
+    --device=/dev/zero \
+    --device=/dev/random \
+    --device=/dev/urandom \
+    -v /lib/modules:/lib/modules:ro \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    --mount type=tmpfs,destination=/dev/hugepages,tmpfs-mode=1770 \
+    -dit formation:latest
+
 ```
 
 <hr>

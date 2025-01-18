@@ -165,8 +165,18 @@ async fn create(
         name: request.name.clone(),
     };
 
-    if let Err(e) = request_receive::<()>(channel, event).await {
-        return Json(VmmResponse::Failure(e.to_string()));
+    if let Err(e) = channel.lock().await
+        .send(event.clone())
+        .await {
+            log::info!("Error sending {event:?}: {e}");
+            return Json(
+                VmmResponse::Failure(
+                    format!(
+                        "Error sending event {event:?} across VmmApiChannel to request creation of vm {}",
+                        request.name
+                    )
+                )
+            )
     }
 
     Json(VmmResponse::Success(VmResponse {

@@ -667,7 +667,7 @@ impl VmManager {
 
                     log::info!("Built VmInstanceConfig... Adding TAP device name");
                     instance_config.tap_device = format!("vmnet{}", self.tap_counter);
-                    instance_config.ip_addr = format!("172.18.0.{}", self.tap_counter + 2);
+                    instance_config.ip_addr = format!("192.168.4.{}", self.tap_counter + 2);
                     log::info!("Added TAP device name... Incrementing TAP counter...");
                     self.tap_counter += 1;
                     log::info!("Incremented TAP counter... Attempting to create VM");

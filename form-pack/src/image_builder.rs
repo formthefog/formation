@@ -64,8 +64,7 @@ impl VirtCustomize {
     
     pub fn useradd(mut self, user: &User) -> Self {
         let username = user.username();
-        let passwd = user.passwd();
-        let mut command = format!(r#"useradd {username} -m"#); 
+        let mut command = format!(r#"useradd -m -s /bin/bash {username}"#); 
         if user.sudo() && !user.disable_root() {
             command.push_str(" -g sudo");
         }
@@ -75,8 +74,6 @@ impl VirtCustomize {
             command.push_str(&format!(" -G {groups}"))
         }
 
-        command.push_str(&format!(" -p {passwd}"));
-
         if !user.chpasswd_expire() {
             command.push_str(" -K PASS_MAX_DAYS=-1");
         }
@@ -84,6 +81,17 @@ impl VirtCustomize {
         self = self.run_command(&command);
         self
     }
+
+    pub fn password(mut self, user: &User) -> Self {
+        let username = user.username();
+        let password = user.passwd();
+        let password = &password.replace('$', r"\$").to_string();
+        let command = format!(r#"echo "{username}:{password}" | chpasswd --encrypted"#);
+
+        self = self.run_command(&command);
+        self
+    }
+
 
     pub fn chmod(mut self, permissions: u16, path: &str) -> Self {
         self.commands.push(
@@ -190,6 +198,7 @@ async fn handle_formfile(
     for user in &formfile.users {
         println!("Formfile containers users, adding users...");
         command = command.useradd(user);
+        command = command.password(user);
     }
     
     // Check if there's any copy intructions
@@ -231,7 +240,7 @@ async fn handle_formfile(
                 let entrypoint = build_entrypoint(entrypoint);
                 if !entrypoint.is_empty() {
                     command = command.write("/etc/systemd/system/form-app.service", &entrypoint);
-                    command = command.chmod(644, "/etc/systemd/form-app.service");
+                    command = command.chmod(644, "/etc/systemd/system/form-app.service");
                     command = command.run_command("systemctl enable form-app.service");
                 }
             },
@@ -378,7 +387,7 @@ ProtectHome=true         # No access to home directories
 PrivateTmp=true          # Private /tmp directory
 
 [Install]
-WantedBy=multi-user.target  # Start on system boot
+WantedBy=multi-user.target 
 "#, exec_start);
 }
 

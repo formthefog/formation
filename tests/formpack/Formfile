@@ -1,10 +1,10 @@
 NAME hello-server
 
-USER username:bigdog passwd:bigdog123 sudo:true
+USER username:bigdog passwd:bigdog123 sudo:true disable_root:false
 
-VCPU 1
+VCPU 2
 
-MEM 512
+MEM 2048 
 
 DISK 5
 
