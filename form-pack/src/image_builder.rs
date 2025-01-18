@@ -25,6 +25,11 @@ impl VirtCustomize {
         self
     }
 
+    pub fn ssh_keygen(self) -> Self {
+        let command = format!("ssh-keygen -A");
+        self.run_command(&command)
+    }
+
     pub fn run_script(mut self, script: &str) -> Self {
         self.commands.push(
             format!("--run {script}")
@@ -64,7 +69,9 @@ impl VirtCustomize {
     
     pub fn useradd(mut self, user: &User) -> Self {
         let username = user.username();
-        let mut command = format!(r#"useradd -m -s /bin/bash {username}"#); 
+        let password = user.passwd();
+        let password = &password.replace('$', r"\$").to_string();
+        let mut command = format!("useradd -m -s /bin/bash"); 
         if user.sudo() && !user.disable_root() {
             command.push_str(" -g sudo");
         }
@@ -77,6 +84,10 @@ impl VirtCustomize {
         if !user.chpasswd_expire() {
             command.push_str(" -K PASS_MAX_DAYS=-1");
         }
+
+        command.push_str(&format!(r#" -p "{password}""#));
+
+        command.push_str(&format!(" {username}"));
 
         self = self.run_command(&command);
         self
@@ -183,6 +194,7 @@ async fn handle_formfile(
         // Grow the filesystem to match the disk size
         .run_command("growpart /dev/sda 1")
         .run_command("resize2fs /dev/sda1")
+        .ssh_keygen()
         // Create the workdir in the root directory of the disk 
         .mkdir(&workdir)
         // Update & Upgrade package manager
@@ -198,7 +210,7 @@ async fn handle_formfile(
     for user in &formfile.users {
         println!("Formfile containers users, adding users...");
         command = command.useradd(user);
-        command = command.password(user);
+        // command = command.password(user);
     }
     
     // Check if there's any copy intructions

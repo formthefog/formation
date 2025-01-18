@@ -21,6 +21,62 @@ As an Open Source project, we not only encourage, but rely on you to contribute 
 </p>
 
 ## Running a Node
+
+Currently Formation is only known to work out of the box on Ubuntu 22.04, and the documentation provided herein assumes you are running Ubuntu 22.04. 
+
+<hr>
+
+#### Setting up local network configuration
+
+Before launching Formation, you will want to ensure that your network and machine's network interface configuration is set up properly to run the protocl.
+
+First and foremost, you will want to have the ports related to the various systems service APIs exposes/forwarded to your machine. 
+
+Different routers and ISPs handle port forwarding differently, so we suggest you search the web for router and ISP specific instructions.
+
+The default ports that the system's service APIs run on are:
+
+`3001` for `formnet` join requests API
+
+`3002` for `form-vmm` API
+
+`3003` for `form-pack-manager` API
+
+and 
+
+`51820` for `formnet` interface.
+
+
+You will also need a primary bridge network, currently, it must be called `br0` 
+though in a future release this will become configurable, however, having
+the primary bridge interface called `br0` is best practice. 
+
+Ensure that you have a `br0` primary bridge interface set up on you machine, and 
+ensure that your bridge is the master to your primary physical interface 
+(eth0, enp3s0, or similar)
+
+Once you have ensured your bridge interface exists and is `up` you can add
+the physical interface to the bridge with the `brctl` command below
+
+```bash
+sudo brctl addif br0 <inet>
+```
+
+replace `<inet>` with the correct name of your physical interface.
+
+
+In order to make this process easy for you, we have provided a script in this repo
+
+`./scripts/validate_network_config.sh`
+
+
+By running this script, assuming you do not have significant amounts of customized networking on the 
+machine you are running Formation on, you should get a properly configured network and be able to move forward.
+
+If you do not follow these steps, it is very likely that VPS instances launched by Formation
+will not have internet access, will not be able to join formnet, and will not be able to be accessed by 
+the developer that owns and manages the instances.
+
 <hr>
 
 There are a few different ways that you can run a Formation node and participate in the network. For full documentation see our [Official Docs](docs.formation.cloud), and navigate to the **Operators** section.
