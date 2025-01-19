@@ -290,7 +290,7 @@ form ssh <username>@10.128.0.54
 OR
 
 ```bash
-form ssh <username>&<app-name>.dev.formation.cloud
+form ssh <username>@<app-name>.dev.formation.cloud
 ```
 
 Any of these options will allow you to gain secure ssh access to your instances.
