@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 use shared::interface_config::InterfaceConfig;
-use shared::{Cidr, CidrTree, Endpoint, Interface, NetworkOpts, Peer};
+use shared::{Cidr, CidrTree, Endpoint, Interface, NatOpts, NetworkOpts, Peer};
 use tokio::{net::TcpListener, sync::broadcast::Receiver};
 use wireguard_control::{Backend, InterfaceName};
 use client::util::Api;
@@ -89,8 +89,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
                     no_routing: false,
                     };
                     let interface_name = InterfaceName::from_str("formnet")?;
-                    let target_conf = PathBuf::from("/etc/formnet").join(interface_name.to_string()).with_extension("conf");
+                    let config_dir = PathBuf::from("/etc/formnet");
+                    let target_conf = config_dir.join(interface_name.to_string()).with_extension("conf");
                     redeem_invite(&interface_name, invitation, target_conf, network_opts)?;
+
+                    let data_dir = PathBuf::from("/var/lib/formnet");
+                    if let Err(e) = up(
+                        Some(interface_name.into()), 
+                        &config_dir, 
+                        &data_dir, 
+                        &NetworkOpts::default(), 
+                        Some(Duration::from_secs(60)), 
+                        None,
+                        &NatOpts::default()
+                    ) {
+                        log::error!("Error bringing formnet up: {e}")
+                    }
+
                     return Ok(())
                 }
                 JoinResponse::Error(e) => {

@@ -198,9 +198,9 @@ async fn handle_formfile(
         // Create the workdir in the root directory of the disk 
         .mkdir(&workdir)
         // Update & Upgrade package manager
+        .write("/etc/vm_name", &formfile.name)
         .copy_in("/var/lib/formnet/formnet", "/usr/bin")
-        .write("/etc/systemd/system/formnet-up.service", &write_formnet_up()) 
-        .write("/etc/systemd/system/formnet-install.service", &write_formnet_install()) 
+        .write("/etc/systemd/system/formnet-join.service", &write_formnet_join()) 
         .write("/etc/netplan/01-custom-netplan.yaml", &write_netplan())
         .run_command("apt-get -y update")
         .run_command("apt-get -y upgrade");
@@ -210,7 +210,9 @@ async fn handle_formfile(
     for user in &formfile.users {
         println!("Formfile containers users, adding users...");
         command = command.useradd(user);
-        // command = command.password(user);
+        if !user.ssh_authorized_keys().is_empty() {
+            command = command.ssh_inject(user);
+        }
     }
     
     // Check if there's any copy intructions
@@ -268,8 +270,7 @@ async fn handle_formfile(
 
     println!("Adding netplan apply and formnet commands to command...");
     command = command.run_command("netplan apply");
-    command = command.run_command("systemctl enable formnet-up.service");
-    command = command.run_command("systemctl enable formnet-install.service");
+    command = command.run_command("systemctl enable formnet-join.service");
 
     let command = match command.build() {
         Ok(cmd) => cmd,
@@ -435,43 +436,18 @@ r#"network:
     "#.to_string()
 }
 
-fn write_formnet_up() -> String {
+fn write_formnet_join() -> String {
 r#"[Unit]
-Description=Formnet Up
-After=formnet-install.service
-Wants=formnet-install.service
+Description=Formnet Join 
 After=network-online.target
 Wants=network-online.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/formnet up -d --interval 60
-Restart=always
-RestartSec=5
-StandardOutput=append:/var/log/formnet.log
-StandardError=append:/var/log/formnet.log
-
-
-[Install]
-WantedBy=multi-user.target
-"#.to_string()
-}
-
-fn write_formnet_install() -> String {
-r#"[Unit]
-Description=Formnet Install
-After=network-online.target
-Wants=network-online.target
-
-ConditionPathExists=!/etc/formnet/state.toml
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/formnet install --default-name -d /etc/formnet/invite.toml
-ExecStart=/bin/touch /etc/formnet/state.toml
-RemainAfterExit=yes
+ExecStart=/usr/bin/formnet 
 StandardOutput=append:/var/log/formnet.log
 StandardError=append:/var/log/formnet.log
+
 
 [Install]
 WantedBy=multi-user.target

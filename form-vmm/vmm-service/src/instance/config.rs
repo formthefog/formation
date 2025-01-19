@@ -3,7 +3,6 @@ use std::str::FromStr;
 use std::path::PathBuf;
 use net_util::MacAddr;
 use serde::{Deserialize, Serialize};
-use shared::interface_config::InterfaceConfig;
 use crate::error::VmmError;
 use form_types::VmmEvent;
 use rand::{thread_rng, Rng};
@@ -109,10 +108,10 @@ impl FromStr for ConsoleType {
     }
 }
 
-impl TryFrom<(&VmmEvent, &InterfaceConfig)> for VmInstanceConfig {
+impl TryFrom<&VmmEvent> for VmInstanceConfig {
     type Error = VmmError;
-    fn try_from(event: (&VmmEvent, &InterfaceConfig)) -> Result<Self, Self::Error> {
-        match &event.0 {
+    fn try_from(event: &VmmEvent) -> Result<Self, Self::Error> {
+        match &event {
             VmmEvent::Create { 
                 formfile,
                 name,

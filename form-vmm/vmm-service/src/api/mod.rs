@@ -12,7 +12,7 @@ use std::{sync::Arc, time::Duration};
 use std::net::SocketAddr;
 
 use crate::VmmError;
-use form_types::{CreateVmRequest, DeleteVmRequest, GetVmRequest, PingVmmRequest, StartVmRequest, StopVmRequest, VmResponse, VmmEvent, VmmResponse};
+use form_types::{BootCompleteRequest, CreateVmRequest, DeleteVmRequest, GetVmRequest, PingVmmRequest, StartVmRequest, StopVmRequest, VmResponse, VmmEvent, VmmResponse};
 
 pub struct VmmApiChannel {
     event_sender: mpsc::Sender<VmmEvent>,
@@ -86,6 +86,7 @@ impl VmmApi {
         let app = Router::new()
             .route("/health", get(health_check))
             .route("/vm/create", post(create))
+            .route("/vm/:id/boot_complete", post(boot_complete))
             .route("/vm/:id/boot", post(start))
             .route("/vm/:id/delete", post(delete))
             .route("/vm/:id/pause", post(stop))
@@ -185,6 +186,36 @@ async fn create(
         state: "PENDING".to_string()
     }))
 
+}
+
+async fn boot_complete(
+    State(channel): State<Arc<Mutex<VmmApiChannel>>>,
+    Json(request): Json<BootCompleteRequest>,
+) -> Json<VmmResponse> {
+
+    log::info!("Received BootCompleteRequest for VM {}", request.name);
+    let event = VmmEvent::BootComplete {
+        id: request.name.clone(),
+        formnet_ip: request.formnet_ip,
+    };
+
+    log::info!("Built BootComplete VmmEvent, sending across api channel");
+    if let Err(e) = channel.lock().await.send(event.clone()).await {
+        log::info!("Error receiving response back from API channel: {e}");
+        return Json(
+            VmmResponse::Failure(
+                format!("Error recording BootComplete event {event:?}: {e}")
+            )
+        )
+    }
+    log::info!("BootCompleteRequest handled succesfully, responding...");
+    Json(VmmResponse::Success(
+        VmResponse { 
+            id: request.name.clone(), 
+            name: request.name,
+            state: "complete".to_string() 
+        }
+    ))
 }
 
 async fn start(

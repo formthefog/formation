@@ -499,6 +499,16 @@ impl NatOpts {
     }
 }
 
+impl Default for NatOpts {
+    fn default() -> Self {
+        NatOpts {
+            no_nat_traversal: false,
+            exclude_nat_candidates: Vec::new(),
+            no_nat_candidates: false
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Args)]
 pub struct NetworkOpts {
     #[clap(long)]
@@ -514,6 +524,16 @@ pub struct NetworkOpts {
     #[clap(long)]
     /// Specify the desired MTU for your interface (default: 1280).
     pub mtu: Option<u32>,
+}
+
+impl Default for NetworkOpts {
+    fn default() -> Self {
+        Self {
+            no_routing: false,
+            backend: Backend::Kernel,
+            mtu: None 
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

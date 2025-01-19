@@ -8,6 +8,12 @@ pub struct PingVmmRequest {
     pub name: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BootCompleteRequest {
+    pub name: String,
+    pub formnet_ip: String,
+}
+
 /// Request to create a new VM instance
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateVmRequest {

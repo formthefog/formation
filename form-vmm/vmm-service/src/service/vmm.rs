@@ -526,7 +526,6 @@ impl VmManager {
             log::error!("Error attempting to add tap device {} to bridge: {e}", &config.tap_device)
         };
 
-
         Ok(())
     }
 
@@ -657,10 +656,8 @@ impl VmManager {
                 ref name, 
                 ..
             } => {
-                let invite = self.request_formnet_invite_for_vm_via_api(name).await?;
-                log::info!("Received formnet invite... Building InstanceConfig...");
                 if PathBuf::from(IMAGE_DIR).join(name).with_extension("raw").exists() {
-                    let mut instance_config: VmInstanceConfig = (event, &invite).try_into()
+                    let mut instance_config: VmInstanceConfig = event.try_into()
                         .map_err(|e: VmmError| {
                             VmmError::Config(e.to_string())
                         })?;
@@ -695,6 +692,11 @@ Formpack for {name} doesn't exist:
                         )
                     ))
                 }
+            }
+            VmmEvent::BootComplete { id, formnet_ip } => {
+                //TODO: Write this information into State so that 
+                //users/developers can "get" the IP address
+                log::info!("Boot Complete for {id}: formnet id: {formnet_ip}");
             }
             VmmEvent::Stop { id, .. } => {
                 //TODO: verify ownership/authorization, etc.

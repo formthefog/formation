@@ -241,6 +241,14 @@ pub enum VmmEvent {
     NetworkSetupComplete {
         invite: String
     },
+    BootComplete {
+        id: String,
+        formnet_ip: String,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
+        signature: String,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
+        recovery_id: u32,
+    },
     Migrate,
     Copy,
     Snapshot,
