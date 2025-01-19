@@ -10,7 +10,7 @@ class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         
         # Send message back to client
-        message = "Hello World!"
+        message = "Hello, Formation!"
         self.wfile.write(bytes(message, "utf8"))
         
     def log_message(self, format, *args):
