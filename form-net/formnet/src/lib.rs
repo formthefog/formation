@@ -612,6 +612,11 @@ pub fn redeem_invite(
     )?;
 
     config.interface.private_key = keypair.private.to_base64();
+
+    if let Some(parent) = target_conf.parent().take() {
+        std::fs::create_dir_all(parent)?;
+    }
+
     config.write_to_path(&target_conf, false, Some(0o600))?;
     log::info!(
         "New keypair registered. Copied config to {}.\n",
@@ -646,18 +651,6 @@ pub fn redeem_invite(
         &network,
         None,
         &nat
-    )?;
-
-    let interface = Interface::from_str(&iface.to_string())?;
-
-    up(
-        Some(interface),
-        &config_dir,
-        &data_dir,
-        &network,
-        Some(Duration::from_secs(60)),
-        None,
-        &nat,
     )?;
 
     Ok(())
@@ -809,7 +802,7 @@ fn update_hosts_file(
     Ok(())
 }
 
-fn up(
+pub fn up(
     interface: Option<Interface>,
     config_dir: &PathBuf,
     data_dir: &PathBuf,
@@ -819,13 +812,17 @@ fn up(
     nat: &NatOpts,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     loop {
+        log::info!("acquiring interfaces");
         let interfaces = match &interface {
             Some(iface) => vec![iface.clone()],
             None => all_installed(&config_dir)?,
         };
+        log::info!("acquired interfaces: {interfaces:?}");
 
         for iface in interfaces {
+            log::info!("calling fetch for interface: {iface}");
             fetch(&iface, config_dir, data_dir, network, hosts_path.clone(), nat)?;
+            log::info!("called fetch for interface: {iface}");
         }
 
         match loop_interval {

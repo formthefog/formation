@@ -1,4 +1,7 @@
-use vmm_service::{api::CreateVmRequest, ServiceConfig, VmManager};
+use std::path::PathBuf;
+use vmm_service::{VmManager, util::default_formfile};
+use form_pack::formfile::FormfileParser;
+use form_types::CreateVmRequest;
 use clap::Parser;
 
 #[derive(Parser)]
@@ -7,6 +10,10 @@ struct Cli {
     test_run: usize,
     #[clap(long, short, default_value_t=false)]
     pubsub: bool,
+    #[clap(long, short, default_value_os_t=default_formfile(PathBuf::from("./")))]
+    formfile: PathBuf,
+    #[clap(long, short, default_value_t=String::from("127.0.0.1:51520"))]
+    pack_manager: String
 }
 
 #[tokio::main]
@@ -17,8 +24,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
     // Create the base service configuration
+    /*
     log::info!("Building service config");
     let service_config = ServiceConfig::default();
+    */
 
     log::info!("Establishing event and shutdown transactions");
     let (event_tx, event_rx) = tokio::sync::mpsc::channel(1024);
@@ -38,10 +47,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
     let vm_manager = VmManager::new(
         event_tx,
         api_addr,
-        service_config,
         formnet_endpoint,
         subscriber_uri,
-        publisher_uri
+        publisher_uri,
     ).await?;
 
     log::info!("Built VM Manager, sleeping for 5 seconds...");
@@ -61,16 +69,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
 
     std::thread::sleep(std::time::Duration::from_secs(5));
 
+    let formfile = {
+        let contents = std::fs::read_to_string(parser.formfile)?;
+        FormfileParser::new().parse(&contents).map_err(|e| {
+            Box::new(
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Unable to parse Formfile: {e}")
+                )
+            )
+        })?
+    };
     log::info!("Building CreateVmRequest...");
     let create_vm_request = CreateVmRequest {
-        distro: "ubuntu".to_string(),
-        version: "22.04".to_string(),
-        memory_mb: 1024,
-        vcpu_count: 4,
         name: format!("test-vm-{}", parser.test_run),
-        meta_data: None,
-        user_data: None,
         recovery_id: 0,
+        formfile,
         signature: Some("test-signature".to_string())
     };
 

@@ -29,10 +29,6 @@ name = "vmm-service"
 path = "src/bin/vmm-service.rs"
 
 [[bin]]
-name = "form"
-path = "src/bin/form.rs"
-
-[[bin]]
 name = "vmm-service-test"
 path = "src/bin/vmm-service-test.rs"
 
@@ -74,6 +70,7 @@ hyper = { version = "1.0", features = ["full"] }
 hyperlocal = "0.9.1"
 http-body-util = "0.1.2"
 hyper-util = "0.1.10"
+form-pack = { path = "../../form-pack" }
 
 [dev-dependencies]
 dirs = "5.0.1"

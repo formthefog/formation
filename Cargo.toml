@@ -5,8 +5,7 @@ members = [
   "form-broker",
   "form-vmm/api_client",
   "form-vmm/arch",
-  "form-vmm/block",
-  "form-vmm/devices",
+  "form-vmm/block", "form-vmm/devices",
   "form-vmm/event_monitor",
   "form-vmm/hypervisor",
   "form-vmm/net_gen",
@@ -38,7 +37,9 @@ members = [
   "form-traits",
   "form-state",
   "form-p2p",
-  "form-vmm/form-vmm"
+  "form-vmm/form-vmm", 
+  "form-cli", 
+  "form-pack"
 ]
 
 [workspace.dependencies]

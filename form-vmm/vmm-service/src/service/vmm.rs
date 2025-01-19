@@ -21,14 +21,14 @@ use seccompiler::SeccompAction;
 use tokio::task::JoinHandle;
 use form_types::{FormnetMessage, FormnetTopic, GenericPublisher, PeerType, VmmEvent, VmmSubscriber};
 use form_broker::{subscriber::SubStream, publisher::PubStream};
+use futures::future::join_all;
 use crate::{api::VmmApi, util::ensure_directory};
 use crate::util::add_tap_to_bridge;
-use crate::ChError;
+use crate::{ChError, IMAGE_DIR};
 use crate::{
     error::VmmError,
     config::create_vm_config,
     instance::config::VmInstanceConfig,
-    ServiceConfig,
 };
 
 type VmmResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
@@ -360,25 +360,22 @@ impl FormVmApi {
 }
 
 pub struct VmManager {
-    // We need to stash threads & socket paths
-    pub config: ServiceConfig,
     vm_monitors: HashMap<String, FormVmm>, 
     server: JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>>,
     tap_counter: u32,
     formnet_endpoint: String,
     api_response_sender: tokio::sync::mpsc::Sender<String>,
     subscriber: Option<VmmSubscriber>,
-    publisher_addr: Option<String>
+    publisher_addr: Option<String>,
 }
 
 impl VmManager {
     pub async fn new(
         event_sender: tokio::sync::mpsc::Sender<VmmEvent>,
         addr: SocketAddr,
-        config: ServiceConfig,
         formnet_endpoint: String,
         subscriber_uri: Option<&str>,
-        publisher_addr: Option<String>
+        publisher_addr: Option<String>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync + 'static>> {
         let (resp_tx, resp_rx) = tokio::sync::mpsc::channel(1024);
         let server = tokio::task::spawn(async move {
@@ -399,14 +396,13 @@ impl VmManager {
         };
 
         Ok(Self {
-            config,
             vm_monitors: HashMap::new(),
             server, 
             tap_counter: 0,
             formnet_endpoint,
             api_response_sender: resp_tx,
             subscriber,
-            publisher_addr
+            publisher_addr,
         })
     }
 
@@ -429,7 +425,7 @@ impl VmManager {
             )?;
             (Some(format!("{path}/form-vm/{}.sock", config.name)), None)
         } else {
-            let sock_path = format!("run/form-vmm/{}.sock", config.name);
+            let sock_path = format!("/run/form-vmm/{}.sock", config.name);
             ensure_directory(
                 PathBuf::from(&sock_path).parent().ok_or(
                     Box::new(
@@ -472,7 +468,7 @@ impl VmManager {
         let hypervisor = hypervisor::new().map_err(|e| Box::new(VmmError::SystemError(
             format!("Unable to create hypervisor: {e}")
         )))?;
-        log::info!("Createed new hypervisor");
+        log::info!("Created new hypervisor");
         let exit_evt = EventFd::new(EFD_NONBLOCK).map_err(|e| {
             Box::new(VmmError::Config(
                 format!("Unable to create EventFd: {e}")
@@ -524,42 +520,41 @@ impl VmManager {
         log::info!("Inserting Form VMM into vm_monitoris map");
         self.vm_monitors.insert(config.name.clone(), vmm);
         log::info!("Calling `boot` on FormVmm");
-        self.boot(config.name.clone()).await?;
+        self.boot(&config.name).await?;
 
         if let Err(e) = add_tap_to_bridge("br0", &config.tap_device.clone()).await {
             log::error!("Error attempting to add tap device {} to bridge: {e}", &config.tap_device)
         };
 
-
         Ok(())
     }
 
-    pub async fn boot(&mut self, name: String) -> ApiResult<()> {
-        self.get_vmm(&name)?.api.boot().await
+    pub async fn boot(&mut self, name: &String) -> ApiResult<()> {
+        self.get_vmm(name)?.api.boot().await
     }
     
-    pub async fn ping(&self, name: String) -> ApiResult<VmmPingResponse> {
-        self.get_vmm(&name)?.api.ping().await
+    pub async fn ping(&self, name: &String) -> ApiResult<VmmPingResponse> {
+        self.get_vmm(name)?.api.ping().await
     }
 
-    pub async fn shutdown(&self, name: String) -> ApiResult<()> {
-        self.get_vmm(&name)?.api.shutdown().await
+    pub async fn shutdown(&self, name: &String) -> ApiResult<()> {
+        self.get_vmm(name)?.api.shutdown().await
     }
 
-    pub async fn pause(&self, name: String) -> ApiResult<()> {
-        self.get_vmm(&name)?.api.pause().await
+    pub async fn pause(&self, name: &String) -> ApiResult<()> {
+        self.get_vmm(name)?.api.pause().await
     }
 
-    pub async fn resume(&self, name: String) -> ApiResult<()> {
-        self.get_vmm(&name)?.api.resume().await
+    pub async fn resume(&self, name: &String) -> ApiResult<()> {
+        self.get_vmm(name)?.api.resume().await
     }
 
-    pub async fn reboot(&self, name: String) -> ApiResult<()> {
-        self.get_vmm(&name)?.api.reboot().await
+    pub async fn reboot(&self, name: &String) -> ApiResult<()> {
+        self.get_vmm(name)?.api.reboot().await
     }
 
-    pub async fn delete(&mut self, name: String) -> ApiResult<()> {
-        let api = &self.get_vmm(&name)?.api;
+    pub async fn delete(&mut self, name: &String) -> ApiResult<()> {
+        let api = &self.get_vmm(name)?.api;
         let resp = api.delete().await?;
         match &resp {
             ApiResponse::SuccessNoContent { .. } => {
@@ -582,8 +577,12 @@ impl VmManager {
         }
     }
 
+    pub async fn info(&self, name: &String) -> ApiResult<VmInfo> {
+        self.get_vmm(name)?.api.info().await
+    }
+
     pub async fn power_button(&self, name: &String) -> ApiResult<()> {
-        self.get_vmm(&name)?.api.power_button().await
+        self.get_vmm(name)?.api.power_button().await
     }
 
     pub async fn run(
@@ -648,7 +647,7 @@ impl VmManager {
     async fn handle_vmm_event(&mut self, event: &VmmEvent) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
         match event {
             VmmEvent::Ping { name } => {
-                let resp = self.ping(name.to_string()).await?;
+                let resp = self.ping(name).await?;
                 self.api_response_sender.send(
                     serde_json::to_string(&resp)?
                 ).await?;
@@ -657,34 +656,85 @@ impl VmManager {
                 ref name, 
                 ..
             } => {
-                let invite = self.request_formnet_invite_for_vm_via_api(name).await?;
-                log::info!("Received formnet invite... Building VmInstanceConfig...");
+                if PathBuf::from(IMAGE_DIR).join(name).with_extension("raw").exists() {
+                    let mut instance_config: VmInstanceConfig = event.try_into()
+                        .map_err(|e: VmmError| {
+                            VmmError::Config(e.to_string())
+                        })?;
 
-                let mut instance_config: VmInstanceConfig = (event, &invite).try_into().map_err(|e: VmmError| {
-                    VmmError::Config(e.to_string())
-                })?;
+                    log::info!("Built VmInstanceConfig... Adding TAP device name");
+                    instance_config.tap_device = format!("vmnet{}", self.tap_counter);
+                    instance_config.ip_addr = format!("172.18.0.{}", self.tap_counter + 2);
+                    log::info!("Added TAP device name... Incrementing TAP counter...");
+                    self.tap_counter += 1;
+                    log::info!("Incremented TAP counter... Attempting to create VM");
+                    // TODO: return Future, and stash future in a `FuturesUnordered`
+                    // to be awaited asynchronously.
+                    self.create(&mut instance_config).await?;
+                    log::info!("Created VM");
+                } else {
+                    log::error!("Unable to find Formpack");
+                    return Err(Box::new(
+                        VmmError::Config(
+                            format!(r#"
+Formpack for {name} doesn't exist:
 
-                log::info!("Built VmInstanceConfig... Adding TAP device name");
-                instance_config.tap_device = format!("vmnet{}", self.tap_counter);
-                instance_config.ip_addr = format!("11.0.0.{}", self.tap_counter + 2);
-                log::info!("Added TAP device name... Incrementing TAP counter...");
-                self.tap_counter += 1;
-                log::info!("Incremented TAP counter... Attempting to create VM");
-                // TODO: return Future, and stash future in a `FuturesUnordered`
-                // to be awaited asynchronously.
-                self.create(&mut instance_config).await?;
-                log::info!("Created VM");
+    Have you succesfully built your Formpack yet? 
+
+    Run 
+
+        ```form pack build .``` 
+
+    from inside your project root directory 
+    and ensure the build is successful before
+    calling `form pack ship`
+"#)
+                        )
+                    ))
+                }
+            }
+            VmmEvent::BootComplete { id, formnet_ip } => {
+                //TODO: Write this information into State so that 
+                //users/developers can "get" the IP address
+                log::info!("Boot Complete for {id}: formnet id: {formnet_ip}");
             }
             VmmEvent::Stop { id, .. } => {
                 //TODO: verify ownership/authorization, etc.
-                self.pause(id.to_string()).await?;
+                self.pause(id).await?;
             }
             VmmEvent::Start {  id, .. } => {
                 //TODO: verify ownership/authorization, etc.
-                self.boot(id.to_string()).await?;
+                self.boot(id).await?;
             }
             VmmEvent::Delete { id, .. } => {
-                self.delete(id.to_string()).await?;
+                self.delete(id).await?;
+            }
+            VmmEvent::Get { id, .. } => {
+                let resp = serde_json::to_string(&self.info(id).await?)?;
+                self.api_response_sender.send(
+                    resp
+                ).await?;
+            }
+            VmmEvent::GetList { .. } => {
+                let resp_futures = join_all(self.vm_monitors.iter().map(|(_id, vmm)| async {
+                    vmm.api.info().await
+                }).collect::<Vec<_>>()).await;
+                let resp = resp_futures.iter().filter_map(|info| {
+                    match info {
+                        Ok(ApiResponse::Success { code: _, content }) => {
+                            match content {
+                                Some(content) => Some(content),
+                                None => None
+                            }
+                        }
+                        _ => None
+                    }
+                }).collect::<Vec<_>>();
+
+                let resp = serde_json::to_string(&resp)?;
+                self.api_response_sender.send(
+                    resp
+                ).await?;
             }
             _ => {}
             

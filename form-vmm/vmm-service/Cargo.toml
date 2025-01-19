@@ -6,6 +6,7 @@ edition = "2021"
 [features]
 pvmemcontrol = []
 guest_debug = []
+dev = []
 
 [dependencies]
 thiserror = "2.0.3"
@@ -62,6 +63,7 @@ hyperlocal = "0.9.1"
 http-body-util = "0.1.2"
 hyper-util = "0.1.10"
 form-broker = { path = "../../form-broker" }
+form-pack = { path = "../../form-pack" }
 
 [dev-dependencies]
 ipnet = "2.9"

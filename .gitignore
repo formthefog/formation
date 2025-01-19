@@ -1,3 +1,5 @@
+/.dockerfiles
 /.env
 /target
 /artifacts
+./tests

@@ -8,7 +8,7 @@ pub mod cli;
 pub mod api;
 pub mod util;
 
-pub use config::{NetworkConfig, DirectoryConfig, DefaultVmParams, ResourceLimits, ServicePaths, ServiceConfig};
+pub use config::{NetworkConfig, DefaultVmParams, ResourceLimits, ServicePaths};
 pub use service::*;
 pub use instance::*;
 pub use error::*;

@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 
 use alloy::primitives::Address;
+use form_pack::formfile::Formfile;
 use serde::{Serialize, Deserialize};
 use uuid::Uuid;
 use form_traits::{Event as EventTrait, IntoEvent};
@@ -181,40 +182,72 @@ pub enum VmmEvent {
         name: String,
     },
     Create { 
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         owner: String,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         recovery_id: u32,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         requestor: String,
-        distro: String,
-        version: String,
-        user_data: Option<String>,
-        meta_data: Option<String>,
-        memory_mb: u64,
-        vcpu_count: u8,
+        formfile: Formfile,
         name: String,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         custom_cmdline: Option<String>,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         rng_source: Option<String>,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         console_type: Option<String>, 
     },
     Start {
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         owner: String,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         recovery_id: u32,
         id: String,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         requestor: String,
     },
     Stop {
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         owner: String,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         recovery_id: u32, 
         id: String,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         requestor: String,
     },
     Delete {
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         owner: String,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         recovery_id: u32,
         id: String,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         requestor: String,
+    },
+    Get {
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
+        owner: String,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
+        recovery_id: u32,
+        id: String,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
+        requestor: String,
+    },
+    GetList {
+        requestor: String,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
+        recovery_id: u32,
     },
     NetworkSetupComplete {
         invite: String
+    },
+    BootComplete {
+        id: String,
+        formnet_ip: String,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
+        signature: String,
+        #[cfg(any(feature = "testnet", feature = "mainnet"))]
+        recovery_id: u32,
     },
     Migrate,
     Copy,

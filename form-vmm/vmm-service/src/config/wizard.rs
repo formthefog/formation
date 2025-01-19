@@ -1,3 +1,4 @@
+/*
 use std::path::PathBuf;
 use dialoguer::{Input, Confirm};
 use crate::{ServiceConfig, ServicePaths, DefaultVmParams, ResourceLimits, DirectoryConfig, config::NetworkConfig};
@@ -31,12 +32,17 @@ pub fn run_config_wizard() -> Result<ServiceConfig, Box<dyn std::error::Error>> 
     println!("\nConfiguring default VM parameters:");
     let default_params = configure_default_params(&limits)?;
 
+    // Default VM Parameters
+    println!("\nConfiguring listen address for Pack Manager:");
+    let pack_manager = configure_pack_manager_listen_address()?;
+
     let config = ServiceConfig {
         base_dir: base_path,
         directories,
         network,
         limits,
-        default_vm_params: default_params
+        default_vm_params: default_params,
+        pack_manager
     };
 
     print_config_summary(&config);
@@ -52,6 +58,15 @@ pub fn run_config_wizard() -> Result<ServiceConfig, Box<dyn std::error::Error>> 
 
     println!("Configuration cancelled. Using defaults.");
     Ok(ServiceConfig::default())
+}
+
+fn configure_pack_manager_listen_address() -> Result<String, Box<dyn std::error::Error>> {
+    let pack_manager: String = Input::new()
+        .with_prompt("Provide the listen address for the FormPackManager API")
+        .default("127.0.0.1:51520".to_string())
+        .interact_text()?;
+
+    Ok(pack_manager)
 }
 
 fn configure_directories(base_path: &PathBuf) -> Result<DirectoryConfig, Box<dyn std::error::Error>> {
@@ -254,3 +269,4 @@ fn print_config_summary(config: &ServiceConfig) {
     println!("  vCPUs: {}", config.default_vm_params.vcpu_count);
     println!("  Disk Size: {}GB", config.default_vm_params.disk_size_gb);
 }
+*/
