@@ -145,7 +145,7 @@ docker run --rm --privileged --network=host \
     -v /lib/modules:/lib/modules:ro \
     -v /var/run/docker.sock:/var/run/docker.sock \
     --mount type=tmpfs,destination=/dev/hugepages,tmpfs-mode=1770 \
-    -dit formation:latest
+    -dit formation-minimal:latest
 
 ```
 
