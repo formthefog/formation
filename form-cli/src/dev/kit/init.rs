@@ -15,10 +15,10 @@ use crate::{encrypt_file, save_config, Config};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Keystore {
-    mnemonic: Option<String>,
-    secret_key: String,
-    public_key: String,
-    address: String,
+    pub mnemonic: Option<String>,
+    pub secret_key: String,
+    pub public_key: String,
+    pub address: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Args)]
@@ -47,14 +47,30 @@ pub struct Init {
     pub join_formnet: Option<bool>,
 }
 
-impl Init {
-    pub async fn handle(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        self.run_wizard().await?;
+impl Default for Init {
+    fn default() -> Self {
+        Self {
+            wizard: true,
+            signing_key: None,
+            mnemonic: None,
+            keystore: None,
+            config_dir: None,
+            data_dir: None,
+            hosts: None,
+            pack_manager_port: None,
+            vmm_port: None,
+            formnet_port: None,
+            join_formnet: None
+        }
+    }
+}
 
-        Ok(())
+impl Init {
+    pub async fn handle(&mut self) -> Result<(Config, Keystore), Box<dyn std::error::Error>> {
+        self.run_wizard().await
     }
 
-    async fn run_wizard(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    async fn run_wizard(&mut self) -> Result<(Config, Keystore), Box<dyn std::error::Error>> {
         #[cfg(target_os = "windows")]
         let home_dir = std::env::var("APPDATA").unwrap_or(".".to_string());
         let home_dir = std::env::var("HOME").unwrap_or(".".to_string());
@@ -250,6 +266,13 @@ impl Init {
             )
         };
 
+        let keystore = Keystore {
+            mnemonic: mnemonic.cloned(),
+            secret_key: hex::encode(SecretKey::from(secret_key).to_bytes()),
+            public_key: hex::encode(PublicKey::from(public_key).to_sec1_bytes().as_ref()),
+            address: address.to_string()
+        };
+
         if Confirm::with_theme(&ColorfulTheme::default())
             .with_prompt("Would you like to save your wallet to a keystore?")
             .default(true)
@@ -257,31 +280,22 @@ impl Init {
 
                 //TODO: Separate the files for different components
                 //No need to encrypt address or pubkey
-
-                let contents = Keystore {
-                    mnemonic: mnemonic.cloned(),
-                    secret_key: hex::encode(SecretKey::from(signing_key).to_bytes()),
-                    public_key: hex::encode(PublicKey::from(public_key).to_sec1_bytes().as_ref()),
-                    address: address.to_string()
-                };
-
                 let password: String = Password::with_theme(&ColorfulTheme::default())
                     .with_prompt("Provide a password for the keystore")
                     .with_confirmation("Confirm the password", "Passwords do not match")
                     .interact()?;
-                let enc_contents = encrypt_file(&serde_json::to_vec(&contents)?, &password)?;
+                let enc_contents = encrypt_file(&serde_json::to_vec(&keystore)?, &password)?;
 
                 let keyfile: String = Input::with_theme(&ColorfulTheme::default())
                     .with_prompt("Provide a name for the keyfile")
                     .default("form_id".into())
                     .interact()?;
 
-                if let Some(keystore) = &self.keystore {
-                    let mut file = std::fs::File::create(keystore.join(keyfile))?;
+                if let Some(ks) = &self.keystore {
+                    let mut file = std::fs::File::create(ks.join(keyfile))?;
                     file.write_all(&enc_contents)?;
                 }
         }
-
 
         println!("Config Directory: {}", self.config_dir.as_ref().map_or("Not set".to_string(), |p| p.display().to_string()));
         println!("Data Directory: {}", self.data_dir.as_ref().map_or("Not set".to_string(), |p| p.display().to_string()));
@@ -301,77 +315,88 @@ impl Init {
         println!("\n{}", "Configuration saved successfully!".green().bold());
         println!("Configuration file: {}", config_path.display());
 
-        if let Some(true) = self.join_formnet {
-            let join_request = JoinRequest::UserJoinRequest(UserJoinRequest {
-                user_id: address.to_string()
-            });
-            let host = if let Some(hosts) = &self.hosts {
-                hosts[0].clone()
-            } else {
-                return Err(
-                    Box::new(
-                        std::io::Error::new(
-                            std::io::ErrorKind::Other, 
-                            "No hosts to request formnet invite from"
-                        )
+        let host = if let Some(hosts) = &self.hosts {
+            hosts[0].clone()
+        } else {
+            return Err(
+                Box::new(
+                    std::io::Error::new(
+                        std::io::ErrorKind::Other, 
+                        "No hosts to request formnet invite from"
                     )
                 )
-            };
+            )
+        };
 
-            let resp = Client::new()
-                .post(&format!("http://{host}/join"))
-                .json(&join_request)
-                .send()
-                .await?
-                .json::<JoinResponse>()
-                .await?;
 
-            match resp {
-                JoinResponse::Success { invitation } => {
-                    let iface = invitation.interface.network_name.clone();
-                    let config_dir = PathBuf::from("/etc/formnet");
-                    let data_dir = PathBuf::from("/var/lib/formnet");
-                    let target_conf = config_dir.join(&iface).with_extension("conf");
-                    let iface = iface.parse()?;
-                    println!("{}", "Attempting to redeem formnet invite".yellow());
-                    if let Err(e) = redeem_invite(&iface, invitation, target_conf, NetworkOpts::default()) {
-                        println!("{}: {}", "Error trying to redeem invite".yellow(), e.to_string().red());
-                    } 
+        Ok((config, keystore))
+    }
+}
 
-                    let daemon = Daemonize::new()
-                        .pid_file("/run/formnet.pid")
-                        .chown_pid_file(true)
-                        .working_directory("/")
-                        .umask(0o027)
-                        .stdout(std::fs::File::create("/var/log/formnet.log").unwrap())
-                        .stderr(std::fs::File::create("/var/log/formnet.log").unwrap());
+pub async fn join_formnet(address: String, provider: String, formnet_port: u16) -> Result<(), Box<dyn std::error::Error>> {
+    let join_request = JoinRequest::UserJoinRequest(UserJoinRequest {
+        user_id: address.to_string()
+    });
 
-                    match daemon.start() {
-                        Ok(_) => {
-                            if let Err(e) = up(
-                                Some(iface.into()),
-                                &config_dir,
-                                &data_dir,
-                                &NetworkOpts::default(),
-                                Some(Duration::from_secs(60)),
-                                None,
-                                &NatOpts::default()
-                            ) {
-                                println!("{}: {}", "Error trying to bring formnet up".yellow(), e.to_string().red());
-                            }
-                        }
-                        Err(e) => {
-                            println!("{}: {}", "Error trying to daemonize formnet".yellow(), e.to_string().red());
-                        }
+    let resp = Client::new()
+        .post(&format!("http://{provider}:{formnet_port}/join"))
+        .json(&join_request)
+        .send()
+        .await?
+        .json::<JoinResponse>()
+        .await?;
+
+    match resp {
+        JoinResponse::Success { invitation } => {
+            let iface = invitation.interface.network_name.clone();
+            let config_dir = PathBuf::from("/etc/formnet");
+            let data_dir = PathBuf::from("/var/lib/formnet");
+            let target_conf = config_dir.join(&iface).with_extension("conf");
+            let iface = iface.parse()?;
+            println!("{}", "Attempting to redeem formnet invite".yellow());
+            if let Err(e) = redeem_invite(&iface, invitation, target_conf, NetworkOpts::default()) {
+                println!("{}: {}", "Error trying to redeem invite".yellow(), e.to_string().red());
+            } 
+
+            let daemon = Daemonize::new()
+                .pid_file("/run/formnet.pid")
+                .chown_pid_file(true)
+                .working_directory("/")
+                .umask(0o027)
+                .stdout(std::fs::File::create("/var/log/formnet.log").unwrap())
+                .stderr(std::fs::File::create("/var/log/formnet.log").unwrap());
+
+            match daemon.start() {
+                Ok(_) => {
+                    if let Err(e) = up(
+                        Some(iface.into()),
+                        &config_dir,
+                        &data_dir,
+                        &NetworkOpts::default(),
+                        Some(Duration::from_secs(60)),
+                        None,
+                        &NatOpts::default()
+                    ) {
+                        println!("{}: {}", "Error trying to bring formnet up".yellow(), e.to_string().red());
                     }
                 }
-                JoinResponse::Error(e) => {
-                    println!("{}: {}", "Error requesting invite".yellow(), e.to_string().red());
+                Err(e) => {
+                    println!("{}: {}", "Error trying to daemonize formnet".yellow(), e.to_string().red());
                 }
             }
-
         }
-
-        Ok(())
+        JoinResponse::Error(e) => {
+            println!("{}: {}", "Error requesting invite".yellow(), e.to_string().red());
+            return Err(
+                Box::new(
+                    std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "Error requesting formnet invite, unable to join formnet: {e}"
+                    )
+                )
+            )
+        }
     }
+
+    Ok(())
 }

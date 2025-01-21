@@ -9,5 +9,4 @@ pub use util::*;
 #[derive(Clone, Debug, Serialize, Deserialize, Subcommand)]
 pub enum KitCommand {
     Init(Init),
-    Load,
 }

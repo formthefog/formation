@@ -11,6 +11,7 @@ use crate::Init;
 pub struct Config {
     pub config_dir: PathBuf,
     pub data_dir: PathBuf,
+    pub keystore_path: PathBuf,
     pub hosts: Vec<String>,
     pub pack_manager_port: u16,
     pub vmm_port: u16,
@@ -45,6 +46,18 @@ impl Config {
                 };
                 default_data_dir
             }),
+            keystore_path: init.keystore.clone().unwrap_or_else(|| {
+                let default_keystore = if cfg!(target_os = "windows") {
+                    let localappdata = std::env::var("APPDATA")
+                        .unwrap_or_else(|_| ".".to_string());
+                    PathBuf::from(localappdata).join(".keystore").join("form_id")
+                } else {
+                    let home = std::env::var("HOME")
+                        .unwrap_or_else(|_| ".".to_string());
+                    PathBuf::from(home).join(".keystore").join("form_id")
+                };
+                default_keystore
+            }),
             hosts: init.hosts.clone().unwrap_or_else(|| vec!["127.0.0.1".to_string()]),
             pack_manager_port: init.pack_manager_port.unwrap_or(3003),
             vmm_port: init.vmm_port.unwrap_or(3002),
@@ -52,38 +65,6 @@ impl Config {
             join_formnet: init.join_formnet.unwrap_or(true),
         }
     }
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct KeystoreEntry {
-    address: String,
-    crypto: CryptoData,
-    id: String,
-    version: u32,
-}
-
-#[derive(Serialize, Deserialize)]
-struct CryptoData {
-    cipher: String,
-    cipherparams: CipherParams,
-    ciphertext: String,
-    kdf: String,
-    kdfparams: KdfParams,
-    mac: String,
-}
-
-#[derive(Serialize, Deserialize)]
-struct CipherParams {
-    iv: String,
-}
-
-#[derive(Serialize, Deserialize)]
-struct KdfParams {
-    dklen: u32,
-    n: u32,
-    p: u32,
-    r: u32,
-    salt: String,
 }
 
 pub fn encrypt_file(contents: &[u8], password: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
@@ -163,10 +144,14 @@ pub fn read_config(config_dir: &Path) -> Result<Config, Box<dyn std::error::Erro
     Ok(config)
 }
 
-// Function to read from keystore (for future use)
-pub fn read_from_keystore(keystore_path: &Path, address: &str) -> Result<KeystoreEntry, Box<dyn std::error::Error>> {
-    let keystore_file = keystore_path.join(format!("key-{}.json", address));
-    let entry_str = std::fs::read_to_string(keystore_file)?;
-    let entry: KeystoreEntry = serde_json::from_str(&entry_str)?;
-    Ok(entry)
+pub fn default_config_dir() -> PathBuf {
+    PathBuf::from(std::env::var("HOME").unwrap_or(".".to_string())).join(".config").join("form")
+}
+
+pub fn default_data_dir() -> PathBuf {
+    PathBuf::from(std::env::var("HOME").unwrap_or(".".to_string())).join(".local").join("share").join("form")
+}
+
+pub fn default_keystore_dir() -> PathBuf {
+    PathBuf::from(std::env::var("HOME").unwrap_or(".".to_string())).join(".keystore")
 }
