@@ -1,8 +1,6 @@
 use clap::{Parser, Subcommand};
 use form_cli::{
-    PackCommand, 
-    ManageCommand,
-    WalletCommand,
+    KitCommand, ManageCommand, PackCommand, WalletCommand
 };
 
 /// The official developer CLI for building, deploying and managing 
@@ -41,6 +39,8 @@ pub struct Form {
 #[derive(Debug, Subcommand)]
 pub enum FormCommand {
     #[clap(subcommand)]
+    Kit(KitCommand),
+    #[clap(subcommand)]
     Wallet(WalletCommand),
     #[clap(subcommand)]
     Pack(PackCommand),
@@ -75,6 +75,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let resp = ship_command.handle(&provider, vmm_port).await?;
                     println!("Response: {resp:?}");
                 }
+            }
+        }
+        FormCommand::Kit(kit_command) => {
+            match kit_command {
+                KitCommand::Init(mut init) => init.handle().await?,
+                KitCommand::Load => {}
             }
         }
         _ => {}
