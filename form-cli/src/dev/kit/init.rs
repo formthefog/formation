@@ -1,17 +1,25 @@
-use std::{path::PathBuf, time::Duration};
-use alloy::primitives::Address;
+use std::{io::Write, path::PathBuf, str::FromStr, time::Duration};
+use alloy::{primitives::Address, signers::k256::elliptic_curve::PublicKey};
 use alloy_signer_local::coins_bip39::{English, Mnemonic};
 use colored::*;
 use clap::Args;
 use daemonize::Daemonize;
 use formnet::{redeem_invite, up, JoinRequest, JoinResponse, UserJoinRequest};
 use k256::{ecdsa::SigningKey, elliptic_curve::SecretKey};
+use rand::thread_rng;
 use reqwest::Client;
 use serde::{Serialize, Deserialize};
-use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
+use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select, Password};
 use shared::{NatOpts, NetworkOpts};
+use crate::{encrypt_file, save_config, Config};
 
-use crate::{save_config, Config};
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Keystore {
+    mnemonic: Option<String>,
+    secret_key: String,
+    public_key: String,
+    address: String,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, Args)]
 pub struct Init {
@@ -47,6 +55,9 @@ impl Init {
     }
 
     async fn run_wizard(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        #[cfg(target_os = "windows")]
+        let home_dir = std::env::var("APPDATA").unwrap_or(".".to_string());
+        let home_dir = std::env::var("HOME").unwrap_or(".".to_string());
         println!("{}", "Welcome to the form kit configuration wizard".blue().bold());
         println!("\n{}", "============================================".blue().bold());
 
@@ -58,18 +69,57 @@ impl Init {
             .items(&options)
             .interact()?;
 
-        let _wallet_config = match selection {
-            0 => {},
-            1 => {},
-            2 => {}
+        let signing_key: SigningKey = match selection {
+            0 => {
+                let count = match Select::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Would you like a 12 or 24 word mnemonic phrase to derive your new keypair from?")
+                    .default(1)
+                    .items(&[12, 24])
+                    .interact()? {
+                        0 => 12,
+                        1 => 24,
+                        _ => unreachable!()
+                    };
+
+                let mut rng = thread_rng(); 
+                let mnemonic = Mnemonic::<English>::new_with_count(&mut rng, count)?;
+                self.mnemonic = Some(mnemonic.to_phrase());
+                let seed = mnemonic.to_seed(None)?;
+                SecretKey::from_slice(&seed[..32])?.into()
+            },
+            1 => {
+                let key_str = Input::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Enter your Secret Key (hex)")
+                    .validate_with(|input: &String| -> Result<(), Box<dyn std::error::Error>> {
+                        SigningKey::from_slice(&hex::decode(input)?)?;
+                        Ok(())
+                    })
+                    .interact_text()?;
+                SigningKey::from_slice(&hex::decode(key_str)?)?
+            },
+            2 => {
+                let mnemonic_str = Input::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Enter your 12 or 24 word mnemonic phrase")
+                    .validate_with(|input: &String| -> Result<(), Box<dyn std::error::Error>> {
+                        Mnemonic::<English>::from_str(&input)?;
+                        Ok(())
+                    })
+                    .interact_text()?.to_string();
+                let mnemonic = Mnemonic::<English>::from_str(&mnemonic_str)?;
+                self.mnemonic = Some(mnemonic.to_phrase());
+                let seed = mnemonic.to_seed(None)?;
+                SecretKey::from_slice(&seed[..32])?.into()
+            }
             _ => unimplemented!()
         };
+
+        self.signing_key = Some(hex::encode(signing_key.to_bytes()));
 
         if self.keystore.is_none() {
             let keystore: String = Input::with_theme(&ColorfulTheme::default())
                 .with_prompt("Enter keystore path")
                 .allow_empty(true)
-                .default("~/.keystore".into())
+                .default(format!("{home_dir}/.keystore"))
                 .interact()?;
 
             if !keystore.is_empty() {
@@ -82,7 +132,7 @@ impl Init {
             let config_dir: String = Input::with_theme(&ColorfulTheme::default())
                 .with_prompt("Enter config directory path")
                 .allow_empty(true)
-                .default("~/.config/form".into())
+                .default(format!("{home_dir}/.config/form"))
                 .interact()?;
 
             if !config_dir.is_empty() {
@@ -95,7 +145,7 @@ impl Init {
             let data_dir: String = Input::with_theme(&ColorfulTheme::default())
                 .with_prompt("Enter data directory path")
                 .allow_empty(true)
-                .default("~/.local/share/form".into())
+                .default(format!("{home_dir}/.local/share/form"))
                 .interact()?;
 
             if !data_dir.is_empty() {
@@ -163,11 +213,76 @@ impl Init {
 
         println!("{}", "==================".blue());
         if let Some(ref key) = self.signing_key {
-            println!("Signing Key: {}", format!("{}...{}", &key[..6], &key[key.len()-6..]).yellow());
+            println!("Signing Key: {}", format!("{}", key.yellow()));
         }
-        if let Some(ref _mnemonic) = self.mnemonic {
-            println!("Mnemonic: {}", "[HIDDEN - Keep Safe]".yellow());
+        if let Some(ref mnemonic) = self.mnemonic {
+            println!("Mnemonic:");
+            let words = mnemonic.split_whitespace();
+            for (idx, word) in words.enumerate() {
+                if idx % 3 == 0 {
+                    print!("\n");
+                }
+
+                print!("{:>2}. {:<15}", (idx + 1).to_string().yellow(), word.blue());
+            }
+            print!("\n");
         }
+
+        let (secret_key, public_key, mnemonic, address) = if let Some(key) = &self.signing_key {
+            let signing_key = SigningKey::from_slice(&hex::decode(key)?)?;
+            let public_key = signing_key.verifying_key().clone();
+            (signing_key, public_key, None, Address::from_public_key(&public_key))
+        } else if let Some(phrase) = &self.mnemonic {
+            let mnemonic = Mnemonic::<English>::new_from_phrase(&phrase)?;
+            let seed = mnemonic.to_seed(None)?;
+            let signing_key: SigningKey = SecretKey::from_slice(&seed[..32])?.into();
+            let public_key = signing_key.verifying_key().clone();
+            let address = Address::from_public_key(&public_key);
+            (signing_key, public_key, Some(phrase), address)
+        } else {
+            return Err(
+                Box::new(
+                    std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "No Mnemonic Phrase or Signing Key"
+                    )
+                )
+            )
+        };
+
+        if Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Would you like to save your wallet to a keystore?")
+            .default(true)
+            .interact()? {
+
+                //TODO: Separate the files for different components
+                //No need to encrypt address or pubkey
+
+                let contents = Keystore {
+                    mnemonic: mnemonic.cloned(),
+                    secret_key: hex::encode(SecretKey::from(signing_key).to_bytes()),
+                    public_key: hex::encode(PublicKey::from(public_key).to_sec1_bytes().as_ref()),
+                    address: address.to_string()
+                };
+
+                let password: String = Password::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Provide a password for the keystore")
+                    .with_confirmation("Confirm the password", "Passwords do not match")
+                    .interact()?;
+                let enc_contents = encrypt_file(&serde_json::to_vec(&contents)?, &password)?;
+
+                let keyfile: String = Input::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Provide a name for the keyfile")
+                    .default("form_id".into())
+                    .interact()?;
+
+                if let Some(keystore) = &self.keystore {
+                    let mut file = std::fs::File::create(keystore.join(keyfile))?;
+                    file.write_all(&enc_contents)?;
+                }
+        }
+
+
         println!("Config Directory: {}", self.config_dir.as_ref().map_or("Not set".to_string(), |p| p.display().to_string()));
         println!("Data Directory: {}", self.data_dir.as_ref().map_or("Not set".to_string(), |p| p.display().to_string()));
         println!("Hosts: {}", self.hosts.as_ref().map_or("Not set".to_string(), |h| h.join(", ")));
@@ -177,8 +292,9 @@ impl Init {
         println!("Join Formnet: {}", self.join_formnet.map_or("Not set".to_string(), |j| j.to_string()));
 
         let config = Config::new(self);
-        
+        std::fs::create_dir_all(config.config_dir.clone())?;
         let config_path = config.config_dir.join("config.json");
+        println!("Saving config to path: {}", config_path.display().to_string());
         save_config(&config, &config_path)?;
 
         // Display final configuration
@@ -186,23 +302,6 @@ impl Init {
         println!("Configuration file: {}", config_path.display());
 
         if let Some(true) = self.join_formnet {
-            let address = if let Some(key) = &self.signing_key {
-                Address::from_public_key(SigningKey::from_slice(&hex::decode(key)?)?.verifying_key())
-            } else if let Some(phrase) = &self.mnemonic {
-                let mnemonic = Mnemonic::<English>::new_from_phrase(&phrase)?;
-                let seed = mnemonic.to_seed(None)?;
-                let signing_key: SigningKey = SecretKey::from_slice(&seed[..32])?.into();
-                Address::from_public_key(signing_key.verifying_key())
-            } else {
-                return Err(
-                    Box::new(
-                        std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            "No Mnemonic Phrase or Signing Key"
-                        )
-                    )
-                )
-            };
             let join_request = JoinRequest::UserJoinRequest(UserJoinRequest {
                 user_id: address.to_string()
             });

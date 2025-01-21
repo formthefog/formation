@@ -1,14 +1,10 @@
 use serde::{Serialize, Deserialize};
 use std::{fs::File, io::Write, path::{Path, PathBuf}};
-use dialoguer::{Input, theme::ColorfulTheme};
 use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce
 };
 use rand::{rngs::OsRng, RngCore};
-use sha2::{Sha256, Digest};
-use sha3::Keccak256;
-use uuid::Uuid;
 use crate::Init;
 
 #[derive(Serialize, Deserialize)]
@@ -90,90 +86,66 @@ struct KdfParams {
     salt: String,
 }
 
-
-pub fn save_to_keystore(signing_key: &str, keystore_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    // Get password from user
-    let password: String = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("Enter password to encrypt keystore")
-        .interact()?;
-
-    // Generate random salt and IV
+pub fn encrypt_file(contents: &[u8], password: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    // Generate a random salt
     let mut salt = [0u8; 32];
-    let mut iv = [0u8; 12];
     OsRng.fill_bytes(&mut salt);
-    OsRng.fill_bytes(&mut iv);
 
-    // Scrypt parameters
-    let scrypt_params = KdfParams {
-        dklen: 32,
-        n: 262144, // 2^18
-        p: 1,
-        r: 8,
-        salt: hex::encode(salt),
-    };
+    // Generate a random nonce
+    let mut nonce_bytes = [0u8; 12];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
 
-    // Derive key using scrypt
-    let mut derived_key = [0u8; 32];
-    scrypt::scrypt(
-        password.as_bytes(),
-        &salt,
-        &scrypt::Params::new(
-            scrypt_params.n.trailing_zeros() as u8,
-            scrypt_params.r,
-            scrypt_params.p,
-            scrypt_params.dklen.try_into()?,
-        )?,
-        &mut derived_key,
-    )?;
+    // Derive key from password using Argon2
+    let argon2 = argon2::Argon2::default();
+    let mut key = [0u8; 32];
+    argon2
+        .hash_password_into(password.as_bytes(), &salt, &mut key)
+        .map_err(|e| format!("Failed to hash password: {}", e))?;
 
-    // Encrypt the private key using AES-256-GCM
-    let cipher = Aes256Gcm::new_from_slice(&derived_key)?;
-    let nonce = Nonce::from_slice(&iv);
-    let signing_key_bytes = hex::decode(signing_key)?;
+    // Create cipher instance
+    let cipher = Aes256Gcm::new_from_slice(&key)?;
+
+    // Encrypt the contents
     let ciphertext = cipher
-        .encrypt(nonce, signing_key_bytes.as_ref())
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        .encrypt(nonce, contents)
+        .map_err(|e| format!("Encryption failed: {}", e))?;
 
-    // Calculate MAC
-    let mut mac_data = Vec::new();
-    mac_data.extend_from_slice(&derived_key[16..32]);
-    mac_data.extend_from_slice(&ciphertext);
-    let mac = hex::encode(Sha256::digest(&mac_data));
+    // Combine salt + nonce + ciphertext
+    let mut encrypted = Vec::new();
+    encrypted.extend_from_slice(&salt);
+    encrypted.extend_from_slice(&nonce_bytes);
+    encrypted.extend(ciphertext);
 
-    // Generate Ethereum-style address from public key
-    let signing_key_bytes = hex::decode(signing_key)?;
-    let public_key = k256::ecdsa::SigningKey::from_slice(&signing_key_bytes)?
-        .verifying_key()
-        .to_encoded_point(false)
-        .to_bytes();
-    let address = hex::encode(&Keccak256::digest(&public_key[1..])[12..]);
+    Ok(encrypted)
+}
 
-    // Create keystore entry
-    let entry = KeystoreEntry {
-        address: format!("0x{}", address),
-        crypto: CryptoData {
-            cipher: "aes-256-gcm".to_string(),
-            cipherparams: CipherParams {
-                iv: hex::encode(iv),
-            },
-            ciphertext: hex::encode(ciphertext),
-            kdf: "scrypt".to_string(),
-            kdfparams: scrypt_params,
-            mac,
-        },
-        id: Uuid::new_v4().to_string(),
-        version: 3,
-    };
+pub fn decrypt_file(encrypted: &[u8], password: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    if encrypted.len() < 44 { // 32 + 12 minimum
+        return Err("Invalid encrypted data".into());
+    }
 
-    // Save to file
-    let keystore_file = keystore_path.join(format!("UTC--{}--{}", 
-        chrono::Utc::now().format("%Y-%m-%dT%H-%M-%S.%fZ"),
-        address));
-    let entry_str = serde_json::to_string_pretty(&entry)?;
-    let mut file = File::create(keystore_file)?;
-    file.write_all(entry_str.as_bytes())?;
+    // Split the data back into salt, nonce, and ciphertext
+    let salt = &encrypted[..32];
+    let nonce = Nonce::from_slice(&encrypted[32..44]);
+    let ciphertext = &encrypted[44..];
 
-    Ok(())
+    // Derive the same key from password
+    let argon2 = argon2::Argon2::default();
+    let mut key = [0u8; 32];
+    argon2
+        .hash_password_into(password.as_bytes(), salt, &mut key)
+        .map_err(|e| format!("Failed to hash password: {}", e))?;
+
+    // Create cipher instance
+    let cipher = Aes256Gcm::new_from_slice(&key)?;
+
+    // Decrypt the contents
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|e| format!("Decryption failed: {}", e))?;
+
+    Ok(plaintext)
 }
 
 pub fn save_config(config: &Config, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
