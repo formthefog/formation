@@ -175,7 +175,7 @@ all in an effort to ensure the network is hardened and ready for a more public a
 
 ## Initializing a Developer Kit
 
-This is an optional step that will save you a lot of time and effort. The rest of the **Deploying an App** guide in here assumes you complete this step. If you choose not to complete this step, please see the [Official Docs](docs.formation.cloud) for CLI requirements, or use our [web-based deployments UI](dev.formation.cloud). 
+This is an optional, **but highly recommended**, step that will save you a lot of time and effort. The rest of the **Deploying an App** guide in here assumes you complete this step. If you choose not to complete this step, please see the [Official Docs](docs.formation.cloud) for CLI requirements, or use our [web-based deployments UI](dev.formation.cloud). 
 
 From anywhere in your terminal run the following command:
 
@@ -223,7 +223,7 @@ ENTRYPOINT ["python3", "/app/hello.py"]
 After you have defined your `Formfile` in the project root, you can use the `form` CLI to validate your `Formfile` 
 
 ```bash
-form pack validate .
+form pack validate
 ```
  Once validated, you can use the same CLI to request your app be built into a `Formpack`
 
@@ -235,7 +235,7 @@ This will package together your application artifacts based on the `Formfile`. I
 
 Once your `Formpack` has successfully been built (i.e. you receive an API response with a `Formpack` ID from the CLI call), you can `ship` your `Formpack` to the network using the same CLI tool
 ```bash
-form pack ship .
+form pack ship 
 ```
 
 This process may take up to 5 minutes, you can `poll` the network for the status of your deployment with the `form manage` CLI tool. 
