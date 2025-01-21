@@ -83,6 +83,28 @@ There are a few different ways that you can run a Formation node and participate
 
 The easiest way to get started is to simply run our Docker image in privileged mode with --network=host.
 
+First you will need to pull the official images:
+
+```bash
+# Pull formation-minimal 
+
+First you will need to pull the 
+docker pull cryptonomikhan/formation-minimal:v0.1.0
+
+# Retag it
+docker tag cryptonomikhan/formation-minimal:v0.1.0 formation-minimal:latest
+
+# Pull form-build-server
+docker pull cryptonomikhan/form-build-server:v0.1.0
+
+# Retag it
+docker tag cryptonomikhan/form-build-server:v0.1.0 form-build-server:latest
+```
+
+Then you can run it, ensure you use the `--privileged` flag `--network=host` and
+provide it with the necessary devices and volumes (`/lib/modules` & `/var/run/docker.sock`)
+
+
 ```bash
 docker run --rm --privileged --network=host \
     --device=/dev/kvm \
