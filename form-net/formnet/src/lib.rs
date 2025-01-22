@@ -9,7 +9,7 @@ use tokio::{io::{AsyncReadExt, AsyncWriteExt}, sync::broadcast::Receiver};
 use wireguard_control::{Backend, Device, DeviceUpdate, InterfaceName, KeyPair, PeerConfigBuilder};
 use client::{data_store::DataStore, nat::{self, NatTraverse}, util::{self, all_installed, Api}};
 use formnet_server::{
-    add_cidr, initialize::{create_database, populate_database, DbInitData, InitializeOpts}, open_database_connection, ConfigFile, DatabaseCidr, DatabasePeer, ServerConfig
+    add_cidr, db::Sqlite, initialize::{create_database, populate_sql_database, DbInitData, InitializeOpts}, open_database_connection, ConfigFile, DatabaseCidr, DatabasePeer, ServerConfig, 
 };
 use shared::wg::DeviceExt; 
 
@@ -125,7 +125,7 @@ pub async fn server_add_peer(
     log::info!("Opening database connection...");
     let conn = open_database_connection(inet, conf)?;
     log::info!("Collecting peers...");
-    let peers = DatabasePeer::list(&conn)?
+    let peers = DatabasePeer::<Sqlite>::list(&conn)?
         .into_iter().map(|dp| dp.inner)
         .collect::<Vec<_>>();
 
@@ -150,10 +150,10 @@ pub async fn server_add_peer(
     };
 
     log::info!("Getting Server Peer...");
-    let server_peer = DatabasePeer::get(&conn, 1)?;
+    let server_peer = DatabasePeer::<Sqlite>::get(&conn, 1)?;
 
     log::info!("Creating peer...");
-    let peer = DatabasePeer::create(&conn, contents)?;
+    let peer = DatabasePeer::<Sqlite>::create(&conn, contents)?;
 
     if Device::get(
         inet, Backend::Kernel 
@@ -919,7 +919,7 @@ pub fn init(
     log::info!("Populating database initially...");
     let database_path = conf.database_path(&name);
     let conn = create_database(&database_path)?;
-    populate_database(&conn, db_init_data)?;
+    populate_sql_database(&conn, db_init_data)?;
 
     println!(
         "{} Created database at {}\n",

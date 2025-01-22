@@ -4,7 +4,7 @@ use rusqlite::{params, Connection};
 use shared::{Cidr, CidrContents};
 use std::{marker::PhantomData, ops::{Deref, DerefMut}};
 
-use super::Sqlite;
+use super::{CrdtMap, Sqlite};
 
 pub static CREATE_TABLE_SQL: &str = "CREATE TABLE cidrs (
       id               INTEGER PRIMARY KEY,
@@ -41,6 +41,12 @@ impl Deref for DatabaseCidr<Sqlite> {
 impl DerefMut for DatabaseCidr<Sqlite> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
+    }
+}
+
+impl DatabaseCidr<CrdtMap> {
+    pub fn get(id: i64) -> Result<Cidr, ServerError> {
+        todo!()
     }
 }
 

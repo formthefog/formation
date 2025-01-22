@@ -188,7 +188,7 @@ pub fn add_peer(
 ) -> Result<(), Error> {
     let config = ConfigFile::from_file(conf.config_path(interface))?;
     let conn = open_database_connection(interface, conf)?;
-    let peers = DatabasePeer::list(&conn)?
+    let peers = DatabasePeer::<Sqlite>::list(&conn)?
         .into_iter()
         .map(|dp| dp.inner)
         .collect::<Vec<_>>();
@@ -202,7 +202,7 @@ pub fn add_peer(
     )? {
         let (peer_request, keypair, target_path, mut target_file) = result;
         log::info!("Received results from prompts, attempting to create peer in database");
-        let peer = DatabasePeer::create(&conn, peer_request)?;
+        let peer = DatabasePeer::<Sqlite>::create(&conn, peer_request)?;
         if cfg!(not(test)) && Device::get(interface, network.backend).is_ok() {
             // Update the current WireGuard interface with the new peers.
             DeviceUpdate::new()
@@ -213,7 +213,7 @@ pub fn add_peer(
             log::info!("adding to WireGuard interface: {}", &*peer);
         }
 
-        let server_peer = DatabasePeer::get(&conn, 1)?;
+        let server_peer = DatabasePeer::<Sqlite>::get(&conn, 1)?;
         prompts::write_peer_invitation(
             (&mut target_file, &target_path),
             interface,
@@ -236,13 +236,13 @@ pub fn rename_peer(
     opts: RenamePeerOpts,
 ) -> Result<(), Error> {
     let conn = open_database_connection(interface, conf)?;
-    let peers = DatabasePeer::list(&conn)?
+    let peers = DatabasePeer::<Sqlite>::list(&conn)?
         .into_iter()
         .map(|dp| dp.inner)
         .collect::<Vec<_>>();
 
     if let Some((peer_request, old_name)) = shared::prompts::rename_peer(&peers, &opts)? {
-        let mut db_peer = DatabasePeer::list(&conn)?
+        let mut db_peer = DatabasePeer::<Sqlite>::list(&conn)?
             .into_iter()
             .find(|p| p.name == old_name)
             .ok_or_else(|| anyhow!("Peer not found."))?;
@@ -262,13 +262,13 @@ pub fn enable_or_disable_peer(
     opts: EnableDisablePeerOpts,
 ) -> Result<(), Error> {
     let conn = open_database_connection(interface, conf)?;
-    let peers = DatabasePeer::list(&conn)?
+    let peers = DatabasePeer::<Sqlite>::list(&conn)?
         .into_iter()
         .map(|dp| dp.inner)
         .collect::<Vec<_>>();
 
     if let Some(peer) = prompts::enable_or_disable_peer(&peers[..], &opts, enable)? {
-        let mut db_peer = DatabasePeer::get(&conn, peer.id)?;
+        let mut db_peer = DatabasePeer::<Sqlite>::get(&conn, peer.id)?;
         db_peer.update(
             &conn,
             PeerContents {
@@ -353,8 +353,8 @@ pub fn delete_cidr(
 ) -> Result<(), Error> {
     log::info!("Fetching eligible CIDRs");
     let conn = open_database_connection(interface, conf)?;
-    let cidrs = DatabaseCidr::list(&conn)?;
-    let peers = DatabasePeer::list(&conn)?
+    let cidrs = DatabaseCidr::<Sqlite>::list(&conn)?;
+    let peers = DatabasePeer::<Sqlite>::list(&conn)?
         .into_iter()
         .map(|dp| dp.inner)
         .collect::<Vec<_>>();
@@ -433,7 +433,7 @@ fn spawn_expired_invite_sweeper(db: Db) {
         let mut interval = tokio::time::interval(Duration::from_secs(10));
         loop {
             interval.tick().await;
-            match DatabasePeer::delete_expired_invites(&db.lock()) {
+            match DatabasePeer::<Sqlite>::delete_expired_invites(&db.lock()) {
                 Ok(deleted) if deleted > 0 => {
                     log::info!("Deleted {} expired peer invitations.", deleted)
                 },
@@ -453,7 +453,7 @@ pub async fn serve(
     log::debug!("opening database connection...");
     let conn = open_database_connection(&interface, conf)?;
 
-    let mut peers = DatabasePeer::list(&conn)?;
+    let mut peers = DatabasePeer::<Sqlite>::list(&conn)?;
     log::debug!("peers listed...");
     let peer_configs = peers
         .iter()
@@ -615,7 +615,7 @@ fn get_session(
         .ct_eq(context.public_key.as_bytes())
         .into()
     {
-        let peer = DatabasePeer::get_from_ip(&context.db.lock(), addr).map_err(|e| match e {
+        let peer = DatabasePeer::<Sqlite>::get_from_ip(&context.db.lock(), addr).map_err(|e| match e {
             rusqlite::Error::QueryReturnedNoRows => ServerError::Unauthorized,
             e => ServerError::Database(e),
         })?;

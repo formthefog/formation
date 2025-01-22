@@ -33,7 +33,7 @@ pub async fn routes(
 }
 
 mod handlers {
-    use crate::util::json_status_response;
+    use crate::{db::Sqlite, util::json_status_response};
 
     use super::*;
 
@@ -54,7 +54,7 @@ mod handlers {
         session: Session,
     ) -> Result<Response<Body>, ServerError> {
         let conn = session.context.db.lock();
-        let cidr = DatabaseCidr::get(&conn, id)?;
+        let cidr = DatabaseCidr::<Sqlite>::get(&conn, id)?;
         DatabaseCidr::from(cidr).update(&conn, form)?;
 
         status_response(StatusCode::NO_CONTENT)
@@ -78,7 +78,7 @@ mod handlers {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{test, DatabasePeer};
+    use crate::{db::Sqlite, test, DatabasePeer};
     use anyhow::Result;
     use bytes::Buf;
     use shared::{Cidr, Error};
@@ -270,7 +270,7 @@ mod tests {
             },
         )?;
 
-        let _experiment_peer = DatabasePeer::create(
+        let _experiment_peer = DatabasePeer::<Sqlite>::create(
             &server.db().lock(),
             test::peer_contents(
                 "experiment-peer",

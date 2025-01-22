@@ -2,10 +2,9 @@ use std::{collections::HashMap, sync::Arc, time::{SystemTime, UNIX_EPOCH}};
 use axum::{extract::{State, Path}, routing::{get, post}, Json, Router};
 use ditto::{map::Op, MapState};
 use reqwest::Client;
-use shared::{Association, Cidr, Peer};
+use shared::{Association, Cidr, Peer, PeerContents};
 use tokio::{net::TcpListener, sync::Mutex};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-
 use crate::network::{CrdtAssociation, CrdtCidr, CrdtPeer, NetworkState};
 
 pub struct DataStore {
@@ -21,7 +20,7 @@ pub enum NewPeerRequest {
         site_id: u32,
         op: Op<String, CrdtPeer>,
     },
-    Join(Peer),
+    Join(PeerContents),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -30,7 +29,7 @@ pub enum UpdatePeerRequest {
         site_id: u32,
         op: Op<String, CrdtPeer>
     },
-    Update(Peer)
+    Update(PeerContents)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -44,7 +43,7 @@ pub enum DeletePeerRequest {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum PeerResponse {
-    Success,
+    Success(Option<Peer>),
     Failure
 }
 
@@ -289,8 +288,14 @@ async fn create_user(
                         if peer.is_admin() {
                             datastore.next_site_id += 1;
                         }
+                        if let Ok(p) = peer.try_into() {
+                            return Json(PeerResponse::Success(Some(p)));
+                        } else {
+                            return Json(PeerResponse::Failure);
+                        }
+                    } else {
+                        return Json(PeerResponse::Failure);
                     }
-                    return Json(PeerResponse::Success);
                 },
                 Err(_) => return Json(PeerResponse::Failure),
             }
@@ -306,18 +311,27 @@ async fn create_user(
                 Err(_e) => return Json(PeerResponse::Failure),
             }; 
 
+            let peer = if let Some(elem) = op.inserted_element() {
+                if let Ok(peer) = elem.value.clone().try_into() {
+                    Some(peer)
+                } else {
+                    return Json(PeerResponse::Failure)
+                }
+            } else {
+                return Json(PeerResponse::Failure)
+            };
             let request = NewPeerRequest::Op { site_id: sid, op };
             match datastore.broadcast::<PeerResponse>(
                 request,
                 "/user/create"
             ).await {
-                Ok(()) => return Json(PeerResponse::Success),
+                Ok(()) => return Json(PeerResponse::Success(peer)),
                 Err(e) => {
                     eprintln!("broadcast_new_peer_request failed: {e}");
                 } 
             }
 
-            return Json(PeerResponse::Success)
+            return Json(PeerResponse::Success(peer))
         },
     }
 }
@@ -428,7 +442,7 @@ async fn delete_user(
     match request {
         DeletePeerRequest::Op { site_id, op } => {
             match datastore.network_state.peer_op(op, site_id) {
-                Ok(()) => return Json(PeerResponse::Success),
+                Ok(()) => return Json(PeerResponse::Success(None)),
                 Err(_) => return Json(PeerResponse::Failure),
             }
         }
@@ -437,7 +451,7 @@ async fn delete_user(
                 Some(Ok(op)) => {
                     let request = DeletePeerRequest::Op { site_id: sid, op };
                     match datastore.broadcast::<PeerResponse>(request, "/user/delete").await {
-                        Ok(()) => return Json(PeerResponse::Success),
+                        Ok(()) => return Json(PeerResponse::Success(None)),
                         Err(e) => {
                             eprintln!("Error broadcasting DeletePeerRequest {e}");
                         }
@@ -454,7 +468,7 @@ async fn delete_user(
         }
     }
 
-    return Json(PeerResponse::Success)
+    return Json(PeerResponse::Success(None))
 }
 async fn create_cidr(
     State(state): State<Arc<Mutex<DataStore>>>,
@@ -684,7 +698,7 @@ async fn handle_peer_updates(update: UpdatePeerRequest, state: Arc<Mutex<DataSto
     match update {
         UpdatePeerRequest::Op { site_id, op } => {
             match datastore.network_state.peer_op(op, site_id) {
-                Ok(()) => return PeerResponse::Success,
+                Ok(()) => return PeerResponse::Success(None),
                 Err(_) => return PeerResponse::Failure,
             }
         }
@@ -696,7 +710,7 @@ async fn handle_peer_updates(update: UpdatePeerRequest, state: Arc<Mutex<DataSto
 
             let request = UpdatePeerRequest::Op { site_id: sid, op };
             match datastore.broadcast::<PeerResponse>(request, "/user/update").await {
-                Ok(()) => return PeerResponse::Success,
+                Ok(()) => return PeerResponse::Success(None),
                 Err(e) => {
                     eprintln!("broadcast_peer_update_request failed: {e}");
                 } 
@@ -704,12 +718,12 @@ async fn handle_peer_updates(update: UpdatePeerRequest, state: Arc<Mutex<DataSto
         }
     }
 
-    PeerResponse::Success
+    PeerResponse::Success(None)
 }
 
 pub async fn request_site_id(to_dial: String) -> Result<u32, Box<dyn std::error::Error>> {
     let resp = Client::new()
-        .get(format!("http://{to_dial}:3004/bootstrap/site_id"))
+        .get(format!("http://{to_dial}:3004/bootstrap/next_site_id"))
         .send().await?.json().await?;
     Ok(resp)
 }

@@ -36,6 +36,8 @@ pub async fn routes(
 
 mod handlers {
 
+    use crate::db::Sqlite;
+
     use super::*;
 
     pub async fn create(
@@ -44,7 +46,7 @@ mod handlers {
     ) -> Result<Response<Body>, ServerError> {
         let conn = session.context.db.lock();
 
-        let peer = DatabasePeer::create(&conn, form)?;
+        let peer = DatabasePeer::<Sqlite>::create(&conn, form)?;
         log::info!("adding peer {}", &*peer);
 
         if cfg!(not(test)) {
@@ -65,7 +67,7 @@ mod handlers {
         session: Session,
     ) -> Result<Response<Body>, ServerError> {
         let conn = session.context.db.lock();
-        let mut peer = DatabasePeer::get(&conn, id)?;
+        let mut peer = DatabasePeer::<Sqlite>::get(&conn, id)?;
         peer.update(&conn, form)?;
 
         status_response(StatusCode::NO_CONTENT)
@@ -74,7 +76,7 @@ mod handlers {
     /// List all peers, including disabled ones. This is an admin-only endpoint.
     pub async fn list(session: Session) -> Result<Response<Body>, ServerError> {
         let conn = session.context.db.lock();
-        let mut peers = DatabasePeer::list(&conn)?
+        let mut peers = DatabasePeer::<Sqlite>::list(&conn)?
             .into_iter()
             .map(|peer| peer.inner)
             .collect::<Vec<_>>();
@@ -84,7 +86,7 @@ mod handlers {
 
     pub async fn delete(id: i64, session: Session) -> Result<Response<Body>, ServerError> {
         let conn = session.context.db.lock();
-        DatabasePeer::disable(&conn, id)?;
+        DatabasePeer::<Sqlite>::disable(&conn, id)?;
 
         status_response(StatusCode::NO_CONTENT)
     }
@@ -93,7 +95,7 @@ mod handlers {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test;
+    use crate::{db::Sqlite, test};
     use bytes::Buf;
     use shared::{Error, Peer};
 
@@ -101,7 +103,7 @@ mod tests {
     async fn test_add_peer() -> Result<(), Error> {
         let server = test::Server::new()?;
 
-        let old_peers = DatabasePeer::list(&server.db().lock())?;
+        let old_peers = DatabasePeer::<Sqlite>::list(&server.db().lock())?;
 
         let peer = if cfg!(feature = "v6-test") {
             test::developer_peer_contents("developer3", "fd00:1337::2:0:0:3")?
@@ -121,7 +123,7 @@ mod tests {
         assert_eq!(peer, peer_res.contents);
 
         // The number of peer entries in the database increased by 1.
-        let new_peers = DatabasePeer::list(&server.db().lock())?;
+        let new_peers = DatabasePeer::<Sqlite>::list(&server.db().lock())?;
         assert_eq!(old_peers.len() + 1, new_peers.len());
 
         Ok(())
@@ -137,7 +139,7 @@ mod tests {
     async fn test_add_peer_with_duplicate_name() -> Result<(), Error> {
         let server = test::Server::new()?;
 
-        let old_peers = DatabasePeer::list(&server.db().lock())?;
+        let old_peers = DatabasePeer::<Sqlite>::list(&server.db().lock())?;
 
         // Try to add a peer with a name that is already taken.
         let peer = test::developer_peer_contents("developer2", "10.80.64.4")?;
@@ -149,7 +151,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 
         // The number of peer entries in the database should not change.
-        let new_peers = DatabasePeer::list(&server.db().lock())?;
+        let new_peers = DatabasePeer::<Sqlite>::list(&server.db().lock())?;
         assert_eq!(old_peers.len(), new_peers.len());
 
         Ok(())
@@ -159,7 +161,7 @@ mod tests {
     async fn test_add_peer_with_duplicate_ip() -> Result<(), Error> {
         let server = test::Server::new()?;
 
-        let old_peers = DatabasePeer::list(&server.db().lock())?;
+        let old_peers = DatabasePeer::<Sqlite>::list(&server.db().lock())?;
 
         // Try to add a peer with an IP that is already taken.
         let peer = test::developer_peer_contents("developer3", "10.80.64.3")?;
@@ -171,7 +173,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 
         // The number of peer entries in the database should not change.
-        let new_peers = DatabasePeer::list(&server.db().lock())?;
+        let new_peers = DatabasePeer::<Sqlite>::list(&server.db().lock())?;
         assert_eq!(old_peers.len(), new_peers.len());
 
         Ok(())
@@ -181,7 +183,7 @@ mod tests {
     async fn test_add_peer_with_outside_cidr_range_ip() -> Result<(), Error> {
         let server = test::Server::new()?;
 
-        let old_peers = DatabasePeer::list(&server.db().lock())?;
+        let old_peers = DatabasePeer::<Sqlite>::list(&server.db().lock())?;
 
         // Try to add IP outside of the CIDR network.
         let peer = test::developer_peer_contents("developer3", "10.80.65.4")?;
@@ -205,7 +207,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 
         // The number of peer entries in the database should not change.
-        let new_peers = DatabasePeer::list(&server.db().lock())?;
+        let new_peers = DatabasePeer::<Sqlite>::list(&server.db().lock())?;
         assert_eq!(old_peers.len(), new_peers.len());
 
         Ok(())
@@ -230,7 +232,7 @@ mod tests {
     #[tokio::test]
     async fn test_update_peer_from_admin() -> Result<(), Error> {
         let server = test::Server::new()?;
-        let old_peer = DatabasePeer::get(&server.db.lock(), test::DEVELOPER1_PEER_ID)?;
+        let old_peer = DatabasePeer::<Sqlite>::get(&server.db.lock(), test::DEVELOPER1_PEER_ID)?;
 
         let change = PeerContents {
             name: "new-peer-name".parse().unwrap(),
@@ -249,7 +251,7 @@ mod tests {
 
         assert_eq!(res.status(), StatusCode::NO_CONTENT);
 
-        let new_peer = DatabasePeer::get(&server.db.lock(), test::DEVELOPER1_PEER_ID)?;
+        let new_peer = DatabasePeer::<Sqlite>::get(&server.db.lock(), test::DEVELOPER1_PEER_ID)?;
         assert_eq!(&*new_peer.name, "new-peer-name");
         Ok(())
     }
@@ -318,7 +320,7 @@ mod tests {
     #[tokio::test]
     async fn test_delete() -> Result<(), Error> {
         let server = test::Server::new()?;
-        let old_peers = DatabasePeer::list(&server.db().lock())?;
+        let old_peers = DatabasePeer::<Sqlite>::list(&server.db().lock())?;
 
         let res = server
             .request(
@@ -331,7 +333,7 @@ mod tests {
         assert!(res.status().is_success());
 
         // The number of peer entries in the database decreased by 1.
-        let all_peers = DatabasePeer::list(&server.db().lock())?;
+        let all_peers = DatabasePeer::<Sqlite>::list(&server.db().lock())?;
         let new_peers = all_peers.iter().filter(|p| !p.is_disabled).count();
         assert_eq!(old_peers.len() - 1, new_peers);
 
@@ -342,7 +344,7 @@ mod tests {
     async fn test_delete_from_non_admin() -> Result<(), Error> {
         let server = test::Server::new()?;
 
-        let old_peers = DatabasePeer::list(&server.db().lock())?;
+        let old_peers = DatabasePeer::<Sqlite>::list(&server.db().lock())?;
 
         let res = server
             .request(
@@ -355,7 +357,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 
         // The number of peer entries in the database hasn't changed.
-        let new_peers = DatabasePeer::list(&server.db().lock())?;
+        let new_peers = DatabasePeer::<Sqlite>::list(&server.db().lock())?;
         assert_eq!(old_peers.len(), new_peers.len());
 
         Ok(())

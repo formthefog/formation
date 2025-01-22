@@ -50,6 +50,8 @@ pub async fn routes(
 mod handlers {
     use shared::Endpoint;
 
+    use crate::db::Sqlite;
+
     use super::*;
 
     /// Get the current state of the network, in the eyes of the current peer.
@@ -58,7 +60,7 @@ mod handlers {
     /// information for the peer to create connections to all of them.
     pub async fn state(session: Session) -> Result<Response<Body>, ServerError> {
         let conn = session.context.db.lock();
-        let selected_peer = DatabasePeer::get(&conn, session.peer.id)?;
+        let selected_peer = DatabasePeer::<Sqlite>::get(&conn, session.peer.id)?;
 
         let cidrs: Vec<_> = DatabaseCidr::list(&conn)?;
 
@@ -84,7 +86,7 @@ mod handlers {
         session: Session,
     ) -> Result<Response<Body>, ServerError> {
         let conn = session.context.db.lock();
-        let mut selected_peer = DatabasePeer::get(&conn, session.peer.id)?;
+        let mut selected_peer = DatabasePeer::<Sqlite>::get(&conn, session.peer.id)?;
 
         let old_public_key = wireguard_control::Key::from_base64(&selected_peer.public_key)
             .map_err(|_| ServerError::WireGuard)?;
@@ -136,7 +138,7 @@ mod handlers {
             return status_response(StatusCode::PAYLOAD_TOO_LARGE);
         }
         let conn = session.context.db.lock();
-        let mut selected_peer = DatabasePeer::get(&conn, session.peer.id)?;
+        let mut selected_peer = DatabasePeer::<Sqlite>::get(&conn, session.peer.id)?;
         selected_peer.update(
             &conn,
             PeerContents {
@@ -154,7 +156,7 @@ mod handlers {
         session: Session,
     ) -> Result<Response<Body>, ServerError> {
         let conn = session.context.db.lock();
-        let mut selected_peer = DatabasePeer::get(&conn, session.peer.id)?;
+        let mut selected_peer = DatabasePeer::<Sqlite>::get(&conn, session.peer.id)?;
         selected_peer.update(
             &conn,
             PeerContents {
@@ -172,7 +174,7 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     use super::*;
-    use crate::{db::DatabaseAssociation, test};
+    use crate::{db::{DatabaseAssociation, Sqlite}, test};
     use bytes::Buf;
     use shared::{AssociationContents, CidrContents, Endpoint, EndpointContents, Error};
 
@@ -277,7 +279,7 @@ mod tests {
                     parent: Some(cidr.id),
                 },
             )?;
-            DatabasePeer::create(
+            DatabasePeer::<Sqlite>::create(
                 &db,
                 test::peer_contents(
                     "experiment-peer",
@@ -347,7 +349,7 @@ mod tests {
         )?;
         peer_contents.is_redeemed = false;
         peer_contents.invite_expires = Some(SystemTime::now() + Duration::from_secs(100));
-        let _experiment_peer = DatabasePeer::create(&server.db().lock(), peer_contents)?;
+        let _experiment_peer = DatabasePeer::<Sqlite>::create(&server.db().lock(), peer_contents)?;
 
         // Step 1: Ensure that before redeeming, other endpoints aren't yet accessible.
         let res = server
@@ -409,7 +411,7 @@ mod tests {
         )?;
         peer_contents.is_redeemed = false;
         peer_contents.invite_expires = Some(SystemTime::now() - Duration::from_secs(1));
-        let _experiment_peer = DatabasePeer::create(&server.db().lock(), peer_contents)?;
+        let _experiment_peer = DatabasePeer::<Sqlite>::create(&server.db().lock(), peer_contents)?;
 
         // Step 1: Ensure that before redeeming, other endpoints aren't yet accessible.
         let res = server
@@ -437,7 +439,7 @@ mod tests {
     async fn test_candidates() -> Result<(), Error> {
         let server = test::Server::new()?;
 
-        let peer = DatabasePeer::get(&server.db().lock(), test::DEVELOPER1_PEER_ID)?;
+        let peer = DatabasePeer::<Sqlite>::get(&server.db().lock(), test::DEVELOPER1_PEER_ID)?;
         assert_eq!(peer.candidates, vec![]);
 
         let candidates = vec!["1.1.1.1:51820".parse::<Endpoint>().unwrap()];
@@ -460,7 +462,7 @@ mod tests {
 
         assert_eq!(res.status(), StatusCode::OK);
 
-        let peer = DatabasePeer::get(&server.db().lock(), test::DEVELOPER1_PEER_ID)?;
+        let peer = DatabasePeer::<Sqlite>::get(&server.db().lock(), test::DEVELOPER1_PEER_ID)?;
         assert_eq!(peer.candidates, candidates);
         Ok(())
     }
@@ -472,7 +474,7 @@ mod tests {
         // case that the peer has specified an endpoint override).
         let server = test::Server::new()?;
 
-        let peer = DatabasePeer::get(&server.db().lock(), test::DEVELOPER1_PEER_ID)?;
+        let peer = DatabasePeer::<Sqlite>::get(&server.db().lock(), test::DEVELOPER1_PEER_ID)?;
         assert_eq!(peer.candidates, vec![]);
 
         // Specify one NAT candidate. At this point, we have an unspecified

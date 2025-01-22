@@ -1,12 +1,12 @@
-use std::{net::{IpAddr, SocketAddr}, time::SystemTime};
+use std::{net::{IpAddr, SocketAddr}, time::{Duration, SystemTime}};
 use ditto::{map::{LocalOp, Op}, Map};
 use ipnet::IpNet;
-use shared::{Association, Cidr, Endpoint, Peer};
+use shared::{Association, Cidr, Endpoint, Peer, PeerContents};
 use serde::{Serialize, Deserialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct CrdtPeer {
-    id: i64,
+    id: String,
     name: String,
     ip: IpAddr,
     cidr_id: i64,
@@ -23,7 +23,7 @@ pub struct CrdtPeer {
 impl From<Peer> for CrdtPeer {
     fn from(value: Peer) -> Self {
         Self {
-            id: value.id,
+            id: value.id.to_string(),
             name: value.contents.name.to_string(),
             ip: value.contents.ip,
             cidr_id: value.contents.cidr_id,
@@ -39,6 +39,29 @@ impl From<Peer> for CrdtPeer {
             .map(|t| t.as_secs()),
             candidates: value.contents.candidates,
         }
+    }
+}
+
+impl TryFrom<CrdtPeer> for Peer {
+    type Error = Box<dyn std::error::Error>;
+    fn try_from(value: CrdtPeer) -> Result<Self, Self::Error> {
+        Ok(Peer{
+            id: value.id.parse()?,
+            contents: PeerContents {
+                name: value.name.parse()?,
+                ip: value.ip,
+                cidr_id: value.cidr_id,
+                public_key: value.public_key,
+                endpoint: value.endpoint,
+                persistent_keepalive_interval: value.keepalive,
+                is_admin: value.is_admin,
+                is_disabled: value.is_disabled,
+                is_redeemed: value.is_redeemed,
+                invite_expires: value.invite_expires.map(|time| {
+                SystemTime::UNIX_EPOCH + Duration::from_secs(time)}),
+                candidates: value.candidates
+            } 
+        })
     }
 }
 
@@ -222,13 +245,23 @@ impl NetworkState {
 
     }
 
-    pub fn add_peer_local(&mut self, peer: Peer) -> Result<Op<String, CrdtPeer>, ditto::Error> {
-        let op = self.peers.insert(peer.id.to_string(), peer.into())?;
+    pub fn add_peer_local(&mut self, peer: PeerContents) -> Result<Op<String, CrdtPeer>, ditto::Error> {
+        let peer_id = self.peers.local_value().len() as i64;
+        let p = Peer {
+            id: peer_id,
+            contents: peer.clone() 
+        };
+        let op = self.peers.insert(peer_id.to_string(), p.into())?;
         Ok(op)
     }
 
-    pub fn update_peer_local(&mut self, peer: Peer) -> Result<Op<String, CrdtPeer>, ditto::Error> {
-        let op = self.peers.insert(peer.id.to_string(), peer.into())?;
+    pub fn update_peer_local(&mut self, peer: PeerContents) -> Result<Op<String, CrdtPeer>, ditto::Error> {
+        let peer_id = self.peers.local_value().len() as i64;
+        let p = Peer {
+            id: peer_id,
+            contents: peer.clone() 
+        };
+        let op = self.peers.insert(peer_id.to_string(), p.into())?;
         Ok(op)
     }
 
