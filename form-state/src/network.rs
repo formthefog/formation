@@ -1,7 +1,7 @@
 use std::{net::{IpAddr, SocketAddr}, time::{Duration, SystemTime}};
 use ditto::{map::{LocalOp, Op}, Map};
 use ipnet::IpNet;
-use shared::{Association, Cidr, Endpoint, Peer, PeerContents};
+use shared::{Association, AssociationContents, Cidr, CidrContents, Endpoint, Peer, PeerContents};
 use serde::{Serialize, Deserialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -97,6 +97,24 @@ pub struct CrdtCidr {
     name: String,
     cidr: IpNet,
     parent: Option<i64>
+}
+
+impl CrdtCidr {
+    pub fn id(&self) -> i64 {
+        self.id
+    }
+    
+    pub fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    pub fn cidr(&self) -> IpNet {
+        self.cidr.clone()
+    }
+
+    pub fn parent(&self) -> Option<i64> {
+        self.parent.clone()
+    }
 }
 
 impl From<Cidr> for CrdtCidr {
@@ -270,13 +288,23 @@ impl NetworkState {
         Some(op)
     }
 
-    pub fn add_cidr_local(&mut self, cidr: Cidr) -> Result<Op<String, CrdtCidr>, ditto::Error> {
-        let op = self.cidrs.insert(cidr.id.to_string(), cidr.into())?;
+    pub fn add_cidr_local(&mut self, cidr: CidrContents) -> Result<Op<String, CrdtCidr>, ditto::Error> {
+        let cidr_id = self.cidrs.local_value().len() as i64;
+        let c = Cidr {
+            id: cidr_id,
+            contents: cidr
+        };
+        let op = self.cidrs.insert(cidr_id.to_string(), c.into())?;
         Ok(op)
     }
 
-    pub fn update_cidr_local(&mut self, cidr: Cidr) -> Result<Op<String, CrdtCidr>, ditto::Error> {
-        let op = self.cidrs.insert(cidr.id.to_string(), cidr.into())?;
+    pub fn update_cidr_local(&mut self, cidr: CidrContents) -> Result<Op<String, CrdtCidr>, ditto::Error> {
+        let cidr_id = self.cidrs.local_value().len() as i64;
+        let c = Cidr {
+            id: cidr_id,
+            contents: cidr
+        };
+        let op = self.cidrs.insert(cidr_id.to_string(), c.into())?;
         Ok(op)
     }
 
@@ -285,8 +313,13 @@ impl NetworkState {
         Some(op)
     }
 
-    pub fn add_association_local(&mut self, association: Association) -> Result<Op<String, CrdtAssociation>, ditto::Error> {
-        let op = self.associations.insert(association.id.to_string(), association.into())?;
+    pub fn add_association_local(&mut self, association: AssociationContents) -> Result<Op<String, CrdtAssociation>, ditto::Error> {
+        let assoc_id = self.associations.local_value().len() as i64;
+        let a = Association {
+            id: assoc_id,
+            contents: association
+        };
+        let op = self.associations.insert(assoc_id.to_string(), a.into())?;
         Ok(op)
     }
 

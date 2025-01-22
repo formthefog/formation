@@ -112,7 +112,7 @@ impl Server {
         assert_eq!(ADMIN_CIDR_ID, create_cidr(&db, "admin", ADMIN_CIDR)?.id);
         assert_eq!(
             ADMIN_PEER_ID,
-            DatabasePeer::create(&db, admin_peer_contents("admin", ADMIN_PEER_IP)?)?.id
+            DatabasePeer::<Sqlite>::create(&db, admin_peer_contents("admin", ADMIN_PEER_IP)?)?.id
         );
         assert_eq!(
             DEVELOPER_CIDR_ID,
@@ -123,23 +123,23 @@ impl Server {
         let developer_1_public_key = developer_1.public_key.clone();
         assert_eq!(
             DEVELOPER1_PEER_ID,
-            DatabasePeer::create(&db, developer_1,)?.id
+            DatabasePeer::<Sqlite>::create(&db, developer_1,)?.id
         );
 
         let developer_2 = developer_peer_contents("developer2", DEVELOPER2_PEER_IP)?;
         let developer_2_public_key = developer_2.public_key.clone();
         assert_eq!(
             DEVELOPER2_PEER_ID,
-            DatabasePeer::create(&db, developer_2)?.id
+            DatabasePeer::<Sqlite>::create(&db, developer_2)?.id
         );
         assert_eq!(USER_CIDR_ID, create_cidr(&db, "user", USER_CIDR)?.id);
         assert_eq!(
             USER1_PEER_ID,
-            DatabasePeer::create(&db, user_peer_contents("user1", USER1_PEER_IP)?)?.id
+            DatabasePeer::<Sqlite>::create(&db, user_peer_contents("user1", USER1_PEER_IP)?)?.id
         );
         assert_eq!(
             USER2_PEER_ID,
-            DatabasePeer::create(&db, user_peer_contents("user2", USER2_PEER_IP)?)?.id
+            DatabasePeer::<Sqlite>::create(&db, user_peer_contents("user2", USER2_PEER_IP)?)?.id
         );
 
         let db = Arc::new(Mutex::new(db));

@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc, time::{SystemTime, UNIX_EPOCH}};
 use axum::{extract::{State, Path}, routing::{get, post}, Json, Router};
 use ditto::{map::Op, MapState};
 use reqwest::Client;
-use shared::{Association, Cidr, Peer, PeerContents};
+use shared::{AssociationContents, CidrContents, Peer, PeerContents};
 use tokio::{net::TcpListener, sync::Mutex};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use crate::network::{CrdtAssociation, CrdtCidr, CrdtPeer, NetworkState};
@@ -71,7 +71,7 @@ pub enum CreateCidrRequest {
         site_id: u32,
         op: Op<String, CrdtCidr>
     },
-    Create(Cidr)
+    Create(CidrContents)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -80,7 +80,7 @@ pub enum UpdateCidrRequest {
         site_id: u32,
         op: Op<String, CrdtCidr>
     },
-    Update(Cidr)
+    Update(CidrContents)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -100,7 +100,7 @@ pub enum ListCidrResponse {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum CidrResponse {
-    Success,
+    Success(Option<CrdtCidr>),
     Failure
 }
 
@@ -116,7 +116,7 @@ pub enum CreateAssociationRequest {
         site_id: u32,
         op: Op<String, CrdtAssociation>,
     },
-    Create(Association),
+    Create(AssociationContents),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -223,6 +223,7 @@ impl DataStore {
             .route("/user/:id/get", get(get_user))
             .route("/user/:ip/get_from_ip", get(get_user_from_ip))
             .route("/user/:id/get_all_allowed", get(get_all_allowed))
+            .route("/user/:cidr/list", get(list_by_cidr))
             .route("/user/list", get(list_users))
             .route("/user/delete_expired", post(delete_expired))
             .route("/cidr/create", post(create_cidr))
@@ -399,6 +400,22 @@ async fn list_users(
     let peers = state.lock().await.get_all_users().iter().map(|(_, v)| v.clone()).collect();
     Json(GetPeerListResponse::Success(peers))
 }
+
+async fn list_by_cidr(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path(cidr): Path<String>
+) -> Json<GetPeerListResponse> {
+    let cidr_id: i64 = if let Ok(id) = cidr.parse() {
+        id
+    } else {
+        return Json(GetPeerListResponse::Failure);
+    };
+    let mut peers = state.lock().await.get_all_users();
+    peers.retain(|_, v| v.cidr() == cidr_id);
+
+    Json(GetPeerListResponse::Success(peers.iter().map(|(_, v)| v.clone()).collect()))
+}
+
 async fn delete_expired(
     State(state): State<Arc<Mutex<DataStore>>>
 ) -> Json<DeleteExpiredResponse> {
@@ -478,8 +495,15 @@ async fn create_cidr(
     let sid = datastore.network_state.cidrs.site_id().clone();
     match request {
         CreateCidrRequest::Op { site_id, op } => {
-            match datastore.network_state.cidr_op(op, site_id) {
-                Ok(()) => return Json(CidrResponse::Success),
+            match datastore.network_state.cidr_op(op.clone(), site_id) {
+                Ok(()) => {
+                    if let Some(elem) = op.clone().inserted_element() {
+                        let cidr = elem.value.clone();
+                        return Json(CidrResponse::Success(Some(cidr)))
+                    } else {
+                        return Json(CidrResponse::Failure)
+                    }
+                }
                 Err(e) => {
                     eprintln!("Failed to create Cidr locally: {e:?}");
                     return Json(CidrResponse::Failure)
@@ -489,13 +513,18 @@ async fn create_cidr(
         CreateCidrRequest::Create(cidr) => {
             match datastore.network_state.add_cidr_local(cidr) {
                 Ok(op) => {
-                    let request = CreateCidrRequest::Op { site_id: sid, op };
-                    match datastore.broadcast::<CidrResponse>(request, "/cidr/create").await {
-                        Ok(()) => return Json(CidrResponse::Success),
-                        Err(e) => {
-                            eprintln!("Error broadcasting CreateCidrRequest: {e}");
-                            return Json(CidrResponse::Success)
+                    let request = CreateCidrRequest::Op { site_id: sid, op: op.clone() };
+                    if let Some(elem) = op.clone().inserted_element() {
+                        let cidr = elem.value.clone();
+                        match datastore.broadcast::<CidrResponse>(request, "/cidr/create").await {
+                            Ok(()) => return Json(CidrResponse::Success(Some(cidr))),
+                            Err(e) => {
+                                eprintln!("Error broadcasting CreateCidrRequest: {e}");
+                                return Json(CidrResponse::Success(Some(cidr)))
+                            }
                         }
+                    } else {
+                        return Json(CidrResponse::Failure);
                     }
                 }
                 Err(e) => {
@@ -516,7 +545,7 @@ async fn update_cidr(
     match request {
         UpdateCidrRequest::Op { site_id, op } => {
             match datastore.network_state.cidr_op(op, site_id) {
-                Ok(()) => return Json(CidrResponse::Success),
+                Ok(()) => return Json(CidrResponse::Success(None)),
                 Err(e) => {
                     eprintln!("Failed to create Cidr locally: {e:?}");
                     return Json(CidrResponse::Failure)
@@ -528,10 +557,10 @@ async fn update_cidr(
                 Ok(op) => {
                     let request = UpdateCidrRequest::Op { site_id: sid, op };
                     match datastore.broadcast::<CidrResponse>(request, "/cidr/update").await {
-                        Ok(()) => return Json(CidrResponse::Success),
+                        Ok(()) => return Json(CidrResponse::Success(None)),
                         Err(e) => {
                             eprintln!("Error broadcasting UpdateCidrRequest : {e}");
-                            return Json(CidrResponse::Success)
+                            return Json(CidrResponse::Success(None))
                         }
                     }
                 }
@@ -553,7 +582,7 @@ async fn delete_cidr(
     match request {
         DeleteCidrRequest::Op { site_id, op } => {
             match datastore.network_state.cidr_op(op, site_id) {
-                Ok(()) => return Json(CidrResponse::Success),
+                Ok(()) => return Json(CidrResponse::Success(None)),
                 Err(e) => {
                     eprintln!("Failed to remove Cidr locally: {e:?}");
                     return Json(CidrResponse::Failure)
@@ -565,10 +594,10 @@ async fn delete_cidr(
                 Some(Ok(op)) => {
                     let request = DeleteCidrRequest::Op { site_id: sid, op };
                     match datastore.broadcast::<CidrResponse>(request, "/cidr/delete").await {
-                        Ok(()) => return Json(CidrResponse::Success),
+                        Ok(()) => return Json(CidrResponse::Success(None)),
                         Err(e) => {
                             eprintln!("Error broadcasting CreateCidrRequest: {e}");
-                            return Json(CidrResponse::Success)
+                            return Json(CidrResponse::Success(None))
                         }
                     }
                 }

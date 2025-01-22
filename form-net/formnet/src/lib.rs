@@ -130,9 +130,8 @@ pub async fn server_add_peer(
         .collect::<Vec<_>>();
 
     log::info!("Collecting CIDRs...");
-    let cidrs = DatabaseCidr::list(&conn)?;
+    let cidrs = DatabaseCidr::<Sqlite>::list(&conn)?;
     let cidr_tree = CidrTree::new(&cidrs[..]);
-
     log::info!("calling add peer to get key pair and contents...");
     let (contents, keypair) = match add_peer(&peers, &cidr_tree, peer_type, peer_id).await {
         Ok((contents, keypair)) => (contents, keypair),

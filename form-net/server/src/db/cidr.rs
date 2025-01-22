@@ -1,4 +1,5 @@
-use crate::{test::Server, ServerError};
+use crate::ServerError;
+use form_state::{datastore::{CidrResponse, CreateCidrRequest, DeleteCidrRequest, GetCidrResponse, GetPeerListResponse, ListCidrResponse, UpdateCidrRequest}, network::CrdtCidr};
 use ipnet::IpNet;
 use rusqlite::{params, Connection};
 use shared::{Cidr, CidrContents};
@@ -30,6 +31,22 @@ impl From<Cidr> for DatabaseCidr<Sqlite> {
     }
 }
 
+impl From<CrdtCidr> for DatabaseCidr<CrdtMap> {
+    fn from(value: CrdtCidr) -> Self {
+        Self {
+            inner: Cidr {
+                id: value.id(),
+                contents: CidrContents {
+                    name: value.name(),
+                    cidr: value.cidr(),
+                    parent: value.parent()
+                }
+            },
+            marker: PhantomData
+        }
+    }
+}
+
 impl Deref for DatabaseCidr<Sqlite> {
     type Target = Cidr;
 
@@ -44,25 +61,179 @@ impl DerefMut for DatabaseCidr<Sqlite> {
     }
 }
 
+impl Deref for DatabaseCidr<CrdtMap> {
+    type Target = Cidr;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for DatabaseCidr<CrdtMap> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+
 impl DatabaseCidr<CrdtMap> {
     pub async fn create(contents: CidrContents) -> Result<Cidr, ServerError> {
-        todo!()
+
+        let client = reqwest::Client::new();
+
+        if let Some(parent) = &contents.parent {
+            let attached_peers = client 
+                .get(format!("http://127.0.0.1:3004/user/{}/list", parent))
+                .send()
+                .await.map_err(|_| ServerError::NotFound)?
+                .json::<GetPeerListResponse>()
+                .await.map_err(|_| ServerError::NotFound)?;
+
+            match attached_peers {
+                GetPeerListResponse::Success(peers) => {
+                    if peers.len() > 0 {
+                        log::warn!("tried to add a CIDR to a parent that has peers assigned to it.");
+                        return Err(ServerError::InvalidQuery)
+                    }
+                }
+                GetPeerListResponse::Failure => {}
+            }
+
+            let cidrs = Self::list().await?;
+            let closest_parent = cidrs.iter()
+                .filter(|current| current.cidr.contains(&contents.cidr))
+                .max_by_key(|current| current.cidr.prefix_len());
+
+            if let Some(closest) = closest_parent {
+                if closest.id != *parent {
+                    log::warn!("tried to add a CIDR at the incrrect place in the tree (should be added to {}).", closest.name);
+                    return Err(ServerError::InvalidQuery)
+                }
+            } else {
+                log::warn!("tried to add a CIDR outside of the root network range.");
+                return Err(ServerError::InvalidQuery);
+            }
+        }
+
+        let overlapping_sibling = Self::list().await?
+            .iter()
+            .filter(|current| current.parent == contents.parent)
+            .map(|sibling| sibling.cidr)
+            .any(|sibling| {
+                contents.cidr.contains(&sibling.network())
+                    || contents.cidr.contains(&sibling.broadcast())
+                    || sibling.contains(&contents.cidr.network())
+                    || sibling.contains(&contents.cidr.broadcast())
+            });
+
+        if overlapping_sibling {
+            log::warn!("tried to add a CIDR that overlaps with a sibling.");
+            return Err(ServerError::InvalidQuery);
+        }
+
+        let request = CreateCidrRequest::Create(contents.clone());
+
+        let resp = client 
+            .post("http://127.0.0.1:3004/cidr/create")
+            .json(&request)
+            .send()
+            .await.map_err(|_| ServerError::InvalidQuery)?
+            .json::<CidrResponse>()
+            .await.map_err(|_| ServerError::NotFound)?;
+
+        match resp {
+            CidrResponse::Success(Some(cidr)) => {
+                let cidr: DatabaseCidr<CrdtMap> = cidr.into();
+                return Ok(cidr.inner)
+            }
+            _ => return Err(ServerError::NotFound),
+        }
     }
 
-    pub async fn update(&mut self, contents: CidrContents) -> Result<Cidr, ServerError> {
-        todo!()
+    pub async fn update(&mut self, contents: CidrContents) -> Result<(), ServerError> {
+        let new_contents = CidrContents {
+            name: contents.name,
+            ..self.contents.clone()
+        };
+
+        let request = UpdateCidrRequest::Update(new_contents.clone());
+        let resp = reqwest::Client::new()
+            .post("http://127.0.0.1:3004/cidr/update")
+            .json(&request)
+            .send()
+            .await.map_err(|_| ServerError::InvalidQuery)?
+            .json::<CidrResponse>()
+            .await.map_err(|_| ServerError::NotFound)?;
+        match resp {
+            CidrResponse::Success(_) => {
+                self.contents = new_contents;
+                return Ok(())
+            }
+            CidrResponse::Failure => {
+                return Err(ServerError::NotFound)
+            }
+        }
     }
 
     pub async fn delete(id: i64) -> Result<(), ServerError> {
-        todo!()
+        let request = DeleteCidrRequest::Delete(id.to_string());
+        let resp = reqwest::Client::new()
+            .post("http://127.0.0.1:3004/cidr/delete")
+            .json(&request)
+            .send()
+            .await.map_err(|_| ServerError::InvalidQuery)?
+            .json::<CidrResponse>()
+            .await.map_err(|_| ServerError::NotFound)?;
+
+        match resp {
+            CidrResponse::Success(_) => {
+                return Ok(())
+            }
+            CidrResponse::Failure => {
+                return Err(ServerError::NotFound)
+            }
+        }
     }
 
     pub async fn get(id: i64) -> Result<Cidr, ServerError> {
-        todo!()
+        let resp = reqwest::Client::new()
+            .get(format!("http://127.0.0.1:3004/cidr/{id}/get"))
+            .send()
+            .await.map_err(|_| ServerError::InvalidQuery)?
+            .json::<GetCidrResponse>()
+            .await.map_err(|_| ServerError::NotFound)?;
+
+        match resp {
+            GetCidrResponse::Success(cidr) => {
+                let db_cidr: DatabaseCidr<CrdtMap> = cidr.into();
+                Ok(db_cidr.inner)
+            }
+            GetCidrResponse::Failure => {
+                return Err(ServerError::NotFound)
+            }
+        }
     }
 
     pub async fn list() -> Result<Vec<Cidr>, ServerError> {
-        todo!()
+        let resp = reqwest::Client::new()
+            .get("http://127.0.0.1:3004/cidr/list")
+            .send()
+            .await.map_err(|_| ServerError::InvalidQuery)?
+            .json::<ListCidrResponse>()
+            .await.map_err(|_| ServerError::NotFound)?;
+
+        match resp {
+            ListCidrResponse::Success(list) => {
+                let cidr_list = list.iter().map(|cidr| {
+                    let db_cidr = DatabaseCidr::<CrdtMap>::from(cidr.clone());
+                    db_cidr.inner
+                }).collect();
+                return Ok(cidr_list)
+            }
+            ListCidrResponse::Failure => {
+                return Err(ServerError::NotFound)
+            }
+        }
     }
 }
 

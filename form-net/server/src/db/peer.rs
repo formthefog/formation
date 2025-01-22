@@ -1,6 +1,6 @@
 use super::{CrdtMap, DatabaseCidr, Sqlite};
 use crate::ServerError;
-use form_state::{datastore::{DeleteExpiredResponse, GetPeerListResponse, GetPeerResponse, NewPeerRequest, PeerResponse, UpdatePeerRequest}, network::CrdtPeer};
+use form_state::datastore::{DeleteExpiredResponse, GetPeerListResponse, GetPeerResponse, NewPeerRequest, PeerResponse, UpdatePeerRequest};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use rusqlite::{params, types::Type, Connection};
@@ -104,7 +104,7 @@ impl DatabasePeer<CrdtMap> {
             return Err(ServerError::InvalidQuery);
         }
 
-        let cidr = DatabaseCidr::<CrdtMap>::get(contents.cidr_id)?;
+        let cidr = DatabaseCidr::<CrdtMap>::get(contents.cidr_id).await?;
         if !cidr.cidr.contains(&contents.ip) {
             log::warn!("Tried to add peer with IP outside of parent CIDR range.");
             return Err(ServerError::InvalidQuery);
