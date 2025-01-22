@@ -46,10 +46,18 @@ and
 
 `51820` for `formnet` interface.
 
-
+##### Setting up a bridge interface
 You will also need a primary bridge network, currently, it must be called `br0` 
 though in a future release this will become configurable, however, having
 the primary bridge interface called `br0` is best practice. 
+
+```bash
+sudo apt update
+sudo apt install bridge-utils
+
+sudo brctl addbr br0
+sudo ip addr add 192.168.1.1/24 dev br0
+```
 
 Ensure that you have a `br0` primary bridge interface set up on you machine, and 
 ensure that your bridge is the master to your primary physical interface 
