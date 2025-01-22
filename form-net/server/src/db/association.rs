@@ -3,6 +3,7 @@
 //! A peer belongs to one parent CIDR, and can by default see all peers within that parent.
 
 use crate::ServerError;
+use form_state::{datastore::{AssociationResponse, CreateAssociationRequest, DeleteAssociationRequest, GetCidrResponse, ListAssociationResponse}, network::CrdtAssociation};
 use rusqlite::{params, Connection};
 use shared::{Association, AssociationContents};
 use std::{marker::PhantomData, ops::{Deref, DerefMut}};
@@ -36,7 +37,36 @@ impl From<Association> for DatabaseAssociation<Sqlite> {
     }
 }
 
+impl From<Association> for DatabaseAssociation<CrdtMap> {
+    fn from(inner: Association) -> Self {
+        Self { inner, marker: PhantomData }
+    }
+}
+
+impl From<CrdtAssociation> for DatabaseAssociation<CrdtMap> {
+    fn from(value: CrdtAssociation) -> Self {
+        Self {
+            inner: Association { 
+                id: value.id(), 
+                contents: AssociationContents {
+                    cidr_id_1: value.cidr_1(),
+                    cidr_id_2: value.cidr_2(),
+                }
+            },
+            marker: PhantomData
+        }
+    }
+}
+
 impl Deref for DatabaseAssociation<Sqlite> {
+    type Target = Association;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl Deref for DatabaseAssociation<CrdtMap> {
     type Target = Association;
 
     fn deref(&self) -> &Self::Target {
@@ -52,15 +82,114 @@ impl DerefMut for DatabaseAssociation<Sqlite> {
 
 impl DatabaseAssociation<CrdtMap> {
     pub async fn create(contents: AssociationContents) -> Result<Association, ServerError> {
-        todo!()
+        let cidr_1 = contents.cidr_id_1;
+        let cidr_2 = contents.cidr_id_2;
+        let cidr_1_resp = reqwest::Client::new()
+            .get(format!("http://127.0.0.1:3004/assoc/{cidr_1}/relationships"))
+            .send()
+            .await.map_err(|_| ServerError::InvalidQuery)?
+            .json::<ListAssociationResponse>()
+            .await.map_err(|_| ServerError::NotFound)?;
+
+        let cidr_2_resp = reqwest::Client::new()
+            .get(format!("http://127.0.0.1:3004/assoc/{cidr_2}/relationships"))
+            .send()
+            .await.map_err(|_| ServerError::InvalidQuery)?
+            .json::<ListAssociationResponse>()
+            .await.map_err(|_| ServerError::NotFound)?;
+
+        let existing = match (cidr_1_resp, cidr_2_resp) {
+            (ListAssociationResponse::Success(mut list_1), ListAssociationResponse::Success(list_2)) => {
+                list_1.extend(list_2);
+                list_1
+            },
+            (ListAssociationResponse::Success(list_1), ListAssociationResponse::Failure) => {
+                list_1
+            },
+            (ListAssociationResponse::Failure, ListAssociationResponse::Success(list_2)) => {
+                list_2
+            }
+            _ => vec![]
+        };
+
+        if !existing.is_empty() {
+            return Err(ServerError::InvalidQuery);
+        }
+
+        let cidr_1_resp = reqwest::Client::new()
+            .get(format!("http://127.0.0.1:3004/cidr/{cidr_1}/get"))
+            .send()
+            .await.map_err(|_| ServerError::InvalidQuery)?
+            .json::<GetCidrResponse>()
+            .await.map_err(|_| ServerError::NotFound)?;
+
+        let cidr_2_resp = reqwest::Client::new()
+            .get(format!("http://127.0.0.1:3004/cidr/{cidr_2}/get"))
+            .send()
+            .await.map_err(|_| ServerError::InvalidQuery)?
+            .json::<GetCidrResponse>()
+            .await.map_err(|_| ServerError::NotFound)?;
+
+        if let (GetCidrResponse::Failure, GetCidrResponse::Failure) = (cidr_1_resp, cidr_2_resp) {
+            return Err(ServerError::InvalidQuery);
+        }
+
+        let request = CreateAssociationRequest::Create(contents);
+
+        let resp = reqwest::Client::new()
+            .post("http://127.0.0.1:3004/assoc/create")
+            .json(&request)
+            .send()
+            .await.map_err(|_| ServerError::InvalidQuery)?
+            .json::<AssociationResponse>()
+            .await.map_err(|_| ServerError::NotFound)?;
+
+        match resp {
+            AssociationResponse::Success(Some(assoc)) => {
+                let db_assoc = DatabaseAssociation::from(assoc.clone());
+                return Ok(db_assoc.deref().clone())
+            }
+            _ => return Err(ServerError::NotFound)
+        }
     }
 
     pub async fn list() -> Result<Vec<Association>, ServerError> {
-        todo!()
+        let resp = reqwest::Client::new()
+            .get("http://127.0.0.1:3004/assoc/list")
+            .send().await.map_err(|_| ServerError::InvalidQuery)?
+            .json::<ListAssociationResponse>()
+            .await.map_err(|_| ServerError::NotFound)?;
+
+        match resp {
+            ListAssociationResponse::Success(list) => {
+                let list = list.iter().map(|assoc| {
+                    let db_assoc = DatabaseAssociation::from(assoc.clone()); 
+                    db_assoc.deref().clone()
+                }).collect();
+
+                return Ok(list)
+            }
+            ListAssociationResponse::Failure => {
+                return Err(ServerError::NotFound)
+            }
+        }
+
     }
 
-    pub async fn delete() -> Result<(), ServerError> {
-        todo!()
+    pub async fn delete(id: i64) -> Result<(), ServerError> {
+        let request = DeleteAssociationRequest::Delete(id.to_string());
+        let resp = reqwest::Client::new()
+            .post("http://127.0.0.1:3004/assoc/delete")
+            .json(&request)
+            .send()
+            .await.map_err(|_| ServerError::InvalidQuery)?
+            .json::<AssociationResponse>()
+            .await.map_err(|_| ServerError::NotFound)?;
+
+        match resp {
+            AssociationResponse::Success(_) => return Ok(()),
+            AssociationResponse::Failure => return Err(ServerError::NotFound),
+        }
     }
 }
 

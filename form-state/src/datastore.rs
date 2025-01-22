@@ -129,7 +129,7 @@ pub enum DeleteAssociationRequest {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum AssociationResponse {
-    Success,
+    Success(Option<CrdtAssociation>),
     Failure
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -234,6 +234,7 @@ impl DataStore {
             .route("/assoc/create", post(create_assoc))
             .route("/assoc/delete", post(delete_assoc))
             .route("/assoc/list", get(list_assoc))
+            .route("/assoc/:cidr_id/relationships", get(relationships))
             .with_state(state)
     }
 
@@ -641,8 +642,14 @@ async fn create_assoc(
     let sid = datastore.network_state.associations.site_id().clone();
     match request {
         CreateAssociationRequest::Op { site_id, op } => {
-            match datastore.network_state.associations_op(op, site_id) {
-                Ok(()) => return Json(AssociationResponse::Success),
+            match datastore.network_state.associations_op(op.clone(), site_id) {
+                Ok(()) => {
+                    if let Some(elem) = op.inserted_element() {
+                        return Json(AssociationResponse::Success(Some(elem.value.clone())))
+                    } else {
+                        return Json(AssociationResponse::Failure)
+                    }
+                }
                 Err(e) => {
                     eprintln!("Failed to create Cidr locally: {e:?}");
                     return Json(AssociationResponse::Failure)
@@ -652,12 +659,22 @@ async fn create_assoc(
         CreateAssociationRequest::Create(assoc) => {
             match datastore.network_state.add_association_local(assoc) {
                 Ok(op) => {
-                    let request = CreateAssociationRequest::Op { site_id: sid, op };
+                    let request = CreateAssociationRequest::Op { site_id: sid, op: op.clone() };
                     match datastore.broadcast::<AssociationResponse>(request, "/assoc/create").await {
-                        Ok(()) => return Json(AssociationResponse::Success),
+                        Ok(()) => {
+                            if let Some(elem) = op.inserted_element() {
+                                return Json(AssociationResponse::Success(Some(elem.value.clone())))
+                            } else {
+                                return Json(AssociationResponse::Failure)
+                            }
+                        }
                         Err(e) => {
                             eprintln!("Error broadcasting CreateCidrRequest: {e}");
-                            return Json(AssociationResponse::Success)
+                            if let Some(elem) = op.inserted_element() {
+                                return Json(AssociationResponse::Success(Some(elem.value.clone())))
+                            } else {
+                                return Json(AssociationResponse::Failure)
+                            }
                         }
                     }
                 }
@@ -679,7 +696,7 @@ async fn delete_assoc(
     match request {
         DeleteAssociationRequest::Op { site_id, op } => {
             match datastore.network_state.associations_op(op, site_id) {
-                Ok(()) => return Json(AssociationResponse::Success),
+                Ok(()) => return Json(AssociationResponse::Success(None)),
                 Err(e) => {
                     eprintln!("Failed to create Cidr locally: {e:?}");
                     return Json(AssociationResponse::Failure)
@@ -691,10 +708,10 @@ async fn delete_assoc(
                 Some(Ok(op)) => {
                     let request = DeleteAssociationRequest::Op { site_id: sid, op };
                     match datastore.broadcast::<AssociationResponse>(request, "/assoc/delete").await {
-                        Ok(()) => return Json(AssociationResponse::Success),
+                        Ok(()) => return Json(AssociationResponse::Success(None)),
                         Err(e) => {
                             eprintln!("Error broadcasting DeleteAssociationRequest: {e}");
-                            return Json(AssociationResponse::Success)
+                            return Json(AssociationResponse::Success(None))
                         }
                     }
                 }
@@ -718,6 +735,20 @@ async fn list_assoc(
     let assocs = state.lock().await.network_state.associations.local_value();
     let assocs_list = assocs.iter().map(|(_, v)| v.clone()).collect();
     Json(ListAssociationResponse::Success(assocs_list))
+}
+
+async fn relationships(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path(cidr_id): Path<String>
+) -> Json<ListAssociationResponse> {
+    let cidr_id: i64 = if let Ok(cidr) = cidr_id.parse() {
+        cidr
+    } else {
+        return Json(ListAssociationResponse::Failure)
+    };
+    let mut assocs = state.lock().await.network_state.associations.local_value();
+    assocs.retain(|_, v| v.cidr_1() == cidr_id || v.cidr_2() == cidr_id);
+    Json(ListAssociationResponse::Success(assocs.iter().map(|(_, v)| v.clone()).collect()))
 }
 
 

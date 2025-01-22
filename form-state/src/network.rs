@@ -136,6 +136,20 @@ pub struct CrdtAssociation {
     cidr_2: i64
 }
 
+impl CrdtAssociation {
+    pub fn id(&self) -> i64 {
+        self.id
+    }
+
+    pub fn cidr_1(&self) -> i64 {
+        self.cidr_1
+    }
+
+    pub fn cidr_2(&self) -> i64 {
+        self.cidr_2
+    }
+}
+
 impl From<Association> for CrdtAssociation{
     fn from(value: Association) -> Self {
         Self {
