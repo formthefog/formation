@@ -5,7 +5,9 @@
 use crate::ServerError;
 use rusqlite::{params, Connection};
 use shared::{Association, AssociationContents};
-use std::ops::{Deref, DerefMut};
+use std::{marker::PhantomData, ops::{Deref, DerefMut}};
+
+use super::Sqlite;
 
 pub static CREATE_TABLE_SQL: &str = "CREATE TABLE associations (
       id         INTEGER PRIMARY KEY,
@@ -23,17 +25,18 @@ pub static CREATE_TABLE_SQL: &str = "CREATE TABLE associations (
     )";
 
 #[derive(Debug)]
-pub struct DatabaseAssociation {
+pub struct DatabaseAssociation<D> {
     pub inner: Association,
+    marker: PhantomData<D>
 }
 
-impl From<Association> for DatabaseAssociation {
+impl From<Association> for DatabaseAssociation<Sqlite> {
     fn from(inner: Association) -> Self {
-        Self { inner }
+        Self { inner, marker: PhantomData }
     }
 }
 
-impl Deref for DatabaseAssociation {
+impl Deref for DatabaseAssociation<Sqlite> {
     type Target = Association;
 
     fn deref(&self) -> &Self::Target {
@@ -41,13 +44,13 @@ impl Deref for DatabaseAssociation {
     }
 }
 
-impl DerefMut for DatabaseAssociation {
+impl DerefMut for DatabaseAssociation<Sqlite> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
-impl DatabaseAssociation {
+impl DatabaseAssociation<Sqlite> {
     pub fn create(
         conn: &Connection,
         contents: AssociationContents,

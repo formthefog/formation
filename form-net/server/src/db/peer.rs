@@ -1,13 +1,11 @@
-use super::DatabaseCidr;
+use super::{CrdtMap, DatabaseCidr, Sqlite};
 use crate::ServerError;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use rusqlite::{params, types::Type, Connection};
 use shared::{IpNetExt, Peer, PeerContents, PERSISTENT_KEEPALIVE_INTERVAL_SECS};
 use std::{
-    net::IpAddr,
-    ops::{Deref, DerefMut},
-    time::{Duration, SystemTime},
+    marker::PhantomData, net::IpAddr, ops::{Deref, DerefMut}, time::{Duration, SystemTime}
 };
 
 pub static CREATE_TABLE_SQL: &str = "CREATE TABLE peers (
@@ -47,17 +45,38 @@ pub static COLUMNS: &[&str] = &[
 static PEER_NAME_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^([a-z0-9]-?)*[a-z0-9]$").unwrap());
 
 #[derive(Debug)]
-pub struct DatabasePeer {
+pub struct DatabasePeer<D> {
     pub inner: Peer,
+    marker: PhantomData<D>
 }
 
-impl From<Peer> for DatabasePeer {
+impl From<Peer> for DatabasePeer<CrdtMap> {
     fn from(inner: Peer) -> Self {
-        Self { inner }
+        Self { inner, marker: PhantomData }
     }
 }
 
-impl Deref for DatabasePeer {
+impl Deref for DatabasePeer<CrdtMap> {
+    type Target = Peer;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    } 
+}
+
+impl DerefMut for DatabasePeer<CrdtMap> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+impl From<Peer> for DatabasePeer<Sqlite> {
+    fn from(inner: Peer) -> Self {
+        Self { inner, marker: PhantomData }
+     }
+}
+
+impl Deref for DatabasePeer<Sqlite> {
     type Target = Peer;
 
     fn deref(&self) -> &Self::Target {
@@ -65,13 +84,13 @@ impl Deref for DatabasePeer {
     }
 }
 
-impl DerefMut for DatabasePeer {
+impl DerefMut for DatabasePeer<Sqlite> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
-impl DatabasePeer {
+impl DatabasePeer<Sqlite> {
     pub fn create(conn: &Connection, contents: PeerContents) -> Result<Self, ServerError> {
         let PeerContents {
             name,
@@ -118,12 +137,7 @@ impl DatabasePeer {
         let candidates = serde_json::to_string(candidates)?;
 
         println!("Executing SQL insert...");
-        conn.execute(
-            &format!(
-                "INSERT INTO peers ({}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                COLUMNS[1..].join(", ")
-            ),
-            params![
+        let params = params![
                 &**name,
                 ip.to_string(),
                 cidr_id,
@@ -134,7 +148,13 @@ impl DatabasePeer {
                 is_redeemed,
                 invite_expires,
                 candidates,
-            ],
+            ];
+        conn.execute(
+            &format!(
+                "INSERT INTO peers ({}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                COLUMNS[1..].join(", ")
+            ),
+            params
         )?;
         println!("Executed SQL insert...");
         let id = conn.last_insert_rowid();

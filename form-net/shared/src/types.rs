@@ -185,13 +185,13 @@ impl From<Option<Endpoint>> for EndpointContents {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Clone, Deserialize, Serialize, Debug)]
 pub struct AssociationContents {
     pub cidr_id_1: i64,
     pub cidr_id_2: i64,
 }
 
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Clone, Deserialize, Serialize, Debug)]
 pub struct Association {
     pub id: i64,
 

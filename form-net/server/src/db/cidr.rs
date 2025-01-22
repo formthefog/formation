@@ -2,7 +2,9 @@ use crate::ServerError;
 use ipnet::IpNet;
 use rusqlite::{params, Connection};
 use shared::{Cidr, CidrContents};
-use std::ops::{Deref, DerefMut};
+use std::{marker::PhantomData, ops::{Deref, DerefMut}};
+
+use super::Sqlite;
 
 pub static CREATE_TABLE_SQL: &str = "CREATE TABLE cidrs (
       id               INTEGER PRIMARY KEY,
@@ -17,17 +19,18 @@ pub static CREATE_TABLE_SQL: &str = "CREATE TABLE cidrs (
             ON DELETE RESTRICT
     )";
 
-pub struct DatabaseCidr {
+pub struct DatabaseCidr<D> {
     inner: Cidr,
+    marker: PhantomData<D>
 }
 
-impl From<Cidr> for DatabaseCidr {
+impl From<Cidr> for DatabaseCidr<Sqlite> {
     fn from(inner: Cidr) -> Self {
-        Self { inner }
+        Self { inner, marker: PhantomData }
     }
 }
 
-impl Deref for DatabaseCidr {
+impl Deref for DatabaseCidr<Sqlite> {
     type Target = Cidr;
 
     fn deref(&self) -> &Self::Target {
@@ -35,13 +38,13 @@ impl Deref for DatabaseCidr {
     }
 }
 
-impl DerefMut for DatabaseCidr {
+impl DerefMut for DatabaseCidr<Sqlite> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
-impl DatabaseCidr {
+impl DatabaseCidr<Sqlite> {
     pub fn create(conn: &Connection, contents: CidrContents) -> Result<Cidr, ServerError> {
         let CidrContents { name, cidr, parent } = &contents;
 

@@ -51,6 +51,7 @@ ureq = { version = "2", default-features = false, features = ["json"] }
 hostsfile = { path = "../hostsfile" }
 publicip = { path = "../publicip" }
 url = "2"
+crdts = "7" 
 
 [dev-dependencies]
 random_word = { version = "0.4.3", features = ["en"] }

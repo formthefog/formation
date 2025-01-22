@@ -1,5 +1,6 @@
 use anyhow::{anyhow, bail};
 use colored::*;
+use db::Sqlite;
 use dialoguer::Confirm;
 use hyper::{http, server::conn::AddrStream, Body, Request, Response};
 use indoc::printdoc;
@@ -55,7 +56,7 @@ pub struct Context {
 
 pub struct Session {
     pub context: Context,
-    pub peer: DatabasePeer,
+    pub peer: DatabasePeer<Sqlite>
 }
 
 impl Session {
