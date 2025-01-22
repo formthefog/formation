@@ -62,7 +62,7 @@ mod handlers {
         let conn = session.context.db.lock();
         let selected_peer = DatabasePeer::<Sqlite>::get(&conn, session.peer.id)?;
 
-        let cidrs: Vec<_> = DatabaseCidr::list(&conn)?;
+        let cidrs: Vec<_> = DatabaseCidr::<Sqlite>::list(&conn)?;
 
         let mut peers: Vec<_> = selected_peer
             .get_all_allowed_peers(&conn)?
@@ -263,7 +263,7 @@ mod tests {
         let server = test::Server::new()?;
         {
             let db = server.db.lock();
-            let cidr = DatabaseCidr::create(
+            let cidr = DatabaseCidr::<Sqlite>::create(
                 &db,
                 CidrContents {
                     name: "experiment cidr".to_string(),
@@ -271,7 +271,7 @@ mod tests {
                     parent: Some(test::ROOT_CIDR_ID),
                 },
             )?;
-            let subcidr = DatabaseCidr::create(
+            let subcidr = DatabaseCidr::<Sqlite>::create(
                 &db,
                 CidrContents {
                     name: "experiment subcidr".to_string(),
@@ -290,14 +290,14 @@ mod tests {
             )?;
 
             // Add a peering between the developer's CIDR and the experimental *parent* cidr.
-            DatabaseAssociation::create(
+            DatabaseAssociation::<Sqlite>::create(
                 &db,
                 AssociationContents {
                     cidr_id_1: test::DEVELOPER_CIDR_ID,
                     cidr_id_2: cidr.id,
                 },
             )?;
-            DatabaseAssociation::create(
+            DatabaseAssociation::<Sqlite>::create(
                 &db,
                 AssociationContents {
                     cidr_id_1: test::INFRA_CIDR_ID,
@@ -332,7 +332,7 @@ mod tests {
     async fn test_redeem() -> Result<(), Error> {
         let server = test::Server::new()?;
 
-        let experimental_cidr = DatabaseCidr::create(
+        let experimental_cidr = DatabaseCidr::<Sqlite>::create(
             &server.db().lock(),
             CidrContents {
                 name: "experimental".to_string(),
@@ -394,7 +394,7 @@ mod tests {
     async fn test_redeem_expired() -> Result<(), Error> {
         let server = test::Server::new()?;
 
-        let experimental_cidr = DatabaseCidr::create(
+        let experimental_cidr = DatabaseCidr::<Sqlite>::create(
             &server.db().lock(),
             CidrContents {
                 name: "experimental".to_string(),

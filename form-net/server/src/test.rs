@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 use crate::{
-    db::{DatabaseCidr, DatabasePeer},
+    db::{DatabaseCidr, DatabasePeer, Sqlite},
     initialize::{init_wizard, InitializeOpts},
     Context, Db, Endpoints, ServerConfig,
 };
@@ -237,7 +237,7 @@ impl Server {
 }
 
 pub fn create_cidr(db: &Connection, name: &str, cidr_str: &str) -> Result<Cidr, Error> {
-    let cidr = DatabaseCidr::create(
+    let cidr = DatabaseCidr::<Sqlite>::create(
         db,
         CidrContents {
             name: name.to_string(),

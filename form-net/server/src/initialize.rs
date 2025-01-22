@@ -65,7 +65,7 @@ pub struct DbInitData {
 pub fn populate_sql_database(conn: &Connection, db_init_data: DbInitData) -> Result<(), Error> {
     const SERVER_NAME: &str = "innernet-server";
 
-    let root_cidr = DatabaseCidr::create(
+    let root_cidr = DatabaseCidr::<Sqlite>::create(
         conn,
         CidrContents {
             name: db_init_data.network_name.clone(),
@@ -75,7 +75,7 @@ pub fn populate_sql_database(conn: &Connection, db_init_data: DbInitData) -> Res
     )
     .map_err(|_| anyhow!("failed to create root CIDR"))?;
 
-    let server_cidr = DatabaseCidr::create(
+    let server_cidr = DatabaseCidr::<Sqlite>::create(
         conn,
         CidrContents {
             name: SERVER_NAME.into(),

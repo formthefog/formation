@@ -43,7 +43,7 @@ mod handlers {
     ) -> Result<Response<Body>, ServerError> {
         let conn = session.context.db.lock();
 
-        let cidr = DatabaseCidr::create(&conn, contents)?;
+        let cidr = DatabaseCidr::<Sqlite>::create(&conn, contents)?;
 
         json_status_response(cidr, StatusCode::CREATED)
     }
@@ -62,14 +62,14 @@ mod handlers {
 
     pub async fn list(session: Session) -> Result<Response<Body>, ServerError> {
         let conn = session.context.db.lock();
-        let cidrs = DatabaseCidr::list(&conn)?;
+        let cidrs = DatabaseCidr::<Sqlite>::list(&conn)?;
 
         json_response(cidrs)
     }
 
     pub async fn delete(id: i64, session: Session) -> Result<Response<Body>, ServerError> {
         let conn = session.context.db.lock();
-        DatabaseCidr::delete(&conn, id)?;
+        DatabaseCidr::<Sqlite>::delete(&conn, id)?;
 
         status_response(StatusCode::NO_CONTENT)
     }
@@ -87,7 +87,7 @@ mod tests {
     async fn test_cidr_add() -> Result<(), Error> {
         let server = test::Server::new()?;
 
-        let old_cidrs = DatabaseCidr::list(&server.db().lock())?;
+        let old_cidrs = DatabaseCidr::<Sqlite>::list(&server.db().lock())?;
 
         let contents = CidrContents {
             name: "experimental".to_string(),
@@ -105,7 +105,7 @@ mod tests {
         let cidr_res: Cidr = serde_json::from_reader(whole_body.reader())?;
         assert_eq!(contents, cidr_res.contents);
 
-        let new_cidrs = DatabaseCidr::list(&server.db().lock())?;
+        let new_cidrs = DatabaseCidr::<Sqlite>::list(&server.db().lock())?;
         assert_eq!(old_cidrs.len() + 1, new_cidrs.len());
 
         Ok(())
@@ -208,7 +208,7 @@ mod tests {
     async fn test_cidr_delete_fail_with_child_cidr() -> Result<(), Error> {
         let server = test::Server::new()?;
 
-        let experimental_cidr = DatabaseCidr::create(
+        let experimental_cidr = DatabaseCidr::<Sqlite>::create(
             &server.db().lock(),
             CidrContents {
                 name: "experimental".to_string(),
@@ -216,7 +216,7 @@ mod tests {
                 parent: Some(test::ROOT_CIDR_ID),
             },
         )?;
-        let experimental_subcidr = DatabaseCidr::create(
+        let experimental_subcidr = DatabaseCidr::<Sqlite>::create(
             &server.db().lock(),
             CidrContents {
                 name: "experimental subcidr".to_string(),
@@ -261,7 +261,7 @@ mod tests {
     async fn test_cidr_delete_fail_with_peer_inside() -> Result<(), Error> {
         let server = test::Server::new()?;
 
-        let experimental_cidr = DatabaseCidr::create(
+        let experimental_cidr = DatabaseCidr::<Sqlite>::create(
             &server.db().lock(),
             CidrContents {
                 name: "experimental".to_string(),

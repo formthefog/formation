@@ -32,6 +32,8 @@ pub async fn routes(
 }
 
 mod handlers {
+    use crate::db::Sqlite;
+
     use super::*;
 
     pub async fn create(
@@ -40,21 +42,21 @@ mod handlers {
     ) -> Result<Response<Body>, ServerError> {
         let conn = session.context.db.lock();
 
-        DatabaseAssociation::create(&conn, contents)?;
+        DatabaseAssociation::<Sqlite>::create(&conn, contents)?;
 
         status_response(StatusCode::CREATED)
     }
 
     pub async fn list(session: Session) -> Result<Response<Body>, ServerError> {
         let conn = session.context.db.lock();
-        let auths = DatabaseAssociation::list(&conn)?;
+        let auths = DatabaseAssociation::<Sqlite>::list(&conn)?;
 
         json_response(auths)
     }
 
     pub async fn delete(id: i64, session: Session) -> Result<Response<Body>, ServerError> {
         let conn = session.context.db.lock();
-        DatabaseAssociation::delete(&conn, id)?;
+        DatabaseAssociation::<Sqlite>::delete(&conn, id)?;
 
         status_response(StatusCode::NO_CONTENT)
     }

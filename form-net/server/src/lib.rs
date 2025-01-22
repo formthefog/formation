@@ -192,7 +192,7 @@ pub fn add_peer(
         .into_iter()
         .map(|dp| dp.inner)
         .collect::<Vec<_>>();
-    let cidrs = DatabaseCidr::list(&conn)?;
+    let cidrs = DatabaseCidr::<Sqlite>::list(&conn)?;
     let cidr_tree = CidrTree::new(&cidrs[..]);
 
     if let Some(result) = shared::prompts::add_peer(
@@ -304,9 +304,9 @@ pub fn add_cidr(
     opts: AddCidrOpts,
 ) -> Result<(), Error> {
     let conn = open_database_connection(interface, conf)?;
-    let cidrs = DatabaseCidr::list(&conn)?;
+    let cidrs = DatabaseCidr::<Sqlite>::list(&conn)?;
     if let Some(cidr_request) = shared::prompts::add_cidr(&cidrs, &opts)? {
-        let cidr = DatabaseCidr::create(&conn, cidr_request)?;
+        let cidr = DatabaseCidr::<Sqlite>::create(&conn, cidr_request)?;
         printdoc!(
             "
             CIDR \"{cidr_name}\" added.
@@ -331,14 +331,14 @@ pub fn rename_cidr(
     opts: RenameCidrOpts,
 ) -> Result<(), Error> {
     let conn = open_database_connection(interface, conf)?;
-    let cidrs = DatabaseCidr::list(&conn)?;
+    let cidrs = DatabaseCidr::<Sqlite>::list(&conn)?;
 
     if let Some((cidr_request, old_name)) = shared::prompts::rename_cidr(&cidrs, &opts)? {
-        let db_cidr = DatabaseCidr::list(&conn)?
+        let db_cidr = DatabaseCidr::<Sqlite>::list(&conn)?
             .into_iter()
             .find(|c| c.name == old_name)
             .ok_or_else(|| anyhow!("CIDR not found."))?;
-        db::DatabaseCidr::from(db_cidr).update(&conn, cidr_request)?;
+        db::DatabaseCidr::<Sqlite>::from(db_cidr).update(&conn, cidr_request)?;
     } else {
         log::info!("exited without renaming CIDR.");
     }
@@ -362,7 +362,7 @@ pub fn delete_cidr(
     let cidr_id = prompts::delete_cidr(&cidrs, &peers, &args)?;
 
     log::info!("Deleting CIDR...");
-    DatabaseCidr::delete(&conn, cidr_id)?;
+    DatabaseCidr::<Sqlite>::delete(&conn, cidr_id)?;
 
     log::info!("CIDR deleted.");
 

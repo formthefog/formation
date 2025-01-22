@@ -1,4 +1,4 @@
-use crate::ServerError;
+use crate::{test::Server, ServerError};
 use ipnet::IpNet;
 use rusqlite::{params, Connection};
 use shared::{Cidr, CidrContents};
@@ -45,7 +45,23 @@ impl DerefMut for DatabaseCidr<Sqlite> {
 }
 
 impl DatabaseCidr<CrdtMap> {
-    pub fn get(id: i64) -> Result<Cidr, ServerError> {
+    pub async fn create(contents: CidrContents) -> Result<Cidr, ServerError> {
+        todo!()
+    }
+
+    pub async fn update(&mut self, contents: CidrContents) -> Result<Cidr, ServerError> {
+        todo!()
+    }
+
+    pub async fn delete(id: i64) -> Result<(), ServerError> {
+        todo!()
+    }
+
+    pub async fn get(id: i64) -> Result<Cidr, ServerError> {
+        todo!()
+    }
+
+    pub async fn list() -> Result<Vec<Cidr>, ServerError> {
         todo!()
     }
 }

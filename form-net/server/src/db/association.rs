@@ -7,7 +7,7 @@ use rusqlite::{params, Connection};
 use shared::{Association, AssociationContents};
 use std::{marker::PhantomData, ops::{Deref, DerefMut}};
 
-use super::Sqlite;
+use super::{CrdtMap, Sqlite};
 
 pub static CREATE_TABLE_SQL: &str = "CREATE TABLE associations (
       id         INTEGER PRIMARY KEY,
@@ -47,6 +47,20 @@ impl Deref for DatabaseAssociation<Sqlite> {
 impl DerefMut for DatabaseAssociation<Sqlite> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
+    }
+}
+
+impl DatabaseAssociation<CrdtMap> {
+    pub async fn create(contents: AssociationContents) -> Result<Association, ServerError> {
+        todo!()
+    }
+
+    pub async fn list() -> Result<Vec<Association>, ServerError> {
+        todo!()
+    }
+
+    pub async fn delete() -> Result<(), ServerError> {
+        todo!()
     }
 }
 
