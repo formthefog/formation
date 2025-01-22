@@ -28,7 +28,7 @@ Currently Formation is only known to work out of the box on Ubuntu 22.04, and th
 
 #### Setting up local network configuration
 
-Before launching Formation, you will want to ensure that your network and machine's network interface configuration is set up properly to run the protocl.
+Before launching Formation, you will want to ensure that your network and machine's network interface configuration is set up properly to run the protocol.
 
 First and foremost, you will want to have the ports related to the various systems service APIs exposes/forwarded to your machine. 
 
