@@ -23,8 +23,8 @@ pub struct Keystore {
 
 #[derive(Clone, Debug, Serialize, Deserialize, Args)]
 pub struct Init {
-    #[clap(default_value_t=true)]
-    wizard: bool,
+    #[clap(long, default_value_t=true)]
+    pub wizard: bool,
     #[clap(long, short)]
     pub signing_key: Option<String>,
     #[clap(long, short)]
