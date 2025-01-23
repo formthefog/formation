@@ -22,6 +22,47 @@ As an Open Source project, we not only encourage, but rely on you to contribute 
 
 ## Running a Node
 
+## Prerequisites
+
+Before proceeding, ensure your system meets the following requirements:
+
+1. **Operating System**: Ubuntu 22.04
+
+2. **System Resources**: Minimum 32 physical cores, 64 GB of RAM, and at least 8TB of storage for full devnet participation.
+
+3. **Dependencies**: The following system dependencies must be installed:
+
+   ```bash
+   sudo apt update
+   sudo apt install -y build-essential bridge-utils kmod pkg-config libssl-dev libudev-dev protobuf-compiler libsqlite3-dev
+   ```
+
+   - `build-essential`: Required for compiling code.
+   - `bridge-utils`: For setting up the network bridge.
+   - `kmod`: For managing kernel modules.
+   - `pkg-config`: For finding library dependencies.
+   - `libssl-dev`: SSL library for cryptography.
+   - `libudev-dev`: Library required by HIDAPI.
+   - `protobuf-compiler`: Protocol Buffers compiler.
+   - `libsqlite3-dev`: Required for SQLite support.
+
+4. **Verify Rust Toolchain**: Install and update Rust using:
+
+   ```bash
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   rustup update
+   ```
+
+5. **Ensure Proper Linker**: Verify that `cc` is installed:
+
+   ```bash
+   which cc
+   ```
+
+   If not found, install it via `build-essential`.
+
+6. Install Docker: Ensure Docker is installed and running. If not, install Docker using this [guide](https://docs.docker.com/engine/install/ubuntu/).
+
 Currently Formation is only known to work out of the box on Ubuntu 22.04, and the documentation provided herein assumes you are running Ubuntu 22.04. 
 
 <hr>
@@ -97,16 +138,16 @@ First you will need to pull the official images:
 # Pull formation-minimal 
 
 First you will need to pull the 
-docker pull cryptonomikhan/formation-minimal
+docker pull cryptonomikhan/formation-minimal:v0.1.0
 
 # Retag it
-docker tag cryptonomikhan/formation-minimal formation-minimal
+docker tag cryptonomikhan/formation-minimal:v0.1.0 formation-minimal
 
 # Pull form-build-server
-docker pull cryptonomikhan/form-build-server
+docker pull cryptonomikhan/form-build-server:v0.1.0
 
 # Retag it
-docker tag cryptonomikhan/form-build-server form-build-server
+docker tag cryptonomikhan/form-build-server:v0.1.0 form-build-server
 ```
 
 Then you can run it, ensure you use the `--privileged` flag `--network=host` and
@@ -124,7 +165,7 @@ docker run --rm --privileged --network=host \
     -v /lib/modules:/lib/modules:ro \
     -v /var/run/docker.sock:/var/run/docker.sock \
     --mount type=tmpfs,destination=/dev/hugepages,tmpfs-mode=1770 \
-    -dit formation:latest
+    -dit formation
 ```
 
 The **Formation** docker image requires that it be run in *privileged* mode, and while privileged mode is outside the scope of this particular document, we highly suggest you take the time to understand the implications of such. 
@@ -175,7 +216,7 @@ docker run --rm --privileged --network=host \
     -v /lib/modules:/lib/modules:ro \
     -v /var/run/docker.sock:/var/run/docker.sock \
     --mount type=tmpfs,destination=/dev/hugepages,tmpfs-mode=1770 \
-    -dit formation-minimal:latest
+    -dit formation-minimal
 
 ```
 
