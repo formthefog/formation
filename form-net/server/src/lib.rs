@@ -14,7 +14,7 @@ use shared::{
     INNERNET_PUBKEY_HEADER,
 };
 use std::{
-    collections::{HashMap, VecDeque}, convert::TryInto, env, fs::File, io::prelude::*, net::{IpAddr, SocketAddr, TcpListener}, ops::Deref, path::{Path, PathBuf}, sync::Arc, time::Duration
+    collections::{HashMap, VecDeque}, convert::TryInto, env, fmt::Display, fs::File, io::prelude::*, net::{IpAddr, SocketAddr, TcpListener}, ops::Deref, path::{Path, PathBuf}, sync::Arc, time::Duration
 };
 use subtle::ConstantTimeEq;
 use wireguard_control::{Backend, Device, DeviceUpdate, InterfaceName, Key, PeerConfigBuilder};
@@ -225,8 +225,8 @@ impl ServerConfig {
 }
 
 #[async_trait::async_trait]
-pub trait FormnetNode {
-    type Error;
+pub trait FormnetNode: Default {
+    type Error: Display;
 
     async fn add_peer(
         &self,

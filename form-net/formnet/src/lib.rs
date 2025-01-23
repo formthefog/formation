@@ -9,7 +9,7 @@ use tokio::{io::{AsyncReadExt, AsyncWriteExt}, sync::broadcast::Receiver};
 use wireguard_control::{Backend, Device, DeviceUpdate, InterfaceName, KeyPair, PeerConfigBuilder};
 use client::{data_store::DataStore, nat::{self, NatTraverse}, util::{self, all_installed, Api}};
 use formnet_server::{
-    add_cidr, db::Sqlite, initialize::{create_database, populate_sql_database, DbInitData, InitializeOpts}, open_database_connection, ConfigFile, DatabaseCidr, DatabasePeer, ServerConfig, 
+    db::{DatastoreType, Sqlite}, initialize::{create_database, populate_sql_database, DbInitData, InitializeOpts}, ConfigFile, DatabaseCidr, DatabasePeer, FormnetNode, ServerConfig 
 };
 use shared::wg::DeviceExt; 
 
@@ -114,7 +114,7 @@ pub async fn add_peer<'a>(
     Ok((peer_request, default_keypair))
 }
 
-pub async fn server_add_peer(
+pub async fn server_add_peer<D: DatastoreType + FormnetNode>(
     inet: &InterfaceName, 
     conf: &ServerConfig,
     peer_type: &PeerType,
@@ -123,7 +123,7 @@ pub async fn server_add_peer(
     log::info!("Reading config file into ConfigFile...");
     let config = ConfigFile::from_file(conf.config_path(inet))?;
     log::info!("Opening database connection...");
-    let conn = open_database_connection(inet, conf)?;
+    let conn = <D as FormnetNode>::open_database_connection(inet, conf).await?;
     log::info!("Collecting peers...");
     let peers = DatabasePeer::<Sqlite>::list(&conn)?
         .into_iter().map(|dp| dp.inner)
@@ -404,8 +404,8 @@ pub enum JoinResponse {
     Error(String) 
 }
 
-pub fn create_router() -> axum::Router {
-    axum::Router::new().route("/join", axum::routing::post(handle_join_request))
+pub fn create_router<D: DatastoreType + FormnetNode + 'static>() -> axum::Router {
+    axum::Router::new().route("/join", axum::routing::post(handle_join_request::<D>))
 }
 
 pub fn is_server() -> bool {
@@ -414,11 +414,11 @@ pub fn is_server() -> bool {
     ).exists()
 }
 
-async fn handle_join_request_from_server(
+async fn handle_join_request_from_server<D: DatastoreType + FormnetNode>(
     join_request: JoinRequest,
     inet: InterfaceName
 ) -> (StatusCode, axum::Json<JoinResponse>) {
-    match server_add_peer(
+    match server_add_peer::<D>(
         &inet,
         &ServerConfig { config_dir: SERVER_CONFIG_DIR.into(), data_dir: SERVER_DATA_DIR.into() },
         &join_request.peer_type(),
@@ -524,7 +524,7 @@ async fn handle_join_request_from_admin_client(
     }
 }
 
-pub async fn handle_join_request(axum::Json(join_request): axum::Json<JoinRequest>) -> impl axum::response::IntoResponse {
+pub async fn handle_join_request<D: DatastoreType + FormnetNode>(axum::Json(join_request): axum::Json<JoinRequest>) -> impl axum::response::IntoResponse {
     let inet = match InterfaceName::from_str(
         FormnetMessage::INTERFACE_NAME
     ) {
@@ -536,7 +536,7 @@ pub async fn handle_join_request(axum::Json(join_request): axum::Json<JoinReques
     };
 
     if is_server() {
-        return handle_join_request_from_server(join_request, inet).await;
+        return handle_join_request_from_server::<D>(join_request, inet).await;
     } else {
         return handle_join_request_from_admin_client(join_request, inet).await;
     }
@@ -833,10 +833,11 @@ pub fn up(
     Ok(())
 }
 
-pub fn init(
+pub async fn init<D: DatastoreType + FormnetNode>(
     conf: &ServerConfig,
     opts: InitializeOpts
-) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> 
+{
     log::info!("Setting up directories for configs...");
     shared::ensure_dirs_exist(&[conf.config_dir(), conf.database_dir()]).map_err(|e| {
         Box::new(
@@ -941,7 +942,9 @@ pub fn init(
         yes: true,
     };
 
-    add_cidr(&*name, conf, cidr_opts)?;
+    <D as FormnetNode>::add_cidr(&D::default(), &*name, conf, cidr_opts).await.map_err(|e| {
+        Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("{}",e)))
+    })?;
 
     log::info!("Added CIDR");
     Ok(())
@@ -953,6 +956,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use formnet_server::db::CrdtMap;
     use tokio::net::TcpListener;
     use reqwest::Client;
 
@@ -962,7 +966,7 @@ mod tests {
         let api_shutdown = rx.resubscribe();
         
         let api_handle = tokio::spawn(async move {
-            let api = create_router();
+            let api = create_router::<CrdtMap>();
             let listener = TcpListener::bind("0.0.0.0:3001").await?;
 
             let _ = axum::serve(

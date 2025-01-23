@@ -1,7 +1,7 @@
 //! A service to create and run innernet behind the scenes
-use form_state::datastore::DataStore;
-use clap::Parser;
-use formnet_server::{serve, uninstall, ServerConfig, initialize::InitializeOpts};
+use clap::{Parser, ValueEnum};
+use formnet_server::db::{CrdtMap, DatastoreType, Sqlite};
+use formnet_server::{FormnetNode, ServerConfig, initialize::InitializeOpts};
 use ipnet::IpNet;
 use reqwest::Client;
 use std::net::SocketAddr;
@@ -19,7 +19,13 @@ use alloy::signers::k256::ecdsa::{SigningKey, VerifyingKey};
 use rand_core::OsRng;
 use formnet::*;
 
-#[derive(Debug, Parser)]
+#[derive(Clone, Debug, ValueEnum)]
+pub enum Datastore {
+    Sql,
+    Crdt
+}
+
+#[derive(Clone, Debug, Parser)]
 struct Opts {
     #[arg(short, long, alias="bootstrap")]
     to_dial: Option<String>,
@@ -30,18 +36,20 @@ struct Opts {
     #[arg(short, long, alias="addr")]
     ip_addr: Option<String>,
     #[arg(short, long, alias="url")]
-    domain: Option<String>
+    domain: Option<String>,
+    #[arg(short, long)]
+    store: Datastore,
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     simple_logger::SimpleLogger::new().init().unwrap();
 
     let parser = Opts::parse();
     log::info!("{parser:?}");
 
-    let interface_handle = if let Some(to_dial) = parser.to_dial {
+    let interface_handle = if let Some(ref to_dial) = parser.to_dial {
         // A bootstrap node was provided, request that the 
         // new operator (local) be added to the network
         // as a peer.
@@ -129,17 +137,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
         // No bootstrap was provided create and serve formnet as server
         log::info!("Attempting to start formnet server, no bootstrap provided...");
         
+        let handle_parser = parser.clone();
         let handle = tokio::spawn(async move {
             log::info!("Building server config...");
             let conf = ServerConfig { config_dir: SERVER_CONFIG_DIR.into(), data_dir: SERVER_DATA_DIR.into() };
             log::info!("Building init options...");
             let mut init_opts = InitializeOpts::default(); 
-            if let Some(ip_addr) = parser.ip_addr {
+            if let Some(ip_addr) = handle_parser.ip_addr {
                 let addr: SocketAddr = format!("{ip_addr}:{}", parser.listen_port).parse()?;
                 init_opts.external_endpoint = Some(Endpoint::from(addr));
                 init_opts.listen_port = Some(parser.listen_port);
                 init_opts.auto_external_endpoint = false;
-            } else if let Some(domain_name) = parser.domain {
+            } else if let Some(domain_name) = handle_parser.domain {
                 init_opts.external_endpoint = 
                     Some(
                         Endpoint::from_str(&format!("{domain_name}:{}", parser.listen_port))?
@@ -164,11 +173,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
             };
 
             log::info!("Initializing the server");
-            init(&conf, init_opts)?;
-            log::info!("Serving the server...");
-            serve(interface_name, &conf, network_opts).await?;
-            log::info!("Server shutdown, cleaning up...");
-            uninstall(&interface_name, &conf, network_opts, true)?;
+
+            match &handle_parser.store {
+                Datastore::Sql => {
+                    init::<Sqlite>(&conf, init_opts).await.map_err(|e| {
+                        Box::new(
+                            std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                e.to_string()
+                            )
+                        )
+                    })?;
+                    log::info!("Serving the server...");
+                    <Sqlite as FormnetNode>::serve(interface_name, &conf, network_opts).await?;
+                    log::info!("Server shutdown, cleaning up...");
+                    <Sqlite as FormnetNode>::uninstall(&Sqlite, &interface_name, &conf, network_opts, true).await?;
+                }
+                Datastore::Crdt => {
+                    init::<CrdtMap>(&conf, init_opts).await?;
+                    <CrdtMap as FormnetNode>::serve(interface_name, &conf, network_opts).await?;
+                    log::info!("Server shutdown, cleaning up...");
+                    <CrdtMap as FormnetNode>::uninstall(&CrdtMap, &interface_name, &conf, network_opts, true).await?;
+                }
+            }
 
             Ok::<(), Box<dyn std::error::Error + Send + Sync + 'static>>(())
         });
@@ -179,19 +206,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
     let (tx, rx) = tokio::sync::broadcast::channel(3);
     let _api_shutdown = tx.subscribe();
     
+    let api_parser = parser.clone();
     log::info!("Spawning API Server for taking join requests...");
     let api_handle = tokio::spawn(async move {
-        let api = create_router();
-        let listener = TcpListener::bind("0.0.0.0:3001").await?;
+        match api_parser.store {
+            Datastore::Sql => {
+                let api = create_router::<Sqlite>();
+                let listener = TcpListener::bind("0.0.0.0:3001").await?;
 
-        let _ = axum::serve(
-            listener,
-            api
-        ).await?;
+                let _ = axum::serve(
+                    listener,
+                    api
+                ).await?;
+            }
+            Datastore::Crdt => {
+            }
+        }
 
         Ok::<(), Box<dyn std::error::Error + Send + Sync + 'static>>(())
     });
 
+    let sub_parser = parser.clone();
     log::info!("Spawning subscriber to broker...");
     let handle = tokio::spawn(async move {
         let sub = FormnetSubscriber::new(
@@ -201,11 +236,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
             ]
         ).await?;
         log::info!("Created formnet subscriber...");
-        if let Err(e) = run(
-            sub,
-            rx
-        ).await {
-            log::error!("Error running formnet handler: {e}");
+        match sub_parser.store {
+            Datastore::Sql => {
+                if let Err(e) = run::<Sqlite>(
+                    sub,
+                    rx
+                ).await {
+                    log::error!("Error running formnet handler: {e}");
+                }
+            }
+            Datastore::Crdt => {
+                if let Err(e) = run::<CrdtMap>(
+                    sub,
+                    rx
+                ).await {
+                    log::error!("Error running formnet handler: {e}");
+                }
+            }
         }
 
         Ok::<(), Box<dyn std::error::Error + Send + Sync + 'static>>(())
@@ -223,7 +270,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
     Ok(())
 }
 
-async fn run(
+async fn run<D: DatastoreType + FormnetNode>(
     mut subscriber: impl SubStream<Message = Vec<FormnetMessage>>,
     mut shutdown: Receiver<()>
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
@@ -232,7 +279,7 @@ async fn run(
         tokio::select! {
             Ok(msg) = subscriber.receive() => {
                 for m in msg {
-                    if let Err(e) = handle_message(&m).await {
+                    if let Err(e) = handle_message::<D>(&m).await {
                         log::error!("Error handling message {m:?}: {e}");
                     }
                 }
@@ -250,7 +297,7 @@ async fn run(
     Ok(())
 }
 
-async fn handle_message(
+async fn handle_message<D: DatastoreType + FormnetNode>(
     message: &FormnetMessage
 ) -> Result<(), Box<dyn std::error::Error>> {
     use form_types::FormnetMessage::*;
@@ -266,7 +313,7 @@ async fn handle_message(
                 log::info!("Built Server Config...");
                 let inet = InterfaceName::from_str(FormnetMessage::INTERFACE_NAME)?;
                 log::info!("Acquired interface name...");
-                if let Ok(invitation) = server_add_peer(
+                if let Ok(invitation) = server_add_peer::<D>(
                     &inet,
                     &server_config,
                     &peer_type.into(),
