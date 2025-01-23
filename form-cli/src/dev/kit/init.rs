@@ -403,7 +403,7 @@ pub async fn join_formnet(address: String, provider: String, formnet_port: u16) 
                 Box::new(
                     std::io::Error::new(
                         std::io::ErrorKind::Other,
-                        "Error requesting formnet invite, unable to join formnet: {e}"
+                        format!("Error requesting formnet invite, unable to join formnet: {}", e)
                     )
                 )
             )
