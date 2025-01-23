@@ -1,103 +1,192 @@
-use std::collections::VecDeque;
+pub mod sqlite_routes {
+    use std::collections::VecDeque;
 
-use crate::{
-    api::inject_endpoints,
-    db::DatabasePeer,
-    util::{form_body, json_response, json_status_response, status_response},
-    ServerError, Session,
-};
-use hyper::{Body, Method, Request, Response, StatusCode};
-use shared::PeerContents;
-use wireguard_control::{DeviceUpdate, PeerConfigBuilder};
+    use crate::{
+        api::inject_endpoints,
+        db::{DatabasePeer, Sqlite},
+        util::{form_body, json_response, json_status_response, status_response},
+        ServerError, Session, SqlContext,
+    };
+    use hyper::{Body, Method, Request, Response, StatusCode};
+    use shared::PeerContents;
+    use wireguard_control::{DeviceUpdate, PeerConfigBuilder};
 
-pub async fn routes(
-    req: Request<Body>,
-    mut components: VecDeque<String>,
-    session: Session,
-) -> Result<Response<Body>, ServerError> {
-    match (req.method(), components.pop_front().as_deref()) {
-        (&Method::GET, None) => handlers::list(session).await,
-        (&Method::POST, None) => {
-            let form = form_body(req).await?;
-            handlers::create(form, session).await
-        },
-        (&Method::PUT, Some(id)) => {
-            let id: i64 = id.parse().map_err(|_| ServerError::NotFound)?;
-            let form = form_body(req).await?;
-            handlers::update(id, form, session).await
-        },
-        (&Method::DELETE, Some(id)) => {
-            let id: i64 = id.parse().map_err(|_| ServerError::NotFound)?;
-            handlers::delete(id, session).await
-        },
-        _ => Err(ServerError::NotFound),
+    pub async fn routes(
+        req: Request<Body>,
+        mut components: VecDeque<String>,
+        session: Session<SqlContext, Sqlite>,
+    ) -> Result<Response<Body>, ServerError> {
+        match (req.method(), components.pop_front().as_deref()) {
+            (&Method::GET, None) => handlers::list(session).await,
+            (&Method::POST, None) => {
+                let form = form_body(req).await?;
+                handlers::create(form, session).await
+            },
+            (&Method::PUT, Some(id)) => {
+                let id: i64 = id.parse().map_err(|_| ServerError::NotFound)?;
+                let form = form_body(req).await?;
+                handlers::update(id, form, session).await
+            },
+            (&Method::DELETE, Some(id)) => {
+                let id: i64 = id.parse().map_err(|_| ServerError::NotFound)?;
+                handlers::delete(id, session).await
+            },
+            _ => Err(ServerError::NotFound),
+        }
+    }
+
+    mod handlers {
+
+        use crate::db::Sqlite;
+
+        use super::*;
+
+        pub async fn create(
+            form: PeerContents,
+            session: Session<SqlContext, Sqlite>,
+        ) -> Result<Response<Body>, ServerError> {
+            let conn = session.context.db.lock();
+
+            let peer = DatabasePeer::<Sqlite>::create(&conn, form)?;
+            log::info!("adding peer {}", &*peer);
+
+            if cfg!(not(test)) {
+                // Update the current WireGuard interface with the new peers.
+                DeviceUpdate::new()
+                    .add_peer(PeerConfigBuilder::from(&*peer))
+                    .apply(&session.context.interface, session.context.backend)
+                    .map_err(|_| ServerError::WireGuard)?;
+                log::info!("updated WireGuard interface, adding {}", &*peer);
+            }
+
+            json_status_response(&*peer, StatusCode::CREATED)
+        }
+
+        pub async fn update(
+            id: i64,
+            form: PeerContents,
+            session: Session<SqlContext, Sqlite>,
+        ) -> Result<Response<Body>, ServerError> {
+            let conn = session.context.db.lock();
+            let mut peer = DatabasePeer::<Sqlite>::get(&conn, id)?;
+            peer.update(&conn, form)?;
+
+            status_response(StatusCode::NO_CONTENT)
+        }
+
+        /// List all peers, including disabled ones. This is an admin-only endpoint.
+        pub async fn list(session: Session<SqlContext, Sqlite>) -> Result<Response<Body>, ServerError> {
+            let conn = session.context.db.lock();
+            let mut peers = DatabasePeer::<Sqlite>::list(&conn)?
+                .into_iter()
+                .map(|peer| peer.inner)
+                .collect::<Vec<_>>();
+            inject_endpoints(&session, &mut peers);
+            json_response(&peers)
+        }
+
+        pub async fn delete(id: i64, session: Session<SqlContext, Sqlite>) -> Result<Response<Body>, ServerError> {
+            let conn = session.context.db.lock();
+            DatabasePeer::<Sqlite>::disable(&conn, id)?;
+
+            status_response(StatusCode::NO_CONTENT)
+        }
     }
 }
 
-mod handlers {
+pub mod crdt_routes {
+    use std::collections::VecDeque;
 
-    use crate::db::Sqlite;
+    use crate::{
+        api::inject_endpoints, db::{CrdtMap, DatabasePeer}, util::{form_body, json_response, json_status_response, status_response}, CrdtContext, ServerError, Session 
+    };
+    use hyper::{Body, Method, Request, Response, StatusCode};
+    use shared::PeerContents;
+    use wireguard_control::{DeviceUpdate, PeerConfigBuilder};
 
-    use super::*;
-
-    pub async fn create(
-        form: PeerContents,
-        session: Session,
+    pub async fn routes(
+        req: Request<Body>,
+        mut components: VecDeque<String>,
+        session: Session<CrdtContext, CrdtMap>,
     ) -> Result<Response<Body>, ServerError> {
-        let conn = session.context.db.lock();
+        match (req.method(), components.pop_front().as_deref()) {
+            (&Method::GET, None) => handlers::list(session).await,
+            (&Method::POST, None) => {
+                let form = form_body(req).await?;
+                handlers::create(form, session).await
+            },
+            (&Method::PUT, Some(id)) => {
+                let id: i64 = id.parse().map_err(|_| ServerError::NotFound)?;
+                let form = form_body(req).await?;
+                handlers::update(id, form).await
+            },
+            (&Method::DELETE, Some(id)) => {
+                let id: i64 = id.parse().map_err(|_| ServerError::NotFound)?;
+                handlers::delete(id).await
+            },
+            _ => Err(ServerError::NotFound),
+        }
+    }
 
-        let peer = DatabasePeer::<Sqlite>::create(&conn, form)?;
-        log::info!("adding peer {}", &*peer);
+    mod handlers {
 
-        if cfg!(not(test)) {
-            // Update the current WireGuard interface with the new peers.
-            DeviceUpdate::new()
-                .add_peer(PeerConfigBuilder::from(&*peer))
-                .apply(&session.context.interface, session.context.backend)
-                .map_err(|_| ServerError::WireGuard)?;
-            log::info!("updated WireGuard interface, adding {}", &*peer);
+        use crate::{db::CrdtMap, CrdtContext};
+
+        use super::*;
+
+        pub async fn create(
+            form: PeerContents,
+            session: Session<CrdtContext, CrdtMap>,
+        ) -> Result<Response<Body>, ServerError> {
+            let peer = DatabasePeer::<CrdtMap>::create(form).await?;
+            log::info!("adding peer {}", &*peer);
+
+            if cfg!(not(test)) {
+                // Update the current WireGuard interface with the new peers.
+                DeviceUpdate::new()
+                    .add_peer(PeerConfigBuilder::from(&*peer))
+                    .apply(&session.context.interface, session.context.backend)
+                    .map_err(|_| ServerError::WireGuard)?;
+                log::info!("updated WireGuard interface, adding {}", &*peer);
+            }
+
+            json_status_response(&*peer, StatusCode::CREATED)
         }
 
-        json_status_response(&*peer, StatusCode::CREATED)
-    }
+        pub async fn update(
+            id: i64,
+            form: PeerContents,
+        ) -> Result<Response<Body>, ServerError> {
+            let mut peer = DatabasePeer::<CrdtMap>::get(id).await?;
+            peer.update(form).await?;
 
-    pub async fn update(
-        id: i64,
-        form: PeerContents,
-        session: Session,
-    ) -> Result<Response<Body>, ServerError> {
-        let conn = session.context.db.lock();
-        let mut peer = DatabasePeer::<Sqlite>::get(&conn, id)?;
-        peer.update(&conn, form)?;
+            status_response(StatusCode::NO_CONTENT)
+        }
 
-        status_response(StatusCode::NO_CONTENT)
-    }
+        /// List all peers, including disabled ones. This is an admin-only endpoint.
+        pub async fn list(session: Session<CrdtContext, CrdtMap>) -> Result<Response<Body>, ServerError> {
+            let mut peers = DatabasePeer::<CrdtMap>::list().await?
+                .into_iter()
+                .map(|peer| peer.inner)
+                .collect::<Vec<_>>();
+            inject_endpoints(&session, &mut peers);
+            json_response(&peers)
+        }
 
-    /// List all peers, including disabled ones. This is an admin-only endpoint.
-    pub async fn list(session: Session) -> Result<Response<Body>, ServerError> {
-        let conn = session.context.db.lock();
-        let mut peers = DatabasePeer::<Sqlite>::list(&conn)?
-            .into_iter()
-            .map(|peer| peer.inner)
-            .collect::<Vec<_>>();
-        inject_endpoints(&session, &mut peers);
-        json_response(&peers)
-    }
+        pub async fn delete(id: i64) -> Result<Response<Body>, ServerError> {
+            DatabasePeer::<CrdtMap>::disable(id).await?;
 
-    pub async fn delete(id: i64, session: Session) -> Result<Response<Body>, ServerError> {
-        let conn = session.context.db.lock();
-        DatabasePeer::<Sqlite>::disable(&conn, id)?;
-
-        status_response(StatusCode::NO_CONTENT)
+            status_response(StatusCode::NO_CONTENT)
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{db::Sqlite, test};
+    use crate::{db::Sqlite, test, DatabasePeer};
     use bytes::Buf;
-    use shared::{Error, Peer};
+    use hyper::StatusCode;
+    use shared::{Error, Peer, PeerContents};
 
     #[tokio::test]
     async fn test_add_peer() -> Result<(), Error> {

@@ -31,6 +31,12 @@ impl From<Cidr> for DatabaseCidr<Sqlite> {
     }
 }
 
+impl From<Cidr> for DatabaseCidr<CrdtMap> {
+    fn from(inner: Cidr) -> Self {
+        Self { inner, marker: PhantomData }
+    }
+}
+
 impl From<CrdtCidr> for DatabaseCidr<CrdtMap> {
     fn from(value: CrdtCidr) -> Self {
         Self {

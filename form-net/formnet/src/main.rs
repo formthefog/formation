@@ -1,4 +1,5 @@
 //! A service to create and run innernet behind the scenes
+use form_state::datastore::DataStore;
 use clap::Parser;
 use formnet_server::{serve, uninstall, ServerConfig, initialize::InitializeOpts};
 use ipnet::IpNet;
@@ -105,6 +106,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
                     ) {
                         log::error!("Error bringing formnet up: {e}")
                     }
+
+                    // Now that formnet is up we can launch our DataStore 
 
                     return Ok(())
                 }

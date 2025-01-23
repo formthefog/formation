@@ -1,87 +1,158 @@
-use std::collections::VecDeque;
+pub mod sqlite_routes {
+    use std::collections::VecDeque;
 
-use crate::{
-    db::DatabaseCidr,
-    util::{form_body, json_response, status_response},
-    ServerError, Session,
-};
-use hyper::{Body, Method, Request, Response, StatusCode};
-use shared::CidrContents;
+    use crate::{
+        db::{DatabaseCidr, Sqlite},
+        util::{form_body, json_response, status_response},
+        ServerError, Session, SqlContext,
+    };
+    use hyper::{Body, Method, Request, Response, StatusCode};
+    use shared::CidrContents;
 
-pub async fn routes(
-    req: Request<Body>,
-    mut components: VecDeque<String>,
-    session: Session,
-) -> Result<Response<Body>, ServerError> {
-    match (req.method(), components.pop_front().as_deref()) {
-        (&Method::GET, None) => handlers::list(session).await,
-        (&Method::POST, None) => {
-            let form = form_body(req).await?;
-            handlers::create(form, session).await
-        },
-        (&Method::PUT, Some(id)) => {
-            let id: i64 = id.parse().map_err(|_| ServerError::NotFound)?;
-            let form = form_body(req).await?;
-            handlers::update(id, form, session).await
-        },
-        (&Method::DELETE, Some(id)) => {
-            let id: i64 = id.parse().map_err(|_| ServerError::NotFound)?;
-            handlers::delete(id, session).await
-        },
-        _ => Err(ServerError::NotFound),
+    pub async fn routes(
+        req: Request<Body>,
+        mut components: VecDeque<String>,
+        session: Session<SqlContext, Sqlite>,
+    ) -> Result<Response<Body>, ServerError> {
+        match (req.method(), components.pop_front().as_deref()) {
+            (&Method::GET, None) => handlers::list(session).await,
+            (&Method::POST, None) => {
+                let form = form_body(req).await?;
+                handlers::create(form, session).await
+            },
+            (&Method::PUT, Some(id)) => {
+                let id: i64 = id.parse().map_err(|_| ServerError::NotFound)?;
+                let form = form_body(req).await?;
+                handlers::update(id, form, session).await
+            },
+            (&Method::DELETE, Some(id)) => {
+                let id: i64 = id.parse().map_err(|_| ServerError::NotFound)?;
+                handlers::delete(id, session).await
+            },
+            _ => Err(ServerError::NotFound),
+        }
+    }
+
+    mod handlers {
+        use crate::{db::Sqlite, util::json_status_response};
+
+        use super::*;
+
+        pub async fn create(
+            contents: CidrContents,
+            session: Session<SqlContext, Sqlite>,
+        ) -> Result<Response<Body>, ServerError> {
+            let conn = session.context.db.lock();
+
+            let cidr = DatabaseCidr::<Sqlite>::create(&conn, contents)?;
+
+            json_status_response(cidr, StatusCode::CREATED)
+        }
+
+        pub async fn update(
+            id: i64,
+            form: CidrContents,
+            session: Session<SqlContext, Sqlite>,
+        ) -> Result<Response<Body>, ServerError> {
+            let conn = session.context.db.lock();
+            let cidr = DatabaseCidr::<Sqlite>::get(&conn, id)?;
+            DatabaseCidr::<Sqlite>::from(cidr).update(&conn, form)?;
+
+            status_response(StatusCode::NO_CONTENT)
+        }
+
+        pub async fn list(session: Session<SqlContext, Sqlite>) -> Result<Response<Body>, ServerError> {
+            let conn = session.context.db.lock();
+            let cidrs = DatabaseCidr::<Sqlite>::list(&conn)?;
+
+            json_response(cidrs)
+        }
+
+        pub async fn delete(id: i64, session: Session<SqlContext, Sqlite>) -> Result<Response<Body>, ServerError> {
+            let conn = session.context.db.lock();
+            DatabaseCidr::<Sqlite>::delete(&conn, id)?;
+
+            status_response(StatusCode::NO_CONTENT)
+        }
     }
 }
 
-mod handlers {
-    use crate::{db::Sqlite, util::json_status_response};
 
-    use super::*;
+pub mod crdt_routes {
+    use std::collections::VecDeque;
 
-    pub async fn create(
-        contents: CidrContents,
-        session: Session,
+    use crate::{
+        db::DatabaseCidr,
+        util::{form_body, json_response, status_response},
+        ServerError,
+    };
+    use hyper::{Body, Method, Request, Response, StatusCode};
+    use shared::CidrContents;
+
+    pub async fn routes(
+        req: Request<Body>,
+        mut components: VecDeque<String>,
     ) -> Result<Response<Body>, ServerError> {
-        let conn = session.context.db.lock();
-
-        let cidr = DatabaseCidr::<Sqlite>::create(&conn, contents)?;
-
-        json_status_response(cidr, StatusCode::CREATED)
+        match (req.method(), components.pop_front().as_deref()) {
+            (&Method::GET, None) => handlers::list().await,
+            (&Method::POST, None) => {
+                let form = form_body(req).await?;
+                handlers::create(form).await
+            },
+            (&Method::PUT, Some(id)) => {
+                let id: i64 = id.parse().map_err(|_| ServerError::NotFound)?;
+                let form = form_body(req).await?;
+                handlers::update(id, form).await
+            },
+            (&Method::DELETE, Some(id)) => {
+                let id: i64 = id.parse().map_err(|_| ServerError::NotFound)?;
+                handlers::delete(id).await
+            },
+            _ => Err(ServerError::NotFound),
+        }
     }
 
-    pub async fn update(
-        id: i64,
-        form: CidrContents,
-        session: Session,
-    ) -> Result<Response<Body>, ServerError> {
-        let conn = session.context.db.lock();
-        let cidr = DatabaseCidr::<Sqlite>::get(&conn, id)?;
-        DatabaseCidr::from(cidr).update(&conn, form)?;
+    mod handlers {
+        use crate::{db::CrdtMap, util::json_status_response};
 
-        status_response(StatusCode::NO_CONTENT)
-    }
+        use super::*;
 
-    pub async fn list(session: Session) -> Result<Response<Body>, ServerError> {
-        let conn = session.context.db.lock();
-        let cidrs = DatabaseCidr::<Sqlite>::list(&conn)?;
+        pub async fn create(
+            contents: CidrContents,
+        ) -> Result<Response<Body>, ServerError> {
+            let cidr = DatabaseCidr::<CrdtMap>::create(contents).await?;
+            json_status_response(cidr, StatusCode::CREATED)
+        }
 
-        json_response(cidrs)
-    }
+        pub async fn update(
+            id: i64,
+            form: CidrContents,
+        ) -> Result<Response<Body>, ServerError> {
+            let cidr = DatabaseCidr::<CrdtMap>::get(id).await?;
+            DatabaseCidr::<CrdtMap>::from(cidr).update(form).await?;
+            status_response(StatusCode::NO_CONTENT)
+        }
 
-    pub async fn delete(id: i64, session: Session) -> Result<Response<Body>, ServerError> {
-        let conn = session.context.db.lock();
-        DatabaseCidr::<Sqlite>::delete(&conn, id)?;
+        pub async fn list() -> Result<Response<Body>, ServerError> {
+            let cidrs = DatabaseCidr::<CrdtMap>::list().await?;
+            json_response(cidrs)
+        }
 
-        status_response(StatusCode::NO_CONTENT)
+        pub async fn delete(id: i64) -> Result<Response<Body>, ServerError> {
+            DatabaseCidr::<CrdtMap>::delete(id).await?;
+
+            status_response(StatusCode::NO_CONTENT)
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{db::Sqlite, test, DatabasePeer};
+    use crate::{db::Sqlite, test, DatabaseCidr, DatabasePeer};
     use anyhow::Result;
     use bytes::Buf;
-    use shared::{Cidr, Error};
+    use hyper::StatusCode;
+    use shared::{Cidr, CidrContents, Error};
 
     #[tokio::test]
     async fn test_cidr_add() -> Result<(), Error> {

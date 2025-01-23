@@ -50,6 +50,7 @@ hex = "0.4.3"
 ureq = { version = "2", default-features = false, features = ["json"] }
 hostsfile = { path = "../hostsfile" }
 publicip = { path = "../publicip" }
+form-state = { path = "../../form-state/"}
 url = "2"
 crdts = "7" 
 

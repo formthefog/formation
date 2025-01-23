@@ -3887,6 +3887,7 @@ dependencies = [
  "client",
  "conductor",
  "crdts",
+ "form-state",
  "form-types",
  "formnet-server",
  "hex",
@@ -3913,6 +3914,7 @@ name = "formnet-server"
 version = "1.6.1"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bytes",
  "clap",
  "clap_complete",

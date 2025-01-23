@@ -1,6 +1,6 @@
 use super::{CrdtMap, DatabaseCidr, Sqlite};
 use crate::ServerError;
-use form_state::datastore::{DeleteExpiredResponse, GetPeerListResponse, GetPeerResponse, NewPeerRequest, PeerResponse, UpdatePeerRequest};
+use form_state::{datastore::{DeleteExpiredResponse, GetPeerListResponse, GetPeerResponse, NewPeerRequest, PeerResponse, UpdatePeerRequest}, network::CrdtPeer};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use rusqlite::{params, types::Type, Connection};
@@ -54,6 +54,16 @@ pub struct DatabasePeer<D> {
 impl From<Peer> for DatabasePeer<CrdtMap> {
     fn from(inner: Peer) -> Self {
         Self { inner, marker: PhantomData }
+    }
+}
+
+impl TryFrom<CrdtPeer> for DatabasePeer<CrdtMap> {
+    type Error = ServerError;
+    fn try_from(value: CrdtPeer) -> Result<Self, Self::Error> {
+        Ok(Self {
+            inner: Peer::try_from(value).map_err(|_| ServerError::InvalidQuery)?,
+            marker: PhantomData
+        })
     }
 }
 
@@ -132,7 +142,7 @@ impl DatabasePeer<CrdtMap> {
         }
     }
 
-    pub async fn update(&self, contents: PeerContents) -> Result<(), ServerError> {
+    pub async fn update(&mut self, contents: PeerContents) -> Result<(), ServerError> {
         if !Self::is_valid_name(&contents.name) {
             log::warn!("peer name is invalid, must conform to hostname(7) requirements.");
             return Err(ServerError::InvalidQuery);
@@ -163,16 +173,38 @@ impl DatabasePeer<CrdtMap> {
             .await.map_err(|_| ServerError::NotFound)?;
 
         match resp {
-            PeerResponse::Success(_) => Ok(()),
+            PeerResponse::Success(_) => {
+                self.contents = new_contents;
+                return Ok(())
+            }
             PeerResponse::Failure => Err(ServerError::NotFound)
         }
+
     }
 
-    pub async fn disable(&self) -> Result<(), ServerError> {
+    pub async fn disable(id: i64) -> Result<(), ServerError> {
+        let resp = reqwest::Client::new()
+            .get(format!("http://127.0.0.1:3004/user/{id}/get"))
+            .send()
+            .await.map_err(|_| ServerError::InvalidQuery)?
+            .json()
+            .await.map_err(|_| ServerError::NotFound)?;
+        
+        let peer_contents = match resp {
+            GetPeerResponse::Success(peer) => {
+                let db_peer = DatabasePeer::<CrdtMap>::try_from(peer)?;
+                db_peer.contents.clone()
+            }
+            GetPeerResponse::Failure => {
+                return Err(ServerError::NotFound)
+            }
+        };
+
         let new_contents = PeerContents {
             is_disabled: true,
-            ..self.contents.clone()
+            ..peer_contents.clone()
         };
+
         let request = UpdatePeerRequest::Update(new_contents.clone()); 
         let resp = reqwest::Client::new()
             .post("http://127.0.0.1:3004/user/disable")
