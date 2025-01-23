@@ -138,16 +138,16 @@ First you will need to pull the official images:
 # Pull formation-minimal 
 
 First you will need to pull the 
-docker pull cryptonomikhan/formation-minimal
+docker pull cryptonomikhan/formation-minimal:v0.1.0
 
 # Retag it
-docker tag cryptonomikhan/formation-minimal formation-minimal
+docker tag cryptonomikhan/formation-minimal:v0.1.0 formation-minimal
 
 # Pull form-build-server
-docker pull cryptonomikhan/form-build-server
+docker pull cryptonomikhan/form-build-server:v0.1.0
 
 # Retag it
-docker tag cryptonomikhan/form-build-server form-build-server
+docker tag cryptonomikhan/form-build-server:v0.1.0 form-build-server
 ```
 
 Then you can run it, ensure you use the `--privileged` flag `--network=host` and
@@ -165,7 +165,7 @@ docker run --rm --privileged --network=host \
     -v /lib/modules:/lib/modules:ro \
     -v /var/run/docker.sock:/var/run/docker.sock \
     --mount type=tmpfs,destination=/dev/hugepages,tmpfs-mode=1770 \
-    -dit formation:latest
+    -dit formation
 ```
 
 The **Formation** docker image requires that it be run in *privileged* mode, and while privileged mode is outside the scope of this particular document, we highly suggest you take the time to understand the implications of such. 
@@ -216,7 +216,7 @@ docker run --rm --privileged --network=host \
     -v /lib/modules:/lib/modules:ro \
     -v /var/run/docker.sock:/var/run/docker.sock \
     --mount type=tmpfs,destination=/dev/hugepages,tmpfs-mode=1770 \
-    -dit formation-minimal:latest
+    -dit formation-minimal
 
 ```
 
