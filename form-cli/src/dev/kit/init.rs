@@ -132,15 +132,15 @@ impl Init {
         self.signing_key = Some(hex::encode(signing_key.to_bytes()));
 
         if self.keystore.is_none() {
-            let keystore: String = Input::with_theme(&ColorfulTheme::default())
-                .with_prompt("Enter keystore path")
+            let keystore_dir: String = Input::with_theme(&ColorfulTheme::default())
+                .with_prompt("Enter keystore directory path")
                 .allow_empty(true)
                 .default(format!("{home_dir}/.keystore"))
                 .interact()?;
 
-            if !keystore.is_empty() {
-                std::fs::create_dir_all(keystore.clone())?;
-                self.keystore = Some(PathBuf::from(keystore))
+            if !keystore_dir.is_empty() {
+                std::fs::create_dir_all(&keystore_dir)?;
+                self.keystore = Some(PathBuf::from(keystore_dir));
             }
         }
 
@@ -174,7 +174,16 @@ impl Init {
             let hosts: String = Input::with_theme(&ColorfulTheme::default())
                 .with_prompt("Enter hosts (comma separated)")
                 .allow_empty(true)
-                .default("127.0.0.1".into())
+                .default("localhost".into())
+                .validate_with(|input: &String| -> Result<(), &str> {
+                    for host in input.split(',') {
+                        let host = host.trim();
+                        if !host.chars().all(|c| c.is_alphanumeric() || c == '-') {
+                            return Err("Hosts must be alphanumeric with optional dashes");
+                        }
+                    }
+                    Ok(())
+                })
                 .interact()?;
 
             if !hosts.is_empty() {
@@ -292,8 +301,11 @@ impl Init {
                     .interact()?;
 
                 if let Some(ks) = &self.keystore {
-                    let mut file = std::fs::File::create(ks.join(keyfile))?;
+                    let keyfile_path = ks.join(&keyfile);
+                    let mut file = std::fs::File::create(&keyfile_path)?;
                     file.write_all(&enc_contents)?;
+                    // Update the keystore path in self to point to the file
+                    self.keystore = Some(keyfile_path);
                 }
         }
 
