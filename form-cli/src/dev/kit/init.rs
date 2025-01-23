@@ -35,7 +35,7 @@ pub struct Init {
     pub config_dir: Option<PathBuf>,
     #[clap(long, short)]
     pub data_dir: Option<PathBuf>,
-    #[clap(long, short)]
+    #[clap(long, short = 'H')]
     pub hosts: Option<Vec<String>>,
     #[clap(long, short)]
     pub pack_manager_port: Option<u16>,
