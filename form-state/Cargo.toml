@@ -14,7 +14,11 @@ serde = { version = "1", features = ["derive"] }
 shared = { path = "../form-net/shared/" }
 serde_json = "1"
 ditto = { path = "../../external/ditto" }
-crdts = "7"
+crdts = { path = "../../external/rust-crdt" }
 ipnet = { version = "2.4", features = ["serde"] }
 axum = "0.8"
 reqwest = { version = "0.12", features = ["json"]}
+tiny-keccak = { version = "2.0.2", features = ["sha3"] }
+k256 = "0.13.4"
+hex = "0.4"
+alloy-primitives = { version = "0.8", features = ["k256"] } 

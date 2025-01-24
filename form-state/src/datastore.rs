@@ -1,179 +1,101 @@
-use std::{collections::HashMap, sync::Arc, time::{SystemTime, UNIX_EPOCH}};
+use std::collections::HashMap;
 use axum::{extract::{State, Path}, routing::{get, post}, Json, Router};
-use ditto::{map::Op, MapState};
 use reqwest::Client;
 use shared::{AssociationContents, CidrContents, Peer, PeerContents};
 use tokio::{net::TcpListener, sync::Mutex};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use crate::network::{CrdtAssociation, CrdtCidr, CrdtPeer, NetworkState};
+use crdts::CvRDT;
+use crate::network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtPeer, NetworkState, PeerOp};
 
 pub struct DataStore {
-    next_site_id: u32,
     network_state: NetworkState,
     // Add Node State
     // Add Instance State
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum NewPeerRequest {
-    Op { 
-        site_id: u32,
-        op: Op<String, CrdtPeer>,
-    },
-    Join(PeerContents),
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum UpdatePeerRequest {
-    Op {
-        site_id: u32,
-        op: Op<String, CrdtPeer>
-    },
-    Update(PeerContents)
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum DeletePeerRequest {
-    Op {
-        site_id: u32,
-        op: Op<String, CrdtPeer>
-    },
+pub enum PeerRequest {
+    Op(PeerOp<String>),
+    Join(PeerContents<String>),
+    Update(PeerContents<String>),
     Delete(String),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum PeerResponse {
-    Success(Option<Peer>),
-    Failure
+pub enum Success<T> {
+    Some(T),
+    List(Vec<T>),
+    None,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum GetPeerResponse {
-    Success(CrdtPeer),
-    Failure
+pub enum Response<T> {
+    Success(Success<T>),
+    Failure { reason: Option<String> }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum GetPeerListResponse {
-    Success(Vec<CrdtPeer>),
-    Failure,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum DeleteExpiredResponse {
-    Success,
-    Failure
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum CreateCidrRequest {
-    Op {
-        site_id: u32,
-        op: Op<String, CrdtCidr>
-    },
-    Create(CidrContents)
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum UpdateCidrRequest {
-    Op {
-        site_id: u32,
-        op: Op<String, CrdtCidr>
-    },
-    Update(CidrContents)
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum DeleteCidrRequest {
-    Op {
-        site_id: u32,
-        op: Op<String, CrdtCidr>
-    },
-    Delete(String)
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ListCidrResponse {
-    Success(Vec<CrdtCidr>),
-    Failure
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum CidrResponse {
-    Success(Option<CrdtCidr>),
-    Failure
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum GetCidrResponse {
-    Success(CrdtCidr),
-    Failure
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum CreateAssociationRequest {
-    Op {
-        site_id: u32,
-        op: Op<String, CrdtAssociation>,
-    },
-    Create(AssociationContents),
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum DeleteAssociationRequest {
-    Op {
-        site_id: u32,
-        op: Op<String, CrdtAssociation>,
-    },
+pub enum CidrRequest {
+    Op(CidrOp<String>),
+    Create(CidrContents<String>),
+    Update(CidrContents<String>),
     Delete(String),
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum AssociationResponse {
-    Success(Option<CrdtAssociation>),
-    Failure
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ListAssociationResponse {
-    Success(Vec<CrdtAssociation>),
-    Failure
-}
 
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum AssocRequest {
+    Op(AssocOp<String>), 
+    Create(AssociationContents<String>),
+    Delete(String),
+}
 
 impl DataStore {
-    pub fn new(site_id: Option<u32>) -> Result<Self, ditto::Error> {
-        let network_state = if let Some(site_id) = site_id {
-            NetworkState::new(site_id)?
-        } else {
-            NetworkState::new(1)?
-        };
+    pub fn new(node_id: String, pk: String) -> Self {
+        let network_state = NetworkState::new(node_id, pk);
 
-        Ok(Self {
-            network_state,
-            next_site_id: site_id.unwrap_or_else(|| 1) + 1, 
-        })
+        Self { network_state }
     }
 
     pub fn new_from_state(
+        node_id: String,
+        pk: String,
         network_state: NetworkState
     ) -> Self {
-        let site_id = network_state.peers.site_id();
-        Self {
-            network_state,
-            next_site_id: site_id + 1
-        }
+        let mut local = Self::new(node_id, pk); 
+        local.network_state = network_state;
+        /*
+        local.network_state.peers.merge(network_state.peers);
+        local.network_state.cidrs.merge(network_state.cidrs);
+        local.network_state.associations.merge(network_state.associations);
+        local.network_state.dns_state.zones.merge(network_state.dns_state.zones);
+        */
+        local
+
     }
 
-    pub fn get_all_users(&self) -> HashMap<String, CrdtPeer> {
-        self.network_state.peers.local_value()
+    pub fn get_all_users(&self) -> HashMap<String, CrdtPeer<String>> {
+        self.network_state.peers.iter().filter_map(|item| {
+            match item.val.1.val() {
+                Some(v) => Some((item.val.0.clone(), v.value().clone())),
+                None => None
+            }
+        }).collect()
     }
 
-    pub fn get_all_active_admin(&mut self) -> HashMap<String, CrdtPeer> {
-        let mut peers = self.network_state.peers.local_value();
-        peers.retain(|_, v| {
-            v.is_admin() && !v.is_disabled() && v.is_redeemed()
-        });
-
-        peers
+    pub fn get_all_active_admin(&mut self) -> HashMap<String, CrdtPeer<String>> {
+        self.network_state.peers.iter().filter_map(|item| {
+            match item.val.1.val() {
+                Some(v) => {
+                    if v.value().is_admin() {
+                        Some((item.val.0.clone(), v.value().clone()))
+                    } else {
+                        None
+                    }
+                }
+                None => None,
+            }
+        }).collect()
     }
 
     pub async fn broadcast<R: DeserializeOwned>(
@@ -208,7 +130,7 @@ impl DataStore {
 
         Ok(())
     }
-
+/*
     pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         Router::new()
             .route("/bootstrap/site_id", get(site_id))
@@ -245,10 +167,12 @@ impl DataStore {
 
         Ok(())
     }
+*/
 }
 
-async fn site_id(
-    State(state): State<Arc<Mutex<DataStore>>>, 
+/*
+async fn site_id<T: Clone + Ord>(
+    State(state): State<Arc<Mutex<DataStore<T>>>>, 
 ) -> Json<u32> {
     let next_site_id = state.lock().await.next_site_id;
     Json(next_site_id)
@@ -810,3 +734,4 @@ pub async fn request_associations_state(to_dial: String) -> Result<MapState<'sta
 
     Ok(resp)
 }
+*/

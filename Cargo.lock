@@ -2724,6 +2724,20 @@ dependencies = [
 [[package]]
 name = "crdts"
 version = "7.3.2"
+dependencies = [
+ "alloy-primitives 0.8.18",
+ "hex",
+ "k256 0.13.4",
+ "num 0.4.3",
+ "quickcheck",
+ "serde",
+ "serde_json",
+ "tiny-keccak",
+]
+
+[[package]]
+name = "crdts"
+version = "7.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "387808c885b79055facbd4b2e806a683fe1bc37abc7dfa5fea1974ad2d4137b0"
 dependencies = [
@@ -3726,7 +3740,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "conductor",
- "crdts",
+ "crdts 7.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "form-traits",
  "form-types",
  "getset",
@@ -3777,15 +3791,19 @@ dependencies = [
 name = "form-state"
 version = "0.1.0"
 dependencies = [
+ "alloy-primitives 0.8.18",
  "axum 0.8.2",
  "clap",
- "crdts",
+ "crdts 7.3.2",
  "ditto",
+ "hex",
  "ipnet",
+ "k256 0.13.4",
  "reqwest 0.12.12",
  "serde",
  "serde_json",
  "shared",
+ "tiny-keccak",
  "tokio",
 ]
 
@@ -3886,7 +3904,7 @@ dependencies = [
  "clap",
  "client",
  "conductor",
- "crdts",
+ "crdts 7.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "form-state",
  "form-types",
  "formnet-server",

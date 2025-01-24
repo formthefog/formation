@@ -4,6 +4,7 @@ use colored::*;
 use dialoguer::{Confirm, Input};
 use hostsfile::HostsBuilder;
 use indoc::eprintdoc;
+use serde::{de::DeserializeOwned, Serialize};
 use shared::{
     get_local_addrs,
     interface_config::InterfaceConfig,
@@ -15,11 +16,7 @@ use shared::{
     RedeemContents, RenameCidrOpts, RenamePeerOpts, State, WrappedIoError, REDEEM_TRANSITION_WAIT,
 };
 use std::{
-    io,
-    net::SocketAddr,
-    path::{Path, PathBuf},
-    thread,
-    time::{Duration, Instant},
+    fmt::Display, io, net::SocketAddr, path::{Path, PathBuf}, thread, time::{Duration, Instant}
 };
 use wireguard_control::{Device, DeviceUpdate, InterfaceName, PeerConfigBuilder, PeerInfo};
 
@@ -34,8 +31,8 @@ use util::{human_duration, human_size, Api};
 
 use crate::util::all_installed;
 
-struct PeerState<'a> {
-    peer: &'a Peer,
+struct PeerState<'a, T: Display + Clone + PartialEq> {
+    peer: &'a Peer<T>,
     info: Option<&'a PeerInfo>,
 }
 
@@ -64,6 +61,8 @@ struct Opts {
 
     #[clap(flatten)]
     network: NetworkOpts,
+    #[clap(default_value_t=false)]
+    sql: bool
 }
 
 #[derive(Clone, Debug, Args)]
@@ -281,10 +280,10 @@ enum Command {
     },
 }
 
-fn update_hosts_file(
+fn update_hosts_file<T: Display + Clone + PartialEq>(
     interface: &InterfaceName,
     hosts_path: PathBuf,
-    peers: &[Peer],
+    peers: &[Peer<T>],
 ) -> Result<(), WrappedIoError> {
     let mut hosts_builder = HostsBuilder::new(format!("innernet {interface}"));
     for peer in peers {
@@ -307,7 +306,7 @@ fn update_hosts_file(
     Ok(())
 }
 
-fn install(
+fn install<T: Display + Clone + PartialEq + Serialize + DeserializeOwned>(
     opts: &Opts,
     invite: &Path,
     hosts_file: Option<PathBuf>,
@@ -359,7 +358,7 @@ fn install(
 
     let mut fetch_success = false;
     for _ in 0..3 {
-        if fetch(&iface, opts, true, hosts_file.clone(), nat).is_ok() {
+        if fetch::<T>(&iface, opts, true, hosts_file.clone(), nat).is_ok() {
             fetch_success = true;
             break;
         }
@@ -498,7 +497,7 @@ fn redeem_invite(
     Ok(())
 }
 
-fn up(
+fn up<T: Display + Clone + PartialEq + Serialize + DeserializeOwned>(
     interface: Option<Interface>,
     opts: &Opts,
     loop_interval: Option<Duration>,
@@ -512,7 +511,7 @@ fn up(
         };
 
         for iface in interfaces {
-            fetch(&iface, opts, true, hosts_path.clone(), nat)?;
+            fetch::<T>(&iface, opts, true, hosts_path.clone(), nat)?;
         }
 
         match loop_interval {
@@ -524,7 +523,7 @@ fn up(
     Ok(())
 }
 
-fn fetch(
+fn fetch<T: Display + Clone + PartialEq + Serialize + DeserializeOwned>( 
     interface: &InterfaceName,
     opts: &Opts,
     bring_up_interface: bool,
@@ -573,7 +572,7 @@ fn fetch(
         "fetching state for {} from server...",
         interface.as_str_lossy().yellow()
     );
-    let mut store = DataStore::open_or_create(&opts.data_dir, interface)?;
+    let mut store = DataStore::<T>::open_or_create(&opts.data_dir, interface)?;
     let api = Api::new(&config.server);
     let State { peers, cidrs } = api.http("GET", "/user/state")?;
 
@@ -653,9 +652,11 @@ fn fetch(
     Ok(())
 }
 
-fn uninstall(interface: &InterfaceName, opts: &Opts, yes: bool) -> Result<(), Error> {
+fn uninstall<T: Display + Clone + PartialEq + Serialize + DeserializeOwned>(
+    interface: &InterfaceName, opts: &Opts, yes: bool
+) -> Result<(), Error> {
     let config = InterfaceConfig::get_path(&opts.config_dir, interface);
-    let data = DataStore::get_path(&opts.data_dir, interface);
+    let data = DataStore::<T>::get_path(&opts.data_dir, interface);
 
     if !config.exists() && !data.exists() {
         bail!(
@@ -692,16 +693,18 @@ fn uninstall(interface: &InterfaceName, opts: &Opts, yes: bool) -> Result<(), Er
     Ok(())
 }
 
-fn add_cidr(interface: &InterfaceName, opts: &Opts, sub_opts: AddCidrOpts) -> Result<(), Error> {
+fn add_cidr<T: Display + Clone + PartialEq + Serialize + DeserializeOwned>(
+    interface: &InterfaceName, opts: &Opts, sub_opts: AddCidrOpts
+) -> Result<(), Error> {
     let InterfaceConfig { server, .. } =
         InterfaceConfig::from_interface(&opts.config_dir, interface)?;
     log::info!("Fetching CIDRs");
     let api = Api::new(&server);
-    let cidrs: Vec<Cidr> = api.http("GET", "/admin/cidrs")?;
+    let cidrs: Vec<Cidr<T>> = api.http("GET", "/admin/cidrs")?;
 
     if let Some(cidr_request) = prompts::add_cidr(&cidrs, &sub_opts)? {
         log::info!("Creating CIDR...");
-        let cidr: Cidr = api.http_form("POST", "/admin/cidrs", cidr_request)?;
+        let cidr: Cidr<T> = api.http_form("POST", "/admin/cidrs", cidr_request)?;
 
         eprintdoc!(
             "
@@ -721,7 +724,7 @@ fn add_cidr(interface: &InterfaceName, opts: &Opts, sub_opts: AddCidrOpts) -> Re
     Ok(())
 }
 
-fn rename_cidr(
+fn rename_cidr<T: Display + Clone + PartialEq + Serialize + DeserializeOwned>(
     interface: &InterfaceName,
     opts: &Opts,
     sub_opts: RenameCidrOpts,
@@ -731,7 +734,7 @@ fn rename_cidr(
     let api = Api::new(&server);
 
     log::info!("Fetching CIDRs");
-    let cidrs: Vec<Cidr> = api.http("GET", "/admin/cidrs")?;
+    let cidrs: Vec<Cidr<T>> = api.http("GET", "/admin/cidrs")?;
 
     if let Some((cidr_request, old_name)) = prompts::rename_cidr(&cidrs, &sub_opts)? {
         log::info!("Renaming CIDR...");
@@ -740,7 +743,7 @@ fn rename_cidr(
             .iter()
             .find(|c| c.name == old_name)
             .ok_or_else(|| anyhow!("CIDR not found."))?
-            .id;
+            .id.clone();
 
         api.http_form::<_, ()>("PUT", &format!("/admin/cidrs/{id}"), cidr_request)?;
         log::info!("CIDR renamed.");
@@ -751,7 +754,7 @@ fn rename_cidr(
     Ok(())
 }
 
-fn delete_cidr(
+fn delete_cidr<T: Display + Clone + PartialEq + Serialize + DeserializeOwned>(
     interface: &InterfaceName,
     opts: &Opts,
     sub_opts: DeleteCidrOpts,
@@ -760,8 +763,8 @@ fn delete_cidr(
         InterfaceConfig::from_interface(&opts.config_dir, interface)?;
     println!("Fetching eligible CIDRs");
     let api = Api::new(&server);
-    let cidrs: Vec<Cidr> = api.http("GET", "/admin/cidrs")?;
-    let peers: Vec<Peer> = api.http("GET", "/admin/peers")?;
+    let cidrs: Vec<Cidr<T>> = api.http("GET", "/admin/cidrs")?;
+    let peers: Vec<Peer<T>> = api.http("GET", "/admin/peers")?;
 
     let cidr_id = prompts::delete_cidr(&cidrs, &peers, &sub_opts)?;
 
@@ -773,8 +776,10 @@ fn delete_cidr(
     Ok(())
 }
 
-fn list_cidrs(interface: &InterfaceName, opts: &Opts, tree: bool) -> Result<(), Error> {
-    let data_store = DataStore::open(&opts.data_dir, interface)?;
+fn list_cidrs<T: Display + Clone + PartialEq + Serialize + DeserializeOwned + Ord>(
+    interface: &InterfaceName, opts: &Opts, tree: bool
+) -> Result<(), Error> {
+    let data_store = DataStore::<T>::open(&opts.data_dir, interface)?;
     if tree {
         let cidr_tree = CidrTree::new(data_store.cidrs());
         colored::control::set_override(false);
@@ -788,22 +793,24 @@ fn list_cidrs(interface: &InterfaceName, opts: &Opts, tree: bool) -> Result<(), 
     Ok(())
 }
 
-fn add_peer(interface: &InterfaceName, opts: &Opts, sub_opts: AddPeerOpts) -> Result<(), Error> {
+fn add_peer<T: Default + Display + Clone + PartialEq + Serialize + DeserializeOwned>(
+    interface: &InterfaceName, opts: &Opts, sub_opts: AddPeerOpts
+) -> Result<(), Error> {
     let InterfaceConfig { server, .. } =
         InterfaceConfig::from_interface(&opts.config_dir, interface)?;
     let api = Api::new(&server);
 
     log::info!("Fetching CIDRs");
-    let cidrs: Vec<Cidr> = api.http("GET", "/admin/cidrs")?;
+    let cidrs: Vec<Cidr<T>> = api.http("GET", "/admin/cidrs")?;
     log::info!("Fetching peers");
-    let peers: Vec<Peer> = api.http("GET", "/admin/peers")?;
+    let peers: Vec<Peer<T>> = api.http("GET", "/admin/peers")?;
     let cidr_tree = CidrTree::new(&cidrs[..]);
 
     if let Some(result) = prompts::add_peer(&peers, &cidr_tree, &sub_opts)? {
         let (peer_request, keypair, target_path, mut target_file) = result;
         log::info!("Creating peer...");
-        let peer: Peer = api.http_form("POST", "/admin/peers", peer_request)?;
-        let server_peer = peers.iter().find(|p| p.id == 1).unwrap();
+        let peer: Peer<T> = api.http_form("POST", "/admin/peers", peer_request)?;
+        let server_peer = peers.iter().find(|p| p.id == T::default()).unwrap();
         prompts::write_peer_invitation(
             (&mut target_file, &target_path),
             interface,
@@ -820,7 +827,7 @@ fn add_peer(interface: &InterfaceName, opts: &Opts, sub_opts: AddPeerOpts) -> Re
     Ok(())
 }
 
-fn rename_peer(
+fn rename_peer<T: Display + Clone + Clone + PartialEq + Serialize + DeserializeOwned>(
     interface: &InterfaceName,
     opts: &Opts,
     sub_opts: RenamePeerOpts,
@@ -830,7 +837,7 @@ fn rename_peer(
     let api = Api::new(&server);
 
     log::info!("Fetching peers");
-    let peers: Vec<Peer> = api.http("GET", "/admin/peers")?;
+    let peers: Vec<Peer<T>> = api.http("GET", "/admin/peers")?;
 
     if let Some((peer_request, old_name)) = prompts::rename_peer(&peers, &sub_opts)? {
         log::info!("Renaming peer...");
@@ -838,7 +845,7 @@ fn rename_peer(
         let id = peers
             .iter()
             .filter(|p| p.name == old_name)
-            .map(|p| p.id)
+            .map(|p| p.id.clone())
             .next()
             .ok_or_else(|| anyhow!("Peer not found."))?;
 
@@ -851,7 +858,7 @@ fn rename_peer(
     Ok(())
 }
 
-fn enable_or_disable_peer(
+fn enable_or_disable_peer<T: Display + Clone + PartialEq + Serialize + DeserializeOwned>(
     interface: &InterfaceName,
     opts: &Opts,
     sub_opts: EnableDisablePeerOpts,
@@ -862,7 +869,7 @@ fn enable_or_disable_peer(
     let api = Api::new(&server);
 
     log::info!("Fetching peers.");
-    let peers: Vec<Peer> = api.http("GET", "/admin/peers")?;
+    let peers: Vec<Peer<T>> = api.http("GET", "/admin/peers")?;
 
     if let Some(peer) = prompts::enable_or_disable_peer(&peers[..], &sub_opts, enable)? {
         let Peer { id, mut contents } = peer;
@@ -875,7 +882,7 @@ fn enable_or_disable_peer(
     Ok(())
 }
 
-fn add_association(
+fn add_association<T: Display + Clone + PartialEq + Serialize + DeserializeOwned>(
     interface: &InterfaceName,
     opts: &Opts,
     sub_opts: AddDeleteAssociationOpts,
@@ -885,7 +892,7 @@ fn add_association(
     let api = Api::new(&server);
 
     log::info!("Fetching CIDRs");
-    let cidrs: Vec<Cidr> = api.http("GET", "/admin/cidrs")?;
+    let cidrs: Vec<Cidr<T>> = api.http("GET", "/admin/cidrs")?;
 
     let association = if let (Some(ref cidr1), Some(ref cidr2)) = (&sub_opts.cidr1, &sub_opts.cidr2)
     {
@@ -909,15 +916,15 @@ fn add_association(
         "POST",
         "/admin/associations",
         AssociationContents {
-            cidr_id_1: association.0.id,
-            cidr_id_2: association.1.id,
+            cidr_id_1: association.0.id.clone(),
+            cidr_id_2: association.1.id.clone(),
         },
     )?;
 
     Ok(())
 }
 
-fn delete_association(
+fn delete_association<T: Display + Clone + PartialEq + Serialize + DeserializeOwned, K: Display + Clone + PartialEq + Serialize + DeserializeOwned>(
     interface: &InterfaceName,
     opts: &Opts,
     sub_opts: AddDeleteAssociationOpts,
@@ -927,9 +934,9 @@ fn delete_association(
     let api = Api::new(&server);
 
     log::info!("Fetching CIDRs");
-    let cidrs: Vec<Cidr> = api.http("GET", "/admin/cidrs")?;
+    let cidrs: Vec<Cidr<T>> = api.http("GET", "/admin/cidrs")?;
     log::info!("Fetching associations");
-    let associations: Vec<Association> = api.http("GET", "/admin/associations")?;
+    let associations: Vec<Association<T, K>> = api.http("GET", "/admin/associations")?;
 
     if let Some(association) =
         prompts::delete_association(&associations[..], &cidrs[..], &sub_opts)?
@@ -942,15 +949,16 @@ fn delete_association(
     Ok(())
 }
 
-fn list_associations(interface: &InterfaceName, opts: &Opts) -> Result<(), Error> {
+fn list_associations<T: Display + Clone + PartialEq + Serialize + DeserializeOwned, K: Display + Clone + PartialEq + Serialize + DeserializeOwned>(
+    interface: &InterfaceName, opts: &Opts) -> Result<(), Error> {
     let InterfaceConfig { server, .. } =
         InterfaceConfig::from_interface(&opts.config_dir, interface)?;
     let api = Api::new(&server);
 
     log::info!("Fetching CIDRs");
-    let cidrs: Vec<Cidr> = api.http("GET", "/admin/cidrs")?;
+    let cidrs: Vec<Cidr<T>> = api.http("GET", "/admin/cidrs")?;
     log::info!("Fetching associations");
-    let associations: Vec<Association> = api.http("GET", "/admin/associations")?;
+    let associations: Vec<Association<T, K>> = api.http("GET", "/admin/associations")?;
 
     for association in associations {
         println!(
@@ -1028,7 +1036,9 @@ fn override_endpoint(
     Ok(())
 }
 
-fn show(opts: &Opts, short: bool, tree: bool, interface: Option<Interface>) -> Result<(), Error> {
+fn show<T: Display + Clone + PartialEq + Serialize + DeserializeOwned + Ord>(
+    opts: &Opts, short: bool, tree: bool, interface: Option<Interface>
+) -> Result<(), Error> {
     let interfaces = interface.map_or_else(
         || Device::list(opts.network.backend),
         |interface| Ok(vec![*interface]),
@@ -1088,7 +1098,7 @@ fn show(opts: &Opts, short: bool, tree: bool, interface: Option<Interface>) -> R
                     None => Err(anyhow!("peer {} isn't an innernet peer.", public_key)),
                 }
             })
-            .collect::<Result<Vec<PeerState>, _>>()?;
+            .collect::<Result<Vec<PeerState<T>>, _>>()?;
         peer_states.push(PeerState {
             peer: me,
             info: None,
@@ -1109,7 +1119,11 @@ fn show(opts: &Opts, short: bool, tree: bool, interface: Option<Interface>) -> R
     Ok(())
 }
 
-fn print_tree(cidr: &CidrTree, peers: &[PeerState], level: usize) {
+fn print_tree<T: Display + Clone + PartialEq + Serialize + DeserializeOwned + Ord>(
+    cidr: &CidrTree<T>, 
+    peers: &[PeerState<T>],
+    level: usize
+) {
     println_pad!(
         level * 2,
         "{} {}",
@@ -1152,7 +1166,11 @@ fn print_interface(device_info: &Device, short: bool) -> Result<(), Error> {
     Ok(())
 }
 
-fn print_peer(peer: &PeerState, short: bool, level: usize) {
+fn print_peer<T: Display + Clone + PartialEq + Serialize + DeserializeOwned>(
+    peer: &PeerState<T>,
+    short: bool,
+    level: usize
+) {
     let pad = level * 2;
     let PeerState { peer, info } = peer;
     if short {
@@ -1214,20 +1232,34 @@ fn main() {
     let opts = Opts::parse();
     util::init_logger(opts.verbose);
 
-    if let Err(e) = run(&opts) {
-        println!();
-        log::error!("{}\n", e);
-        if let Some(e) = e.downcast_ref::<WrappedIoError>() {
-            util::permissions_helptext(&opts.config_dir, &opts.data_dir, e);
+    if opts.sql {
+        if let Err(e) = run::<i64>(&opts) {
+            println!();
+            log::error!("{}\n", e);
+            if let Some(e) = e.downcast_ref::<WrappedIoError>() {
+                util::permissions_helptext(&opts.config_dir, &opts.data_dir, e);
+            }
+            if let Some(e) = e.downcast_ref::<io::Error>() {
+                util::permissions_helptext(&opts.config_dir, &opts.data_dir, e);
+            }
+            std::process::exit(1);
         }
-        if let Some(e) = e.downcast_ref::<io::Error>() {
-            util::permissions_helptext(&opts.config_dir, &opts.data_dir, e);
+    } else {
+        if let Err(e) = run::<String>(&opts) {
+            println!();
+            log::error!("{}\n", e);
+            if let Some(e) = e.downcast_ref::<WrappedIoError>() {
+                util::permissions_helptext(&opts.config_dir, &opts.data_dir, e);
+            }
+            if let Some(e) = e.downcast_ref::<io::Error>() {
+                util::permissions_helptext(&opts.config_dir, &opts.data_dir, e);
+            }
+            std::process::exit(1);
         }
-        std::process::exit(1);
     }
 }
 
-fn run(opts: &Opts) -> Result<(), Error> {
+fn run<T: Default + Display + Clone + PartialEq + Serialize + DeserializeOwned + Ord>(opts: &Opts) -> Result<(), Error> {
     let command = opts.command.clone().unwrap_or(Command::Show {
         short: false,
         tree: false,
@@ -1240,24 +1272,24 @@ fn run(opts: &Opts) -> Result<(), Error> {
             hosts,
             install_opts,
             nat,
-        } => install(opts, &invite, hosts.into(), install_opts, &nat)?,
+        } => install::<T>(opts, &invite, hosts.into(), install_opts, &nat)?,
         Command::Show {
             short,
             tree,
             interface,
-        } => show(opts, short, tree, interface)?,
+        } => show::<T>(opts, short, tree, interface)?,
         Command::Fetch {
             interface,
             hosts,
             nat,
-        } => fetch(&interface, opts, false, hosts.into(), &nat)?,
+        } => fetch::<T>(&interface, opts, false, hosts.into(), &nat)?,
         Command::Up {
             interface,
             daemon,
             hosts,
             nat,
             interval,
-        } => up(
+        } => up::<T>(
             interface,
             opts,
             daemon.then(|| Duration::from_secs(interval)),
@@ -1265,45 +1297,45 @@ fn run(opts: &Opts) -> Result<(), Error> {
             &nat,
         )?,
         Command::Down { interface } => wg::down(&interface, opts.network.backend)?,
-        Command::Uninstall { interface, yes } => uninstall(&interface, opts, yes)?,
+        Command::Uninstall { interface, yes } => uninstall::<T>(&interface, opts, yes)?,
         Command::AddPeer {
             interface,
             sub_opts,
-        } => add_peer(&interface, opts, sub_opts)?,
+        } => add_peer::<T>(&interface, opts, sub_opts)?,
         Command::RenamePeer {
             interface,
             sub_opts,
-        } => rename_peer(&interface, opts, sub_opts)?,
+        } => rename_peer::<T>(&interface, opts, sub_opts)?,
         Command::AddCidr {
             interface,
             sub_opts,
-        } => add_cidr(&interface, opts, sub_opts)?,
+        } => add_cidr::<T>(&interface, opts, sub_opts)?,
         Command::RenameCidr {
             interface,
             sub_opts,
-        } => rename_cidr(&interface, opts, sub_opts)?,
+        } => rename_cidr::<T>(&interface, opts, sub_opts)?,
         Command::DeleteCidr {
             interface,
             sub_opts,
-        } => delete_cidr(&interface, opts, sub_opts)?,
-        Command::ListCidrs { interface, tree } => list_cidrs(&interface, opts, tree)?,
+        } => delete_cidr::<T>(&interface, opts, sub_opts)?,
+        Command::ListCidrs { interface, tree } => list_cidrs::<T>(&interface, opts, tree)?,
         Command::DisablePeer {
             interface,
             sub_opts,
-        } => enable_or_disable_peer(&interface, opts, sub_opts, false)?,
+        } => enable_or_disable_peer::<T>(&interface, opts, sub_opts, false)?,
         Command::EnablePeer {
             interface,
             sub_opts,
-        } => enable_or_disable_peer(&interface, opts, sub_opts, true)?,
+        } => enable_or_disable_peer::<T>(&interface, opts, sub_opts, true)?,
         Command::AddAssociation {
             interface,
             sub_opts,
-        } => add_association(&interface, opts, sub_opts)?,
+        } => add_association::<T>(&interface, opts, sub_opts)?,
         Command::DeleteAssociation {
             interface,
             sub_opts,
-        } => delete_association(&interface, opts, sub_opts)?,
-        Command::ListAssociations { interface } => list_associations(&interface, opts)?,
+        } => delete_association::<T, T>(&interface, opts, sub_opts)?,
+        Command::ListAssociations { interface } => list_associations::<T, T>(&interface, opts)?,
         Command::SetListenPort {
             interface,
             sub_opts,

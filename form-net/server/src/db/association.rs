@@ -26,24 +26,24 @@ pub static CREATE_TABLE_SQL: &str = "CREATE TABLE associations (
     )";
 
 #[derive(Debug)]
-pub struct DatabaseAssociation<D> {
-    pub inner: Association,
+pub struct DatabaseAssociation<D, T, K> {
+    pub inner: Association<T, K>,
     marker: PhantomData<D>
 }
 
-impl From<Association> for DatabaseAssociation<Sqlite> {
-    fn from(inner: Association) -> Self {
+impl From<Association> for DatabaseAssociation<Sqlite, i64, i64> {
+    fn from(inner: Association<i64, i64>) -> Self {
         Self { inner, marker: PhantomData }
     }
 }
 
-impl From<Association> for DatabaseAssociation<CrdtMap> {
-    fn from(inner: Association) -> Self {
+impl From<Association> for DatabaseAssociation<CrdtMap, String, (String, String)> {
+    fn from(inner: Association<String, (String, String)>) -> Self {
         Self { inner, marker: PhantomData }
     }
 }
 
-impl From<CrdtAssociation> for DatabaseAssociation<CrdtMap> {
+impl From<CrdtAssociation> for DatabaseAssociation<CrdtMap, String, (String, String)> {
     fn from(value: CrdtAssociation) -> Self {
         Self {
             inner: Association { 
@@ -58,7 +58,7 @@ impl From<CrdtAssociation> for DatabaseAssociation<CrdtMap> {
     }
 }
 
-impl Deref for DatabaseAssociation<Sqlite> {
+impl Deref for DatabaseAssociation<Sqlite, i64, i64> {
     type Target = Association;
 
     fn deref(&self) -> &Self::Target {
@@ -66,7 +66,7 @@ impl Deref for DatabaseAssociation<Sqlite> {
     }
 }
 
-impl Deref for DatabaseAssociation<CrdtMap> {
+impl Deref for DatabaseAssociation<CrdtMap, String, (String, String)> {
     type Target = Association;
 
     fn deref(&self) -> &Self::Target {
@@ -74,14 +74,14 @@ impl Deref for DatabaseAssociation<CrdtMap> {
     }
 }
 
-impl DerefMut for DatabaseAssociation<Sqlite> {
+impl DerefMut for DatabaseAssociation<Sqlite, i64, i64> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
-impl DatabaseAssociation<CrdtMap> {
-    pub async fn create(contents: AssociationContents) -> Result<Association, ServerError> {
+impl DatabaseAssociation<CrdtMap, String, (String, String)> {
+    pub async fn create(contents: AssociationContents<String>) -> Result<Association<String, (String, String)>, ServerError> {
         let cidr_1 = contents.cidr_id_1;
         let cidr_2 = contents.cidr_id_2;
         let cidr_1_resp = reqwest::Client::new()
