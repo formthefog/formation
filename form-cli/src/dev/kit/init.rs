@@ -4,13 +4,12 @@ use alloy_signer_local::coins_bip39::{English, Mnemonic};
 use colored::*;
 use clap::Args;
 use daemonize::Daemonize;
-use formnet::{redeem_invite, up, JoinRequest, JoinResponse, UserJoinRequest};
+use formnet::{redeem, up, JoinRequest, JoinResponse, UserJoinRequest};
 use k256::{ecdsa::SigningKey, elliptic_curve::SecretKey};
 use rand::thread_rng;
 use reqwest::Client;
 use serde::{Serialize, Deserialize};
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select, Password};
-use shared::{NatOpts, NetworkOpts};
 use crate::{encrypt_file, save_config, Config};
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -315,7 +314,7 @@ impl Init {
         println!("\n{}", "Configuration saved successfully!".green().bold());
         println!("Configuration file: {}", config_path.display());
 
-        let host = if let Some(hosts) = &self.hosts {
+        let _host = if let Some(hosts) = &self.hosts {
             hosts[0].clone()
         } else {
             return Err(
@@ -348,13 +347,8 @@ pub async fn join_formnet(address: String, provider: String, formnet_port: u16) 
 
     match resp {
         JoinResponse::Success { invitation } => {
-            let iface = invitation.interface.network_name.clone();
-            let config_dir = PathBuf::from("/etc/formnet");
-            let data_dir = PathBuf::from("/var/lib/formnet");
-            let target_conf = config_dir.join(&iface).with_extension("conf");
-            let iface = iface.parse()?;
             println!("{}", "Attempting to redeem formnet invite".yellow());
-            if let Err(e) = redeem_invite(&iface, invitation, target_conf, NetworkOpts::default()) {
+            if let Err(e) = redeem(invitation) {
                 println!("{}: {}", "Error trying to redeem invite".yellow(), e.to_string().red());
             } 
 
@@ -369,13 +363,8 @@ pub async fn join_formnet(address: String, provider: String, formnet_port: u16) 
             match daemon.start() {
                 Ok(_) => {
                     if let Err(e) = up(
-                        Some(iface.into()),
-                        &config_dir,
-                        &data_dir,
-                        &NetworkOpts::default(),
                         Some(Duration::from_secs(60)),
                         None,
-                        &NatOpts::default()
                     ) {
                         println!("{}: {}", "Error trying to bring formnet up".yellow(), e.to_string().red());
                     }

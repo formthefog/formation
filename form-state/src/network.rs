@@ -1,5 +1,5 @@
 use std::{net::{IpAddr, SocketAddr}, time::{Duration, SystemTime}};
-use crdts::{map::Op, Map, BFTReg, merkle_reg::Sha3Hash, CmRDT};
+use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, CmRDT, Map, Update};
 use ipnet::IpNet;
 use k256::ecdsa::SigningKey;
 use shared::{AssociationContents, CidrContents, Endpoint, Peer, PeerContents};
@@ -56,13 +56,12 @@ impl From<PeerContents<String>> for CrdtPeer<String> {
     }
 }
 
-impl TryFrom<CrdtPeer<String>> for Peer<String> {
-    type Error = Box<dyn std::error::Error>;
-    fn try_from(value: CrdtPeer<String>) -> Result<Self, Self::Error> {
-        Ok(Peer{
-            id: value.id.parse()?,
+impl From<CrdtPeer<String>> for Peer<String> {
+    fn from(value: CrdtPeer<String>) -> Self {
+        Peer{
+            id: value.id,
             contents: PeerContents {
-                name: value.name.parse()?,
+                name: value.name.into(),
                 ip: value.ip,
                 cidr_id: value.cidr_id,
                 public_key: value.public_key,
@@ -75,7 +74,7 @@ impl TryFrom<CrdtPeer<String>> for Peer<String> {
                 SystemTime::UNIX_EPOCH + Duration::from_secs(time)}),
                 candidates: value.candidates
             } 
-        })
+        }
     }
 }
 
@@ -230,7 +229,7 @@ pub struct CrdtDnsRecord {
 }
 
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum ZoneEntry {
     Record(CrdtDnsRecord),
     Subdomain(DnsZone),
@@ -242,7 +241,7 @@ impl Sha3Hash for ZoneEntry {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct DnsZone {
     records: Map<Actor, BFTReg<ZoneEntry, Actor>, Actor>,
     owner: String,
@@ -367,8 +366,57 @@ impl NetworkState {
         todo!()
     }
 
-    pub fn peer_op(&mut self, op: PeerOp<String>) {
-        self.peers.apply(op);
+    pub fn peer_op(&mut self, op: PeerOp<String>) -> Option<(String, String)> {
+        self.peers.apply(op.clone());
+        match op {
+            Op::Up { dot, key, op } => Some((dot.actor, key)),
+            Op::Rm { clock, keyset } => None
+        }
+    }
+
+    pub fn peer_op_success(&self, key: String, update: Update<CrdtPeer<String>, String>) -> (bool, CrdtPeer<String>) {
+        if let Some(reg) = self.peers.get(&key).val {
+            if let Some(v) = reg.val() {
+                // If the in the updated register equals the value in the Op it
+                // succeeded
+                if v.value() == update.op().value {
+                    return (true, v.value()) 
+                // Otherwise, it could be that it's a concurrent update and was added
+                // to the DAG as a head
+                } else if reg.dag_contains(&update.hash()) && reg.is_head(&update.hash()) {
+                    return (true, v.value()) 
+                // Otherwise, we could be missing a child, and this particular update
+                // is orphaned, if so we should requst the child we are missing from
+                // the actor who shared this update
+                } else if reg.is_orphaned(&update.hash()) {
+                    return (true, v.value())
+                // Otherwise it was a no-op for some reason
+                } else {
+                    return (false, v.value()) 
+                }
+            } else {
+                return (false, update.op().value) 
+            }
+        } else {
+            return (false, update.op().value);
+        }
+    }
+
+    pub fn get_peer_by_ip(&self, ip: String) -> Option<CrdtPeer<String>> {
+        if let Some(ctx) = self.peers.values().find(|ctx| {
+            match ctx.val.val() {
+                None => false,
+                Some(node) => {
+                    node.value().ip().to_string() == ip
+                }
+            }
+        }) {
+            if let Some(node) = ctx.val.val() {
+                return Some(node.value())
+            }
+        }
+
+        None
     }
 
     pub fn cidr_op(&mut self, op: CidrOp<String>) {

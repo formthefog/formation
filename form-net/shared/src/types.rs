@@ -192,7 +192,7 @@ pub struct AssociationContents<T> {
 }
 
 #[derive(Clone, Deserialize, Serialize, Debug)]
-pub struct Association<T: Display + Clone + PartialEq, K: Display + Clone + PartialEq> {
+pub struct Association<T: Display + Clone + PartialEq, K: Clone + PartialEq> {
     pub id: K,
 
     #[serde(flatten)]
@@ -837,6 +837,12 @@ static HOSTNAME_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^([a-z0-9]-?)*[a-
 impl Hostname {
     pub fn is_valid(name: &str) -> bool {
         name.len() < 64 && HOSTNAME_REGEX.is_match(name)
+    }
+}
+
+impl From<String> for Hostname {
+    fn from(value: String) -> Self {
+        Self(value.clone())
     }
 }
 

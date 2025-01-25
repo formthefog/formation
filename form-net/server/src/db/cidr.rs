@@ -1,9 +1,9 @@
 use crate::ServerError;
-use form_state::{datastore::{CidrResponse, CreateCidrRequest, DeleteCidrRequest, GetCidrResponse, GetPeerListResponse, ListCidrResponse, UpdateCidrRequest}, network::CrdtCidr};
+use form_state::datastore::{CidrRequest, Response, Success};
 use ipnet::IpNet;
 use rusqlite::{params, Connection};
 use shared::{Cidr, CidrContents};
-use std::{marker::PhantomData, ops::{Deref, DerefMut}};
+use std::{fmt::Display, marker::PhantomData, ops::{Deref, DerefMut}};
 
 use super::{CrdtMap, Sqlite};
 
@@ -20,70 +20,54 @@ pub static CREATE_TABLE_SQL: &str = "CREATE TABLE cidrs (
             ON DELETE RESTRICT
     )";
 
-pub struct DatabaseCidr<D> {
-    inner: Cidr,
+pub struct DatabaseCidr<T: Display + Clone + PartialEq, D> {
+    inner: Cidr<T>,
     marker: PhantomData<D>
 }
 
-impl From<Cidr> for DatabaseCidr<Sqlite> {
-    fn from(inner: Cidr) -> Self {
+impl<T: Display + Clone + PartialEq> From<Cidr<T>> for DatabaseCidr<T, Sqlite> {
+    fn from(inner: Cidr<T>) -> Self {
         Self { inner, marker: PhantomData }
     }
 }
 
-impl From<Cidr> for DatabaseCidr<CrdtMap> {
-    fn from(inner: Cidr) -> Self {
+impl<T: Display + Clone + PartialEq> From<Cidr<T>> for DatabaseCidr<T, CrdtMap> {
+    fn from(inner: Cidr<T>) -> Self {
         Self { inner, marker: PhantomData }
     }
 }
 
-impl From<CrdtCidr> for DatabaseCidr<CrdtMap> {
-    fn from(value: CrdtCidr) -> Self {
-        Self {
-            inner: Cidr {
-                id: value.id(),
-                contents: CidrContents {
-                    name: value.name(),
-                    cidr: value.cidr(),
-                    parent: value.parent()
-                }
-            },
-            marker: PhantomData
-        }
-    }
-}
-
-impl Deref for DatabaseCidr<Sqlite> {
-    type Target = Cidr;
+impl<T: Display + Clone + PartialEq> Deref for DatabaseCidr<T, Sqlite> {
+    type Target = Cidr<T>;
 
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
 
-impl DerefMut for DatabaseCidr<Sqlite> {
+impl<T: Display + Clone + PartialEq> DerefMut for DatabaseCidr<T, Sqlite> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
-impl Deref for DatabaseCidr<CrdtMap> {
-    type Target = Cidr;
+impl<T: Display + Clone + PartialEq> Deref for DatabaseCidr<T, CrdtMap> {
+    type Target = Cidr<T>;
 
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
 
-impl DerefMut for DatabaseCidr<CrdtMap> {
+impl<T: Display + Clone + PartialEq> DerefMut for DatabaseCidr<T, CrdtMap> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
 
-impl DatabaseCidr<CrdtMap> {
-    pub async fn create(contents: CidrContents) -> Result<Cidr, ServerError> {
+impl DatabaseCidr<String, CrdtMap> {
+    pub async fn create(contents: CidrContents<String>) -> Result<Cidr<String>, ServerError> {
 
         let client = reqwest::Client::new();
 
@@ -92,17 +76,17 @@ impl DatabaseCidr<CrdtMap> {
                 .get(format!("http://127.0.0.1:3004/user/{}/list", parent))
                 .send()
                 .await.map_err(|_| ServerError::NotFound)?
-                .json::<GetPeerListResponse>()
+                .json::<Response<Cidr<String>>>()
                 .await.map_err(|_| ServerError::NotFound)?;
 
             match attached_peers {
-                GetPeerListResponse::Success(peers) => {
+                Response::Success(Success::List(peers)) => {
                     if peers.len() > 0 {
                         log::warn!("tried to add a CIDR to a parent that has peers assigned to it.");
                         return Err(ServerError::InvalidQuery)
                     }
                 }
-                GetPeerListResponse::Failure => {}
+                _ => {}
             }
 
             let cidrs = Self::list().await?;
@@ -137,114 +121,114 @@ impl DatabaseCidr<CrdtMap> {
             return Err(ServerError::InvalidQuery);
         }
 
-        let request = CreateCidrRequest::Create(contents.clone());
+        let request = CidrRequest::Create(contents.clone());
 
         let resp = client 
             .post("http://127.0.0.1:3004/cidr/create")
             .json(&request)
             .send()
             .await.map_err(|_| ServerError::InvalidQuery)?
-            .json::<CidrResponse>()
+            .json::<Response<Cidr<String>>>()
             .await.map_err(|_| ServerError::NotFound)?;
 
         match resp {
-            CidrResponse::Success(Some(cidr)) => {
-                let cidr: DatabaseCidr<CrdtMap> = cidr.into();
+            Response::Success(Success::Some(cidr)) => {
+                let cidr: DatabaseCidr<String, CrdtMap> = cidr.into();
                 return Ok(cidr.inner)
             }
             _ => return Err(ServerError::NotFound),
         }
     }
 
-    pub async fn update(&mut self, contents: CidrContents) -> Result<(), ServerError> {
+    pub async fn update(&mut self, contents: CidrContents<String>) -> Result<(), ServerError> {
         let new_contents = CidrContents {
             name: contents.name,
             ..self.contents.clone()
         };
 
-        let request = UpdateCidrRequest::Update(new_contents.clone());
+        let request = CidrRequest::Update(new_contents.clone());
         let resp = reqwest::Client::new()
             .post("http://127.0.0.1:3004/cidr/update")
             .json(&request)
             .send()
             .await.map_err(|_| ServerError::InvalidQuery)?
-            .json::<CidrResponse>()
+            .json::<Response<Cidr<String>>>()
             .await.map_err(|_| ServerError::NotFound)?;
         match resp {
-            CidrResponse::Success(_) => {
+            Response::Success(_) => {
                 self.contents = new_contents;
                 return Ok(())
             }
-            CidrResponse::Failure => {
+            Response::Failure { .. }=> {
                 return Err(ServerError::NotFound)
             }
         }
     }
 
-    pub async fn delete(id: i64) -> Result<(), ServerError> {
-        let request = DeleteCidrRequest::Delete(id.to_string());
+    pub async fn delete(id: String) -> Result<(), ServerError> {
+        let request = CidrRequest::Delete(id.to_string());
         let resp = reqwest::Client::new()
             .post("http://127.0.0.1:3004/cidr/delete")
             .json(&request)
             .send()
             .await.map_err(|_| ServerError::InvalidQuery)?
-            .json::<CidrResponse>()
+            .json::<Response<Cidr<String>>>()
             .await.map_err(|_| ServerError::NotFound)?;
 
         match resp {
-            CidrResponse::Success(_) => {
+            Response::Success(_) => {
                 return Ok(())
             }
-            CidrResponse::Failure => {
+            Response::Failure { .. }=> {
                 return Err(ServerError::NotFound)
             }
         }
     }
 
-    pub async fn get(id: i64) -> Result<Cidr, ServerError> {
+    pub async fn get(id: String) -> Result<Cidr<String>, ServerError> {
         let resp = reqwest::Client::new()
             .get(format!("http://127.0.0.1:3004/cidr/{id}/get"))
             .send()
             .await.map_err(|_| ServerError::InvalidQuery)?
-            .json::<GetCidrResponse>()
+            .json::<Response<Cidr<String>>>()
             .await.map_err(|_| ServerError::NotFound)?;
 
         match resp {
-            GetCidrResponse::Success(cidr) => {
-                let db_cidr: DatabaseCidr<CrdtMap> = cidr.into();
+            Response::Success(Success::Some(cidr)) => {
+                let db_cidr: DatabaseCidr<String, CrdtMap> = cidr.into();
                 Ok(db_cidr.inner)
             }
-            GetCidrResponse::Failure => {
+            _ => {
                 return Err(ServerError::NotFound)
             }
         }
     }
 
-    pub async fn list() -> Result<Vec<Cidr>, ServerError> {
+    pub async fn list() -> Result<Vec<Cidr<String>>, ServerError> {
         let resp = reqwest::Client::new()
             .get("http://127.0.0.1:3004/cidr/list")
             .send()
             .await.map_err(|_| ServerError::InvalidQuery)?
-            .json::<ListCidrResponse>()
+            .json::<Response<Cidr<String>>>()
             .await.map_err(|_| ServerError::NotFound)?;
 
         match resp {
-            ListCidrResponse::Success(list) => {
+            Response::Success(Success::List(list)) => {
                 let cidr_list = list.iter().map(|cidr| {
-                    let db_cidr = DatabaseCidr::<CrdtMap>::from(cidr.clone());
+                    let db_cidr = DatabaseCidr::<String, CrdtMap>::from(cidr.clone());
                     db_cidr.inner
                 }).collect();
                 return Ok(cidr_list)
             }
-            ListCidrResponse::Failure => {
+            _ => {
                 return Err(ServerError::NotFound)
             }
         }
     }
 }
 
-impl DatabaseCidr<Sqlite> {
-    pub fn create(conn: &Connection, contents: CidrContents) -> Result<Cidr, ServerError> {
+impl DatabaseCidr<i64, Sqlite> {
+    pub fn create(conn: &Connection, contents: CidrContents<i64>) -> Result<Cidr<i64>, ServerError> {
         let CidrContents { name, cidr, parent } = &contents;
 
         log::debug!("creating {:?}", contents);
@@ -316,7 +300,7 @@ impl DatabaseCidr<Sqlite> {
 
     /// Update self with new contents, validating them and updating the backend in the process.
     /// Currently this only supports updating the name and ignores changes to any other field.
-    pub fn update(&mut self, conn: &Connection, contents: CidrContents) -> Result<(), ServerError> {
+    pub fn update(&mut self, conn: &Connection, contents: CidrContents<i64>) -> Result<(), ServerError> {
         let new_contents = CidrContents {
             name: contents.name,
             ..self.contents.clone()
@@ -336,7 +320,7 @@ impl DatabaseCidr<Sqlite> {
         Ok(())
     }
 
-    fn from_row(row: &rusqlite::Row) -> Result<Cidr, rusqlite::Error> {
+    fn from_row(row: &rusqlite::Row) -> Result<Cidr<i64>, rusqlite::Error> {
         let id = row.get(0)?;
         let name = row.get(1)?;
         let ip_str: String = row.get(2)?;
@@ -352,7 +336,7 @@ impl DatabaseCidr<Sqlite> {
         })
     }
 
-    pub fn get(conn: &Connection, id: i64) -> Result<Cidr, ServerError> {
+    pub fn get(conn: &Connection, id: i64) -> Result<Cidr<i64>, ServerError> {
         Ok(conn.query_row(
             "SELECT id, name, ip, prefix, parent FROM cidrs WHERE id = ?1",
             params![id],
@@ -360,7 +344,7 @@ impl DatabaseCidr<Sqlite> {
         )?)
     }
 
-    pub fn list(conn: &Connection) -> Result<Vec<Cidr>, ServerError> {
+    pub fn list(conn: &Connection) -> Result<Vec<Cidr<i64>>, ServerError> {
         let mut stmt = conn.prepare_cached("SELECT id, name, ip, prefix, parent FROM cidrs")?;
         let cidr_iter = stmt.query_map(params![], Self::from_row)?;
 

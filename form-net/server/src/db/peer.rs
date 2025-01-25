@@ -1,12 +1,12 @@
 use super::{CrdtMap, DatabaseCidr, Sqlite};
 use crate::ServerError;
-use form_state::{datastore::{DeleteExpiredResponse, GetPeerListResponse, GetPeerResponse, NewPeerRequest, PeerResponse, UpdatePeerRequest}, network::CrdtPeer};
+use form_state::datastore::{PeerRequest, Response, Success};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use rusqlite::{params, types::Type, Connection};
 use shared::{IpNetExt, Peer, PeerContents, PERSISTENT_KEEPALIVE_INTERVAL_SECS};
 use std::{
-    marker::PhantomData, net::IpAddr, ops::{Deref, DerefMut}, time::{Duration, SystemTime}
+    fmt::Display, marker::PhantomData, net::IpAddr, ops::{Deref, DerefMut}, time::{Duration, SystemTime}
 };
 
 pub static CREATE_TABLE_SQL: &str = "CREATE TABLE peers (
@@ -46,75 +46,45 @@ pub static COLUMNS: &[&str] = &[
 static PEER_NAME_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^([a-z0-9]-?)*[a-z0-9]$").unwrap());
 
 #[derive(Debug)]
-pub struct DatabasePeer<D> {
-    pub inner: Peer,
+pub struct DatabasePeer<T: Display + Clone + PartialEq, D> {
+    pub inner: Peer<T>,
     marker: PhantomData<D>
 }
 
-impl From<Peer> for DatabasePeer<CrdtMap> {
-    fn from(inner: Peer) -> Self {
+impl<T: Display + Clone + PartialEq, D> From<Peer<T>> for DatabasePeer<T, D> {
+    fn from(inner: Peer<T>) -> Self {
         Self { inner, marker: PhantomData }
     }
 }
 
-impl TryFrom<CrdtPeer> for DatabasePeer<CrdtMap> {
-    type Error = ServerError;
-    fn try_from(value: CrdtPeer) -> Result<Self, Self::Error> {
-        Ok(Self {
-            inner: Peer::try_from(value).map_err(|_| ServerError::InvalidQuery)?,
-            marker: PhantomData
-        })
-    }
-}
-
-impl Deref for DatabasePeer<CrdtMap> {
-    type Target = Peer;
+impl<T: Display + Clone + PartialEq, D> Deref for DatabasePeer<T, D> {
+    type Target = Peer<T>;
 
     fn deref(&self) -> &Self::Target {
         &self.inner
     } 
 }
 
-impl DerefMut for DatabasePeer<CrdtMap> {
+impl<T: Display + Clone + PartialEq, D> DerefMut for DatabasePeer<T, D> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
-impl From<Peer> for DatabasePeer<Sqlite> {
-    fn from(inner: Peer) -> Self {
-        Self { inner, marker: PhantomData }
-     }
-}
-
-impl Deref for DatabasePeer<Sqlite> {
-    type Target = Peer;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-impl DerefMut for DatabasePeer<Sqlite> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
-    }
-}
-
-impl<D> DatabasePeer<D> {
+impl<T: Display + Clone + PartialEq, D> DatabasePeer<T, D> {
     fn is_valid_name(name: &str) -> bool {
         name.len() < 64 && PEER_NAME_REGEX.is_match(name)
     }
 }
 
-impl DatabasePeer<CrdtMap> {
-    pub async fn create(contents: PeerContents) -> Result<Self, ServerError> {
+impl DatabasePeer<String, CrdtMap> {
+    pub async fn create(contents: PeerContents<String>) -> Result<Self, ServerError> {
         if !Self::is_valid_name(&contents.name) {
             log::warn!("Peer name is invalid, must confirm to hostname(7) requirements");
             return Err(ServerError::InvalidQuery);
         }
 
-        let cidr = DatabaseCidr::<CrdtMap>::get(contents.cidr_id).await?;
+        let cidr = DatabaseCidr::<String, CrdtMap>::get(contents.cidr_id.clone()).await?;
         if !cidr.cidr.contains(&contents.ip) {
             log::warn!("Tried to add peer with IP outside of parent CIDR range.");
             return Err(ServerError::InvalidQuery);
@@ -125,24 +95,23 @@ impl DatabasePeer<CrdtMap> {
             return Err(ServerError::InvalidQuery);
         }
 
-        let request = NewPeerRequest::Join(contents);
+        let request = PeerRequest::Join(contents);
 
         let resp = reqwest::Client::new()
             .post("http://127.0.0.1:3004/user/create")
             .json(&request)
             .send()
             .await.map_err(|_| ServerError::NotFound)?
-            .json::<PeerResponse>()
+            .json::<Response<Peer<String>>>()
             .await.map_err(|_| ServerError::NotFound)?;
 
         match resp {
-            PeerResponse::Success(Some(peer)) => Ok(peer.into()),
-            PeerResponse::Success(None) => Err(ServerError::NotFound),
-            PeerResponse::Failure => Err(ServerError::NotFound)
+            Response::Success(Success::Some(peer)) => Ok(peer.into()),
+            _ => Err(ServerError::NotFound),
         }
     }
 
-    pub async fn update(&mut self, contents: PeerContents) -> Result<(), ServerError> {
+    pub async fn update(&mut self, contents: PeerContents<String>) -> Result<(), ServerError> {
         if !Self::is_valid_name(&contents.name) {
             log::warn!("peer name is invalid, must conform to hostname(7) requirements.");
             return Err(ServerError::InvalidQuery);
@@ -162,40 +131,39 @@ impl DatabasePeer<CrdtMap> {
             ..self.contents.clone()
         };
 
-        let request = UpdatePeerRequest::Update(new_contents.clone());
+        let request = PeerRequest::Update(new_contents.clone());
 
         let resp = reqwest::Client::new()
             .post("http://127.0.0.1:3004/user/update")
             .json(&request)
             .send()
             .await.map_err(|_| ServerError::NotFound)?
-            .json::<PeerResponse>()
+            .json::<Response<Peer<String>>>()
             .await.map_err(|_| ServerError::NotFound)?;
 
         match resp {
-            PeerResponse::Success(_) => {
+            Response::Success(Success::Some(_)) => {
                 self.contents = new_contents;
                 return Ok(())
             }
-            PeerResponse::Failure => Err(ServerError::NotFound)
+            _ => Err(ServerError::NotFound)
         }
 
     }
 
-    pub async fn disable(id: i64) -> Result<(), ServerError> {
+    pub async fn disable(id: String) -> Result<(), ServerError> {
         let resp = reqwest::Client::new()
             .get(format!("http://127.0.0.1:3004/user/{id}/get"))
             .send()
             .await.map_err(|_| ServerError::InvalidQuery)?
-            .json()
+            .json::<Response<Peer<String>>>()
             .await.map_err(|_| ServerError::NotFound)?;
         
         let peer_contents = match resp {
-            GetPeerResponse::Success(peer) => {
-                let db_peer = DatabasePeer::<CrdtMap>::try_from(peer)?;
-                db_peer.contents.clone()
+            Response::Success(Success::Some(peer)) => {
+                peer.contents.clone()
             }
-            GetPeerResponse::Failure => {
+            _ => {
                 return Err(ServerError::NotFound)
             }
         };
@@ -205,18 +173,18 @@ impl DatabasePeer<CrdtMap> {
             ..peer_contents.clone()
         };
 
-        let request = UpdatePeerRequest::Update(new_contents.clone()); 
+        let request = PeerRequest::Update(new_contents.clone()); 
         let resp = reqwest::Client::new()
             .post("http://127.0.0.1:3004/user/disable")
             .json(&request)
             .send()
             .await.map_err(|_| ServerError::NotFound)?
-            .json::<PeerResponse>()
+            .json::<Response<Peer<String>>>()
             .await.map_err(|_| ServerError::NotFound)?;
 
         match resp {
-            PeerResponse::Success(_) => Ok(()),
-            PeerResponse::Failure => Err(ServerError::NotFound)
+            Response::Success(Success::Some(_)) => Ok(()),
+            _ => Err(ServerError::NotFound)
         }
     }
 
@@ -225,35 +193,34 @@ impl DatabasePeer<CrdtMap> {
             is_redeemed: true,
             ..self.contents.clone()
         };
-        let request = UpdatePeerRequest::Update(new_contents.clone());
+        let request = PeerRequest::Update(new_contents.clone());
         let resp = reqwest::Client::new()
             .post("http://127.0.0.1:3004/user/update")
             .json(&request)
             .send()
             .await.map_err(|_| ServerError::NotFound)?
-            .json::<PeerResponse>()
+            .json::<Response<Peer<String>>>()
             .await.map_err(|_| ServerError::NotFound)?;
 
         match resp {
-            PeerResponse::Success(_) => Ok(()),
-            PeerResponse::Failure => Err(ServerError::NotFound)
+            Response::Success(Success::Some(_)) => Ok(()),
+            _ => Err(ServerError::NotFound)
         }
     }
 
-    pub async fn get(id: i64) -> Result<Self, ServerError> {
+    pub async fn get(id: String) -> Result<Self, ServerError> {
         let resp = reqwest::Client::new()
             .get(format!("http://127.0.0.1:3004/user/{id}/get"))
             .send()
             .await.map_err(|_| ServerError::NotFound)?
-            .json::<GetPeerResponse>()
+            .json::<Response<Peer<String>>>()
             .await.map_err(|_| ServerError::NotFound)?;
 
         match resp {
-            GetPeerResponse::Success(peer) => {
-                let peer: Peer = peer.try_into().map_err(|_| ServerError::NotFound)?;
+            Response::Success(Success::Some(peer)) => {
                 Ok(peer.into())
             }
-            GetPeerResponse::Failure => Err(ServerError::NotFound)
+            _ => Err(ServerError::NotFound)
         }
     }
 
@@ -262,39 +229,35 @@ impl DatabasePeer<CrdtMap> {
             .get(format!("http://127.0.0.1:3004/user/{ip}/get_from_ip"))
             .send()
             .await.map_err(|_| ServerError::NotFound)?
-            .json::<GetPeerResponse>()
+            .json::<Response<Peer<String>>>()
             .await.map_err(|_| ServerError::NotFound)?;
 
         match resp {
-            GetPeerResponse::Success(peer) => {
-                let peer: Peer = peer.try_into().map_err(|_| ServerError::NotFound)?;
+            Response::Success(Success::Some(peer)) => {
                 Ok(peer.into())
             }
-            GetPeerResponse::Failure => Err(ServerError::NotFound)
+            _ => Err(ServerError::NotFound)
         }
     }
 
     pub async fn get_all_allowed_peers(&self) -> Result<Vec<Self>, ServerError> {
-        let id = self.inner.id;
+        let id = self.inner.id.clone();
         let resp = reqwest::Client::new()
             .get(format!("http://127.0.0.1:3004/user/{id}/get_all_allowed"))
             .send()
             .await.map_err(|_| ServerError::NotFound)?
-            .json::<GetPeerListResponse>()
+            .json::<Response<Peer<String>>>()
             .await.map_err(|_| ServerError::NotFound)?;
 
         match resp {
-            GetPeerListResponse::Success(peers) => {
-                let peers = peers.iter().filter_map(|p| {
-                    match Peer::try_from(p.clone()) {
-                        Ok(peer) => Some(peer.into()),
-                        Err(_) => None
-                    }
+            Response::Success(Success::List(peers)) => {
+                let peers = peers.iter().map(|p| {
+                    DatabasePeer::<String, CrdtMap>::from(p.clone())
                 }).collect();
 
                 Ok(peers)
             }
-            GetPeerListResponse::Failure => Err(ServerError::NotFound)
+            _ => Err(ServerError::NotFound)
         }
     }
 
@@ -303,21 +266,18 @@ impl DatabasePeer<CrdtMap> {
             .get("http://127.0.0.1:3004/user/list")
             .send()
             .await.map_err(|_| ServerError::NotFound)?
-            .json::<GetPeerListResponse>()
+            .json::<Response<Peer<String>>>()
             .await.map_err(|_| ServerError::NotFound)?;
 
         match resp {
-            GetPeerListResponse::Success(peers) => {
-                let peers = peers.iter().filter_map(|p| {
-                    match Peer::try_from(p.clone()) {
-                        Ok(peer) => Some(peer.into()),
-                        Err(_) => None
-                    }
+            Response::Success(Success::List(peers)) => {
+                let peers = peers.iter().map(|p| {
+                    DatabasePeer::<String, CrdtMap>::from(p.clone())
                 }).collect();
 
                 Ok(peers)
             }
-            GetPeerListResponse::Failure => Err(ServerError::NotFound)
+            _ => Err(ServerError::NotFound)
         }
     }
 
@@ -326,18 +286,18 @@ impl DatabasePeer<CrdtMap> {
             .get("http://127.0.0.1:3004/user/delete_expired")
             .send()
             .await.map_err(|_| ServerError::NotFound)?
-            .json::<DeleteExpiredResponse>()
+            .json::<Response<Peer<String>>>()
             .await.map_err(|_| ServerError::NotFound)?;
 
         match resp {
-            DeleteExpiredResponse::Success => Ok(()),
-            DeleteExpiredResponse::Failure => Err(ServerError::NotFound)
+            Response::Success(Success::List(_)) => Ok(()),
+            _ => Err(ServerError::NotFound)
         }
     }
 }
 
-impl DatabasePeer<Sqlite> {
-    pub fn create(conn: &Connection, contents: PeerContents) -> Result<Self, ServerError> {
+impl DatabasePeer<i64, Sqlite> {
+    pub fn create(conn: &Connection, contents: PeerContents<i64>) -> Result<Self, ServerError> {
         let PeerContents {
             name,
             ip,
@@ -360,7 +320,7 @@ impl DatabasePeer<Sqlite> {
             return Err(ServerError::InvalidQuery);
         }
 
-        let cidr = DatabaseCidr::<Sqlite>::get(conn, *cidr_id)?;
+        let cidr = DatabaseCidr::<i64, Sqlite>::get(conn, *cidr_id)?;
         if !cidr.cidr.contains(ip) {
             log::warn!("tried to add peer with IP outside of parent CIDR range.");
             println!("tried to add peer with IP outside of parent CIDR range.");
@@ -409,7 +369,7 @@ impl DatabasePeer<Sqlite> {
 
 
     /// Update self with new contents, validating them and updating the backend in the process.
-    pub fn update(&mut self, conn: &Connection, contents: PeerContents) -> Result<(), ServerError> {
+    pub fn update(&mut self, conn: &Connection, contents: PeerContents<i64>) -> Result<(), ServerError> {
         if !Self::is_valid_name(&contents.name) {
             log::warn!("peer name is invalid, must conform to hostname(7) requirements.");
             return Err(ServerError::InvalidQuery);

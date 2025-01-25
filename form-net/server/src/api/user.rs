@@ -14,7 +14,7 @@ pub mod sqlite_routes {
     pub async fn routes(
         req: Request<Body>,
         mut components: VecDeque<String>,
-        session: Session<SqlContext, Sqlite>,
+        session: Session<SqlContext, i64, Sqlite>,
     ) -> Result<Response<Body>, ServerError> {
         match (req.method(), components.pop_front().as_deref()) {
             (&Method::GET, Some("state")) => {
@@ -59,11 +59,11 @@ pub mod sqlite_routes {
         ///
         /// This endpoint returns the visible CIDRs and Peers, providing all the necessary
         /// information for the peer to create connections to all of them.
-        pub async fn state(session: Session<SqlContext, Sqlite>) -> Result<Response<Body>, ServerError> {
+        pub async fn state(session: Session<SqlContext, i64, Sqlite>) -> Result<Response<Body>, ServerError> {
             let conn = session.context.db.lock();
-            let selected_peer = DatabasePeer::<Sqlite>::get(&conn, session.peer.id)?;
+            let selected_peer = DatabasePeer::<i64, Sqlite>::get(&conn, session.peer.id)?;
 
-            let cidrs: Vec<_> = DatabaseCidr::<Sqlite>::list(&conn)?;
+            let cidrs: Vec<_> = DatabaseCidr::<i64, Sqlite>::list(&conn)?;
 
             let mut peers: Vec<_> = selected_peer
                 .get_all_allowed_peers(&conn)?
@@ -84,10 +84,10 @@ pub mod sqlite_routes {
         /// it is called and succeeds, it cannot be called again.
         pub async fn redeem(
             form: RedeemContents,
-            session: Session<SqlContext, Sqlite>,
+            session: Session<SqlContext, i64, Sqlite>,
         ) -> Result<Response<Body>, ServerError> {
             let conn = session.context.db.lock();
-            let mut selected_peer = DatabasePeer::<Sqlite>::get(&conn, session.peer.id)?;
+            let mut selected_peer = DatabasePeer::<i64, Sqlite>::get(&conn, session.peer.id)?;
 
             let old_public_key = wireguard_control::Key::from_base64(&selected_peer.public_key)
                 .map_err(|_| ServerError::WireGuard)?;
@@ -133,13 +133,13 @@ pub mod sqlite_routes {
         /// Currently limited to 10 candidates max.
         pub async fn candidates(
             contents: Vec<Endpoint>,
-            session: Session<SqlContext, Sqlite>,
+            session: Session<SqlContext, i64, Sqlite>,
         ) -> Result<Response<Body>, ServerError> {
             if contents.len() > 10 {
                 return status_response(StatusCode::PAYLOAD_TOO_LARGE);
             }
             let conn = session.context.db.lock();
-            let mut selected_peer = DatabasePeer::<Sqlite>::get(&conn, session.peer.id)?;
+            let mut selected_peer = DatabasePeer::<i64, Sqlite>::get(&conn, session.peer.id)?;
             selected_peer.update(
                 &conn,
                 PeerContents {
@@ -154,10 +154,10 @@ pub mod sqlite_routes {
         /// Force a specific endpoint to be reported by the server.
         pub async fn endpoint(
             contents: EndpointContents,
-            session: Session<SqlContext, Sqlite>,
+            session: Session<SqlContext, i64, Sqlite>,
         ) -> Result<Response<Body>, ServerError> {
             let conn = session.context.db.lock();
-            let mut selected_peer = DatabasePeer::<Sqlite>::get(&conn, session.peer.id)?;
+            let mut selected_peer = DatabasePeer::<i64, Sqlite>::get(&conn, session.peer.id)?;
             selected_peer.update(
                 &conn,
                 PeerContents {
@@ -185,7 +185,7 @@ pub mod crdt_routes {
     pub async fn routes(
         req: Request<Body>,
         mut components: VecDeque<String>,
-        session: Session<CrdtContext, CrdtMap>,
+        session: Session<CrdtContext, String, CrdtMap>,
     ) -> Result<Response<Body>, ServerError> {
         match (req.method(), components.pop_front().as_deref()) {
             (&Method::GET, Some("state")) => {
@@ -227,10 +227,10 @@ pub mod crdt_routes {
         ///
         /// This endpoint returns the visible CIDRs and Peers, providing all the necessary
         /// information for the peer to create connections to all of them.
-        pub async fn state(session: Session<CrdtContext, CrdtMap>) -> Result<Response<Body>, ServerError> {
-            let selected_peer = DatabasePeer::<CrdtMap>::get(session.peer.id).await?;
+        pub async fn state(session: Session<CrdtContext, String, CrdtMap>) -> Result<Response<Body>, ServerError> {
+            let selected_peer = DatabasePeer::<String, CrdtMap>::get(session.peer.id.clone()).await?;
 
-            let cidrs: Vec<_> = DatabaseCidr::<CrdtMap>::list().await?;
+            let cidrs: Vec<_> = DatabaseCidr::<String, CrdtMap>::list().await?;
 
             let mut peers: Vec<_> = selected_peer
                 .get_all_allowed_peers().await?
@@ -251,9 +251,9 @@ pub mod crdt_routes {
         /// it is called and succeeds, it cannot be called again.
         pub async fn redeem(
             form: RedeemContents,
-            session: Session<CrdtContext, CrdtMap>,
+            session: Session<CrdtContext, String, CrdtMap>,
         ) -> Result<Response<Body>, ServerError> {
-            let mut selected_peer = DatabasePeer::<CrdtMap>::get(session.peer.id).await?;
+            let mut selected_peer = DatabasePeer::<String, CrdtMap>::get(session.peer.id.clone()).await?;
 
             let old_public_key = wireguard_control::Key::from_base64(&selected_peer.public_key)
                 .map_err(|_| ServerError::WireGuard)?;
@@ -300,12 +300,12 @@ pub mod crdt_routes {
         /// Currently limited to 10 candidates max.
         pub async fn candidates(
             contents: Vec<Endpoint>,
-            session: Session<CrdtContext, CrdtMap>,
+            session: Session<CrdtContext, String, CrdtMap>,
         ) -> Result<Response<Body>, ServerError> {
             if contents.len() > 10 {
                 return status_response(StatusCode::PAYLOAD_TOO_LARGE);
             }
-            let mut selected_peer = DatabasePeer::<CrdtMap>::get(session.peer.id).await?;
+            let mut selected_peer = DatabasePeer::<String, CrdtMap>::get(session.peer.id.clone()).await?;
             selected_peer.update(
                 PeerContents {
                     candidates: contents,
@@ -319,9 +319,9 @@ pub mod crdt_routes {
         /// Force a specific endpoint to be reported by the server.
         pub async fn endpoint(
             contents: EndpointContents,
-            session: Session<CrdtContext, CrdtMap>,
+            session: Session<CrdtContext, String, CrdtMap>,
         ) -> Result<Response<Body>, ServerError> {
-            let mut selected_peer = DatabasePeer::<CrdtMap>::get(session.peer.id).await?;
+            let mut selected_peer = DatabasePeer::<String, CrdtMap>::get(session.peer.id.clone()).await?;
             selected_peer.update(
                 PeerContents {
                     endpoint: contents.into(),
@@ -354,7 +354,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
 
         let whole_body = hyper::body::aggregate(res).await?;
-        let State { peers, .. } = serde_json::from_reader(whole_body.reader())?;
+        let State { peers, .. }: State<i64> = serde_json::from_reader(whole_body.reader())?;
         let mut peer_names = peers.iter().map(|p| &*p.contents.name).collect::<Vec<_>>();
         peer_names.sort_unstable();
         // Developers should see only peers in infra CIDR and developer CIDR.
@@ -429,7 +429,7 @@ mod tests {
         let server = test::Server::new()?;
         {
             let db = server.db.lock();
-            let cidr = DatabaseCidr::<Sqlite>::create(
+            let cidr = DatabaseCidr::<i64, Sqlite>::create(
                 &db,
                 CidrContents {
                     name: "experiment cidr".to_string(),
@@ -437,7 +437,7 @@ mod tests {
                     parent: Some(test::ROOT_CIDR_ID),
                 },
             )?;
-            let subcidr = DatabaseCidr::<Sqlite>::create(
+            let subcidr = DatabaseCidr::<i64, Sqlite>::create(
                 &db,
                 CidrContents {
                     name: "experiment subcidr".to_string(),
@@ -445,7 +445,7 @@ mod tests {
                     parent: Some(cidr.id),
                 },
             )?;
-            DatabasePeer::<Sqlite>::create(
+            DatabasePeer::<i64, Sqlite>::create(
                 &db,
                 test::peer_contents(
                     "experiment-peer",
@@ -456,14 +456,14 @@ mod tests {
             )?;
 
             // Add a peering between the developer's CIDR and the experimental *parent* cidr.
-            DatabaseAssociation::<Sqlite>::create(
+            DatabaseAssociation::<Sqlite, i64, i64>::create(
                 &db,
                 AssociationContents {
                     cidr_id_1: test::DEVELOPER_CIDR_ID,
                     cidr_id_2: cidr.id,
                 },
             )?;
-            DatabaseAssociation::<Sqlite>::create(
+            DatabaseAssociation::<Sqlite, i64, i64>::create(
                 &db,
                 AssociationContents {
                     cidr_id_1: test::INFRA_CIDR_ID,
@@ -498,7 +498,7 @@ mod tests {
     async fn test_redeem() -> Result<(), Error> {
         let server = test::Server::new()?;
 
-        let experimental_cidr = DatabaseCidr::<Sqlite>::create(
+        let experimental_cidr = DatabaseCidr::<i64, Sqlite>::create(
             &server.db().lock(),
             CidrContents {
                 name: "experimental".to_string(),
@@ -515,7 +515,7 @@ mod tests {
         )?;
         peer_contents.is_redeemed = false;
         peer_contents.invite_expires = Some(SystemTime::now() + Duration::from_secs(100));
-        let _experiment_peer = DatabasePeer::<Sqlite>::create(&server.db().lock(), peer_contents)?;
+        let _experiment_peer = DatabasePeer::<i64, Sqlite>::create(&server.db().lock(), peer_contents)?;
 
         // Step 1: Ensure that before redeeming, other endpoints aren't yet accessible.
         let res = server
@@ -560,7 +560,7 @@ mod tests {
     async fn test_redeem_expired() -> Result<(), Error> {
         let server = test::Server::new()?;
 
-        let experimental_cidr = DatabaseCidr::<Sqlite>::create(
+        let experimental_cidr = DatabaseCidr::<i64, Sqlite>::create(
             &server.db().lock(),
             CidrContents {
                 name: "experimental".to_string(),
@@ -577,7 +577,7 @@ mod tests {
         )?;
         peer_contents.is_redeemed = false;
         peer_contents.invite_expires = Some(SystemTime::now() - Duration::from_secs(1));
-        let _experiment_peer = DatabasePeer::<Sqlite>::create(&server.db().lock(), peer_contents)?;
+        let _experiment_peer = DatabasePeer::<i64, Sqlite>::create(&server.db().lock(), peer_contents)?;
 
         // Step 1: Ensure that before redeeming, other endpoints aren't yet accessible.
         let res = server
@@ -605,7 +605,7 @@ mod tests {
     async fn test_candidates() -> Result<(), Error> {
         let server = test::Server::new()?;
 
-        let peer = DatabasePeer::<Sqlite>::get(&server.db().lock(), test::DEVELOPER1_PEER_ID)?;
+        let peer = DatabasePeer::<i64, Sqlite>::get(&server.db().lock(), test::DEVELOPER1_PEER_ID)?;
         assert_eq!(peer.candidates, vec![]);
 
         let candidates = vec!["1.1.1.1:51820".parse::<Endpoint>().unwrap()];
@@ -628,7 +628,7 @@ mod tests {
 
         assert_eq!(res.status(), StatusCode::OK);
 
-        let peer = DatabasePeer::<Sqlite>::get(&server.db().lock(), test::DEVELOPER1_PEER_ID)?;
+        let peer = DatabasePeer::<i64, Sqlite>::get(&server.db().lock(), test::DEVELOPER1_PEER_ID)?;
         assert_eq!(peer.candidates, candidates);
         Ok(())
     }
@@ -640,7 +640,7 @@ mod tests {
         // case that the peer has specified an endpoint override).
         let server = test::Server::new()?;
 
-        let peer = DatabasePeer::<Sqlite>::get(&server.db().lock(), test::DEVELOPER1_PEER_ID)?;
+        let peer = DatabasePeer::<i64, Sqlite>::get(&server.db().lock(), test::DEVELOPER1_PEER_ID)?;
         assert_eq!(peer.candidates, vec![]);
 
         // Specify one NAT candidate. At this point, we have an unspecified
@@ -666,7 +666,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
 
         let whole_body = hyper::body::aggregate(res).await?;
-        let State { peers, .. } = serde_json::from_reader(whole_body.reader())?;
+        let State { peers, .. }: State<i64> = serde_json::from_reader(whole_body.reader())?;
 
         let developer_1 = peers
             .into_iter()
@@ -701,7 +701,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
 
         let whole_body = hyper::body::aggregate(res).await?;
-        let State { peers, .. } = serde_json::from_reader(whole_body.reader())?;
+        let State { peers, .. }: State<i64> = serde_json::from_reader(whole_body.reader())?;
 
         let developer_1 = peers
             .into_iter()

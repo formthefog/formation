@@ -31,10 +31,10 @@ pub use db::{DatabaseCidr, DatabasePeer};
 pub use error::ServerError;
 use shared::{prompts, wg, CidrTree, Error, Interface};
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 type Db = Arc<Mutex<Connection>>;
-type Endpoints = Arc<RwLock<HashMap<String, SocketAddr>>>;
+pub type Endpoints = Arc<RwLock<HashMap<String, SocketAddr>>>;
 
 pub trait DatastoreContext {
     fn endpoints(&self) -> Endpoints;
@@ -103,12 +103,12 @@ impl DatastoreContext for CrdtContext {
     }
 }
 
-pub struct Session<C: DatastoreContext, D> {
+pub struct Session<C: DatastoreContext, T: Display + Clone + PartialEq, D> {
     pub context: C,
-    pub peer: DatabasePeer<D>
+    pub peer: DatabasePeer<T, D>
 }
 
-impl Session<CrdtContext, CrdtMap> {
+impl Session<CrdtContext, String, CrdtMap> {
     pub fn admin_capable(&self) -> bool {
         self.peer.is_admin && self.user_capable()
     }
@@ -122,7 +122,7 @@ impl Session<CrdtContext, CrdtMap> {
     }
 }
 
-impl Session<SqlContext, Sqlite> {
+impl Session<SqlContext, i64, Sqlite> {
     pub fn admin_capable(&self) -> bool {
         self.peer.is_admin && self.user_capable()
     }
@@ -138,18 +138,21 @@ impl Session<SqlContext, Sqlite> {
 
 #[derive(Deserialize, Serialize, Debug)]
 #[serde(rename_all = "kebab-case")]
-pub struct ConfigFile {
+pub struct ConfigFile { 
     /// The server's WireGuard key
     pub private_key: String,
 
     /// The listen port of the server
     pub listen_port: u16,
 
-    /// The internal WireGuard IP address assigned to the server
+    /// The internal WireGuard IP address assigned to this node 
     pub address: IpAddr,
 
     /// The CIDR prefix of the WireGuard network
     pub network_cidr_prefix: u8,
+
+    /// The ID of the bootstrap node/server
+    pub bootstrap: String 
 }
 
 impl ConfigFile {
@@ -225,7 +228,7 @@ impl ServerConfig {
 }
 
 #[async_trait::async_trait]
-pub trait FormnetNode: Default {
+pub trait FormnetNode: Default + Send + Sync {
     type Error: Display;
 
     async fn add_peer(
@@ -314,12 +317,22 @@ impl FormnetNode for CrdtMap {
         network: NetworkOpts,
     ) -> Result<(), Error> {
         let config = ConfigFile::from_file(conf.config_path(interface))?;
-        let peers = DatabasePeer::<CrdtMap>::list().await?
+        let peers = DatabasePeer::<String, CrdtMap>::list().await?
             .into_iter()
             .map(|dp| dp.inner)
             .collect::<Vec<_>>();
-        let cidrs = DatabaseCidr::<CrdtMap>::list().await?;
+        let cidrs = DatabaseCidr::<String, CrdtMap>::list().await?;
         let cidr_tree = CidrTree::new(&cidrs[..]);
+        let server_id = {
+            match peers.iter().find(|p| p.is_admin) {
+                Some(peer) => {
+                    &peer.id
+                }
+                None => {
+                    return Err(Error::new(std::io::Error::new(std::io::ErrorKind::Other, "No admins, no servers, cannot add peer")));
+                }
+            }
+        };
 
         if let Some(result) = shared::prompts::add_peer(
             &peers,
@@ -328,7 +341,7 @@ impl FormnetNode for CrdtMap {
         )? {
             let (peer_request, keypair, target_path, mut target_file) = result;
             log::info!("Received results from prompts, attempting to create peer in database");
-            let peer = DatabasePeer::<CrdtMap>::create(peer_request).await?;
+            let peer = DatabasePeer::<String, CrdtMap>::create(peer_request).await?;
             if cfg!(not(test)) && Device::get(interface, network.backend).is_ok() {
                 // Update the current WireGuard interface with the new peers.
                 DeviceUpdate::new()
@@ -339,7 +352,7 @@ impl FormnetNode for CrdtMap {
                 log::info!("adding to WireGuard interface: {}", &*peer);
             }
 
-            let server_peer = DatabasePeer::<CrdtMap>::get(1).await?;
+            let server_peer = DatabasePeer::<String, CrdtMap>::get(server_id.clone()).await?;
             prompts::write_peer_invitation(
                 (&mut target_file, &target_path),
                 interface,
@@ -362,13 +375,13 @@ impl FormnetNode for CrdtMap {
         _conf: &ServerConfig,
         opts: RenamePeerOpts,
     ) -> Result<(), Error> {
-        let peers = DatabasePeer::<CrdtMap>::list().await?
+        let peers = DatabasePeer::<String, CrdtMap>::list().await?
             .into_iter()
             .map(|dp| dp.inner)
             .collect::<Vec<_>>();
 
         if let Some((peer_request, old_name)) = shared::prompts::rename_peer(&peers, &opts)? {
-            let mut db_peer = DatabasePeer::<CrdtMap>::list().await?
+            let mut db_peer = DatabasePeer::<String, CrdtMap>::list().await?
                 .into_iter()
                 .find(|p| p.name == old_name)
                 .ok_or_else(|| anyhow!("Peer not found."))?;
@@ -388,13 +401,13 @@ impl FormnetNode for CrdtMap {
         network: NetworkOpts,
         opts: EnableDisablePeerOpts,
     ) -> Result<(), Error> {
-        let peers = DatabasePeer::<CrdtMap>::list().await?
+        let peers = DatabasePeer::<String, CrdtMap>::list().await?
             .into_iter()
             .map(|dp| dp.inner)
             .collect::<Vec<_>>();
 
         if let Some(peer) = prompts::enable_or_disable_peer(&peers[..], &opts, enable)? {
-            let mut db_peer = DatabasePeer::<CrdtMap>::get(peer.id).await?;
+            let mut db_peer = DatabasePeer::<String, CrdtMap>::get(peer.id.clone()).await?;
             db_peer.update(
                 PeerContents {
                     is_disabled: !enable,
@@ -429,9 +442,9 @@ impl FormnetNode for CrdtMap {
         _conf: &ServerConfig,
         opts: AddCidrOpts,
     ) -> Result<(), Error> {
-        let cidrs = DatabaseCidr::<CrdtMap>::list().await?;
+        let cidrs = DatabaseCidr::<String, CrdtMap>::list().await?;
         if let Some(cidr_request) = shared::prompts::add_cidr(&cidrs, &opts)? {
-            let cidr = DatabaseCidr::<CrdtMap>::create(cidr_request).await?;
+            let cidr = DatabaseCidr::<String, CrdtMap>::create(cidr_request).await?;
             printdoc!(
                 "
                 CIDR \"{cidr_name}\" added.
@@ -456,14 +469,14 @@ impl FormnetNode for CrdtMap {
         _conf: &ServerConfig,
         opts: RenameCidrOpts,
     ) -> Result<(), Error> {
-        let cidrs = DatabaseCidr::<CrdtMap>::list().await?;
+        let cidrs = DatabaseCidr::<String, CrdtMap>::list().await?;
 
         if let Some((cidr_request, old_name)) = shared::prompts::rename_cidr(&cidrs, &opts)? {
-            let db_cidr = DatabaseCidr::<CrdtMap>::list().await?
+            let db_cidr = DatabaseCidr::<String, CrdtMap>::list().await?
                 .into_iter()
                 .find(|c| c.name == old_name)
                 .ok_or_else(|| anyhow!("CIDR not found."))?;
-            db::DatabaseCidr::<CrdtMap>::from(db_cidr).update(cidr_request).await?;
+            db::DatabaseCidr::<String, CrdtMap>::from(db_cidr).update(cidr_request).await?;
         } else {
             log::info!("exited without renaming CIDR.");
         }
@@ -478,8 +491,8 @@ impl FormnetNode for CrdtMap {
         args: DeleteCidrOpts,
     ) -> Result<(), Error> {
         log::info!("Fetching eligible CIDRs");
-        let cidrs = DatabaseCidr::<CrdtMap>::list().await?;
-        let peers = DatabasePeer::<CrdtMap>::list().await?
+        let cidrs = DatabaseCidr::<String, CrdtMap>::list().await?;
+        let peers = DatabasePeer::<String, CrdtMap>::list().await?
             .into_iter()
             .map(|dp| dp.inner)
             .collect::<Vec<_>>();
@@ -487,7 +500,7 @@ impl FormnetNode for CrdtMap {
         let cidr_id = prompts::delete_cidr(&cidrs, &peers, &args)?;
 
         log::info!("Deleting CIDR...");
-        DatabaseCidr::<CrdtMap>::delete(cidr_id).await?;
+        DatabaseCidr::<String, CrdtMap>::delete(cidr_id).await?;
 
         log::info!("CIDR deleted.");
 
@@ -559,7 +572,7 @@ impl FormnetNode for CrdtMap {
             let mut interval = tokio::time::interval(Duration::from_secs(10));
             loop {
                 interval.tick().await;
-                match DatabasePeer::<CrdtMap>::delete_expired_invites().await {
+                match DatabasePeer::<String, CrdtMap>::delete_expired_invites().await {
                     Ok(_) => {
                         log::info!("Deleted expired peer invitations.")
                     },
@@ -577,7 +590,7 @@ impl FormnetNode for CrdtMap {
         let config = ConfigFile::from_file(conf.config_path(&interface))?;
         log::debug!("opening database connection...");
 
-        let mut peers = DatabasePeer::<CrdtMap>::list().await?;
+        let mut peers = DatabasePeer::<String, CrdtMap>::list().await?;
         log::debug!("peers listed...");
         let peer_configs = peers
             .iter()
@@ -686,11 +699,11 @@ impl FormnetNode for Sqlite {
     ) -> Result<(), Error> {
         let config = ConfigFile::from_file(conf.config_path(interface))?;
         let conn = Self::open_database_connection(interface, conf).await?;
-        let peers = DatabasePeer::<Sqlite>::list(&conn)?
+        let peers = DatabasePeer::<i64, Sqlite>::list(&conn)?
             .into_iter()
             .map(|dp| dp.inner)
             .collect::<Vec<_>>();
-        let cidrs = DatabaseCidr::<Sqlite>::list(&conn)?;
+        let cidrs = DatabaseCidr::<i64, Sqlite>::list(&conn)?;
         let cidr_tree = CidrTree::new(&cidrs[..]);
 
         if let Some(result) = shared::prompts::add_peer(
@@ -700,7 +713,7 @@ impl FormnetNode for Sqlite {
         )? {
             let (peer_request, keypair, target_path, mut target_file) = result;
             log::info!("Received results from prompts, attempting to create peer in database");
-            let peer = DatabasePeer::<Sqlite>::create(&conn, peer_request)?;
+            let peer = DatabasePeer::<i64, Sqlite>::create(&conn, peer_request)?;
             if cfg!(not(test)) && Device::get(interface, network.backend).is_ok() {
                 // Update the current WireGuard interface with the new peers.
                 DeviceUpdate::new()
@@ -711,7 +724,7 @@ impl FormnetNode for Sqlite {
                 log::info!("adding to WireGuard interface: {}", &*peer);
             }
 
-            let server_peer = DatabasePeer::<Sqlite>::get(&conn, 1)?;
+            let server_peer = DatabasePeer::<i64, Sqlite>::get(&conn, 1)?;
             prompts::write_peer_invitation(
                 (&mut target_file, &target_path),
                 interface,
@@ -735,13 +748,13 @@ impl FormnetNode for Sqlite {
         opts: RenamePeerOpts,
     ) -> Result<(), Error> {
         let conn = Self::open_database_connection(interface, conf).await?;
-        let peers = DatabasePeer::<Sqlite>::list(&conn)?
+        let peers = DatabasePeer::<i64, Sqlite>::list(&conn)?
             .into_iter()
             .map(|dp| dp.inner)
             .collect::<Vec<_>>();
 
         if let Some((peer_request, old_name)) = shared::prompts::rename_peer(&peers, &opts)? {
-            let mut db_peer = DatabasePeer::<Sqlite>::list(&conn)?
+            let mut db_peer = DatabasePeer::<i64, Sqlite>::list(&conn)?
                 .into_iter()
                 .find(|p| p.name == old_name)
                 .ok_or_else(|| anyhow!("Peer not found."))?;
@@ -762,13 +775,13 @@ impl FormnetNode for Sqlite {
         opts: EnableDisablePeerOpts,
     ) -> Result<(), Error> {
         let conn = Self::open_database_connection(interface, conf).await?;
-        let peers = DatabasePeer::<Sqlite>::list(&conn)?
+        let peers = DatabasePeer::<i64, Sqlite>::list(&conn)?
             .into_iter()
             .map(|dp| dp.inner)
             .collect::<Vec<_>>();
 
         if let Some(peer) = prompts::enable_or_disable_peer(&peers[..], &opts, enable)? {
-            let mut db_peer = DatabasePeer::<Sqlite>::get(&conn, peer.id)?;
+            let mut db_peer = DatabasePeer::<i64, Sqlite>::get(&conn, peer.id)?;
             db_peer.update(
                 &conn,
                 PeerContents {
@@ -805,9 +818,9 @@ impl FormnetNode for Sqlite {
         opts: AddCidrOpts,
     ) -> Result<(), Error> {
         let conn = Self::open_database_connection(interface, conf).await?;
-        let cidrs = DatabaseCidr::<Sqlite>::list(&conn)?;
+        let cidrs = DatabaseCidr::<i64, Sqlite>::list(&conn)?;
         if let Some(cidr_request) = shared::prompts::add_cidr(&cidrs, &opts)? {
-            let cidr = DatabaseCidr::<Sqlite>::create(&conn, cidr_request)?;
+            let cidr = DatabaseCidr::<i64, Sqlite>::create(&conn, cidr_request)?;
             printdoc!(
                 "
                 CIDR \"{cidr_name}\" added.
@@ -833,14 +846,14 @@ impl FormnetNode for Sqlite {
         opts: RenameCidrOpts,
     ) -> Result<(), Error> {
         let conn = Self::open_database_connection(interface, conf).await?;
-        let cidrs = DatabaseCidr::<Sqlite>::list(&conn)?;
+        let cidrs = DatabaseCidr::<i64, Sqlite>::list(&conn)?;
 
         if let Some((cidr_request, old_name)) = shared::prompts::rename_cidr(&cidrs, &opts)? {
-            let db_cidr = DatabaseCidr::<Sqlite>::list(&conn)?
+            let db_cidr = DatabaseCidr::<i64, Sqlite>::list(&conn)?
                 .into_iter()
                 .find(|c| c.name == old_name)
                 .ok_or_else(|| anyhow!("CIDR not found."))?;
-            db::DatabaseCidr::<Sqlite>::from(db_cidr).update(&conn, cidr_request)?;
+            db::DatabaseCidr::<i64, Sqlite>::from(db_cidr).update(&conn, cidr_request)?;
         } else {
             log::info!("exited without renaming CIDR.");
         }
@@ -856,8 +869,8 @@ impl FormnetNode for Sqlite {
     ) -> Result<(), Error> {
         log::info!("Fetching eligible CIDRs");
         let conn = Self::open_database_connection(interface, conf).await?;
-        let cidrs = DatabaseCidr::<Sqlite>::list(&conn)?;
-        let peers = DatabasePeer::<Sqlite>::list(&conn)?
+        let cidrs = DatabaseCidr::<i64, Sqlite>::list(&conn)?;
+        let peers = DatabasePeer::<i64, Sqlite>::list(&conn)?
             .into_iter()
             .map(|dp| dp.inner)
             .collect::<Vec<_>>();
@@ -865,7 +878,7 @@ impl FormnetNode for Sqlite {
         let cidr_id = prompts::delete_cidr(&cidrs, &peers, &args)?;
 
         log::info!("Deleting CIDR...");
-        DatabaseCidr::<Sqlite>::delete(&conn, cidr_id)?;
+        DatabaseCidr::<i64, Sqlite>::delete(&conn, cidr_id)?;
 
         log::info!("CIDR deleted.");
 
@@ -938,7 +951,7 @@ impl FormnetNode for Sqlite {
             let mut interval = tokio::time::interval(Duration::from_secs(10));
             loop {
                 interval.tick().await;
-                match DatabasePeer::<Sqlite>::delete_expired_invites(&db.lock()) {
+                match DatabasePeer::<i64, Sqlite>::delete_expired_invites(&db.lock()) {
                     Ok(deleted) if deleted > 0 => {
                         log::info!("Deleted {} expired peer invitations.", deleted)
                     },
@@ -958,7 +971,7 @@ impl FormnetNode for Sqlite {
         log::debug!("opening database connection...");
         let conn = Self::open_database_connection(&interface, conf).await?;
 
-        let mut peers = DatabasePeer::<Sqlite>::list(&conn)?;
+        let mut peers = DatabasePeer::<i64, Sqlite>::list(&conn)?;
         log::debug!("peers listed...");
         let peer_configs = peers
             .iter()
@@ -1112,7 +1125,7 @@ pub mod sqlite_service {
         req: &Request<Body>,
         context: SqlContext,
         addr: IpAddr,
-    ) -> Result<Session<SqlContext, Sqlite>, ServerError> {
+    ) -> Result<Session<SqlContext, i64, Sqlite>, ServerError> {
         let pubkey = req
             .headers()
             .get(INNERNET_PUBKEY_HEADER)
@@ -1124,7 +1137,7 @@ pub mod sqlite_service {
             .ct_eq(context.public_key.as_bytes())
             .into()
         {
-            let peer = DatabasePeer::<Sqlite>::get_from_ip(&context.db.lock(), addr).map_err(|e| match e {
+            let peer = DatabasePeer::<i64, Sqlite>::get_from_ip(&context.db.lock(), addr).map_err(|e| match e {
                 rusqlite::Error::QueryReturnedNoRows => ServerError::Unauthorized,
                 e => ServerError::Database(e),
             })?;
@@ -1141,7 +1154,7 @@ pub mod sqlite_service {
 pub mod crdt_service {
     use super::*;
 
-    pub(crate) async fn hyper_service(
+    pub async fn hyper_service(
         req: Request<Body>,
         context: CrdtContext,
         remote_addr: SocketAddr,
@@ -1180,11 +1193,11 @@ pub mod crdt_service {
         }
     }
 
-    pub(crate) async fn get_crdt_session(
+    pub async fn get_crdt_session(
         req: &Request<Body>,
         context: CrdtContext,
         addr: IpAddr,
-    ) -> Result<Session<CrdtContext, CrdtMap>, ServerError> {
+    ) -> Result<Session<CrdtContext, String, CrdtMap>, ServerError> {
         let pubkey = req
             .headers()
             .get(INNERNET_PUBKEY_HEADER)
@@ -1196,7 +1209,7 @@ pub mod crdt_service {
             .ct_eq(context.public_key.as_bytes())
             .into()
         {
-            let peer = DatabasePeer::<CrdtMap>::get_from_ip(addr).await?;
+            let peer = DatabasePeer::<String, CrdtMap>::get_from_ip(addr).await?;
 
             if !peer.is_disabled {
                 return Ok(Session { context, peer });

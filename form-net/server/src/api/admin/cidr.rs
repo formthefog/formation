@@ -12,7 +12,7 @@ pub mod sqlite_routes {
     pub async fn routes(
         req: Request<Body>,
         mut components: VecDeque<String>,
-        session: Session<SqlContext, Sqlite>,
+        session: Session<SqlContext, i64, Sqlite>,
     ) -> Result<Response<Body>, ServerError> {
         match (req.method(), components.pop_front().as_deref()) {
             (&Method::GET, None) => handlers::list(session).await,
@@ -39,38 +39,38 @@ pub mod sqlite_routes {
         use super::*;
 
         pub async fn create(
-            contents: CidrContents,
-            session: Session<SqlContext, Sqlite>,
+            contents: CidrContents<i64>,
+            session: Session<SqlContext, i64, Sqlite>,
         ) -> Result<Response<Body>, ServerError> {
             let conn = session.context.db.lock();
 
-            let cidr = DatabaseCidr::<Sqlite>::create(&conn, contents)?;
+            let cidr = DatabaseCidr::<i64, Sqlite>::create(&conn, contents)?;
 
             json_status_response(cidr, StatusCode::CREATED)
         }
 
         pub async fn update(
             id: i64,
-            form: CidrContents,
-            session: Session<SqlContext, Sqlite>,
+            form: CidrContents<i64>,
+            session: Session<SqlContext, i64, Sqlite>,
         ) -> Result<Response<Body>, ServerError> {
             let conn = session.context.db.lock();
-            let cidr = DatabaseCidr::<Sqlite>::get(&conn, id)?;
-            DatabaseCidr::<Sqlite>::from(cidr).update(&conn, form)?;
+            let cidr = DatabaseCidr::<i64, Sqlite>::get(&conn, id)?;
+            DatabaseCidr::<i64, Sqlite>::from(cidr).update(&conn, form)?;
 
             status_response(StatusCode::NO_CONTENT)
         }
 
-        pub async fn list(session: Session<SqlContext, Sqlite>) -> Result<Response<Body>, ServerError> {
+        pub async fn list(session: Session<SqlContext, i64, Sqlite>) -> Result<Response<Body>, ServerError> {
             let conn = session.context.db.lock();
-            let cidrs = DatabaseCidr::<Sqlite>::list(&conn)?;
+            let cidrs = DatabaseCidr::<i64, Sqlite>::list(&conn)?;
 
             json_response(cidrs)
         }
 
-        pub async fn delete(id: i64, session: Session<SqlContext, Sqlite>) -> Result<Response<Body>, ServerError> {
+        pub async fn delete(id: i64, session: Session<SqlContext, i64, Sqlite>) -> Result<Response<Body>, ServerError> {
             let conn = session.context.db.lock();
-            DatabaseCidr::<Sqlite>::delete(&conn, id)?;
+            DatabaseCidr::<i64, Sqlite>::delete(&conn, id)?;
 
             status_response(StatusCode::NO_CONTENT)
         }
@@ -100,13 +100,11 @@ pub mod crdt_routes {
                 handlers::create(form).await
             },
             (&Method::PUT, Some(id)) => {
-                let id: i64 = id.parse().map_err(|_| ServerError::NotFound)?;
                 let form = form_body(req).await?;
-                handlers::update(id, form).await
+                handlers::update(id.to_string(), form).await
             },
             (&Method::DELETE, Some(id)) => {
-                let id: i64 = id.parse().map_err(|_| ServerError::NotFound)?;
-                handlers::delete(id).await
+                handlers::delete(id.to_string()).await
             },
             _ => Err(ServerError::NotFound),
         }
@@ -118,28 +116,28 @@ pub mod crdt_routes {
         use super::*;
 
         pub async fn create(
-            contents: CidrContents,
+            contents: CidrContents<String>,
         ) -> Result<Response<Body>, ServerError> {
-            let cidr = DatabaseCidr::<CrdtMap>::create(contents).await?;
+            let cidr = DatabaseCidr::<String, CrdtMap>::create(contents).await?;
             json_status_response(cidr, StatusCode::CREATED)
         }
 
         pub async fn update(
-            id: i64,
-            form: CidrContents,
+            id: String,
+            form: CidrContents<String>,
         ) -> Result<Response<Body>, ServerError> {
-            let cidr = DatabaseCidr::<CrdtMap>::get(id).await?;
-            DatabaseCidr::<CrdtMap>::from(cidr).update(form).await?;
+            let cidr = DatabaseCidr::<String, CrdtMap>::get(id).await?;
+            DatabaseCidr::<String, CrdtMap>::from(cidr).update(form).await?;
             status_response(StatusCode::NO_CONTENT)
         }
 
         pub async fn list() -> Result<Response<Body>, ServerError> {
-            let cidrs = DatabaseCidr::<CrdtMap>::list().await?;
+            let cidrs = DatabaseCidr::<String, CrdtMap>::list().await?;
             json_response(cidrs)
         }
 
-        pub async fn delete(id: i64) -> Result<Response<Body>, ServerError> {
-            DatabaseCidr::<CrdtMap>::delete(id).await?;
+        pub async fn delete(id: String) -> Result<Response<Body>, ServerError> {
+            DatabaseCidr::<String,CrdtMap>::delete(id).await?;
 
             status_response(StatusCode::NO_CONTENT)
         }
@@ -158,7 +156,7 @@ mod tests {
     async fn test_cidr_add() -> Result<(), Error> {
         let server = test::Server::new()?;
 
-        let old_cidrs = DatabaseCidr::<Sqlite>::list(&server.db().lock())?;
+        let old_cidrs = DatabaseCidr::<i64, Sqlite>::list(&server.db().lock())?;
 
         let contents = CidrContents {
             name: "experimental".to_string(),
@@ -173,10 +171,10 @@ mod tests {
         assert_eq!(res.status(), 201);
 
         let whole_body = hyper::body::aggregate(res).await?;
-        let cidr_res: Cidr = serde_json::from_reader(whole_body.reader())?;
+        let cidr_res: Cidr<i64> = serde_json::from_reader(whole_body.reader())?;
         assert_eq!(contents, cidr_res.contents);
 
-        let new_cidrs = DatabaseCidr::<Sqlite>::list(&server.db().lock())?;
+        let new_cidrs = DatabaseCidr::<i64, Sqlite>::list(&server.db().lock())?;
         assert_eq!(old_cidrs.len() + 1, new_cidrs.len());
 
         Ok(())
@@ -197,7 +195,7 @@ mod tests {
             .await;
         assert!(res.status().is_success());
         let whole_body = hyper::body::aggregate(res).await?;
-        let cidr_res: Cidr = serde_json::from_reader(whole_body.reader())?;
+        let cidr_res: Cidr<i64> = serde_json::from_reader(whole_body.reader())?;
 
         let contents = CidrContents {
             name: "experimental".to_string(),
@@ -279,7 +277,7 @@ mod tests {
     async fn test_cidr_delete_fail_with_child_cidr() -> Result<(), Error> {
         let server = test::Server::new()?;
 
-        let experimental_cidr = DatabaseCidr::<Sqlite>::create(
+        let experimental_cidr = DatabaseCidr::<i64, Sqlite>::create(
             &server.db().lock(),
             CidrContents {
                 name: "experimental".to_string(),
@@ -287,7 +285,7 @@ mod tests {
                 parent: Some(test::ROOT_CIDR_ID),
             },
         )?;
-        let experimental_subcidr = DatabaseCidr::<Sqlite>::create(
+        let experimental_subcidr = DatabaseCidr::<i64, Sqlite>::create(
             &server.db().lock(),
             CidrContents {
                 name: "experimental subcidr".to_string(),
@@ -332,7 +330,7 @@ mod tests {
     async fn test_cidr_delete_fail_with_peer_inside() -> Result<(), Error> {
         let server = test::Server::new()?;
 
-        let experimental_cidr = DatabaseCidr::<Sqlite>::create(
+        let experimental_cidr = DatabaseCidr::<i64, Sqlite>::create(
             &server.db().lock(),
             CidrContents {
                 name: "experimental".to_string(),
@@ -341,7 +339,7 @@ mod tests {
             },
         )?;
 
-        let _experiment_peer = DatabasePeer::<Sqlite>::create(
+        let _experiment_peer = DatabasePeer::<i64, Sqlite>::create(
             &server.db().lock(),
             test::peer_contents(
                 "experiment-peer",

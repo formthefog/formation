@@ -15,7 +15,7 @@ pub mod sqlite_routes {
     pub async fn routes(
         req: Request<Body>,
         mut components: VecDeque<String>,
-        session: Session<SqlContext, Sqlite>,
+        session: Session<SqlContext, i64, Sqlite>,
     ) -> Result<Response<Body>, ServerError> {
         match (req.method(), components.pop_front().as_deref()) {
             (&Method::GET, None) => handlers::list(session).await,
@@ -38,26 +38,26 @@ pub mod sqlite_routes {
         use crate::{db::{DatabaseAssociation, Sqlite}, util::{json_response, status_response}, ServerError, Session, SqlContext};
 
         pub async fn create(
-            contents: AssociationContents,
-            session: Session<SqlContext, Sqlite>,
+            contents: AssociationContents<i64>,
+            session: Session<SqlContext, i64, Sqlite>,
         ) -> Result<Response<Body>, ServerError> {
             let conn = session.context.db.lock();
 
-            DatabaseAssociation::<Sqlite>::create(&conn, contents)?;
+            DatabaseAssociation::<Sqlite, i64, i64>::create(&conn, contents)?;
 
             status_response(StatusCode::CREATED)
         }
 
-        pub async fn list(session: Session<SqlContext, Sqlite>) -> Result<Response<Body>, ServerError> {
+        pub async fn list(session: Session<SqlContext, i64, Sqlite>) -> Result<Response<Body>, ServerError> {
             let conn = session.context.db.lock();
-            let auths = DatabaseAssociation::<Sqlite>::list(&conn)?;
+            let auths = DatabaseAssociation::<Sqlite, i64, i64>::list(&conn)?;
 
             json_response(auths)
         }
 
-        pub async fn delete(id: i64, session: Session<SqlContext, Sqlite>) -> Result<Response<Body>, ServerError> {
+        pub async fn delete(id: i64, session: Session<SqlContext, i64, Sqlite>) -> Result<Response<Body>, ServerError> {
             let conn = session.context.db.lock();
-            DatabaseAssociation::<Sqlite>::delete(&conn, id)?;
+            DatabaseAssociation::<Sqlite, i64, i64>::delete(&conn, id)?;
 
             status_response(StatusCode::NO_CONTENT)
         }
@@ -97,19 +97,19 @@ pub mod crdt_routes {
         use crate::{db::{CrdtMap, DatabaseAssociation}, util::{json_response, status_response}, ServerError};
 
         pub async fn create(
-            contents: AssociationContents,
+            contents: AssociationContents<String>,
         ) -> Result<Response<Body>, ServerError> {
-            DatabaseAssociation::<CrdtMap>::create(contents).await?;
+            DatabaseAssociation::<CrdtMap, String, String>::create(contents).await?;
             status_response(StatusCode::CREATED)
         }
 
         pub async fn list() -> Result<Response<Body>, ServerError> {
-            let auths = DatabaseAssociation::<CrdtMap>::list().await?;
+            let auths = DatabaseAssociation::<CrdtMap, String, String>::list().await?;
             json_response(auths)
         }
 
         pub async fn delete(id: i64) -> Result<Response<Body>, ServerError> {
-            DatabaseAssociation::<CrdtMap>::delete(id).await?;
+            DatabaseAssociation::<CrdtMap, String, String>::delete(id).await?;
             status_response(StatusCode::NO_CONTENT)
         }
     }
