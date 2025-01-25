@@ -75,7 +75,7 @@ where
 }
 
 /// Bring up a prompt to create a new CIDR. Returns the peer request.
-pub fn add_cidr(cidrs: &[Cidr], request: &AddCidrOpts) -> Result<Option<CidrContents>, Error> {
+pub fn add_cidr<T: Display + Clone + PartialEq>(cidrs: &[Cidr<T>], request: &AddCidrOpts) -> Result<Option<CidrContents<T>>, Error> {
     let parent_cidr = if let Some(ref parent_name) = request.parent {
         cidrs
             .iter()
@@ -100,7 +100,7 @@ pub fn add_cidr(cidrs: &[Cidr], request: &AddCidrOpts) -> Result<Option<CidrCont
     let cidr_request = CidrContents {
         name: name.to_string(),
         cidr,
-        parent: Some(parent_cidr.id),
+        parent: Some(parent_cidr.id.clone()),
     };
 
     Ok(
@@ -113,10 +113,10 @@ pub fn add_cidr(cidrs: &[Cidr], request: &AddCidrOpts) -> Result<Option<CidrCont
 }
 
 /// Bring up a prompt to rename an existing CIDR. Returns the CIDR request.
-pub fn rename_cidr(
-    cidrs: &[Cidr],
+pub fn rename_cidr<T: Display + Clone + PartialEq>(
+    cidrs: &[Cidr<T>],
     args: &RenameCidrOpts,
-) -> Result<Option<(CidrContents, String)>, Error> {
+) -> Result<Option<(CidrContents<T>, String)>, Error> {
     let old_cidr = if let Some(ref name) = args.name {
         cidrs
             .iter()
@@ -156,13 +156,13 @@ pub fn rename_cidr(
 }
 
 /// Bring up a prompt to delete a CIDR. Returns the peer request.
-pub fn delete_cidr(cidrs: &[Cidr], peers: &[Peer], request: &DeleteCidrOpts) -> Result<i64, Error> {
+pub fn delete_cidr<T: Display + Clone + PartialEq>(cidrs: &[Cidr<T>], peers: &[Peer<T>], request: &DeleteCidrOpts) -> Result<T, Error> {
     let eligible_cidrs: Vec<_> = cidrs
         .iter()
         .filter(|cidr| {
             !peers.iter().any(|peer| peer.contents.cidr_id == cidr.id) &&
             !cidrs.iter().any(
-                |cidr2| matches!(cidr2.contents.parent, Some(parent_id) if parent_id == cidr.id)
+                |cidr2| matches!(&cidr2.contents.parent, Some(parent_id) if *parent_id == cidr.id)
             )
         })
         .collect();
@@ -176,13 +176,13 @@ pub fn delete_cidr(cidrs: &[Cidr], peers: &[Peer], request: &DeleteCidrOpts) -> 
     };
 
     if request.yes || confirm(&format!("Delete CIDR \"{}\"?", cidr.name))? {
-        Ok(cidr.id)
+        Ok(cidr.id.clone())
     } else {
         Err(anyhow!("Canceled"))
     }
 }
 
-pub fn choose_cidr<'a>(cidrs: &'a [Cidr], text: &'static str) -> Result<&'a Cidr, Error> {
+pub fn choose_cidr<'a, T: Display + Clone + PartialEq>(cidrs: &'a [Cidr<T>], text: &'static str) -> Result<&'a Cidr<T>, Error> {
     let eligible_cidrs: Vec<_> = cidrs
         .iter()
         .filter(|cidr| cidr.name != "innernet-server")
@@ -190,11 +190,11 @@ pub fn choose_cidr<'a>(cidrs: &'a [Cidr], text: &'static str) -> Result<&'a Cidr
     Ok(select(text, &eligible_cidrs)?.1)
 }
 
-pub fn choose_association<'a>(
-    associations: &'a [Association],
-    cidrs: &'a [Cidr],
+pub fn choose_association<'a, T: Display + Clone + PartialEq, K: Display + Clone + PartialEq>(
+    associations: &'a [Association<T, K>],
+    cidrs: &'a [Cidr<T>],
     args: &AddDeleteAssociationOpts,
-) -> Result<&'a Association, Error> {
+) -> Result<&'a Association<T, K>, Error> {
     match (&args.cidr1, &args.cidr2) {
         (Some(cidr1_name), Some(cidr2_name)) => {
             let cidr1 = find_cidr(cidrs, cidr1_name)?;
@@ -234,18 +234,18 @@ pub fn choose_association<'a>(
     }
 }
 
-fn find_cidr<'a>(cidrs: &'a [Cidr], name: &str) -> Result<&'a Cidr, Error> {
+fn find_cidr<'a, T: Display + Clone + PartialEq>(cidrs: &'a [Cidr<T>], name: &str) -> Result<&'a Cidr<T>, Error> {
     cidrs
         .iter()
         .find(|c| c.name == name)
         .ok_or_else(|| anyhow!("can't find cidr '{}'", name))
 }
 
-fn find_or_prompt_cidr<'a>(
-    cidrs: &'a [Cidr],
+fn find_or_prompt_cidr<'a, T: Display + Clone + PartialEq>(
+    cidrs: &'a [Cidr<T>],
     sub_opt: &Option<String>,
     prompt: &'static str,
-) -> Result<&'a Cidr, Error> {
+) -> Result<&'a Cidr<T>, Error> {
     if let Some(name) = sub_opt {
         find_cidr(cidrs, name)
     } else {
@@ -253,10 +253,10 @@ fn find_or_prompt_cidr<'a>(
     }
 }
 
-pub fn add_association<'a>(
-    cidrs: &'a [Cidr],
+pub fn add_association<'a, T: Display + Clone + PartialEq>(
+    cidrs: &'a [Cidr<T>],
     args: &AddDeleteAssociationOpts,
-) -> Result<Option<(&'a Cidr, &'a Cidr)>, Error> {
+) -> Result<Option<(&'a Cidr<T>, &'a Cidr<T>)>, Error> {
     let cidr1 = find_or_prompt_cidr(cidrs, &args.cidr1, "First CIDR")?;
     let cidr2 = find_or_prompt_cidr(cidrs, &args.cidr2, "Second CIDR")?;
 
@@ -275,11 +275,11 @@ pub fn add_association<'a>(
     )
 }
 
-pub fn delete_association<'a>(
-    associations: &'a [Association],
-    cidrs: &'a [Cidr],
+pub fn delete_association<'a, T: Display + Clone + PartialEq, K: Display + Clone + PartialEq>(
+    associations: &'a [Association<T, K>],
+    cidrs: &'a [Cidr<T>],
     args: &AddDeleteAssociationOpts,
-) -> Result<Option<&'a Association>, Error> {
+) -> Result<Option<&'a Association<T, K>>, Error> {
     let association = choose_association(associations, cidrs, args)?;
 
     Ok(
@@ -292,11 +292,11 @@ pub fn delete_association<'a>(
 }
 
 /// Bring up a prompt to create a new peer. Returns the peer request.
-pub fn add_peer(
-    peers: &[Peer],
-    cidr_tree: &CidrTree,
+pub fn add_peer<T: Display + Clone + PartialEq>(
+    peers: &[Peer<T>],
+    cidr_tree: &CidrTree<T>,
     args: &AddPeerOpts,
-) -> Result<Option<(PeerContents, KeyPair, String, File)>, Error> {
+) -> Result<Option<(PeerContents<T>, KeyPair, String, File)>, Error> {
     let leaves = cidr_tree.leaves();
 
     let cidr = if let Some(ref parent_name) = args.cidr {
@@ -361,7 +361,7 @@ pub fn add_peer(
     let peer_request = PeerContents {
         name,
         ip,
-        cidr_id: cidr.id,
+        cidr_id: cidr.id.clone(),
         public_key: default_keypair.public.to_base64(),
         endpoint: None,
         is_admin,
@@ -387,10 +387,10 @@ pub fn add_peer(
 }
 
 /// Bring up a prompt to rename an existing peer. Returns the peer request.
-pub fn rename_peer(
-    peers: &[Peer],
+pub fn rename_peer<T: Display + Clone + PartialEq>(
+    peers: &[Peer<T>],
     args: &RenamePeerOpts,
-) -> Result<Option<(PeerContents, Hostname)>, Error> {
+) -> Result<Option<(PeerContents<T>, Hostname)>, Error> {
     let eligible_peers = peers
         .iter()
         .filter(|p| &*p.name != "innernet-server")
@@ -438,11 +438,11 @@ pub fn rename_peer(
 
 /// Presents a selection and confirmation of eligible peers for either disabling or enabling,
 /// and returns back the ID of the selected peer.
-pub fn enable_or_disable_peer(
-    peers: &[Peer],
+pub fn enable_or_disable_peer<T: Display + Clone + PartialEq>(
+    peers: &[Peer<T>],
     args: &EnableDisablePeerOpts,
     enable: bool,
-) -> Result<Option<Peer>, Error> {
+) -> Result<Option<Peer<T>>, Error> {
     let enabled_peers: Vec<_> = peers
         .iter()
         .filter(|peer| enable && peer.is_disabled || !enable && !peer.is_disabled)
@@ -481,12 +481,12 @@ pub fn enable_or_disable_peer(
 }
 
 /// Confirm and write a innernet invitation file after a peer has been created.
-pub fn write_peer_invitation(
+pub fn write_peer_invitation<T: Display + Clone + PartialEq>(
     target_file: (&mut File, &str),
     network_name: &InterfaceName,
-    peer: &Peer,
-    server_peer: &Peer,
-    root_cidr: &Cidr,
+    peer: &Peer<T>,
+    server_peer: &Peer<T>,
+    root_cidr: &Cidr<T>,
     keypair: KeyPair,
     server_api_addr: &SocketAddr,
 ) -> Result<(), Error> {

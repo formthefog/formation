@@ -1,10 +1,6 @@
-use std::{path::PathBuf, time::Duration};
-use form_types::{BootCompleteRequest, VmmResponse};
-use formnet::{redeem_invite, up, JoinRequest, JoinResponse, VmJoinRequest};
-use shared::{NatOpts, NetworkOpts};
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /*
     simple_logger::SimpleLogger::new().init().unwrap();
     let host_public_ip = reqwest::blocking::get(
         "https://api.ipify.org"
@@ -87,6 +83,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         JoinResponse::Error(reason) => return Err(other_err(&reason.to_string()))
     }
+*/
+    Ok(())
 }
 
 pub fn other_err(msg: &str) -> Box<dyn std::error::Error> {

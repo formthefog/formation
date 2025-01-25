@@ -1,15 +1,23 @@
 use std::{net::{IpAddr, SocketAddr}, time::{Duration, SystemTime}};
-use ditto::{map::{LocalOp, Op}, Map};
+use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, CmRDT, Map, Update};
 use ipnet::IpNet;
-use shared::{Association, AssociationContents, Cidr, CidrContents, Endpoint, Peer, PeerContents};
+use k256::ecdsa::SigningKey;
+use shared::{AssociationContents, CidrContents, Endpoint, Peer, PeerContents};
 use serde::{Serialize, Deserialize};
+use tiny_keccak::{Hasher, Sha3};
+use crate::Actor;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct CrdtPeer {
+pub type PeerOp<T> = Op<String, BFTReg<CrdtPeer<T>, Actor>, Actor>; 
+pub type CidrOp<T> = Op<String, BFTReg<CrdtCidr<T>, Actor>, Actor>;
+pub type AssocOp<T> = Op<(String, String), BFTReg<CrdtAssociation<T>, Actor>, Actor>;
+pub type DnsOp = Op<String, BFTReg<DnsZone, Actor>, Actor>;
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CrdtPeer<T: Clone> {
     id: String,
     name: String,
     ip: IpAddr,
-    cidr_id: i64,
+    cidr_id: T, 
     public_key: String,
     endpoint: Option<Endpoint>,
     keepalive: Option<u16>,
@@ -20,35 +28,40 @@ pub struct CrdtPeer {
     candidates: Vec<Endpoint>,
 }
 
-impl From<Peer> for CrdtPeer {
-    fn from(value: Peer) -> Self {
+impl Sha3Hash for CrdtPeer<String> {
+    fn hash(&self, hasher: &mut Sha3) {
+        hasher.update(&serde_json::to_vec(self).unwrap())
+    }
+}
+
+impl From<PeerContents<String>> for CrdtPeer<String> {
+    fn from(value: PeerContents<String>) -> Self {
         Self {
-            id: value.id.to_string(),
-            name: value.contents.name.to_string(),
-            ip: value.contents.ip,
-            cidr_id: value.contents.cidr_id,
-            public_key: value.contents.public_key,
-            endpoint: value.contents.endpoint,
-            keepalive: value.contents.persistent_keepalive_interval,
-            is_admin: value.contents.is_admin,
-            is_disabled: value.contents.is_disabled,
-            is_redeemed: value.contents.is_redeemed,
-            invite_expires: value.contents.invite_expires
+            id: value.name.to_string().clone(),
+            name: value.name.to_string(),
+            ip: value.ip,
+            cidr_id: value.cidr_id,
+            public_key: value.public_key,
+            endpoint: value.endpoint,
+            keepalive: value.persistent_keepalive_interval,
+            is_admin: value.is_admin,
+            is_disabled: value.is_disabled,
+            is_redeemed: value.is_redeemed,
+            invite_expires: value.invite_expires
             .map(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
             .flatten()
             .map(|t| t.as_secs()),
-            candidates: value.contents.candidates,
+            candidates: value.candidates,
         }
     }
 }
 
-impl TryFrom<CrdtPeer> for Peer {
-    type Error = Box<dyn std::error::Error>;
-    fn try_from(value: CrdtPeer) -> Result<Self, Self::Error> {
-        Ok(Peer{
-            id: value.id.parse()?,
+impl From<CrdtPeer<String>> for Peer<String> {
+    fn from(value: CrdtPeer<String>) -> Self {
+        Peer{
+            id: value.id,
             contents: PeerContents {
-                name: value.name.parse()?,
+                name: value.name.into(),
                 ip: value.ip,
                 cidr_id: value.cidr_id,
                 public_key: value.public_key,
@@ -61,11 +74,11 @@ impl TryFrom<CrdtPeer> for Peer {
                 SystemTime::UNIX_EPOCH + Duration::from_secs(time)}),
                 candidates: value.candidates
             } 
-        })
+        }
     }
 }
 
-impl CrdtPeer {
+impl<T: Clone> CrdtPeer<T> {
     pub fn ip(&self) -> IpAddr {
         self.ip
     }
@@ -82,8 +95,8 @@ impl CrdtPeer {
         self.is_redeemed
     }
 
-    pub fn cidr(&self) -> i64 {
-        self.cidr_id
+    pub fn cidr(&self) -> T {
+        self.cidr_id.clone()
     }
 
     pub fn invite_expires(&self) -> Option<u64> {
@@ -92,16 +105,23 @@ impl CrdtPeer {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct CrdtCidr {
-    id: i64,
+pub struct CrdtCidr<T: Clone> {
+    id: String,
     name: String,
     cidr: IpNet,
-    parent: Option<i64>
+    parent: Option<T>
 }
 
-impl CrdtCidr {
-    pub fn id(&self) -> i64 {
-        self.id
+impl Sha3Hash for CrdtCidr<String> {
+    fn hash(&self, hasher: &mut Sha3) {
+        hasher.update(&serde_json::to_vec(self).unwrap())
+    }
+}
+
+
+impl<T: Clone> CrdtCidr<T> {
+    pub fn id(&self) -> String {
+        self.id.clone()
     }
     
     pub fn name(&self) -> String {
@@ -112,50 +132,57 @@ impl CrdtCidr {
         self.cidr.clone()
     }
 
-    pub fn parent(&self) -> Option<i64> {
+    pub fn parent(&self) -> Option<T> {
         self.parent.clone()
     }
 }
 
-impl From<Cidr> for CrdtCidr {
-    fn from(value: Cidr) -> Self { 
+impl From<CidrContents<String>> for CrdtCidr<String> {
+    fn from(value: CidrContents<String>) -> Self { 
         Self {
-            id:  value.id,
-            name: value.contents.name,
-            cidr: value.contents.cidr,
-            parent: value.contents.parent,
+            id:  value.name.clone(),
+            name: value.name,
+            cidr: value.cidr,
+            parent: value.parent,
         }
     }
 
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct CrdtAssociation {
-    id: i64,
-    cidr_1: i64,
-    cidr_2: i64
+pub struct CrdtAssociation<T: Clone> {
+    id: (T, T),
+    cidr_1: T,
+    cidr_2: T 
 }
 
-impl CrdtAssociation {
-    pub fn id(&self) -> i64 {
-        self.id
-    }
-
-    pub fn cidr_1(&self) -> i64 {
-        self.cidr_1
-    }
-
-    pub fn cidr_2(&self) -> i64 {
-        self.cidr_2
+impl Sha3Hash for CrdtAssociation<String> {
+    fn hash(&self, hasher: &mut Sha3) {
+        hasher.update(&serde_json::to_vec(self).unwrap())
     }
 }
 
-impl From<Association> for CrdtAssociation{
-    fn from(value: Association) -> Self {
+
+impl<T: Clone> CrdtAssociation<T> {
+    pub fn id(&self) -> (T, T) {
+        self.id.clone()
+    }
+
+    pub fn cidr_1(&self) -> T {
+        self.cidr_1.clone()
+    }
+
+    pub fn cidr_2(&self) -> T {
+        self.cidr_2.clone()
+    }
+}
+
+impl From<AssociationContents<String>> for CrdtAssociation<String> {
+    fn from(value: AssociationContents<String>) -> Self {
         Self {
-            id: value.id,
-            cidr_1: value.contents.cidr_id_1,
-            cidr_2: value.contents.cidr_id_2
+            id: (value.cidr_id_1.clone(), value.cidr_id_2.clone()),
+            cidr_1: value.cidr_id_1,
+            cidr_2: value.cidr_id_2
         }
     }
 }
@@ -208,10 +235,22 @@ pub enum ZoneEntry {
     Subdomain(DnsZone),
 }
 
+impl Sha3Hash for ZoneEntry {
+    fn hash(&self, hasher: &mut Sha3) {
+        hasher.update(&serde_json::to_vec(self).unwrap())
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct DnsZone {
-    records: Map<String, ZoneEntry>,
+    records: Map<Actor, BFTReg<ZoneEntry, Actor>, Actor>,
     owner: String,
+}
+
+impl Sha3Hash for DnsZone {
+    fn hash(&self, hasher: &mut Sha3) {
+        hasher.update(&serde_json::to_vec(self).unwrap())
+    }
 }
 
 impl DnsZone {
@@ -222,7 +261,7 @@ impl DnsZone {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DnsState {
-    zones: Map<String, DnsZone>
+    pub zones: Map<Actor, BFTReg<DnsZone, Actor>, Actor>
 }
 
 impl DnsState {
@@ -232,167 +271,187 @@ impl DnsState {
         }
     }
 
-    pub fn add_site_id(&mut self, site_id: u32) -> Result<Vec<Op<String, DnsZone>>, ditto::Error> {
-        self.zones.add_site_id(site_id)
-    }
-
-    pub fn execute_op(&mut self, op: Op<String, DnsZone>) -> LocalOp<String, DnsZone> {
-        self.zones.execute_op(op)
+    pub fn apply(&mut self, op: DnsOp) {
+        self.zones.apply(op);
     }
 }
 
-
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NetworkState {
-    pub peers: Map<String, CrdtPeer>,
-    pub cidrs: Map<String, CrdtCidr>,
-    pub associations: Map<String, CrdtAssociation>,
+    pub pk: String,
+    pub node_id: Actor,
+    pub peers: Map<String, BFTReg<CrdtPeer<String>, Actor>, Actor>,
+    pub cidrs: Map<String, BFTReg<CrdtCidr<String>, Actor>, Actor>,
+    pub associations: Map<(String, String), BFTReg<CrdtAssociation<String>, Actor>, Actor>,
     pub dns_state: DnsState
 }
 
+#[allow(dead_code, unused)]
 impl NetworkState {
-    pub fn new(site_id: u32) -> Result<Self, ditto::Error> {
-        let mut peer_map = Map::new();
-        let mut cidr_map = Map::new();
-        let mut associations_map = Map::new();
-        let mut dns_map = DnsState::new();
+    pub fn new(node_id: Actor, pk: String) -> Self {
+        let peer_map = Map::new();
+        let cidr_map = Map::new();
+        let associations_map = Map::new();
+        let dns_map = DnsState::new();
 
-        let cached_peer_ops = peer_map.add_site_id(site_id)?;
-        let cached_cidr_ops = cidr_map.add_site_id(site_id)?;
-        let cached_assoc_ops = associations_map.add_site_id(site_id)?;
-        let cached_dns_ops = dns_map.add_site_id(site_id)?;
-
-        let mut ns = Self {
+        Self {
+            pk,
+            node_id,
             peers: peer_map,
             cidrs: cidr_map,
             associations: associations_map,
             dns_state: dns_map 
-        };
-
-        ns.handle_cached_peer_ops(cached_peer_ops)?;
-        ns.handle_cached_cidr_ops(cached_cidr_ops)?;
-        ns.handle_cached_assoc_ops(cached_assoc_ops)?;
-        ns.handle_cached_dns_ops(cached_dns_ops)?;
-
-        Ok(ns)
-
+        }
     }
 
-    pub fn add_peer_local(&mut self, peer: PeerContents) -> Result<Op<String, CrdtPeer>, ditto::Error> {
-        let peer_id = self.peers.local_value().len() as i64;
-        let p = Peer {
-            id: peer_id,
-            contents: peer.clone() 
-        };
-        let op = self.peers.insert(peer_id.to_string(), p.into())?;
-        Ok(op)
+    pub fn update_peer_local(&mut self, peer: PeerContents<String>) -> PeerOp<String> {
+        let add_ctx = self.peers.read_ctx().derive_add_ctx(self.node_id.clone());
+        let signing_key = SigningKey::from_slice(
+            &hex::decode(self.pk.clone())
+                .expect("PANIC: Invalid SigningKey Cannot Decode from Hex"))
+                .expect("PANIC: Invalid SigningKey cannot recover ffrom Bytes");
+        let op = self.peers.update(peer.name.to_string(), add_ctx, |reg, ctx| {
+            let op = reg.update(peer.into(), self.node_id.clone(), signing_key).expect("PANIC: Unable to sign updates");
+            op
+        });
+        op
     }
 
-    pub fn update_peer_local(&mut self, peer: PeerContents) -> Result<Op<String, CrdtPeer>, ditto::Error> {
-        let peer_id = self.peers.local_value().len() as i64;
-        let p = Peer {
-            id: peer_id,
-            contents: peer.clone() 
-        };
-        let op = self.peers.insert(peer_id.to_string(), p.into())?;
-        Ok(op)
+    pub fn remove_peer_local(&mut self, id: String) -> PeerOp<String> {
+        let rm_ctx = self.peers.read_ctx().derive_rm_ctx();
+        self.peers.rm(id, rm_ctx)
     }
 
-    pub fn remove_peer_local(&mut self, id: String) -> Option<Result<Op<String, CrdtPeer>, ditto::Error>> {
-        let op = self.peers.remove(&id)?;
-        Some(op)
+    pub fn update_cidr_local(&mut self, cidr: CidrContents<String>) ->  CidrOp<String> { 
+        let add_ctx = self.cidrs.read_ctx().derive_add_ctx(self.node_id.clone());
+        let signing_key = SigningKey::from_slice(
+            &hex::decode(self.pk.clone())
+                .expect("PANIC: Invalid SigningKey Cannot Decode from Hex"))
+                .expect("PANIC: Invalid SigningKey cannot recover ffrom Bytes");
+        let op = self.cidrs.update(cidr.name.to_string(), add_ctx, |reg, ctx| {
+            let op = reg.update(cidr.into(), self.node_id.clone(), signing_key).expect("PANIC: Unable to sign updates");
+            op
+        });
+        op
     }
 
-    pub fn add_cidr_local(&mut self, cidr: CidrContents) -> Result<Op<String, CrdtCidr>, ditto::Error> {
-        let cidr_id = self.cidrs.local_value().len() as i64;
-        let c = Cidr {
-            id: cidr_id,
-            contents: cidr
-        };
-        let op = self.cidrs.insert(cidr_id.to_string(), c.into())?;
-        Ok(op)
+    pub fn remove_cidr_local(&mut self, id: String) -> CidrOp<String> { 
+        let rm_ctx = self.cidrs.read_ctx().derive_rm_ctx();
+        self.cidrs.rm(id, rm_ctx)
     }
 
-    pub fn update_cidr_local(&mut self, cidr: CidrContents) -> Result<Op<String, CrdtCidr>, ditto::Error> {
-        let cidr_id = self.cidrs.local_value().len() as i64;
-        let c = Cidr {
-            id: cidr_id,
-            contents: cidr
-        };
-        let op = self.cidrs.insert(cidr_id.to_string(), c.into())?;
-        Ok(op)
+    pub fn add_association_local(&mut self, association: AssociationContents<String>) -> AssocOp<String> { 
+        let add_ctx = self.associations.read_ctx().derive_add_ctx(self.node_id.clone());
+        let signing_key = SigningKey::from_slice(
+            &hex::decode(self.pk.clone())
+                .expect("PANIC: Invalid SigningKey Cannot Decode from Hex"))
+                .expect("PANIC: Invalid SigningKey cannot recover ffrom Bytes");
+        let op = self.associations.update((association.cidr_id_1.to_string(), association.cidr_id_2.to_string()), add_ctx, |reg, ctx| {
+            let op = reg.update(association.into(), self.node_id.clone(), signing_key).expect("PANIC: Unable to sign updates");
+            op
+        });
+        op
     }
 
-    pub fn remove_cidr_local(&mut self, id: String) -> Option<Result<Op<String, CrdtCidr>, ditto::Error>> {
-        let op = self.cidrs.remove(&id)?;
-        Some(op)
+    pub fn remove_association_local(&mut self, id: (String, String)) -> AssocOp<String> { 
+        let rm_ctx = self.associations.read_ctx().derive_rm_ctx();
+        self.associations.rm(id, rm_ctx)
     }
 
-    pub fn add_association_local(&mut self, association: AssociationContents) -> Result<Op<String, CrdtAssociation>, ditto::Error> {
-        let assoc_id = self.associations.local_value().len() as i64;
-        let a = Association {
-            id: assoc_id,
-            contents: association
-        };
-        let op = self.associations.insert(assoc_id.to_string(), a.into())?;
-        Ok(op)
-    }
-
-    pub fn remove_association_local(&mut self, id: String) -> Option<Result<Op<String, CrdtAssociation>, ditto::Error>> {
-        let op = self.associations.remove(&id)?;
-        Some(op)
-    }
-
-    pub fn add_dns_local(&mut self, _dns: ZoneEntry) -> Result<Op<String, ZoneEntry>, ditto::Error> {
+    pub fn add_dns_local(&mut self, _dns: ZoneEntry) { 
         todo!()
     }
 
-    pub fn remove_dns_local(&mut self, _id: String) -> Option<Result<Op<String, ZoneEntry>, ditto::Error>> {
+    pub fn remove_dns_local(&mut self, _id: String) { 
         todo!()
     }
 
-    pub fn peer_op(&mut self, op: Op<String, CrdtPeer>, site_id: u32)  -> Result<(), ditto::Error> {
-        self.peers.validate_and_execute_op(op, site_id)?;
-        Ok(())
+    pub fn peer_op(&mut self, op: PeerOp<String>) -> Option<(String, String)> {
+        self.peers.apply(op.clone());
+        match op {
+            Op::Up { dot, key, op } => Some((dot.actor, key)),
+            Op::Rm { clock, keyset } => None
+        }
     }
 
-    pub fn cidr_op(&mut self, op: Op<String, CrdtCidr>, site_id: u32) -> Result<(), ditto::Error> {
-        self.cidrs.validate_and_execute_op(op, site_id)?;
-        Ok(())
+    pub fn peer_op_success(&self, key: String, update: Update<CrdtPeer<String>, String>) -> (bool, CrdtPeer<String>) {
+        if let Some(reg) = self.peers.get(&key).val {
+            if let Some(v) = reg.val() {
+                // If the in the updated register equals the value in the Op it
+                // succeeded
+                if v.value() == update.op().value {
+                    return (true, v.value()) 
+                // Otherwise, it could be that it's a concurrent update and was added
+                // to the DAG as a head
+                } else if reg.dag_contains(&update.hash()) && reg.is_head(&update.hash()) {
+                    return (true, v.value()) 
+                // Otherwise, we could be missing a child, and this particular update
+                // is orphaned, if so we should requst the child we are missing from
+                // the actor who shared this update
+                } else if reg.is_orphaned(&update.hash()) {
+                    return (true, v.value())
+                // Otherwise it was a no-op for some reason
+                } else {
+                    return (false, v.value()) 
+                }
+            } else {
+                return (false, update.op().value) 
+            }
+        } else {
+            return (false, update.op().value);
+        }
     }
 
-    pub fn associations_op(&mut self, op: Op<String, CrdtAssociation>, site_id: u32) -> Result<(), ditto::Error> {
-        self.associations.validate_and_execute_op(op, site_id)?;
-        Ok(())
-    }
-
-    fn handle_cached_peer_ops(&mut self, ops: Vec<Op<String, CrdtPeer>>) -> Result<(), ditto::Error> {
-        for op in ops {
-            self.peers.execute_op(op);
+    pub fn get_peer_by_ip(&self, ip: String) -> Option<CrdtPeer<String>> {
+        if let Some(ctx) = self.peers.values().find(|ctx| {
+            match ctx.val.val() {
+                None => false,
+                Some(node) => {
+                    node.value().ip().to_string() == ip
+                }
+            }
+        }) {
+            if let Some(node) = ctx.val.val() {
+                return Some(node.value())
+            }
         }
 
-        Ok(())
+        None
     }
 
-    fn handle_cached_cidr_ops(&mut self, ops: Vec<Op<String, CrdtCidr>>) -> Result<(), ditto::Error> {
-        for op in ops {
-            self.cidrs.execute_op(op);
-        }
-        Ok(())
+    pub fn cidr_op(&mut self, op: CidrOp<String>) {
+        self.cidrs.apply(op);
     }
 
-    fn handle_cached_assoc_ops(&mut self, ops: Vec<Op<String, CrdtAssociation>>) -> Result<(), ditto::Error> {
-        for op in ops {
-            self.associations.execute_op(op);
-        }
-
-        Ok(())
+    pub fn associations_op(&mut self, op: AssocOp<String>) {
+        self.associations.apply(op);
     }
 
-    fn handle_cached_dns_ops(&mut self, ops: Vec<Op<String, DnsZone>>) -> Result<(), ditto::Error> {
-        for op in ops {
-            self.dns_state.execute_op(op);
-        }
+    pub fn dns_op(&mut self, op: DnsOp) {
+        self.dns_state.apply(op);
+    }
 
-        Ok(())
+    fn handle_cached_peer_ops(&mut self, ops: Vec<PeerOp<String>>) {
+        for op in ops {
+            self.peer_op(op);
+        }
+    }
+
+    fn handle_cached_cidr_ops(&mut self, ops: Vec<CidrOp<String>>) {
+        for op in ops {
+            self.cidr_op(op);
+        }
+    }
+
+    fn handle_cached_assoc_ops(&mut self, ops: Vec<AssocOp<String>>) {
+        for op in ops {
+            self.associations_op(op);
+        }
+    }
+
+    fn handle_cached_dns_ops(&mut self, ops: Vec<DnsOp>) {
+        for op in ops {
+            self.dns_op(op);
+        }
     }
 }

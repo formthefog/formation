@@ -13,7 +13,7 @@ pub mod sqlite_routes {
     pub async fn routes(
         req: Request<Body>,
         mut components: VecDeque<String>,
-        session: Session<SqlContext, Sqlite>,
+        session: Session<SqlContext, i64, Sqlite>,
     ) -> Result<Response<Body>, ServerError> {
         if !session.admin_capable() {
             return Err(ServerError::Unauthorized);
@@ -39,7 +39,7 @@ pub mod crdt_routes {
     pub async fn routes(
         req: Request<Body>,
         mut components: VecDeque<String>,
-        session: Session<CrdtContext, CrdtMap>,
+        session: Session<CrdtContext, String, CrdtMap>,
     ) -> Result<Response<Body>, ServerError> {
         if !session.admin_capable() {
             return Err(ServerError::Unauthorized);

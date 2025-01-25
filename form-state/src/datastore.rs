@@ -1,179 +1,105 @@
 use std::{collections::HashMap, sync::Arc, time::{SystemTime, UNIX_EPOCH}};
 use axum::{extract::{State, Path}, routing::{get, post}, Json, Router};
-use ditto::{map::Op, MapState};
 use reqwest::Client;
-use shared::{AssociationContents, CidrContents, Peer, PeerContents};
+use shared::{Association, AssociationContents, Cidr, CidrContents, Peer, PeerContents};
 use tokio::{net::TcpListener, sync::Mutex};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use crate::network::{CrdtAssociation, CrdtCidr, CrdtPeer, NetworkState};
+use crdts::{Map, BFTReg};
+use crate::network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtPeer, NetworkState, PeerOp};
+
+pub type PeerMap = Map<String, BFTReg<CrdtPeer<String>, String>, String>;
+pub type CidrMap = Map<String, BFTReg<CrdtCidr<String>, String>, String>;
+pub type AssocMap = Map<(String, String), BFTReg<CrdtAssociation<String>, String>, String>;
 
 pub struct DataStore {
-    next_site_id: u32,
     network_state: NetworkState,
     // Add Node State
     // Add Instance State
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum NewPeerRequest {
-    Op { 
-        site_id: u32,
-        op: Op<String, CrdtPeer>,
-    },
-    Join(PeerContents),
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum UpdatePeerRequest {
-    Op {
-        site_id: u32,
-        op: Op<String, CrdtPeer>
-    },
-    Update(PeerContents)
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum DeletePeerRequest {
-    Op {
-        site_id: u32,
-        op: Op<String, CrdtPeer>
-    },
+pub enum PeerRequest {
+    Op(PeerOp<String>),
+    Join(PeerContents<String>),
+    Update(PeerContents<String>),
     Delete(String),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum PeerResponse {
-    Success(Option<Peer>),
-    Failure
+pub enum Success<T> {
+    Some(T),
+    List(Vec<T>),
+    None,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum GetPeerResponse {
-    Success(CrdtPeer),
-    Failure
+pub enum Response<T> {
+    Success(Success<T>),
+    Failure { reason: Option<String> }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum GetPeerListResponse {
-    Success(Vec<CrdtPeer>),
-    Failure,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum DeleteExpiredResponse {
-    Success,
-    Failure
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum CreateCidrRequest {
-    Op {
-        site_id: u32,
-        op: Op<String, CrdtCidr>
-    },
-    Create(CidrContents)
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum UpdateCidrRequest {
-    Op {
-        site_id: u32,
-        op: Op<String, CrdtCidr>
-    },
-    Update(CidrContents)
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum DeleteCidrRequest {
-    Op {
-        site_id: u32,
-        op: Op<String, CrdtCidr>
-    },
-    Delete(String)
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ListCidrResponse {
-    Success(Vec<CrdtCidr>),
-    Failure
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum CidrResponse {
-    Success(Option<CrdtCidr>),
-    Failure
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum GetCidrResponse {
-    Success(CrdtCidr),
-    Failure
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum CreateAssociationRequest {
-    Op {
-        site_id: u32,
-        op: Op<String, CrdtAssociation>,
-    },
-    Create(AssociationContents),
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum DeleteAssociationRequest {
-    Op {
-        site_id: u32,
-        op: Op<String, CrdtAssociation>,
-    },
+pub enum CidrRequest {
+    Op(CidrOp<String>),
+    Create(CidrContents<String>),
+    Update(CidrContents<String>),
     Delete(String),
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum AssociationResponse {
-    Success(Option<CrdtAssociation>),
-    Failure
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ListAssociationResponse {
-    Success(Vec<CrdtAssociation>),
-    Failure
-}
 
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum AssocRequest {
+    Op(AssocOp<String>), 
+    Create(AssociationContents<String>),
+    Delete(String),
+}
 
 impl DataStore {
-    pub fn new(site_id: Option<u32>) -> Result<Self, ditto::Error> {
-        let network_state = if let Some(site_id) = site_id {
-            NetworkState::new(site_id)?
-        } else {
-            NetworkState::new(1)?
-        };
+    pub fn new(node_id: String, pk: String) -> Self {
+        let network_state = NetworkState::new(node_id, pk);
 
-        Ok(Self {
-            network_state,
-            next_site_id: site_id.unwrap_or_else(|| 1) + 1, 
-        })
+        Self { network_state }
     }
 
     pub fn new_from_state(
+        node_id: String,
+        pk: String,
         network_state: NetworkState
     ) -> Self {
-        let site_id = network_state.peers.site_id();
-        Self {
-            network_state,
-            next_site_id: site_id + 1
-        }
+        let mut local = Self::new(node_id, pk); 
+        local.network_state = network_state;
+        /*
+        local.network_state.peers.merge(network_state.peers);
+        local.network_state.cidrs.merge(network_state.cidrs);
+        local.network_state.associations.merge(network_state.associations);
+        local.network_state.dns_state.zones.merge(network_state.dns_state.zones);
+        */
+        local
+
     }
 
-    pub fn get_all_users(&self) -> HashMap<String, CrdtPeer> {
-        self.network_state.peers.local_value()
+    pub fn get_all_users(&self) -> HashMap<String, CrdtPeer<String>> {
+        self.network_state.peers.iter().filter_map(|item| {
+            match item.val.1.val() {
+                Some(v) => Some((item.val.0.clone(), v.value().clone())),
+                None => None
+            }
+        }).collect()
     }
 
-    pub fn get_all_active_admin(&mut self) -> HashMap<String, CrdtPeer> {
-        let mut peers = self.network_state.peers.local_value();
-        peers.retain(|_, v| {
-            v.is_admin() && !v.is_disabled() && v.is_redeemed()
-        });
-
-        peers
+    pub fn get_all_active_admin(&mut self) -> HashMap<String, CrdtPeer<String>> {
+        self.network_state.peers.iter().filter_map(|item| {
+            match item.val.1.val() {
+                Some(v) => {
+                    if v.value().is_admin() {
+                        Some((item.val.0.clone(), v.value().clone()))
+                    } else {
+                        None
+                    }
+                }
+                None => None,
+            }
+        }).collect()
     }
 
     pub async fn broadcast<R: DeserializeOwned>(
@@ -208,10 +134,8 @@ impl DataStore {
 
         Ok(())
     }
-
     pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         Router::new()
-            .route("/bootstrap/site_id", get(site_id))
             .route("/bootstrap/peer_state", get(peer_state))
             .route("/bootstrap/cidr_state", get(cidr_state))
             .route("/bootstrap/assoc_state", get(assoc_state))
@@ -219,13 +143,14 @@ impl DataStore {
             .route("/user/update", post(update_user))
             .route("/user/disable", post(disable_user))
             .route("/user/redeem", post(redeem_invite)) 
-            .route("/user/delete", post(delete_user))
             .route("/user/:id/get", get(get_user))
             .route("/user/:ip/get_from_ip", get(get_user_from_ip))
+            .route("/user/delete", post(delete_user))
             .route("/user/:id/get_all_allowed", get(get_all_allowed))
-            .route("/user/:cidr/list", get(list_by_cidr))
             .route("/user/list", get(list_users))
+            .route("/user/:cidr/list", get(list_by_cidr))
             .route("/user/delete_expired", post(delete_expired))
+            /*
             .route("/cidr/create", post(create_cidr))
             .route("/cidr/update", post(update_cidr))
             .route("/cidr/delete", post(delete_cidr))
@@ -235,6 +160,7 @@ impl DataStore {
             .route("/assoc/delete", post(delete_assoc))
             .route("/assoc/list", get(list_assoc))
             .route("/assoc/:cidr_id/relationships", get(relationships))
+            */
             .with_state(state)
     }
 
@@ -247,187 +173,306 @@ impl DataStore {
     }
 }
 
-async fn site_id(
-    State(state): State<Arc<Mutex<DataStore>>>, 
-) -> Json<u32> {
-    let next_site_id = state.lock().await.next_site_id;
-    Json(next_site_id)
-}
-
 async fn peer_state(
     State(state): State<Arc<Mutex<DataStore>>>, 
-) -> Json<MapState<'static, String, CrdtPeer>> {
-    let peer_state = state.lock().await.network_state.peers.clone_state();
+) -> Json<PeerMap> {
+    let peer_state = state.lock().await.network_state.peers.clone();
     Json(peer_state)
 }
 
 async fn cidr_state(
     State(state): State<Arc<Mutex<DataStore>>>, 
-) -> Json<MapState<'static, String, CrdtCidr>> {
-    let cidr_state = state.lock().await.network_state.cidrs.clone_state();
+) -> Json<CidrMap> {
+    let cidr_state = state.lock().await.network_state.cidrs.clone();
     Json(cidr_state)
 }
 
 async fn assoc_state(
     State(state): State<Arc<Mutex<DataStore>>>, 
-) -> Json<MapState<'static, String, CrdtAssociation>> {
-    let assoc_state = state.lock().await.network_state.associations.clone_state();
+) -> Json<AssocMap> {
+    let assoc_state = state.lock().await.network_state.associations.clone();
     Json(assoc_state)
 }
 
 async fn create_user(
     State(state): State<Arc<Mutex<DataStore>>>,
-    Json(user): Json<NewPeerRequest>
-) -> Json<PeerResponse> {
+    Json(user): Json<PeerRequest>
+) -> Json<Response<Peer<String>>> {
     let mut datastore = state.lock().await;
-    let sid = datastore.network_state.peers.site_id().clone();
     match user {
-        NewPeerRequest::Op { site_id, op } => {
-            match datastore.network_state.peer_op(op.clone(), site_id) {
-                Ok(()) => {
-                    if let Some(elem) = op.inserted_element() {
-                        let peer = elem.value.clone();
-                        if peer.is_admin() {
-                            datastore.next_site_id += 1;
-                        }
-                        if let Ok(p) = peer.try_into() {
-                            return Json(PeerResponse::Success(Some(p)));
-                        } else {
-                            return Json(PeerResponse::Failure);
-                        }
+        PeerRequest::Op(map_op) => {
+            match &map_op {
+                crdts::map::Op::Up { ref key, ref op, .. } => {
+                    datastore.network_state.peer_op(map_op.clone());
+                    if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
+                        return Json(Response::Success(Success::Some(v.into())))
                     } else {
-                        return Json(PeerResponse::Failure);
+                        return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
                     }
-                },
-                Err(_) => return Json(PeerResponse::Failure),
-            }
-        },
-        NewPeerRequest::Join(peer) => {
-            let op = match datastore.network_state.add_peer_local(peer.clone()) {
-                Ok(op) => {
-                    if peer.is_admin {
-                        datastore.next_site_id += 1;
-                    }
-                    op
-                },
-                Err(_e) => return Json(PeerResponse::Failure),
-            }; 
-
-            let peer = if let Some(elem) = op.inserted_element() {
-                if let Ok(peer) = elem.value.clone().try_into() {
-                    Some(peer)
-                } else {
-                    return Json(PeerResponse::Failure)
                 }
-            } else {
-                return Json(PeerResponse::Failure)
-            };
-            let request = NewPeerRequest::Op { site_id: sid, op };
-            match datastore.broadcast::<PeerResponse>(
-                request,
-                "/user/create"
-            ).await {
-                Ok(()) => return Json(PeerResponse::Success(peer)),
-                Err(e) => {
-                    eprintln!("broadcast_new_peer_request failed: {e}");
-                } 
+                crdts::map::Op::Rm { .. } => {
+                    return Json(Response::Failure { reason: Some("Invalid Op type for Create User".into()) });
+                }
             }
-
-            return Json(PeerResponse::Success(peer))
-        },
+        }
+        PeerRequest::Join(contents) => {
+            let op = datastore.network_state.update_peer_local(contents);
+            datastore.network_state.peer_op(op.clone());
+            match &op {
+                crdts::map::Op::Rm { .. } => {
+                    return Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Join request".to_string()) });
+                }
+                crdts::map::Op::Up { ref key, ref op, .. } => {
+                    if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
+                        return Json(Response::Success(Success::Some(v.into())))
+                    } else {
+                        return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
+                    }
+                }
+            }
+        }
+        _ => {
+            return Json(Response::Failure { reason: Some("Invalid request for create user".into()) });
+        }
     }
 }
 
 async fn update_user(
     State(state): State<Arc<Mutex<DataStore>>>,
-    Json(user): Json<UpdatePeerRequest>
-) -> Json<PeerResponse> {
-    Json(handle_peer_updates(user, state).await)
+    Json(user): Json<PeerRequest>
+) -> Json<Response<Peer<String>>> {
+    let mut datastore = state.lock().await;
+    match user {
+        PeerRequest::Op(map_op) => {
+            match &map_op {
+                crdts::map::Op::Up { ref key, ref op, .. } => {
+                    datastore.network_state.peer_op(map_op.clone());
+                    if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
+                        return Json(Response::Success(Success::Some(v.into())))
+                    } else {
+                        return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
+                    }
+                }
+                crdts::map::Op::Rm { .. } => {
+                    return Json(Response::Failure { reason: Some("Invalid Op type for Create User".into()) });
+                }
+            }
+        }
+        PeerRequest::Update(contents) => {
+            let op = datastore.network_state.update_peer_local(contents);
+            datastore.network_state.peer_op(op.clone());
+            match &op {
+                crdts::map::Op::Rm { .. } => {
+                    return Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Join request".to_string()) });
+                }
+                crdts::map::Op::Up { ref key, ref op, .. } => {
+                    if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
+                        return Json(Response::Success(Success::Some(v.into())))
+                    } else {
+                        return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
+                    }
+                }
+            }
+        }
+        _ => {
+            return Json(Response::Failure { reason: Some("Invalid request for update user".into()) });
+        }
+    }
 }
 
 async fn disable_user(
     State(state): State<Arc<Mutex<DataStore>>>,
-    Json(user): Json<UpdatePeerRequest>
-) -> Json<PeerResponse> {
-    Json(handle_peer_updates(user, state).await)
+    Json(user): Json<PeerRequest>
+) -> Json<Response<Peer<String>>> {
+    let mut datastore = state.lock().await;
+    match user {
+        PeerRequest::Op(map_op) => {
+            match &map_op {
+                crdts::map::Op::Up { ref key, ref op, .. } => {
+                    datastore.network_state.peer_op(map_op.clone());
+                    if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
+                        return Json(Response::Success(Success::Some(v.into())))
+                    } else {
+                        return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
+                    }
+                }
+                crdts::map::Op::Rm { .. } => {
+                    return Json(Response::Failure { reason: Some("Invalid Op type for Create User".into()) });
+                }
+            }
+        }
+        PeerRequest::Update(contents) => {
+            let op = datastore.network_state.update_peer_local(contents);
+            datastore.network_state.peer_op(op.clone());
+            match &op {
+                crdts::map::Op::Rm { .. } => {
+                    return Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Join request".to_string()) });
+                }
+                crdts::map::Op::Up { ref key, ref op, .. } => {
+                    if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
+                        return Json(Response::Success(Success::Some(v.into())))
+                    } else {
+                        return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
+                    }
+                }
+            }
+        }
+        _ => {
+            return Json(Response::Failure { reason: Some("Invalid request for update user".into()) });
+        }
+    }
 }
+
 async fn redeem_invite(
     State(state): State<Arc<Mutex<DataStore>>>,
-    Json(user): Json<UpdatePeerRequest>
-) -> Json<PeerResponse> {
-    Json(handle_peer_updates(user, state).await)
+    Json(user): Json<PeerRequest>
+) -> Json<Response<Peer<String>>> {
+    let mut datastore = state.lock().await;
+    match user {
+        PeerRequest::Op(map_op) => {
+            match &map_op {
+                crdts::map::Op::Up { ref key, ref op, .. } => {
+                    datastore.network_state.peer_op(map_op.clone());
+                    if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
+                        return Json(Response::Success(Success::Some(v.into())))
+                    } else {
+                        return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
+                    }
+                }
+                crdts::map::Op::Rm { .. } => {
+                    return Json(Response::Failure { reason: Some("Invalid Op type for Create User".into()) });
+                }
+            }
+        }
+        PeerRequest::Update(contents) => {
+            let op = datastore.network_state.update_peer_local(contents);
+            datastore.network_state.peer_op(op.clone());
+            match &op {
+                crdts::map::Op::Rm { .. } => {
+                    return Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Join request".to_string()) });
+                }
+                crdts::map::Op::Up { ref key, ref op, .. } => {
+                    if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
+                        return Json(Response::Success(Success::Some(v.into())))
+                    } else {
+                        return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
+                    }
+                }
+            }
+        }
+        _ => {
+            return Json(Response::Failure { reason: Some("Invalid request for update user".into()) });
+        }
+    }
 }
+
+async fn delete_user(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Json(user): Json<PeerRequest>
+) -> Json<Response<Peer<String>>> {
+    let mut datastore = state.lock().await;
+    match user {
+        PeerRequest::Op(map_op) => {
+            match &map_op {
+                crdts::map::Op::Up { .. } => {
+                    return Json(Response::Failure { reason: Some("Invalid Op type for delete User".into()) });
+                }
+                crdts::map::Op::Rm { .. } => {
+                    datastore.network_state.peer_op(map_op);
+                    return Json(Response::Success(Success::None));
+                }
+            }
+        }
+        PeerRequest::Delete(contents) => {
+            let op = datastore.network_state.remove_peer_local(contents);
+            datastore.network_state.peer_op(op.clone());
+            match &op {
+                crdts::map::Op::Rm { .. } => {
+                    return Json(Response::Success(Success::None));
+                }
+                crdts::map::Op::Up { .. } => {
+                    return Json(Response::Failure { reason: Some("Map generated Add context instead of Rm context on Delete request".to_string()) });
+                }
+            }
+        }
+        _ => {
+            return Json(Response::Failure { reason: Some("Invalid request for update user".into()) });
+        }
+    }
+}
+
+
 async fn get_user(
     State(state): State<Arc<Mutex<DataStore>>>,
     Path(id): Path<String>
-) -> Json<GetPeerResponse> {
-    if let Some(peer) = state.lock().await.network_state.peers.get(&id) {
-        return Json(GetPeerResponse::Success(peer.clone()))
-    } else {
-        return Json(GetPeerResponse::Failure)
-    }
+) -> Json<Response<Peer<String>>> {
+    if let Some(peer) = state.lock().await.network_state.peers.get(&id).val {
+        if let Some(val) = peer.val() {
+            return Json(Response::Success(Success::Some(val.value().into())))
+        } else {
+            return Json(Response::Failure { reason: Some("Entry exists, but value is None".into()) })
+        }
+    } 
+    Json(Response::Failure { reason: Some("Entry does not exist in the CrdtMap".to_string()) })
 }
 
 async fn get_user_from_ip(
     State(state): State<Arc<Mutex<DataStore>>>,
     Path(ip): Path<String>
-) -> Json<GetPeerResponse> {
-    let peers = state.lock().await.get_all_users();
-    if let Some(peer) = peers.values().find(|peer| peer.ip().to_string() == ip) {
-        Json(GetPeerResponse::Success(peer.clone()))
-    } else {
-        Json(GetPeerResponse::Failure)
-    }
+) -> Json<Response<Peer<String>>> {
+    if let Some(peer) = state.lock().await.network_state.get_peer_by_ip(ip.clone()) {
+        return Json(Response::Success(Success::Some(peer.into())))
+    } 
+
+    return Json(Response::Failure { reason: Some(format!("Peer with IP {ip} does not exist")) })
 }
 
 async fn get_all_allowed(
     State(state): State<Arc<Mutex<DataStore>>>,
     Path(id): Path<String>,
-) -> Json<GetPeerListResponse> {
+) -> Json<Response<Peer<String>>> {
     let mut peers = state.lock().await.get_all_users();
-    if let Some(peer) = state.lock().await.network_state.peers.get(&id) {
-        let cidr = peer.cidr();
-        peers.retain(|_, v| v.cidr() == cidr);
-        let all_allowed = peers.iter().map(|(_, v)| v.clone()).collect();
-        Json(GetPeerListResponse::Success(all_allowed))
-    } else {
-        Json(GetPeerListResponse::Failure)
-    }
+    if let Some(peer) = state.lock().await.network_state.peers.get(&id).val {
+        if let Some(node) = peer.val() {
+            let peer = node.value();
+            let cidr = peer.cidr();
+            peers.retain(|_, v| v.cidr() == cidr);
+            let all_allowed = peers.iter().map(|(_, v)| v.clone().into()).collect();
+            return Json(Response::Success(Success::List(all_allowed)))
+        }
+    } 
+
+    return Json(Response::Failure { reason: Some("Peer for which allowed peers was requested does not exist".into()) })
 }
 
 async fn list_users(
     State(state): State<Arc<Mutex<DataStore>>>,
-) -> Json<GetPeerListResponse> {
-    let peers = state.lock().await.get_all_users().iter().map(|(_, v)| v.clone()).collect();
-    Json(GetPeerListResponse::Success(peers))
+) -> Json<Response<Peer<String>>> {
+    let peers = state.lock().await.get_all_users().iter().map(|(_, v)| v.clone().into()).collect();
+    Json(Response::Success(Success::List(peers)))
 }
 
 async fn list_by_cidr(
     State(state): State<Arc<Mutex<DataStore>>>,
     Path(cidr): Path<String>
-) -> Json<GetPeerListResponse> {
-    let cidr_id: i64 = if let Ok(id) = cidr.parse() {
-        id
-    } else {
-        return Json(GetPeerListResponse::Failure);
-    };
+) -> Json<Response<Peer<String>>> {
     let mut peers = state.lock().await.get_all_users();
-    peers.retain(|_, v| v.cidr() == cidr_id);
-
-    Json(GetPeerListResponse::Success(peers.iter().map(|(_, v)| v.clone()).collect()))
+    peers.retain(|_, v| v.cidr() == cidr);
+    Json(Response::Success(Success::List(peers.iter().map(|(_, v)| v.clone().into()).collect())))
 }
 
 async fn delete_expired(
     State(state): State<Arc<Mutex<DataStore>>>
-) -> Json<DeleteExpiredResponse> {
-    let mut peers = state.lock().await.get_all_users();
+) -> Json<Response<Peer<String>>> {
+    let all_peers = state.lock().await.get_all_users();
     let now = match SystemTime::now()
         .duration_since(UNIX_EPOCH) {
             Ok(n) => n.as_secs(),
-            Err(_) => return Json(DeleteExpiredResponse::Failure),
+            Err(_) => return Json(Response::Failure { reason: Some("Unable to get current timestamp".to_string()) }),
     };
 
-    peers.retain(|_, v| {
+    let mut removed_peers = all_peers.clone();
+    removed_peers.retain(|_, v| {
         match v.invite_expires() {
             Some(expires) => {
                 (expires < now) && (!v.is_redeemed())
@@ -437,350 +482,86 @@ async fn delete_expired(
     });
 
     let mut datastore = state.lock().await;
-    let sid = datastore.network_state.peers.site_id();
-    for (id, _) in peers {
-        if let Some(Ok(op)) = datastore.network_state.peers.remove(&id) {
-            let request = DeletePeerRequest::Op { site_id: sid, op }; 
-            match datastore.broadcast::<PeerResponse>(request, "/user/delete").await {
-                Ok(()) => return Json(DeleteExpiredResponse::Success),
-                Err(e) => eprintln!("Error broadcasting DeletePeerRequest: {e}")
-            };
+    for (id, _) in &removed_peers {
+        let op = datastore.network_state.remove_peer_local(id.clone());
+        datastore.network_state.peer_op(op);
+        let request = PeerRequest::Delete(id.clone()); 
+        match datastore.broadcast::<Response<Peer<String>>>(request, "/user/delete").await {
+            Ok(()) => return Json(Response::Success(Success::List(removed_peers.iter().map(|(_, v)| v.clone().into()).collect()))),
+            Err(e) => eprintln!("Error broadcasting DeletePeerRequest: {e}")
         }
     }
 
-    Json(DeleteExpiredResponse::Success)
+    Json(Response::Success(Success::List(removed_peers.iter().map(|(_, v)| v.clone().into()).collect())))
 }
 
-async fn delete_user(
-    State(state): State<Arc<Mutex<DataStore>>>,
-    Json(request): Json<DeletePeerRequest>,
-) -> Json<PeerResponse> {
-    let mut datastore = state.lock().await;
-    let sid = datastore.network_state.peers.site_id().clone();
-    match request {
-        DeletePeerRequest::Op { site_id, op } => {
-            match datastore.network_state.peer_op(op, site_id) {
-                Ok(()) => return Json(PeerResponse::Success(None)),
-                Err(_) => return Json(PeerResponse::Failure),
-            }
-        }
-        DeletePeerRequest::Delete(peer) => {
-            match datastore.network_state.remove_peer_local(peer) {
-                Some(Ok(op)) => {
-                    let request = DeletePeerRequest::Op { site_id: sid, op };
-                    match datastore.broadcast::<PeerResponse>(request, "/user/delete").await {
-                        Ok(()) => return Json(PeerResponse::Success(None)),
-                        Err(e) => {
-                            eprintln!("Error broadcasting DeletePeerRequest {e}");
-                        }
-                    }
-                }
-                Some(Err(e)) => {
-                    eprintln!("Unable to remove peer locally: {e:?}");
-                    return Json(PeerResponse::Failure)
-                }
-                None => {
-                    return Json(PeerResponse::Failure)
-                }
-            }
-        }
-    }
-
-    return Json(PeerResponse::Success(None))
-}
 async fn create_cidr(
     State(state): State<Arc<Mutex<DataStore>>>,
-    Json(request): Json<CreateCidrRequest>,
-) -> Json<CidrResponse> {
-    let mut datastore = state.lock().await;
-    let sid = datastore.network_state.cidrs.site_id().clone();
-    match request {
-        CreateCidrRequest::Op { site_id, op } => {
-            match datastore.network_state.cidr_op(op.clone(), site_id) {
-                Ok(()) => {
-                    if let Some(elem) = op.clone().inserted_element() {
-                        let cidr = elem.value.clone();
-                        return Json(CidrResponse::Success(Some(cidr)))
-                    } else {
-                        return Json(CidrResponse::Failure)
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Failed to create Cidr locally: {e:?}");
-                    return Json(CidrResponse::Failure)
-                }
-            }
-        }
-        CreateCidrRequest::Create(cidr) => {
-            match datastore.network_state.add_cidr_local(cidr) {
-                Ok(op) => {
-                    let request = CreateCidrRequest::Op { site_id: sid, op: op.clone() };
-                    if let Some(elem) = op.clone().inserted_element() {
-                        let cidr = elem.value.clone();
-                        match datastore.broadcast::<CidrResponse>(request, "/cidr/create").await {
-                            Ok(()) => return Json(CidrResponse::Success(Some(cidr))),
-                            Err(e) => {
-                                eprintln!("Error broadcasting CreateCidrRequest: {e}");
-                                return Json(CidrResponse::Success(Some(cidr)))
-                            }
-                        }
-                    } else {
-                        return Json(CidrResponse::Failure);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Error adding CIDR locally: {e:?}");
-                    return Json(CidrResponse::Failure)
-                }
-            }
-        }
-    }
+    Json(request): Json<CidrRequest>,
+) -> Json<Response<Cidr<String>>> {
+    let datastore = state.lock().await;
+    todo!()
 } 
 
 async fn update_cidr(
     State(state): State<Arc<Mutex<DataStore>>>,
-    Json(request): Json<UpdateCidrRequest>,
-) -> Json<CidrResponse> {
-    let mut datastore = state.lock().await;
-    let sid = datastore.network_state.cidrs.site_id().clone();
-    match request {
-        UpdateCidrRequest::Op { site_id, op } => {
-            match datastore.network_state.cidr_op(op, site_id) {
-                Ok(()) => return Json(CidrResponse::Success(None)),
-                Err(e) => {
-                    eprintln!("Failed to create Cidr locally: {e:?}");
-                    return Json(CidrResponse::Failure)
-                }
-            }
-        }
-        UpdateCidrRequest::Update(cidr) => {
-            match datastore.network_state.update_cidr_local(cidr) {
-                Ok(op) => {
-                    let request = UpdateCidrRequest::Op { site_id: sid, op };
-                    match datastore.broadcast::<CidrResponse>(request, "/cidr/update").await {
-                        Ok(()) => return Json(CidrResponse::Success(None)),
-                        Err(e) => {
-                            eprintln!("Error broadcasting UpdateCidrRequest : {e}");
-                            return Json(CidrResponse::Success(None))
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Error updating CIDR locally: {e:?}");
-                    return Json(CidrResponse::Failure)
-                }
-            }
-        }
-    }
+    Json(request): Json<CidrRequest>,
+) -> Json<Response<Cidr<String>>> {
+    let datastore = state.lock().await;
+    todo!()
 } 
 
 async fn delete_cidr(
     State(state): State<Arc<Mutex<DataStore>>>,
-    Json(request): Json<DeleteCidrRequest>,
-) -> Json<CidrResponse> {
-    let mut datastore = state.lock().await;
-    let sid = datastore.network_state.cidrs.site_id().clone();
-    match request {
-        DeleteCidrRequest::Op { site_id, op } => {
-            match datastore.network_state.cidr_op(op, site_id) {
-                Ok(()) => return Json(CidrResponse::Success(None)),
-                Err(e) => {
-                    eprintln!("Failed to remove Cidr locally: {e:?}");
-                    return Json(CidrResponse::Failure)
-                }
-            }
-        }
-        DeleteCidrRequest::Delete(id) => {
-            match datastore.network_state.remove_cidr_local(id) {
-                Some(Ok(op)) => {
-                    let request = DeleteCidrRequest::Op { site_id: sid, op };
-                    match datastore.broadcast::<CidrResponse>(request, "/cidr/delete").await {
-                        Ok(()) => return Json(CidrResponse::Success(None)),
-                        Err(e) => {
-                            eprintln!("Error broadcasting CreateCidrRequest: {e}");
-                            return Json(CidrResponse::Success(None))
-                        }
-                    }
-                }
-                Some(Err(e)) => {
-                    eprintln!("Error removing CIDR locally: {e:?}");
-                    return Json(CidrResponse::Failure)
-                }
-                None => {
-                    eprintln!("Error removing CIDR locally: NotFound");
-                    return Json(CidrResponse::Failure)
-                }
-            }
-        }
-    }
+    Json(request): Json<CidrRequest>,
+) -> Json<Response<Cidr<String>>> {
+    let datastore = state.lock().await;
+    todo!()
 } 
 
 async fn get_cidr(
     State(state): State<Arc<Mutex<DataStore>>>,
     Path(id): Path<String>
-) -> Json<GetCidrResponse> {
-    if let Some(peer) = state.lock().await.network_state.cidrs.get(&id) {
-        return Json(GetCidrResponse::Success(peer.clone()))
-    } else {
-        return Json(GetCidrResponse::Failure)
-    }
+) -> Json<Response<Cidr<String>>> {
+    todo!()
 } 
 
 async fn list_cidr(
     State(state): State<Arc<Mutex<DataStore>>>,
-) -> Json<ListCidrResponse> {
-    let cidrs = state.lock().await.network_state.cidrs.local_value();
-    let cidrs_list = cidrs.iter().map(|(_, v)| v.clone()).collect();
-    Json(ListCidrResponse::Success(cidrs_list))
+) -> Json<Response<Cidr<String>>> {
+    todo!()
 } 
 
 async fn create_assoc(
     State(state): State<Arc<Mutex<DataStore>>>,
-    Json(request): Json<CreateAssociationRequest>
-) -> Json<AssociationResponse> {
-    let mut datastore = state.lock().await;
-    let sid = datastore.network_state.associations.site_id().clone();
-    match request {
-        CreateAssociationRequest::Op { site_id, op } => {
-            match datastore.network_state.associations_op(op.clone(), site_id) {
-                Ok(()) => {
-                    if let Some(elem) = op.inserted_element() {
-                        return Json(AssociationResponse::Success(Some(elem.value.clone())))
-                    } else {
-                        return Json(AssociationResponse::Failure)
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Failed to create Cidr locally: {e:?}");
-                    return Json(AssociationResponse::Failure)
-                }
-            }
-        }
-        CreateAssociationRequest::Create(assoc) => {
-            match datastore.network_state.add_association_local(assoc) {
-                Ok(op) => {
-                    let request = CreateAssociationRequest::Op { site_id: sid, op: op.clone() };
-                    match datastore.broadcast::<AssociationResponse>(request, "/assoc/create").await {
-                        Ok(()) => {
-                            if let Some(elem) = op.inserted_element() {
-                                return Json(AssociationResponse::Success(Some(elem.value.clone())))
-                            } else {
-                                return Json(AssociationResponse::Failure)
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Error broadcasting CreateCidrRequest: {e}");
-                            if let Some(elem) = op.inserted_element() {
-                                return Json(AssociationResponse::Success(Some(elem.value.clone())))
-                            } else {
-                                return Json(AssociationResponse::Failure)
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Error adding CIDR locally: {e:?}");
-                    return Json(AssociationResponse::Failure)
-                }
-            }
-        }
-    }
+    Json(request): Json<AssocRequest>
+) -> Json<Response<Association<String, (String, String)>>> {
+    let datastore = state.lock().await;
+    todo!()
 }
 
 async fn delete_assoc(
     State(state): State<Arc<Mutex<DataStore>>>,
-    Json(request): Json<DeleteAssociationRequest>,
-) -> Json<AssociationResponse> {
-    let mut datastore = state.lock().await;
-    let sid = datastore.network_state.associations.site_id().clone();
-    match request {
-        DeleteAssociationRequest::Op { site_id, op } => {
-            match datastore.network_state.associations_op(op, site_id) {
-                Ok(()) => return Json(AssociationResponse::Success(None)),
-                Err(e) => {
-                    eprintln!("Failed to create Cidr locally: {e:?}");
-                    return Json(AssociationResponse::Failure)
-                }
-            }
-        }
-        DeleteAssociationRequest::Delete(id) => {
-            match datastore.network_state.remove_association_local(id) {
-                Some(Ok(op)) => {
-                    let request = DeleteAssociationRequest::Op { site_id: sid, op };
-                    match datastore.broadcast::<AssociationResponse>(request, "/assoc/delete").await {
-                        Ok(()) => return Json(AssociationResponse::Success(None)),
-                        Err(e) => {
-                            eprintln!("Error broadcasting DeleteAssociationRequest: {e}");
-                            return Json(AssociationResponse::Success(None))
-                        }
-                    }
-                }
-                Some(Err(e)) => {
-                    eprintln!("Error removing CIDR locally: {e:?}");
-                    return Json(AssociationResponse::Failure)
-                }
-                None => {
-                    eprintln!("Error removing CIDR locally: NotFound");
-                    return Json(AssociationResponse::Failure)
-                }
-            }
-        }
-    }
-
+    Json(request): Json<AssocRequest>,
+) -> Json<Response<Association<String, (String, String)>>> {
+    let datastore = state.lock().await;
+    todo!()
 }
 
 async fn list_assoc(
     State(state): State<Arc<Mutex<DataStore>>>,
-) -> Json<ListAssociationResponse> {
-    let assocs = state.lock().await.network_state.associations.local_value();
-    let assocs_list = assocs.iter().map(|(_, v)| v.clone()).collect();
-    Json(ListAssociationResponse::Success(assocs_list))
+) -> Json<Response<Association<String, (String, String)>>> {
+    todo!()
 }
 
 async fn relationships(
     State(state): State<Arc<Mutex<DataStore>>>,
     Path(cidr_id): Path<String>
-) -> Json<ListAssociationResponse> {
-    let cidr_id: i64 = if let Ok(cidr) = cidr_id.parse() {
-        cidr
-    } else {
-        return Json(ListAssociationResponse::Failure)
-    };
-    let mut assocs = state.lock().await.network_state.associations.local_value();
-    assocs.retain(|_, v| v.cidr_1() == cidr_id || v.cidr_2() == cidr_id);
-    Json(ListAssociationResponse::Success(assocs.iter().map(|(_, v)| v.clone()).collect()))
+) -> Json<Response<(Cidr<String>, Cidr<String>)>> {
+    todo!()
 }
 
-
-async fn handle_peer_updates(update: UpdatePeerRequest, state: Arc<Mutex<DataStore>>) -> PeerResponse {
-    let mut datastore = state.lock().await;
-    let sid = datastore.network_state.peers.site_id().clone();
-    match update {
-        UpdatePeerRequest::Op { site_id, op } => {
-            match datastore.network_state.peer_op(op, site_id) {
-                Ok(()) => return PeerResponse::Success(None),
-                Err(_) => return PeerResponse::Failure,
-            }
-        }
-        UpdatePeerRequest::Update(peer) => {
-            let op = match datastore.network_state.update_peer_local(peer) {
-                Ok(op) => op,
-                Err(_e) => return PeerResponse::Failure
-            };
-
-            let request = UpdatePeerRequest::Op { site_id: sid, op };
-            match datastore.broadcast::<PeerResponse>(request, "/user/update").await {
-                Ok(()) => return PeerResponse::Success(None),
-                Err(e) => {
-                    eprintln!("broadcast_peer_update_request failed: {e}");
-                } 
-            }
-        }
-    }
-
-    PeerResponse::Success(None)
-}
-
+/*
 pub async fn request_site_id(to_dial: String) -> Result<u32, Box<dyn std::error::Error>> {
     let resp = Client::new()
         .get(format!("http://{to_dial}:3004/bootstrap/next_site_id"))
@@ -810,3 +591,4 @@ pub async fn request_associations_state(to_dial: String) -> Result<MapState<'sta
 
     Ok(resp)
 }
+*/

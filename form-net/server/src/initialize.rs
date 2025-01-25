@@ -51,6 +51,10 @@ pub struct InitializeOpts {
     /// Port to listen on (for the WireGuard interface)
     #[clap(long)]
     pub listen_port: Option<u16>,
+
+    /// 20 byte hex string that represents and Ethereum wallet 
+    #[clap(long, short='A')]
+    pub address: String
 }
 
 pub struct DbInitData {
@@ -65,7 +69,7 @@ pub struct DbInitData {
 pub fn populate_sql_database(conn: &Connection, db_init_data: DbInitData) -> Result<(), Error> {
     const SERVER_NAME: &str = "innernet-server";
 
-    let root_cidr = DatabaseCidr::<Sqlite>::create(
+    let root_cidr = DatabaseCidr::<i64, Sqlite>::create(
         conn,
         CidrContents {
             name: db_init_data.network_name.clone(),
@@ -75,7 +79,7 @@ pub fn populate_sql_database(conn: &Connection, db_init_data: DbInitData) -> Res
     )
     .map_err(|_| anyhow!("failed to create root CIDR"))?;
 
-    let server_cidr = DatabaseCidr::<Sqlite>::create(
+    let server_cidr = DatabaseCidr::<i64, Sqlite>::create(
         conn,
         CidrContents {
             name: SERVER_NAME.into(),
@@ -85,7 +89,7 @@ pub fn populate_sql_database(conn: &Connection, db_init_data: DbInitData) -> Res
     )
     .map_err(|_| anyhow!("failed to create innernet-server CIDR"))?;
 
-    let _me = DatabasePeer::<Sqlite>::create(
+    let _me = DatabasePeer::<i64, Sqlite>::create(
         conn,
         PeerContents {
             name: SERVER_NAME.parse().map_err(|e: &str| anyhow!(e))?,
@@ -181,6 +185,7 @@ pub fn init_wizard(conf: &ServerConfig, opts: InitializeOpts) -> Result<(), Erro
         listen_port,
         address: our_ip,
         network_cidr_prefix: root_cidr.prefix_len(),
+        bootstrap: "none".to_string()
     };
     config.write_to_path(config_path)?;
 
