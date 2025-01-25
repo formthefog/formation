@@ -138,7 +138,7 @@ impl DatabaseAssociation<CrdtMap, String, String> {
     }
 
     pub async fn delete(id: i64) -> Result<(), ServerError> {
-        let request = AssocRequest::Delete(id.to_string());
+        let request = AssocRequest::Delete((id.to_string(), id.to_string()));
         let resp = reqwest::Client::new()
             .post("http://127.0.0.1:3004/assoc/delete")
             .json(&request)
