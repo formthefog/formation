@@ -62,6 +62,7 @@ pub async fn init(address: String) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let database_path = data_dir.join(&name.to_string()).with_extension("db");
+    ensure_crdt_datastore(None).await?;
     populate_crdt_datastore(
         db_init_data,
         address
@@ -104,7 +105,13 @@ pub async fn init(address: String) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub async fn populate_crdt_datastore(
+pub async fn ensure_crdt_datastore(
+    bootstrap: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    Ok(())
+}
+
+async fn populate_crdt_datastore(
     db_init_data: DbInitData,
     server_name: String
 ) -> Result<(), Box<dyn std::error::Error>> {
