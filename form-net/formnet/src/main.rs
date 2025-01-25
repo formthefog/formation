@@ -1,7 +1,9 @@
-//! A service to create and run innernet behind the scenes
+//! A service to create and run formnet, a wireguard based p2p VPN tunnel, behind the scenes
 use clap::Parser;
 use formnet::{init::init, serve::serve};
-use formnet::NETWORK_NAME;
+use formnet::{create_router, ensure_crdt_datastore, redeem, JoinRequest, JoinResponse, OperatorJoinRequest, NETWORK_NAME};
+use reqwest::Client;
+use shared::interface_config::InterfaceConfig;
 
 #[derive(Clone, Debug, Parser)]
 struct Opts {
@@ -23,77 +25,80 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log::info!("{parser:?}");
 
     if !parser.bootstraps.is_empty() {
-
+        let invitation = request_to_join(parser.bootstraps.clone(), parser.address).await?;
+        ensure_crdt_datastore().await?;
+        redeem(invitation)?;
     } else {
         init(parser.address).await?;
-        serve(NETWORK_NAME).await?;
     }
+
+    let (shutdown, mut receiver) = tokio::sync::broadcast::channel::<()>(2);
+    let mut formnet_receiver = shutdown.subscribe();
+    let formnet_server_handle = tokio::spawn(async move {
+        tokio::select! {
+            res = serve(NETWORK_NAME) => {
+                if let Err(e) = res {
+                    eprintln!("Error trying to serve formnet server: {e}");
+                }
+            }
+            _ = formnet_receiver.recv() => {
+                eprintln!("Formnet Server: Received shutdown signal");
+            }
+        }
+    });
+
+    let join_server_handle = tokio::spawn(async move {
+        tokio::select! {
+            res = start_join_server() => {
+                if let Err(e) = res {
+                    eprintln!("Error trying to serve join server: {e}");
+                }
+            }
+            _ = receiver.recv() => {
+                eprintln!("Join Server: Received shutdown signal");
+            }
+        }
+    });
+
+    tokio::signal::ctrl_c().await?;
+    shutdown.send(())?;
+
+    join_server_handle.await?;
+    formnet_server_handle.await?;
 
     Ok(())
 }
 
-/*
-async fn handle_message<D: DatastoreType + FormnetNode>(
-    message: &FormnetMessage
-) -> Result<(), Box<dyn std::error::Error>> {
-    use form_types::FormnetMessage::*;
-    log::info!("Received message: {message:?}");
-    match message {
-        AddPeer { peer_type, peer_id, callback } => {
-            if is_server() {
-                log::info!("Receiving node is Server, adding peer from server...");
-                let server_config = ServerConfig { 
-                    config_dir: PathBuf::from(SERVER_CONFIG_DIR), 
-                    data_dir: PathBuf::from(SERVER_DATA_DIR)
-                };
-                log::info!("Built Server Config...");
-                let inet = InterfaceName::from_str(FormnetMessage::INTERFACE_NAME)?;
-                log::info!("Acquired interface name...");
-                if let Ok(invitation) = server_add_peer::<D>(
-                    &inet,
-                    &server_config,
-                    &peer_type.into(),
-                    peer_id,
-                ).await {
-                    return server_respond_with_peer_invitation(
-                        invitation,
-                        *callback
-                    ).await;
-                }
-            }
+async fn request_to_join(bootstrap: Vec<String>, address: String) -> Result<InterfaceConfig, Box<dyn std::error::Error>> {
+    let request = JoinRequest::OperatorJoinRequest(
+        OperatorJoinRequest {
+            operator_id: address,
+        }
+    );
 
-            let InterfaceConfig { server, ..} = InterfaceConfig::from_interface(
-                PathBuf::from(CONFIG_DIR).as_path(), 
-                &InterfaceName::from_str(
-                    FormnetMessage::INTERFACE_NAME
-                )?
-            )?;
-            let api = Api::new(&server);
-            log::info!("Fetching CIDRs...");
-            let cidrs: Vec<Cidr> = api.http("GET", "/admin/cidrs")?;
-            log::info!("Fetching Peers...");
-            let peers: Vec<Peer> = api.http("GET", "/admin/peers")?;
-            log::info!("Creating CIDR Tree...");
-            let cidr_tree = CidrTree::new(&cidrs[..]);
-
-            if let Ok((content, keypair)) = add_peer(
-                &peers, &cidr_tree, &peer_type.into(), peer_id
-            ).await {
-                log::info!("Creating peer...");
-                let peer: Peer = api.http_form("POST", "/admin/peers", content)?;
-                respond_with_peer_invitation(
-                    &peer,
-                    server.clone(), 
-                    &cidr_tree, 
-                    keypair, 
-                    *callback
-                ).await?;
+    while let Some(dial) = bootstrap.iter().next() {
+        match Client::new()
+        .post(&format!("http://{dial}/join"))
+        .json(&request)
+        .send()
+        .await {
+            Ok(response) => match response.json::<JoinResponse>().await {
+                Ok(JoinResponse::Success { invitation }) => return Ok(invitation),
+                _ => {}
             }
-        },
-        DisablePeer => {},
-        EnablePeer => {},
-        SetListenPort => {},
-        OverrideEndpoint => {},
+            _ => {}
+        }
     }
+    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Did not receive a valid invitation")));
 }
-*/
+
+async fn start_join_server() -> Result<(), Box<dyn std::error::Error>> {
+    let router = create_router();
+    let listener = tokio::net::TcpListener::bind(
+        "0.0.0.0:3001"
+    ).await?;
+
+    axum::serve(listener, router).await?;
+
+    return Ok(())
+}

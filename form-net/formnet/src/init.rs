@@ -1,4 +1,6 @@
 use std::{net::{IpAddr, Ipv4Addr, SocketAddr}, path::PathBuf, str::FromStr};
+use reqwest::Client;
+use serde_json::Value;
 use shared::{CidrContents, IpNetExt, PeerContents, PERSISTENT_KEEPALIVE_INTERVAL_SECS};
 use formnet_server::{db::CrdtMap, initialize::DbInitData, ConfigFile, DatabaseCidr, DatabasePeer};
 use ipnet::IpNet;
@@ -62,7 +64,7 @@ pub async fn init(address: String) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let database_path = data_dir.join(&name.to_string()).with_extension("db");
-    ensure_crdt_datastore(None).await?;
+    ensure_crdt_datastore().await?;
     populate_crdt_datastore(
         db_init_data,
         address
@@ -105,10 +107,16 @@ pub async fn init(address: String) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub async fn ensure_crdt_datastore(
-    bootstrap: Option<String>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    Ok(())
+pub async fn ensure_crdt_datastore() -> Result<(), Box<dyn std::error::Error>> {
+    match Client::new()
+        .get("http://127.0.0.1:3004/ping")
+        .send()
+        .await?
+        .json::<Value>()
+        .await {
+            Ok(_) => return Ok(()),
+            Err(e) => return Err(Box::new(e)),
+    };
 }
 
 async fn populate_crdt_datastore(

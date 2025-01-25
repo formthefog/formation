@@ -2,7 +2,7 @@ use std::{net::{IpAddr, SocketAddr}, time::{Duration, SystemTime}};
 use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, CmRDT, Map, Update};
 use ipnet::IpNet;
 use k256::ecdsa::SigningKey;
-use shared::{AssociationContents, CidrContents, Endpoint, Peer, PeerContents};
+use shared::{Association, AssociationContents, Cidr, CidrContents, Endpoint, Peer, PeerContents};
 use serde::{Serialize, Deserialize};
 use tiny_keccak::{Hasher, Sha3};
 use crate::Actor;
@@ -74,6 +74,31 @@ impl From<CrdtPeer<String>> for Peer<String> {
                 SystemTime::UNIX_EPOCH + Duration::from_secs(time)}),
                 candidates: value.candidates
             } 
+        }
+    }
+}
+
+impl From<CrdtCidr<String>> for Cidr<String> {
+    fn from(value: CrdtCidr<String>) -> Self {
+        Cidr {
+            id: value.id,
+            contents: CidrContents {
+                name: value.name.clone(),
+                cidr: value.cidr.clone(),
+                parent: value.parent.clone(),
+            }
+        }
+    }
+}
+
+impl From<CrdtAssociation<String>> for Association<String, (String, String)> {
+    fn from(value: CrdtAssociation<String>) -> Self {
+        Association {
+            id: value.id,
+            contents: AssociationContents {
+                cidr_id_1: value.cidr_1,
+                cidr_id_2: value.cidr_2
+            }
         }
     }
 }
@@ -340,7 +365,7 @@ impl NetworkState {
         self.cidrs.rm(id, rm_ctx)
     }
 
-    pub fn add_association_local(&mut self, association: AssociationContents<String>) -> AssocOp<String> { 
+    pub fn update_association_local(&mut self, association: AssociationContents<String>) -> AssocOp<String> { 
         let add_ctx = self.associations.read_ctx().derive_add_ctx(self.node_id.clone());
         let signing_key = SigningKey::from_slice(
             &hex::decode(self.pk.clone())
@@ -423,9 +448,66 @@ impl NetworkState {
         self.cidrs.apply(op);
     }
 
+    pub fn cidr_op_success(&self, key: String, update: Update<CrdtCidr<String>, String>) -> (bool, CrdtCidr<String>) {
+        if let Some(reg) = self.cidrs.get(&key).val {
+            if let Some(v) = reg.val() {
+                // If the in the updated register equals the value in the Op it
+                // succeeded
+                if v.value() == update.op().value {
+                    return (true, v.value()) 
+                // Otherwise, it could be that it's a concurrent update and was added
+                // to the DAG as a head
+                } else if reg.dag_contains(&update.hash()) && reg.is_head(&update.hash()) {
+                    return (true, v.value()) 
+                // Otherwise, we could be missing a child, and this particular update
+                // is orphaned, if so we should requst the child we are missing from
+                // the actor who shared this update
+                } else if reg.is_orphaned(&update.hash()) {
+                    return (true, v.value())
+                // Otherwise it was a no-op for some reason
+                } else {
+                    return (false, v.value()) 
+                }
+            } else {
+                return (false, update.op().value) 
+            }
+        } else {
+            return (false, update.op().value);
+        }
+    }
+
     pub fn associations_op(&mut self, op: AssocOp<String>) {
         self.associations.apply(op);
     }
+
+    pub fn associations_op_success(&self, key: (String, String), update: Update<CrdtAssociation<String>, String>) -> (bool, CrdtAssociation<String>) {
+        if let Some(reg) = self.associations.get(&key).val {
+            if let Some(v) = reg.val() {
+                // If the in the updated register equals the value in the Op it
+                // succeeded
+                if v.value() == update.op().value {
+                    return (true, v.value()) 
+                // Otherwise, it could be that it's a concurrent update and was added
+                // to the DAG as a head
+                } else if reg.dag_contains(&update.hash()) && reg.is_head(&update.hash()) {
+                    return (true, v.value()) 
+                // Otherwise, we could be missing a child, and this particular update
+                // is orphaned, if so we should requst the child we are missing from
+                // the actor who shared this update
+                } else if reg.is_orphaned(&update.hash()) {
+                    return (true, v.value())
+                // Otherwise it was a no-op for some reason
+                } else {
+                    return (false, v.value()) 
+                }
+            } else {
+                return (false, update.op().value) 
+            }
+        } else {
+            return (false, update.op().value);
+        }
+    }
+
 
     pub fn dns_op(&mut self, op: DnsOp) {
         self.dns_state.apply(op);
