@@ -13,7 +13,6 @@ pub struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-
     let parser = Cli::parse();
     let datastore = if let Some(to_dial) = parser.to_dial {
         let state = request_full_state(to_dial).await?;
