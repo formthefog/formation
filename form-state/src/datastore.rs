@@ -270,14 +270,19 @@ async fn create_user(
             }
         }
         PeerRequest::Join(contents) => {
-            let op = datastore.network_state.update_peer_local(contents);
-            datastore.network_state.peer_op(op.clone());
-            match &op {
+            let map_op = datastore.network_state.update_peer_local(contents);
+            datastore.network_state.peer_op(map_op.clone());
+            match &map_op {
                 crdts::map::Op::Rm { .. } => {
                     return Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Join request".to_string()) });
                 }
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
+                        let request = PeerRequest::Op(map_op);
+                        match datastore.broadcast::<Response<Peer<String>>>(request, "/user/create").await {
+                            Ok(()) => return Json(Response::Success(Success::Some(v.into()))),
+                            Err(e) => eprintln!("Error broadcasting DeletePeerRequest: {e}")
+                        }
                         return Json(Response::Success(Success::Some(v.into())))
                     } else {
                         return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
@@ -313,14 +318,19 @@ async fn update_user(
             }
         }
         PeerRequest::Update(contents) => {
-            let op = datastore.network_state.update_peer_local(contents);
-            datastore.network_state.peer_op(op.clone());
-            match &op {
+            let map_op = datastore.network_state.update_peer_local(contents);
+            datastore.network_state.peer_op(map_op.clone());
+            match &map_op {
                 crdts::map::Op::Rm { .. } => {
                     return Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Join request".to_string()) });
                 }
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
+                        let request = PeerRequest::Op(map_op);
+                        match datastore.broadcast::<Response<Peer<String>>>(request, "/user/update").await {
+                            Ok(()) => return Json(Response::Success(Success::Some(v.into()))),
+                            Err(e) => eprintln!("Error broadcasting DeletePeerRequest: {e}")
+                        }
                         return Json(Response::Success(Success::Some(v.into())))
                     } else {
                         return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
@@ -356,14 +366,19 @@ async fn disable_user(
             }
         }
         PeerRequest::Update(contents) => {
-            let op = datastore.network_state.update_peer_local(contents);
-            datastore.network_state.peer_op(op.clone());
-            match &op {
+            let map_op = datastore.network_state.update_peer_local(contents);
+            datastore.network_state.peer_op(map_op.clone());
+            match &map_op {
                 crdts::map::Op::Rm { .. } => {
                     return Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Join request".to_string()) });
                 }
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
+                        let request = PeerRequest::Op(map_op);
+                        match datastore.broadcast::<Response<Peer<String>>>(request, "/user/disable").await {
+                            Ok(()) => return Json(Response::Success(Success::Some(v.into()))),
+                            Err(e) => eprintln!("Error broadcasting DeletePeerRequest: {e}")
+                        }
                         return Json(Response::Success(Success::Some(v.into())))
                     } else {
                         return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
@@ -399,14 +414,19 @@ async fn redeem_invite(
             }
         }
         PeerRequest::Update(contents) => {
-            let op = datastore.network_state.update_peer_local(contents);
-            datastore.network_state.peer_op(op.clone());
-            match &op {
+            let map_op = datastore.network_state.update_peer_local(contents);
+            datastore.network_state.peer_op(map_op.clone());
+            match &map_op {
                 crdts::map::Op::Rm { .. } => {
                     return Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Join request".to_string()) });
                 }
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
+                        let request = PeerRequest::Op(map_op);
+                        match datastore.broadcast::<Response<Peer<String>>>(request, "/user/redeem").await {
+                            Ok(()) => return Json(Response::Success(Success::Some(v.into()))),
+                            Err(e) => eprintln!("Error broadcasting DeletePeerRequest: {e}")
+                        }
                         return Json(Response::Success(Success::Some(v.into())))
                     } else {
                         return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
@@ -438,10 +458,15 @@ async fn delete_user(
             }
         }
         PeerRequest::Delete(contents) => {
-            let op = datastore.network_state.remove_peer_local(contents);
-            datastore.network_state.peer_op(op.clone());
-            match &op {
+            let map_op = datastore.network_state.remove_peer_local(contents);
+            datastore.network_state.peer_op(map_op.clone());
+            match &map_op {
                 crdts::map::Op::Rm { .. } => {
+                    let request = PeerRequest::Op(map_op);
+                    match datastore.broadcast::<Response<Peer<String>>>(request, "/user/delete").await {
+                        Ok(()) => return Json(Response::Success(Success::None)),
+                        Err(e) => eprintln!("Error broadcasting DeletePeerRequest: {e}")
+                    }
                     return Json(Response::Success(Success::None));
                 }
                 crdts::map::Op::Up { .. } => {
@@ -571,14 +596,19 @@ async fn create_cidr(
             }
         }
         CidrRequest::Create(contents) => {
-            let op = datastore.network_state.update_cidr_local(contents);
-            datastore.network_state.cidr_op(op.clone());
-            match &op {
+            let map_op = datastore.network_state.update_cidr_local(contents);
+            datastore.network_state.cidr_op(map_op.clone());
+            match &map_op {
                 crdts::map::Op::Rm { .. } => {
                     return Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Join request".to_string()) });
                 }
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     if let (true, v) = datastore.network_state.cidr_op_success(key.clone(), op.clone()) {
+                        let request = CidrRequest::Op(map_op);
+                        match datastore.broadcast::<Response<Cidr<String>>>(request, "/cidr/create").await {
+                            Ok(()) => return Json(Response::Success(Success::Some(v.into()))),
+                            Err(e) => eprintln!("Error broadcasting DeletePeerRequest: {e}")
+                        }
                         return Json(Response::Success(Success::Some(v.into())))
                     } else {
                         return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
@@ -614,14 +644,19 @@ async fn update_cidr(
             }
         }
         CidrRequest::Update(contents) => {
-            let op = datastore.network_state.update_cidr_local(contents);
-            datastore.network_state.cidr_op(op.clone());
-            match &op {
+            let map_op = datastore.network_state.update_cidr_local(contents);
+            datastore.network_state.cidr_op(map_op.clone());
+            match &map_op {
                 crdts::map::Op::Rm { .. } => {
                     return Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Join request".to_string()) });
                 }
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     if let (true, v) = datastore.network_state.cidr_op_success(key.clone(), op.clone()) {
+                        let request = CidrRequest::Op(map_op);
+                        match datastore.broadcast::<Response<Cidr<String>>>(request, "/cidr/update").await {
+                            Ok(()) => return Json(Response::Success(Success::Some(v.into()))),
+                            Err(e) => eprintln!("Error broadcasting DeletePeerRequest: {e}")
+                        }
                         return Json(Response::Success(Success::Some(v.into())))
                     } else {
                         return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
@@ -653,10 +688,15 @@ async fn delete_cidr(
             }
         }
         CidrRequest::Delete(contents) => {
-            let op = datastore.network_state.remove_cidr_local(contents);
-            datastore.network_state.cidr_op(op.clone());
-            match &op {
+            let map_op = datastore.network_state.remove_cidr_local(contents);
+            datastore.network_state.cidr_op(map_op.clone());
+            match &map_op {
                 crdts::map::Op::Rm { .. } => {
+                    let request = CidrRequest::Op(map_op);
+                    match datastore.broadcast::<Response<Cidr<String>>>(request, "/cidr/delete").await {
+                        Ok(()) => return Json(Response::Success(Success::None)),
+                        Err(e) => eprintln!("Error broadcasting DeletePeerRequest: {e}")
+                    }
                     return Json(Response::Success(Success::None));
                 }
                 crdts::map::Op::Up { .. } => {
@@ -713,14 +753,19 @@ async fn create_assoc(
             }
         }
         AssocRequest::Create(contents) => {
-            let op = datastore.network_state.update_association_local(contents);
-            datastore.network_state.associations_op(op.clone());
-            match &op {
+            let map_op = datastore.network_state.update_association_local(contents);
+            datastore.network_state.associations_op(map_op.clone());
+            match &map_op {
                 crdts::map::Op::Rm { .. } => {
                     return Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Join request".to_string()) });
                 }
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     if let (true, v) = datastore.network_state.associations_op_success(key.clone(), op.clone()) {
+                        let request = AssocRequest::Op(map_op);
+                        match datastore.broadcast::<Response<Association<String, (String, String)>>>(request, "/assoc/create").await {
+                            Ok(()) => return Json(Response::Success(Success::Some(v.into()))),
+                            Err(e) => eprintln!("Error broadcasting DeletePeerRequest: {e}")
+                        }
                         return Json(Response::Success(Success::Some(v.into())))
                     } else {
                         return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
@@ -752,10 +797,15 @@ async fn delete_assoc(
             }
         }
         AssocRequest::Delete(contents) => {
-            let op = datastore.network_state.remove_association_local(contents);
-            datastore.network_state.associations_op(op.clone());
-            match &op {
+            let map_op = datastore.network_state.remove_association_local(contents);
+            datastore.network_state.associations_op(map_op.clone());
+            match &map_op {
                 crdts::map::Op::Rm { .. } => {
+                    let request = AssocRequest::Op(map_op);
+                    match datastore.broadcast::<Response<Association<String, (String, String)>>>(request, "/assoc/delete").await {
+                        Ok(()) => return Json(Response::Success(Success::None)),
+                        Err(e) => eprintln!("Error broadcasting DeletePeerRequest: {e}")
+                    }
                     return Json(Response::Success(Success::None));
                 }
                 crdts::map::Op::Up { .. } => {
