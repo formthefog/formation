@@ -1,5 +1,4 @@
 use serde::{Serialize, Deserialize};
-use wireguard_control::KeyPair;
 
 pub trait DatastoreType {}
 
