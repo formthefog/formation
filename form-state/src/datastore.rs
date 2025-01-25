@@ -1,6 +1,7 @@
 use std::{collections::{HashMap, HashSet}, sync::Arc, time::{SystemTime, UNIX_EPOCH}};
 use axum::{extract::{State, Path}, routing::{get, post}, Json, Router};
 use reqwest::Client;
+use serde_json::Value;
 use shared::{Association, AssociationContents, Cidr, CidrContents, Peer, PeerContents};
 use tokio::{net::TcpListener, sync::Mutex};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -176,6 +177,7 @@ impl DataStore {
 
     pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         Router::new()
+            .route("/ping", get(pong))
             .route("/bootstrap/full_state", get(full_state))
             .route("/bootstrap/network_state", get(network_state))
             .route("/bootstrap/peer_state", get(peer_state))
@@ -211,6 +213,10 @@ impl DataStore {
 
         Ok(())
     }
+}
+
+async fn pong() -> Json<Value> {
+    Json(serde_json::json!({"ping":"pong"}))
 }
 
 async fn full_state(

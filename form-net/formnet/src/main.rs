@@ -1,7 +1,7 @@
 //! A service to create and run formnet, a wireguard based p2p VPN tunnel, behind the scenes
 use clap::Parser;
 use formnet::{init::init, serve::serve};
-use formnet::{create_router, redeem, JoinRequest, JoinResponse, OperatorJoinRequest, NETWORK_NAME};
+use formnet::{create_router, ensure_crdt_datastore, redeem, JoinRequest, JoinResponse, OperatorJoinRequest, NETWORK_NAME};
 use reqwest::Client;
 use shared::interface_config::InterfaceConfig;
 
@@ -26,6 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if !parser.bootstraps.is_empty() {
         let invitation = request_to_join(parser.bootstraps.clone(), parser.address).await?;
+        ensure_crdt_datastore().await?;
         redeem(invitation)?;
     } else {
         init(parser.address).await?;
