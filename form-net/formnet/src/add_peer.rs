@@ -1,8 +1,8 @@
 use std::{net::SocketAddr, path::PathBuf, str::FromStr, time::{Duration, SystemTime}};
 use form_types::PeerType;
-use formnet_server::{db::CrdtMap, ConfigFile, DatabaseCidr, DatabasePeer, ServerConfig, ServerError};
+use formnet_server::{db::CrdtMap, ConfigFile, DatabaseCidr, DatabasePeer, ServerError};
 use ipnet::IpNet;
-use shared::{interface_config::{InterfaceConfig, InterfaceInfo, ServerInfo}, AddPeerOpts, Cidr, CidrTree, Hostname, IpNetExt, NetworkOpts, Peer, PeerContents, Timestring, PERSISTENT_KEEPALIVE_INTERVAL_SECS};
+use shared::{interface_config::{InterfaceConfig, InterfaceInfo, ServerInfo}, Cidr, CidrTree, Hostname, IpNetExt, NetworkOpts, Peer, PeerContents, Timestring, PERSISTENT_KEEPALIVE_INTERVAL_SECS};
 use wireguard_control::{Device, DeviceUpdate, InterfaceName, KeyPair, PeerConfigBuilder};
 
 use crate::{CONFIG_DIR, NETWORK_NAME};

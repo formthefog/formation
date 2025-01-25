@@ -4,7 +4,7 @@ use reqwest::Client;
 use shared::{Association, AssociationContents, Cidr, CidrContents, Peer, PeerContents};
 use tokio::{net::TcpListener, sync::Mutex};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use crdts::{CvRDT, Map, BFTReg, CmRDT};
+use crdts::{Map, BFTReg};
 use crate::network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtPeer, NetworkState, PeerOp};
 
 pub type PeerMap = Map<String, BFTReg<CrdtPeer<String>, String>, String>;
@@ -499,7 +499,7 @@ async fn create_cidr(
     State(state): State<Arc<Mutex<DataStore>>>,
     Json(request): Json<CidrRequest>,
 ) -> Json<Response<Cidr<String>>> {
-    let mut datastore = state.lock().await;
+    let datastore = state.lock().await;
     todo!()
 } 
 
@@ -507,7 +507,7 @@ async fn update_cidr(
     State(state): State<Arc<Mutex<DataStore>>>,
     Json(request): Json<CidrRequest>,
 ) -> Json<Response<Cidr<String>>> {
-    let mut datastore = state.lock().await;
+    let datastore = state.lock().await;
     todo!()
 } 
 
@@ -515,7 +515,7 @@ async fn delete_cidr(
     State(state): State<Arc<Mutex<DataStore>>>,
     Json(request): Json<CidrRequest>,
 ) -> Json<Response<Cidr<String>>> {
-    let mut datastore = state.lock().await;
+    let datastore = state.lock().await;
     todo!()
 } 
 
@@ -536,7 +536,7 @@ async fn create_assoc(
     State(state): State<Arc<Mutex<DataStore>>>,
     Json(request): Json<AssocRequest>
 ) -> Json<Response<Association<String, (String, String)>>> {
-    let mut datastore = state.lock().await;
+    let datastore = state.lock().await;
     todo!()
 }
 
@@ -544,7 +544,7 @@ async fn delete_assoc(
     State(state): State<Arc<Mutex<DataStore>>>,
     Json(request): Json<AssocRequest>,
 ) -> Json<Response<Association<String, (String, String)>>> {
-    let mut datastore = state.lock().await;
+    let datastore = state.lock().await;
     todo!()
 }
 
