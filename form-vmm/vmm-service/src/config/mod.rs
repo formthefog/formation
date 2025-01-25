@@ -2,8 +2,6 @@ pub mod wizard;
 use net_util::MacAddr;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::io::{Read, Write};
-use crate::VmmError;
 
 use super::{VmInstanceConfig, ConsoleType}; 
 use vmm::vm_config::{
