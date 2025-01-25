@@ -7,6 +7,8 @@ use crate::add_peer::add_peer;
 
 pub fn create_router() -> axum::Router {
     axum::Router::new().route("/join", axum::routing::post(handle_join_request))
+        //TODO: Add routes to request custom cidr, request custom assoc
+        //Add routes to delete peer, delete custom cidr, delete assoc
 }
 
 async fn handle_join_request(

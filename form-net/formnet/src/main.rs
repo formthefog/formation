@@ -33,33 +33,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /*
-async fn run<D: DatastoreType + FormnetNode>(
-    mut subscriber: impl SubStream<Message = Vec<FormnetMessage>>,
-    mut shutdown: Receiver<()>
-) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-    log::info!("Starting main formnet handler loop");
-    loop {
-        tokio::select! {
-            Ok(msg) = subscriber.receive() => {
-                for m in msg {
-                    if let Err(e) = handle_message::<D>(&m).await {
-                        log::error!("Error handling message {m:?}: {e}");
-                    }
-                }
-            }
-            _ = tokio::time::sleep(Duration::from_secs(30)) => {
-                log::info!("Heartbeat...");
-            }
-            _ = shutdown.recv() => {
-                log::error!("Received shutdown signal for Formnet");
-                break;
-            }
-        }
-    }
-
-    Ok(())
-}
-
 async fn handle_message<D: DatastoreType + FormnetNode>(
     message: &FormnetMessage
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -124,45 +97,3 @@ async fn handle_message<D: DatastoreType + FormnetNode>(
     }
 }
 */
-
-// Create formnet from CLI, Config or Wizard 
-// If done via wizard save to file
-// Listen for messages on topic "Network" from broker
-// Handle messages
-//
-// Formnet service can:
-//  1. Add peers
-//  2. Remove peers
-//  3. Add CIDRs
-//  4. Remove CIDRs
-//  5. Rename Peers
-//  6. Rename CIDRs
-//  7. Enable Peers
-//  8. Disable Peers
-//  9. Manage Associations
-//  10. Manage Endpoints
-//
-// When a new peer joins the network, a join token will be sent to them
-// which they will then "install" via their formnet network service.
-//
-// In the formnet there are 3 types of peers:
-//  1. Operators - All operators are admins and can add CIDRs, Peers, Associations, etc.
-//                 All operators run a "server" replica.
-//
-//  2. Users - Users run a simple client, they are added as a peer, and in future version
-//             will have more strictly managed associations to ensure they only have
-//             access to the resources they own. In the first version, they have access
-//             to the entire network, but instances and resources use internal auth mechanisms
-//             such as public/private key auth to provide security.
-//
-//  3. Instances - Instances are user owned resources, such as Virtual Machines, containers,
-//                 etc. Instances are only manageable by their owner. Once they are up and
-//                 running the rest of the network just knows they are there. Operators that
-//                 are responsible for a given instance can be financially penalized for not
-//                 maintaining the instance in the correct state/status.
-// 
-
-// So what do we need this to do
-// 1. Listen on `topic` for relevant messages from the MessageBroker
-// 2. When a message is received, match that message on an action
-// 3. Handle the action (by using the API).
