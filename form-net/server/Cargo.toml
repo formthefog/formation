@@ -17,10 +17,6 @@ version = "1.6.1"
 [lib]
 path = "src/lib.rs"
 
-[[bin]]
-name = "formnet-server"
-path = "src/main.rs"
-
 [features]
 v6-test = []
 

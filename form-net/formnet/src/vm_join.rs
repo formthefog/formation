@@ -1,6 +1,10 @@
+use std::time::Duration;
+
+use form_types::{BootCompleteRequest, VmmResponse};
+use formnet::{redeem, up, JoinRequest, JoinResponse, VmJoinRequest};
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /*
     simple_logger::SimpleLogger::new().init().unwrap();
     let host_public_ip = reqwest::blocking::get(
         "https://api.ipify.org"
@@ -32,12 +36,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let invite = invitation;
             let formnet_ip = invite.interface.address.addr().to_string();
             log::info!("extracted formnet IP for {name}");
-            let iface = invite.interface.network_name.clone();
-            let config_dir = PathBuf::from("/etc/formnet"); 
-            let target_conf = config_dir.join(&iface).with_extension("conf");
-            let iface = iface.parse()?;
             log::info!("Attempting to redeem invite");
-            if let Err(e) = redeem_invite(&iface, invite, target_conf, NetworkOpts::default()).map_err(|e| {
+            if let Err(e) = redeem(invite).map_err(|e| {
                 other_err(&e.to_string())
             }) {
                 log::error!("Error attempting to redeem invite: {e}");
@@ -47,15 +47,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             log::info!("Spawning thread to bring formnet up");
             let handle = tokio::spawn(async move {
-                let data_dir = PathBuf::from("/var/lib/formnet");
                 if let Err(e) = up(
-                    Some(iface.into()),
-                    &config_dir,
-                    &data_dir,
-                    &NetworkOpts::default(),
                     Some(Duration::from_secs(60)),
                     None,
-                    &NatOpts::default(),
                 ) {
                     log::error!("Error bringing formnet up: {e}");
                 }
@@ -83,8 +77,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         JoinResponse::Error(reason) => return Err(other_err(&reason.to_string()))
     }
-*/
-    Ok(())
 }
 
 pub fn other_err(msg: &str) -> Box<dyn std::error::Error> {

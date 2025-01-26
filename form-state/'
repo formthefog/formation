@@ -104,10 +104,6 @@ impl From<CrdtAssociation<String>> for Association<String, (String, String)> {
 }
 
 impl<T: Clone> CrdtPeer<T> {
-    pub fn id(&self) -> String {
-        self.id.clone()
-    }
-
     pub fn ip(&self) -> IpAddr {
         self.ip
     }

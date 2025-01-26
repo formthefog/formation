@@ -36,6 +36,8 @@ COPY ./target/release/vmm-service /usr/local/bin/vmm-service
 COPY ./target/release/form-broker /usr/local/bin/form-broker
 # Copy our pack manager binary into /usr/local/bin
 COPY ./target/release/form-pack-manager /usr/local/bin/form-pack-manager
+# Copy our form-state binary into /usr/local/bin
+COPY ./target/release/form-state /usr/local/bin/form-state
 # Copy the VMM service run script to /usr/local/bin
 COPY ./scripts/run-vmm-service.sh /usr/local/bin/run-vmm-service.sh
 # Copy the formnet run script into /usr/local/bin
@@ -58,6 +60,7 @@ RUN chmod +x /entrypoint.sh
 EXPOSE 3001
 EXPOSE 3002
 EXPOSE 3003
+EXPOSE 3004
 EXPOSE 51820
 
 WORKDIR /app

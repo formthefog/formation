@@ -69,15 +69,18 @@ impl DataStore {
         pk: String,
         other: DataStore,
     ) -> Self {
+        log::info!("Building new datastore from state...");
         let mut local = Self::new(node_id, pk); 
         local.network_state.peers.merge(other.network_state.peers);
         local.network_state.cidrs.merge(other.network_state.cidrs);
         local.network_state.associations.merge(other.network_state.associations);
         local.network_state.dns_state.zones.merge(other.network_state.dns_state.zones);
+        log::info!("Built new datastore from state... Returning...");
         local
     }
 
     pub fn get_all_users(&self) -> HashMap<String, CrdtPeer<String>> {
+        log::info!("Getting all peers from datastore network state...");
         self.network_state.peers.iter().filter_map(|item| {
             match item.val.1.val() {
                 Some(v) => Some((item.val.0.clone(), v.value().clone())),
@@ -87,6 +90,7 @@ impl DataStore {
     }
 
     pub fn get_all_cidrs(&self) -> HashMap<String, CrdtCidr<String>> {
+        log::info!("Getting all cidrs from datastore network state...");
         self.network_state.cidrs.iter().filter_map(|item| {
             match item.val.1.val() {
                 Some(v) => Some((item.val.0.clone(), v.value().clone())),
@@ -96,6 +100,7 @@ impl DataStore {
     }
 
     pub fn get_all_assocs(&self) -> HashMap<(String, String), CrdtAssociation<String>> {
+        log::info!("Getting all associations from datastore network state...");
         self.network_state.associations.iter().filter_map(|item| {
             match item.val.1.val() {
                 Some(v) => Some((item.val.0.clone(), v.value().clone())),
@@ -105,6 +110,7 @@ impl DataStore {
     }
 
     pub fn get_relationships(&self, cidr_id: String) -> Vec<(Cidr<String>, Cidr<String>)> {
+        log::info!("Getting relationships for {cidr_id} from datastore network state...");
         let mut assoc_ids = self.get_all_assocs();
         assoc_ids.retain(|k, _| k.0 == cidr_id || k.1 == cidr_id);
         let ids: HashSet<(String, String)> = assoc_ids.iter().map(|(k, _)| k.clone()).collect();
@@ -128,6 +134,7 @@ impl DataStore {
     }
 
     pub fn get_all_active_admin(&mut self) -> HashMap<String, CrdtPeer<String>> {
+        log::info!("Getting all active admins from datastore network state...");
         self.network_state.peers.iter().filter_map(|item| {
             match item.val.1.val() {
                 Some(v) => {
@@ -147,11 +154,14 @@ impl DataStore {
         request: impl Serialize + Clone,
         endpoint: &str
     ) -> Result<(), Box<dyn std::error::Error>> {
+        log::info!("Bradcasting Op to all active admins...");
         let peers = self.get_all_active_admin();
         for (id, peer) in peers {
+            log::info!("Sending Op to all {id} at {}...", peer.ip().to_string());
             if let Err(e) = self.send::<R>(&peer.ip().to_string(), endpoint, request.clone()).await {
                 eprintln!("Error sending {endpoint} request to {id}: {}: {e}", peer.ip().to_string());
             };
+            log::info!("Successfully sent Op {id} at {}...", peer.ip().to_string());
         }
 
         Ok(())
@@ -216,12 +226,14 @@ impl DataStore {
 }
 
 async fn pong() -> Json<Value> {
+    log::info!("Received Ping Request, sending Pong...");
     Json(serde_json::json!({"ping":"pong"}))
 }
 
 async fn full_state(
     State(state): State<Arc<Mutex<DataStore>>>,
 ) -> Json<DataStore> {
+    log::info!("Received full state request, returning...");
     let datastore = state.lock().await.clone();
     Json(datastore)
 }
@@ -229,6 +241,7 @@ async fn full_state(
 async fn network_state(
     State(state): State<Arc<Mutex<DataStore>>>,
 ) -> Json<NetworkState> {
+    log::info!("Received network state request, returning...");
     let network_state = state.lock().await.network_state.clone();
     Json(network_state)
 }
@@ -236,6 +249,7 @@ async fn network_state(
 async fn peer_state(
     State(state): State<Arc<Mutex<DataStore>>>, 
 ) -> Json<PeerMap> {
+    log::info!("Received peer state request, returning...");
     let peer_state = state.lock().await.network_state.peers.clone();
     Json(peer_state)
 }
@@ -243,6 +257,7 @@ async fn peer_state(
 async fn cidr_state(
     State(state): State<Arc<Mutex<DataStore>>>, 
 ) -> Json<CidrMap> {
+    log::info!("Received cidr state request, returning...");
     let cidr_state = state.lock().await.network_state.cidrs.clone();
     Json(cidr_state)
 }
@@ -250,6 +265,7 @@ async fn cidr_state(
 async fn assoc_state(
     State(state): State<Arc<Mutex<DataStore>>>, 
 ) -> Json<AssocMap> {
+    log::info!("Received assoc state request, returning...");
     let assoc_state = state.lock().await.network_state.associations.clone();
     Json(assoc_state)
 }
@@ -258,15 +274,19 @@ async fn create_user(
     State(state): State<Arc<Mutex<DataStore>>>,
     Json(user): Json<PeerRequest>
 ) -> Json<Response<Peer<String>>> {
+    log::info!("Received create user request...");
     let mut datastore = state.lock().await;
     match user {
         PeerRequest::Op(map_op) => {
+            log::info!("Create user request is an Op from another peer");
             match &map_op {
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     datastore.network_state.peer_op(map_op.clone());
                     if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
+                        log::info!("Peer Op succesffully applied...");
                         return Json(Response::Success(Success::Some(v.into())))
                     } else {
+                        log::info!("Peer Op rejected...");
                         return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
                     }
                 }
@@ -276,7 +296,10 @@ async fn create_user(
             }
         }
         PeerRequest::Join(contents) => {
+            log::info!("Create user request was a direct request...");
+            log::info!("Building Map Op...");
             let map_op = datastore.network_state.update_peer_local(contents);
+            log::info!("Map op created... Applying...");
             datastore.network_state.peer_op(map_op.clone());
             match &map_op {
                 crdts::map::Op::Rm { .. } => {
@@ -284,6 +307,7 @@ async fn create_user(
                 }
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
+                        log::info!("Map Op was successful, broadcasting...");
                         let request = PeerRequest::Op(map_op);
                         match datastore.broadcast::<Response<Peer<String>>>(request, "/user/create").await {
                             Ok(()) => return Json(Response::Success(Success::Some(v.into()))),
@@ -306,9 +330,11 @@ async fn update_user(
     State(state): State<Arc<Mutex<DataStore>>>,
     Json(user): Json<PeerRequest>
 ) -> Json<Response<Peer<String>>> {
+    log::info!("Received update user request...");
     let mut datastore = state.lock().await;
     match user {
         PeerRequest::Op(map_op) => {
+            log::info!("Update user request is an Op from another peer");
             match &map_op {
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     datastore.network_state.peer_op(map_op.clone());
@@ -324,6 +350,8 @@ async fn update_user(
             }
         }
         PeerRequest::Update(contents) => {
+            log::info!("Update user request was a direct request...");
+            log::info!("Building Map Op...");
             let map_op = datastore.network_state.update_peer_local(contents);
             datastore.network_state.peer_op(map_op.clone());
             match &map_op {
@@ -332,6 +360,7 @@ async fn update_user(
                 }
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
+                        log::info!("Map Op was successful, broadcasting...");
                         let request = PeerRequest::Op(map_op);
                         match datastore.broadcast::<Response<Peer<String>>>(request, "/user/update").await {
                             Ok(()) => return Json(Response::Success(Success::Some(v.into()))),
@@ -354,13 +383,16 @@ async fn disable_user(
     State(state): State<Arc<Mutex<DataStore>>>,
     Json(user): Json<PeerRequest>
 ) -> Json<Response<Peer<String>>> {
+    log::info!("Received disable user request...");
     let mut datastore = state.lock().await;
     match user {
         PeerRequest::Op(map_op) => {
+            log::info!("Disable user request is an Op from another peer");
             match &map_op {
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     datastore.network_state.peer_op(map_op.clone());
                     if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
+                        log::info!("Map Op was successful, broadcasting...");
                         return Json(Response::Success(Success::Some(v.into())))
                     } else {
                         return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
@@ -372,6 +404,8 @@ async fn disable_user(
             }
         }
         PeerRequest::Update(contents) => {
+            log::info!("Disable user request was a direct request...");
+            log::info!("Building Map Op...");
             let map_op = datastore.network_state.update_peer_local(contents);
             datastore.network_state.peer_op(map_op.clone());
             match &map_op {
@@ -380,6 +414,7 @@ async fn disable_user(
                 }
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
+                        log::info!("Map Op was successful, broadcasting...");
                         let request = PeerRequest::Op(map_op);
                         match datastore.broadcast::<Response<Peer<String>>>(request, "/user/disable").await {
                             Ok(()) => return Json(Response::Success(Success::Some(v.into()))),
@@ -402,9 +437,11 @@ async fn redeem_invite(
     State(state): State<Arc<Mutex<DataStore>>>,
     Json(user): Json<PeerRequest>
 ) -> Json<Response<Peer<String>>> {
+    log::info!("Received redeem invite user request...");
     let mut datastore = state.lock().await;
     match user {
         PeerRequest::Op(map_op) => {
+            log::info!("Redeem invite user request is an Op from another peer");
             match &map_op {
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     datastore.network_state.peer_op(map_op.clone());
@@ -420,6 +457,8 @@ async fn redeem_invite(
             }
         }
         PeerRequest::Update(contents) => {
+            log::info!("Redeem invite user request was a direct request...");
+            log::info!("Building Map Op...");
             let map_op = datastore.network_state.update_peer_local(contents);
             datastore.network_state.peer_op(map_op.clone());
             match &map_op {
@@ -428,6 +467,7 @@ async fn redeem_invite(
                 }
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
+                        log::info!("Map Op was successful, broadcasting...");
                         let request = PeerRequest::Op(map_op);
                         match datastore.broadcast::<Response<Peer<String>>>(request, "/user/redeem").await {
                             Ok(()) => return Json(Response::Success(Success::Some(v.into()))),
@@ -450,9 +490,11 @@ async fn delete_user(
     State(state): State<Arc<Mutex<DataStore>>>,
     Json(user): Json<PeerRequest>
 ) -> Json<Response<Peer<String>>> {
+    log::info!("Received redeem invite user request...");
     let mut datastore = state.lock().await;
     match user {
         PeerRequest::Op(map_op) => {
+            log::info!("delete user request is an Op from another peer");
             match &map_op {
                 crdts::map::Op::Up { .. } => {
                     return Json(Response::Failure { reason: Some("Invalid Op type for delete User".into()) });
@@ -464,11 +506,14 @@ async fn delete_user(
             }
         }
         PeerRequest::Delete(contents) => {
+            log::info!("Delete user request was a direct request...");
+            log::info!("Building Map Op...");
             let map_op = datastore.network_state.remove_peer_local(contents);
             datastore.network_state.peer_op(map_op.clone());
             match &map_op {
                 crdts::map::Op::Rm { .. } => {
                     let request = PeerRequest::Op(map_op);
+                    log::info!("Map Op was successful, broadcasting...");
                     match datastore.broadcast::<Response<Peer<String>>>(request, "/user/delete").await {
                         Ok(()) => return Json(Response::Success(Success::None)),
                         Err(e) => eprintln!("Error broadcasting DeletePeerRequest: {e}")
@@ -491,8 +536,11 @@ async fn get_user(
     State(state): State<Arc<Mutex<DataStore>>>,
     Path(id): Path<String>
 ) -> Json<Response<Peer<String>>> {
+    log::info!("Request to get peer {id}");
     if let Some(peer) = state.lock().await.network_state.peers.get(&id).val {
+        log::info!("Found register for peer {id}");
         if let Some(val) = peer.val() {
+            log::info!("Found value for peer {id}");
             return Json(Response::Success(Success::Some(val.value().into())))
         } else {
             return Json(Response::Failure { reason: Some("Entry exists, but value is None".into()) })
@@ -505,7 +553,9 @@ async fn get_user_from_ip(
     State(state): State<Arc<Mutex<DataStore>>>,
     Path(ip): Path<String>
 ) -> Json<Response<Peer<String>>> {
+    log::info!("Request to get peer by IP {ip}");
     if let Some(peer) = state.lock().await.network_state.get_peer_by_ip(ip.clone()) {
+        log::info!("Found peer {} by IP {ip}", peer.id());
         return Json(Response::Success(Success::Some(peer.into())))
     } 
 
@@ -516,13 +566,15 @@ async fn get_all_allowed(
     State(state): State<Arc<Mutex<DataStore>>>,
     Path(id): Path<String>,
 ) -> Json<Response<Peer<String>>> {
+    log::info!("Requesting all allowed peers for peer {id}");
     let mut peers = state.lock().await.get_all_users();
     if let Some(peer) = state.lock().await.network_state.peers.get(&id).val {
         if let Some(node) = peer.val() {
             let peer = node.value();
             let cidr = peer.cidr();
             peers.retain(|_, v| v.cidr() == cidr);
-            let all_allowed = peers.iter().map(|(_, v)| v.clone().into()).collect();
+            let all_allowed: Vec<Peer<String>> = peers.iter().map(|(_, v)| v.clone().into()).collect();
+            log::info!("Retrieved all allowed peers for peer {id}. Total {}", all_allowed.len());
             return Json(Response::Success(Success::List(all_allowed)))
         }
     } 
@@ -533,7 +585,9 @@ async fn get_all_allowed(
 async fn list_users(
     State(state): State<Arc<Mutex<DataStore>>>,
 ) -> Json<Response<Peer<String>>> {
+    log::info!("Requesting a list of all users in the network...");
     let peers = state.lock().await.get_all_users().iter().map(|(_, v)| v.clone().into()).collect();
+    log::info!("Retrieved a list of all users in the network... Returning...");
     Json(Response::Success(Success::List(peers)))
 }
 
@@ -541,14 +595,17 @@ async fn list_by_cidr(
     State(state): State<Arc<Mutex<DataStore>>>,
     Path(cidr): Path<String>
 ) -> Json<Response<Peer<String>>> {
+    log::info!("Retrieving a list of all users in the cidr {cidr}...");
     let mut peers = state.lock().await.get_all_users();
     peers.retain(|_, v| v.cidr() == cidr);
+    log::info!("Retrieved a list of all users in the cidr {cidr}... Returning");
     Json(Response::Success(Success::List(peers.iter().map(|(_, v)| v.clone().into()).collect())))
 }
 
 async fn delete_expired(
     State(state): State<Arc<Mutex<DataStore>>>
 ) -> Json<Response<Peer<String>>> {
+    log::info!("Deleting all users that are expired and not redeemed...");
     let all_peers = state.lock().await.get_all_users();
     let now = match SystemTime::now()
         .duration_since(UNIX_EPOCH) {
@@ -577,6 +634,7 @@ async fn delete_expired(
         }
     }
 
+    log::info!("Deleted all users that are expired and not redeemed...");
     Json(Response::Success(Success::List(removed_peers.iter().map(|(_, v)| v.clone().into()).collect())))
 }
 

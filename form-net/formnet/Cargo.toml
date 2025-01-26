@@ -21,8 +21,8 @@ name = "formnet"
 path = "src/main.rs"
 
 [[bin]]
-name = "formnet-join"
-path = "src/client.rs"
+name = "formnet-vm-join"
+path = "src/vm_join.rs"
 
 
 [dependencies]

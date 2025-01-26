@@ -2714,6 +2714,19 @@ dependencies = [
 [[package]]
 name = "crdts"
 version = "7.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "387808c885b79055facbd4b2e806a683fe1bc37abc7dfa5fea1974ad2d4137b0"
+dependencies = [
+ "num",
+ "quickcheck",
+ "serde",
+ "tiny-keccak",
+]
+
+[[package]]
+name = "crdts"
+version = "7.3.2"
+source = "git+https://github.com/cryptonomikhan/rust-crdt.git#adcb816a5ba2c3b50693d115c39dfbad21cb7ea6"
 dependencies = [
  "alloy-primitives 0.8.18",
  "hex",
@@ -2722,18 +2735,6 @@ dependencies = [
  "quickcheck",
  "serde",
  "serde_json",
- "tiny-keccak",
-]
-
-[[package]]
-name = "crdts"
-version = "7.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "387808c885b79055facbd4b2e806a683fe1bc37abc7dfa5fea1974ad2d4137b0"
-dependencies = [
- "num",
- "quickcheck",
- "serde",
  "tiny-keccak",
 ]
 
@@ -3771,14 +3772,16 @@ dependencies = [
  "alloy-primitives 0.8.18",
  "axum 0.8.2",
  "clap",
- "crdts 7.3.2",
+ "crdts 7.3.2 (git+https://github.com/cryptonomikhan/rust-crdt.git)",
  "hex",
  "ipnet",
  "k256 0.13.4",
+ "log",
  "reqwest 0.12.12",
  "serde",
  "serde_json",
  "shared",
+ "simple_logger 5.0.0",
  "tiny-keccak",
  "tokio",
 ]
