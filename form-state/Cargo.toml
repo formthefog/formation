@@ -24,3 +24,4 @@ log = "0.4"
 simple_logger = "5"
 alloy-primitives = { version = "0.8", features = ["k256"] } 
 rand = "0.8"
+form-config = { path = "../form-config" }

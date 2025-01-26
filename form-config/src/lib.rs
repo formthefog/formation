@@ -1,9 +1,9 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
 use alloy::signers::local::coins_bip39::{English, Mnemonic};
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, Password, Select};
 use colored::*;
-use keys::KeySet;
+use keys::{derive_signing_key, KeySet};
 use rand::{rngs::OsRng, RngCore};
 use serde::{Serialize, Deserialize};
 use anyhow::{anyhow, Result};
@@ -39,6 +39,74 @@ pub struct OperatorConfig {
     pub event_queue_port: u16,
     #[clap(long="contract", short='e', aliases=["staking-contract", "avs-contract"])]
     pub contract_address: Option<String>
+}
+
+impl OperatorConfig {
+    pub fn from_file(path: impl AsRef<Path>, encrypted: bool, password: Option<&str>) -> Result<Self> {
+        let mut plain_config: OperatorConfig = serde_json::from_slice(&std::fs::read(path)?)?;
+        if let (None, None) = (&plain_config.mnemonic, &plain_config.secret_key) {
+            return Err(anyhow!("Either a mnemonic or secret key is required"));
+        }
+        if encrypted {
+            plain_config = plain_config.decrypt_key(
+                password.ok_or(
+                    anyhow!(
+                        "If config file is encrypted, password is required"
+                    )
+                )?
+            )?; 
+        }
+
+        return Ok(plain_config)
+    }
+
+    fn decrypt_key(mut self, password: &str) -> Result<Self> {
+        (self.mnemonic, self.secret_key) = if let Some(mnemonic) = &self.mnemonic {
+            let plain_phrase = mnemonic.iter().filter_map(|ew| {
+                match hex::decode(ew) {
+                    Ok(ewb) => match decrypt_file(&ewb, password) {
+                        Ok(plaintext) => match String::from_utf8(plaintext) {
+                            Ok(string) => Some(string),
+                            _ => None
+                        }
+                        _ => None
+                    }
+                    _ => None
+                }
+            }).collect::<Vec<String>>();
+            if plain_phrase.len() != mnemonic.len() {
+                return Err(anyhow!("Error decrypting mnemonic phrase, length doesn't match"));
+            }
+
+            let plain_sk = if let Some(key) = &self.secret_key {
+                hex::encode(
+                    &decrypt_file(
+                        &hex::decode(key).map_err(|e| anyhow!("{e}"))?, password
+                    ).map_err(|e| anyhow!("{e}"))?
+                )
+            } else {
+                hex::encode(
+                    derive_signing_key(
+                        &Mnemonic::<English>::new_from_phrase(&mnemonic.join(" "))?, 
+                        Some(password)
+                    )?.to_bytes()
+                )
+            };
+
+            (Some(plain_phrase), Some(plain_sk))
+        } else {
+            let plain_sk = hex::encode(
+                &decrypt_file(
+                    &hex::decode(
+                        self.secret_key.unwrap()
+                    ).map_err(|e| anyhow!("{e}"))?, password
+                ).map_err(|e| anyhow!("{e}"))?
+            );
+            (None, Some(plain_sk))
+        };         
+
+        Ok(self)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Args)]

@@ -898,7 +898,7 @@ async fn relationships(
     Json(Response::Success(Success::Relationships(ships)))
 }
 
-pub async fn request_full_state(to_dial: String) -> Result<DataStore, Box<dyn std::error::Error>> {
+pub async fn request_full_state(to_dial: &str) -> Result<DataStore, Box<dyn std::error::Error>> {
     let resp = Client::new()
         .get(format!("http://{to_dial}:3004/bootstrap/full_state"))
         .send().await?.json().await?;
