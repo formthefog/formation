@@ -3,6 +3,10 @@ name = "form-config"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "form-config-wizard"
+path = "src/main.rs"
+
 [dependencies]
 alloy = { version = "0.9.1", features = ["signers", "signer-local", "signer-mnemonic", "signer-mnemonic-all-languages"] }
 serde = { version = "1", features = ["derive"] }

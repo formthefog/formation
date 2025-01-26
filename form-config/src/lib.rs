@@ -12,33 +12,33 @@ use clap::Args;
 #[derive(Debug, Clone, Serialize, Deserialize, Args)]
 pub struct OperatorConfig {
     #[clap(long, short='n', default_value="1")]
-    network_id: u16,
+    pub network_id: u16,
     #[clap(long, short='K', default_value_os_t=default_keyfile_path())]
-    keyfile: PathBuf,
+    pub keyfile: PathBuf,
     #[clap(long="secret-key", short='S', alias="private-key")]
-    secret_key: Option<String>,
+    pub secret_key: Option<String>,
     #[clap(long="mnemonic-phrase", short='M', aliases=["phrase", "mnemonic"])]
-    mnemonic: Option<String>,
+    pub mnemonic: Option<Vec<String>>,
     #[clap(long, short='P')]
-    public_key: Option<String>,
+    pub public_key: Option<String>,
     #[clap(long, short)]
-    address: Option<String>,
+    pub address: Option<String>,
     #[clap(long="bootstrap-nodes", short='b', alias="to-dial")]
-    bootstrap_nodes: Vec<String>,
+    pub bootstrap_nodes: Vec<String>,
     #[clap(long="datastore-port", short='d', default_value="3004")]
-    datastore_port: u16,
+    pub datastore_port: u16,
     #[clap(long="formnet-join-port", short='j', default_value="3001")]
-    formnet_join_server_port: u16,
+    pub formnet_join_server_port: u16,
     #[clap(long="formnet-service-port", short='f', default_value="51820")]
-    formnet_service_port: u16,
+    pub formnet_service_port: u16,
     #[clap(long="vmm-service-port", short='v', default_value="3002")]
-    vmm_service_port: u16,
+    pub vmm_service_port: u16,
     #[clap(long="pack-manager-port", short='p', default_value="3003")]
-    pack_manager_port: u16,
+    pub pack_manager_port: u16,
     #[clap(long="event-queue-port", short='e', aliases=["mempool-port", "event-pool-port", "mempool", "events"])]
-    event_queue_port: u16,
+    pub event_queue_port: u16,
     #[clap(long="contract", short='e', aliases=["staking-contract", "avs-contract"])]
-    contract_address: Option<String>
+    pub contract_address: Option<String>
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Args)]
@@ -65,6 +65,7 @@ mod keys {
     use alloy::{primitives::Address, signers::{
         k256::ecdsa::{SigningKey, VerifyingKey}, local::coins_bip39::{English, Mnemonic}
     }};
+    use k256::{elliptic_curve::SecretKey, Secp256k1};
     use rand::thread_rng;
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -77,7 +78,7 @@ mod keys {
 
     impl KeySet {
         pub fn from_mnemonic(mnemonic: Mnemonic<English>, password: Option<&str>) -> Self {
-            let signing_key = derive_signing_key(&mnemonic, password);
+            let signing_key = derive_signing_key(&mnemonic, password).expect("Unable to derive signing key from mnemonic");
             let public_key = derive_public_key(&signing_key);
             let address = derive_address(&public_key);
             let phrase = mnemonic.to_phrase().split_whitespace().into_iter().map(|s| s.to_string()).collect();
@@ -114,9 +115,12 @@ mod keys {
     pub fn derive_signing_key(
         mnemonic: &Mnemonic<English>,
         password: Option<&str>
-    ) -> SigningKey {
-        let seed = mnemonic.to_seed(password).expect("Unable to build seed from Mnemonic phrase");
-        SigningKey::from_slice(&seed).expect("Unable to derive signing key from Mnemonic phrase")
+    ) -> Result<SigningKey> {
+        let path = "m/44'/60'/0'/0'/0";
+        let master_key = mnemonic.derive_key(path, password)?;
+        let signing_key: &SigningKey = master_key.as_ref();
+        let secret_key: SecretKey<Secp256k1> = signing_key.into();
+        return Ok(SigningKey::from(secret_key));
     }
 
     pub fn derive_public_key(signing_key: &SigningKey) -> VerifyingKey {
@@ -138,8 +142,9 @@ mod prompts {
         println!("The network ID is used to distinguish between different networks.");
         println!("Common values:");
         println!("  1 = Mainnet");
-        println!("  5 = Goerli");
-        println!("  11155111 = Sepolia");
+        println!("  2 = Jericho");
+        println!("  3 = Uruk");
+        println!("  >50000 = Local");
         
         let network_id: u16 = Input::with_theme(theme)
             .with_prompt("Enter network ID")
@@ -216,8 +221,10 @@ mod prompts {
                 let keyset = KeySet::random(password.as_deref(), count);
                 
                 println!("\n{}", "Generated New Keys:".bold().yellow());
-                println!("Mnemonic Phrase: {:?}", keyset.mnemonic.iter().map(|s| s.bold()).collect::<Vec<_>>());
-                println!("Address: 0x{}", keyset.address.bright_green());
+                print!("Mnemonic Phrase: ");
+                keyset.mnemonic.iter().for_each(|s| print!("{}, ", s.blue().bold()));
+                print!("\n");
+                println!("Address: {}{}", "0x".bright_green(), keyset.address.bright_green());
                 println!("\n{}", "⚠️  IMPORTANT ⚠️ ".bold().red());
                 println!("Please store your mnemonic phrase safely. It cannot be recovered if lost!");
                 
@@ -358,11 +365,7 @@ pub fn run_config_wizard() -> Result<OperatorConfig> {
         network_id,
         keyfile,
         secret_key,
-        mnemonic: if let Some(phrase) = mnemonic {
-            Some(phrase.join(" "))
-        } else {
-            None
-        }, // Not implemented yet
+        mnemonic,
         public_key,
         address,
         bootstrap_nodes,
@@ -392,6 +395,7 @@ pub fn save_config_and_keystore(
             println!("\n{}", "Encrypting Keystore".bold().green());
             println!("Please choose a strong password to encrypt your keys.");
             println!("This password will be required to decrypt your keys later.");
+            println!("{}", "⚠️  Encrypting the Keystore may take up to 2 minutes⚠️  ".bold().yellow());
             
             let theme = ColorfulTheme::default();
             let password: String = Password::with_theme(&theme)
@@ -401,7 +405,7 @@ pub fn save_config_and_keystore(
             
             // Create and save the encrypted keystore
             let keystore = KeySet::from_mnemonic(
-                Mnemonic::<English>::new_from_phrase(mnemonic)?,
+                Mnemonic::<English>::new_from_phrase(&mnemonic.join(" "))?,
                 Some(&password),
             );
             
@@ -413,7 +417,10 @@ pub fn save_config_and_keystore(
             let keystore_json = serde_json::to_vec(&keystore)?;
             let encrypted_hex_mnemonic = keystore.mnemonic.iter().filter_map(|s| {
                 match encrypt_file(s.as_bytes(), &password) {
-                    Ok(eb) => Some(hex::encode(eb)),
+                    Ok(eb) => {
+                        let hex = hex::encode(&eb);
+                        Some(hex)
+                    },
                     Err(_) => None
                 }
             }).collect::<Vec<String>>();
@@ -427,8 +434,8 @@ pub fn save_config_and_keystore(
                 ).map_err(|e| anyhow!("{e}"))?
             );
 
-            safe_config.mnemonic = Some(encrypted_hex_mnemonic.join(" "));
-            safe_config.mnemonic = Some(encrypted_secret_key);
+            safe_config.mnemonic = Some(encrypted_hex_mnemonic);
+            safe_config.secret_key = Some(encrypted_secret_key);
             safe_config.address = Some(hex::encode(address));
             let encrypted = encrypt_file(&keystore_json, &password).map_err(|e| anyhow!(format!("Unable to encrypt file {e}")))?;
             std::fs::write(&keystore_path, encrypted)?;
