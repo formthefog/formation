@@ -556,3 +556,94 @@ impl NetworkState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shared::{PeerContents, Hostname};
+    use std::str::FromStr;
+    use std::net::IpAddr;
+    use k256::ecdsa::SigningKey;
+    use alloy_primitives::Address;
+    use hex;
+
+    #[test]
+    fn test_insert_peer() -> Result<(), Box<dyn std::error::Error>> {
+        let sk = SigningKey::random(&mut rand::thread_rng());
+        let address = hex::encode(&Address::from_private_key(&sk));
+        let pk = hex::encode(SigningKey::random(&mut rand::thread_rng()).to_bytes());
+        let mut state = NetworkState::new(address.clone(), pk.clone());
+
+        // Create a new peer
+        let peer_contents = PeerContents {
+            name: Hostname::from_str("peer-1")?,
+            ip: IpAddr::from([192, 168, 1, 1]),
+            cidr_id: "cidr-1".to_string(),
+            public_key: "public-key".to_string(),
+            endpoint: None,
+            persistent_keepalive_interval: Some(15),
+            is_admin: false,
+            is_disabled: false,
+            is_redeemed: true,
+            invite_expires: None,
+            candidates: vec![],
+        };
+
+        // Insert the peer
+        let op = state.update_peer_local(peer_contents.clone());
+        println!("{op:?}\n\n");
+        state.peer_op(op);
+        println!("{:?}\n\n", state.peers);
+
+        // Validate the peer exists
+        let peer = state.get_peer_by_ip("192.168.1.1".to_string());
+        assert!(peer.is_some());
+        let peer = peer.unwrap();
+        assert_eq!(peer.id(), "peer-1");
+        assert_eq!(peer.ip(), IpAddr::from([192, 168, 1, 1]));
+        assert!(peer.is_redeemed());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_peer() -> Result<(), Box<dyn std::error::Error>> {
+        let sk = SigningKey::random(&mut rand::thread_rng());
+        let address = hex::encode(&Address::from_private_key(&sk));
+        let pk = hex::encode(SigningKey::random(&mut rand::thread_rng()).to_bytes());
+        let mut state = NetworkState::new(address.clone(), pk.clone());
+
+        // Insert the peer
+        let peer_contents = PeerContents {
+            name: Hostname::from_str("peer-1")?,
+            ip: IpAddr::from([192, 168, 1, 1]),
+            cidr_id: "cidr-1".to_string(),
+            public_key: "public-key".to_string(),
+            endpoint: None,
+            persistent_keepalive_interval: Some(15),
+            is_admin: false,
+            is_disabled: false,
+            is_redeemed: true,
+            invite_expires: None,
+            candidates: vec![],
+        };
+
+        let op = state.update_peer_local(peer_contents.clone());
+        state.peer_op(op);
+
+        // Update the peer
+        let mut updated_peer_contents = peer_contents.clone();
+        updated_peer_contents.is_admin = true;
+        let update_op = state.update_peer_local(updated_peer_contents.clone());
+        println!("{update_op:?}\n\n");
+        state.peer_op(update_op);
+        println!("{:?}\n\n", state.peers);
+
+        // Validate the peer was updated
+        let peer = state.get_peer_by_ip("192.168.1.1".to_string());
+        assert!(peer.is_some());
+        let peer = peer.unwrap();
+        assert!(peer.is_admin());
+        Ok(())
+    }
+}
