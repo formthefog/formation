@@ -383,7 +383,7 @@ pub fn save_config_and_keystore(
     encrypt_keys: bool
 ) -> Result<()> {
     // Create a copy of the config that we'll save
-    let safe_config = config.clone();
+    let mut safe_config = config.clone();
     
     if encrypt_keys {
         if let (Some(secret_key), Some(mnemonic), Some(address)) = 
@@ -411,6 +411,25 @@ pub fn save_config_and_keystore(
             }
             
             let keystore_json = serde_json::to_vec(&keystore)?;
+            let encrypted_hex_mnemonic = keystore.mnemonic.iter().filter_map(|s| {
+                match encrypt_file(s.as_bytes(), &password) {
+                    Ok(eb) => Some(hex::encode(eb)),
+                    Err(_) => None
+                }
+            }).collect::<Vec<String>>();
+            if encrypted_hex_mnemonic.len() != keystore.mnemonic.len() {
+            return Err(anyhow!("One or more of the words in the mnemonic was not properly encrypted")); }
+
+            let encrypted_secret_key = hex::encode(
+                &encrypt_file(
+                    &hex::decode(&secret_key)?,
+                    &password
+                ).map_err(|e| anyhow!("{e}"))?
+            );
+
+            safe_config.mnemonic = Some(encrypted_hex_mnemonic.join(" "));
+            safe_config.mnemonic = Some(encrypted_secret_key);
+            safe_config.address = Some(hex::encode(address));
             let encrypted = encrypt_file(&keystore_json, &password).map_err(|e| anyhow!(format!("Unable to encrypt file {e}")))?;
             std::fs::write(&keystore_path, encrypted)?;
             
