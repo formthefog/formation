@@ -25,38 +25,69 @@ pub struct Cli {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let parser = Cli::parse();
 
+    let config = OperatorConfig::from_file(parser.config_path, parser.encrypted, parser.password.as_deref()).ok(); 
     let private_key = if let Some(pk) = &parser.secret_key {
         pk.clone()
     } else {
-        let config = OperatorConfig::from_file(parser.config_path, parser.encrypted, parser.password.as_deref())?; 
-        config.secret_key.ok_or(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Secret Key required")))?
+        config.clone().unwrap().secret_key.ok_or(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Secret Key required")))?
     };
 
     let address = hex::encode(Address::from_private_key(&SigningKey::from_slice(&hex::decode(&private_key)?)?)); 
-
-    let datastore = if !&parser.to_dial.is_empty() {
-        let mut iter = parser.to_dial.iter();
-        let mut state = None;
-        while let Some(dial) = iter.next() {
-            match request_full_state(dial).await {
-                Ok(s) => {
-                    state = Some(s);
-                    break;
-                } 
-                Err(_) => {}
-            }
-        };
-        let state = state.ok_or(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Unable to acquire state from any bootstrap nodes provided")))?;
-        let datastore = DataStore::new_from_state(
-            address.clone(), private_key.clone(), state
-        );
-        datastore
+    let mut datastore = if parser.to_dial.is_empty() {
+        if config.is_none() {
+            let datastore = DataStore::new(address.clone(), private_key.clone());
+            Some(datastore)
+        } else if config.clone().unwrap().bootstrap_nodes.is_empty() {
+            let datastore = DataStore::new(address.clone(), private_key.clone());
+            Some(datastore)
+        } else { 
+            None
+        }
     } else {
-        let datastore = DataStore::new(address.clone(), private_key.clone());
-        datastore
+        None
     };
 
-    datastore.run().await?;
+    if datastore.is_none() {
+        if !&parser.to_dial.is_empty() {
+            let mut iter = parser.to_dial.iter();
+            let mut state = None;
+            while let Some(dial) = iter.next() {
+                match request_full_state(dial).await {
+                    Ok(s) => {
+                        state = Some(s);
+                        break;
+                    } 
+                    Err(_) => {}
+                }
+            };
+            let state = state.expect("Unable to acquire state from bootstrap nodes");
+            let ds = DataStore::new_from_state(
+                address.clone(), private_key.clone(), state
+            );
+            datastore = Some(ds)
+        } else if !config.is_none() && !config.clone().unwrap().bootstrap_nodes.is_empty() {
+            let unwrapped_config = config.clone().unwrap();
+            let mut iter = unwrapped_config.bootstrap_nodes.iter();
+            let mut state = None;
+            while let Some(dial) = iter.next() {
+                match request_full_state(dial).await {
+                    Ok(s) => {
+                        state = Some(s);
+                        break;
+                    } 
+                    Err(_) => {}
+                }
+            };
+            let state = state.expect("Unable to acquire staate from bootstrap nodes");
+            let ds = DataStore::new_from_state(
+                address.clone(), private_key.clone(), state
+            );
+            datastore = Some(ds)
+        } else {
+            panic!("Something went terribly wrong trying to instantiate the Datastore");
+        }
+    };
 
+    let _ = datastore.unwrap().run().await;
     Ok(())
 }
