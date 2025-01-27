@@ -1,4 +1,4 @@
-use std::{net::{IpAddr, Ipv4Addr, SocketAddr}, path::PathBuf, str::FromStr};
+use std::{net::{IpAddr, Ipv4Addr, SocketAddr}, path::PathBuf, str::FromStr, time::Duration};
 use reqwest::Client;
 use serde_json::Value;
 use shared::{CidrContents, IpNetExt, PeerContents, PERSISTENT_KEEPALIVE_INTERVAL_SECS};
@@ -64,6 +64,7 @@ pub async fn init(address: String) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let database_path = data_dir.join(&name.to_string()).with_extension("db");
+    let _ = tokio::time::sleep(Duration::from_secs(5)).await;
     ensure_crdt_datastore().await?;
     populate_crdt_datastore(
         db_init_data,

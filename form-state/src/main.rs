@@ -23,6 +23,10 @@ pub struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    simple_logger::init_with_level(log::Level::Info)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+
+    log::info!("Parsing CLI...");
     let parser = Cli::parse();
 
     let config = OperatorConfig::from_file(parser.config_path, parser.encrypted, parser.password.as_deref()).ok(); 
@@ -31,6 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         config.clone().unwrap().secret_key.ok_or(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Secret Key required")))?
     };
+    log::info!("Acquired private key...");
 
     let address = hex::encode(Address::from_private_key(&SigningKey::from_slice(&hex::decode(&private_key)?)?)); 
     let mut datastore = if parser.to_dial.is_empty() {
@@ -87,6 +92,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             panic!("Something went terribly wrong trying to instantiate the Datastore");
         }
     };
+
+    log::info!("Built data store, running...");
 
     let _ = datastore.unwrap().run().await;
     Ok(())

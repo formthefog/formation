@@ -1,8 +1,8 @@
 use std::net::SocketAddr;
 use std::hash::Hash;
 use std::collections::HashSet;
-use alloy::primitives::Address;
-use alloy::signers::k256::ecdsa::{SigningKey, Signature, RecoveryId};
+use alloy_core::primitives::Address;
+use k256::ecdsa::{SigningKey, Signature, RecoveryId};
 use crate::{Topic, Event};
 
 pub trait ServiceType {}

@@ -100,12 +100,20 @@ pub async fn serve(
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 fn get_listener(addr: SocketAddr, interface: &InterfaceName) -> Result<TcpListener, Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(addr)?;
     listener.set_nonblocking(true)?;
     let sock = socket2::Socket::from(listener);
     sock.bind_device(Some(interface.as_str_lossy().as_bytes()))?;
     Ok(sock.into())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn get_listener(addr: SocketAddr, _interface: &InterfaceName) -> Result<TcpListener, Box<dyn std::error::Error>> {
+    let listener = TcpListener::bind(addr)?;
+    listener.set_nonblocking(true)?;
+    Ok(listener)
 }
 
 

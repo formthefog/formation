@@ -16,7 +16,14 @@ pub fn fetch(
     let network = NetworkOpts::default();
     let nat_opts = NatOpts::default();
     let config = InterfaceConfig::from_interface(&config_dir, &interface)?; 
+    #[cfg(target_os = "linux")]
     let interface_up = match Device::list(wireguard_control::Backend::Kernel) {
+        Ok(interfaces) => interfaces.iter().any(|name| *name == interface),
+        _ => false,
+    };
+
+    #[cfg(not(target_os = "linux"))]
+    let interface_up = match Device::list(wireguard_control::Backend::Userspace) {
         Ok(interfaces) => interfaces.iter().any(|name| *name == interface),
         _ => false,
     };

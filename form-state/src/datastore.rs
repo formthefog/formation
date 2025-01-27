@@ -219,7 +219,7 @@ impl DataStore {
     pub async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
         let router = Self::app(Arc::new(Mutex::new(self)));
         let listener = TcpListener::bind("0.0.0.0:3004").await?;
-        log::info!("Running datstore server...");
+        log::info!("Running datastore server...");
         let _ = axum::serve(listener, router).await?;
 
         Ok(())

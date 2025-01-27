@@ -1,6 +1,7 @@
 use std::{io::Write, path::PathBuf, str::FromStr, time::Duration};
-use alloy::{primitives::Address, signers::k256::elliptic_curve::PublicKey};
+use k256::elliptic_curve::PublicKey;
 use alloy_signer_local::coins_bip39::{English, Mnemonic};
+use alloy_core::primitives::Address;
 use colored::*;
 use clap::Args;
 use daemonize::Daemonize;

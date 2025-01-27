@@ -530,7 +530,10 @@ impl Default for NetworkOpts {
     fn default() -> Self {
         Self {
             no_routing: false,
+            #[cfg(target_os = "linux")]
             backend: Backend::Kernel,
+            #[cfg(not(target_os = "linux"))]
+            backend: Backend::Userspace,
             mtu: None 
         }
     }
