@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 use dialoguer::{theme::ColorfulTheme, Confirm};
 use colored::*;
 use form_cli::{
-    decrypt_file, default_config_dir, default_data_dir, default_keystore_dir, join_formnet, Config, Init, Keystore, KitCommand, ManageCommand, PackCommand, WalletCommand
+    decrypt_file, default_config_dir, default_data_dir, default_keystore_dir, join_formnet, operator_config, Config, Init, Keystore, KitCommand, ManageCommand, Operator, PackCommand, WalletCommand
 };
 
 /// The official developer CLI for building, deploying and managing 
@@ -102,6 +102,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let host = config.hosts[0].clone();
                     if let true = config.join_formnet {
                         join_formnet(keystore.address.to_string(), host, config.formnet_port).await?; 
+                    }
+                }
+                KitCommand::Operator(sub) => {
+                    match sub {
+                        Operator::Config => {
+                            operator_config()?;
+                        }
                     }
                 }
             }

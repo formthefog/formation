@@ -8,9 +8,9 @@ use k256::ecdsa::SigningKey;
 
 #[derive(Clone, Debug, Parser)]
 pub struct Cli {
-    #[clap(alias="config", default_value_os_t=PathBuf::from("/etc/formation/operator-config.json"))]
+    #[clap(long="config-path", short='C', alias="config", default_value_os_t=PathBuf::from("/etc/formation/operator-config.json"))]
     config_path: PathBuf,
-    #[clap(alias="bootstrap")]
+    #[clap(long, short, alias="bootstrap")]
     to_dial: Vec<String>,
     #[clap(long, short)]
     secret_key: Option<String>,

@@ -14,6 +14,9 @@ container_id=$(docker run --rm --privileged --network=host \
     --device=/dev/urandom \
     -v /lib/modules:/lib/modules:ro \
     -v /var/run/docker.sock:/var/run/docker.sock \
+    -v /etc/secrets/:/etc/secrets \
+    -e SECRET_PATH=$SECRET_PATH \
+    -e PASSWORD=$PASSWORD \
     --mount type=tmpfs,destination=/dev/hugepages,tmpfs-mode=1770 \
     -dit formation-minimal:latest
 )

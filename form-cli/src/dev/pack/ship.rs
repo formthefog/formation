@@ -2,8 +2,7 @@ use std::path::PathBuf;
 use clap::Args;
 use form_pack::formfile::FormfileParser;
 use form_types::{CreateVmRequest, VmmResponse};
-use vmm_service::util::default_formfile;
-use crate::default_context;
+use crate::{default_context, default_formfile};
 
 
 #[derive(Debug, Args)]

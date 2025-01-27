@@ -33,7 +33,7 @@ struct Opts {
     #[clap(flatten)]
     network: NetworkOpts,
 
-    #[clap(short, long)]
+    #[clap(value_enum, short, long, default_value_t = Datastore::Crdt)]
     datastore: Datastore
 }
 

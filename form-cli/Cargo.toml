@@ -40,20 +40,18 @@ scrypt = "0.11"
 uuid = { version = "1.4", features = ["v4"] }
 hex = "0.4"
 random_word = { version = "0.4", features = ["en"] }
-vmm-service = { path = "../form-vmm/vmm-service" }
 form-types = { path = "../form-types" }
 form-pack = { path = "../form-pack" }
 shared = { path = "../form-net/shared" }
 formnet = { path = "../form-net/formnet" }
+form-config = { path = "../form-config" }
 tokio-util = "0.7"
 bytes = "1"
 chrono = "0.4"
-hidapi = { version = "1.5", default-features = false, features= ["linux-static-hidraw"] }
-ledger-transport-hid = "0.10"
-ledger-apdu = "0.10"
 tiny_http = "0.12"
 bs58 = "0.5"
 slip10 = "0.4"
 base58 = "0.2"
 daemonize = "0.5"
 argon2 = "0.5"
+anyhow = "1"

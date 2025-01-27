@@ -1,5 +1,4 @@
 use clap::Args;
-use vmm_service::util::default_formfile;
 use std::path::PathBuf;
 use reqwest::{Client, multipart::Form};
 use form_pack::{
@@ -7,7 +6,7 @@ use form_pack::{
     manager::PackResponse
 };
 use form_pack::pack::Pack;
-use crate::default_context;
+use crate::{default_context, default_formfile};
 
 
 /// Create a new instance

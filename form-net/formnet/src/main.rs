@@ -1,32 +1,34 @@
 //! A service to create and run formnet, a wireguard based p2p VPN tunnel, behind the scenes
 use std::path::PathBuf;
-
 use alloy::primitives::Address;
 use alloy::signers::k256::ecdsa::SigningKey;
 use clap::{Parser, Subcommand, Args};
 use form_config::OperatorConfig;
 use form_types::PeerType;
 use formnet::{init::init, serve::serve};
-use formnet::{create_router, ensure_crdt_datastore, redeem, request_to_join, NETWORK_NAME};
+use formnet::{create_router, ensure_crdt_datastore, redeem, request_to_join, user_join_formnet, vm_join_formnet, NETWORK_NAME};
 
 #[derive(Clone, Debug, Parser)]
 struct Cli {
     #[clap(subcommand)]
-    membership: Membership
+    join: Membership
 
 }
 
 #[derive(Clone, Debug, Subcommand)]
 enum Membership {
+    #[command(alias="node")]
     Operator(OperatorOpts),
+    #[command(alias="dev")]
     User(UserOpts),
-    Instance(InstanceOpts)
+    #[command(alias="vm")]
+    Instance
 }
 
 #[derive(Clone, Debug, Args)]
 struct OperatorOpts {
     /// The path to the operator config file 
-    #[arg(alias="config-file", default_value_os_t=PathBuf::from(".operator-config.json"))]
+    #[arg(long="config-path", short='C', aliases=["config", "config-file"], default_value_os_t=PathBuf::from(".operator-config.json"))]
     config_path: PathBuf,
     /// 1 or more bootstrap nodes that are known
     /// and already active in the Network
@@ -45,10 +47,12 @@ struct OperatorOpts {
 
 #[derive(Clone, Debug, Args)]
 struct UserOpts {
-}
-
-#[derive(Clone, Debug, Args)]
-struct InstanceOpts {
+    #[arg(alias="endpoint")]
+    provider: String, 
+    #[arg(alias="endpoint-port")]
+    port: u16,
+    #[arg(long, short)]
+    secret_key: String,
 }
 
 #[tokio::main]
@@ -58,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     log::info!("{cli:?}");
     
-    match cli.membership {
+    match cli.join {
         Membership::Operator(parser) => {
             let operator_config = OperatorConfig::from_file(
                 parser.config_path,
@@ -118,8 +122,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             join_server_handle.await?;
             formnet_server_handle.await?;
         }
-        Membership::User(_opts) => {} 
-        Membership::Instance(_opts) => {}
+        Membership::User(opts) => {
+            let address = hex::encode(Address::from_private_key(&SigningKey::from_slice(&hex::decode(&opts.secret_key)?)?));
+            user_join_formnet(address, opts.provider, opts.port).await?;
+        } 
+        Membership::Instance => {
+            vm_join_formnet().await?;
+        }
     }
 
     Ok(())

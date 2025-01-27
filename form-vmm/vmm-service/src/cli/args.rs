@@ -8,7 +8,7 @@ pub struct CliArgs {
     /// Enable debug logging
     #[arg(short, long, default_value="false")]
     pub debug: bool,
-    #[arg(short, long, default_value_os_t=PathBuf::from("/etc/formation/.operator-config.json"))]
+    #[arg(short='C', long, default_value_os_t=PathBuf::from("/etc/formation/.operator-config.json"))]
     pub config: PathBuf,
     #[arg(short, long, default_value="true")]
     pub encrypted: bool,

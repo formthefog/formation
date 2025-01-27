@@ -83,7 +83,26 @@ There are a few different ways that you can run a Formation node and participate
 
 The easiest way to get started is to simply run our Docker image in privileged mode with --network=host.
 
-First you will need to pull the official images:
+First, you will need to build an Operator config file:
+
+```bash
+form kit operator config
+```
+
+This will walk you through a wizard, which will ask a series of questions. If you a running a single node developer network
+or joining the official devnet using the official docker images, you will likely want to select all of the defaults.
+
+![form kit operator config demo](./assets/form-kit-operator-config.gif)
+
+Currently, ports related to service apis are hardcoded in many places throughout the system components, and as such,
+we as you for the time being to only use the default ports, unless you are actively contributing to the project
+and making changes to this default.
+
+The reason for this, for now, is that different identification information does not currently include service ports for external facing services,
+and in many cases, right now, due to the age of the project, we haven't gotten around to making internal service API ports configurable.
+if you would like to contribute to this, please see [#16](https://github.com/formthefog/formation/issues/16)
+
+Second, you will need to pull the official images:
 
 ```bash
 # Pull formation-minimal 
@@ -104,6 +123,16 @@ docker tag cryptonomikhan/form-build-server form-build-server
 Then you can run it, ensure you use the `--privileged` flag `--network=host` and
 provide it with the necessary devices and volumes (`/lib/modules` & `/var/run/docker.sock`)
 
+You will also need to provide a volume/mount for the operator config, which contains
+your secret key or mnemonic phrase, which is used to derive your identification,
+and is used to sign messages to ensure authenticity.
+
+You will then want to ensure that you also provide the path to the operator
+config file as an environment variable inside the container.
+
+If you chose to provide a password for the encryption of your keys in the config
+file (currently required, though will not be in the near future) you will
+want to provide the password as an environment variable as well.
 
 ```bash
 docker run --rm --privileged --network=host \
@@ -115,6 +144,9 @@ docker run --rm --privileged --network=host \
     --device=/dev/urandom \
     -v /lib/modules:/lib/modules:ro \
     -v /var/run/docker.sock:/var/run/docker.sock \
+    -v /path/to/config:/path/to/secrets \
+    -e SECRET_PATH=/path/to/config \
+    -e PASSWORD=<your-encryption-password> \
     --mount type=tmpfs,destination=/dev/hugepages,tmpfs-mode=1770 \
     -dit formation:latest
 ```
@@ -166,6 +198,10 @@ docker run --rm --privileged --network=host \
     --device=/dev/urandom \
     -v /lib/modules:/lib/modules:ro \
     -v /var/run/docker.sock:/var/run/docker.sock \
+    -v /path/to/operator/config \ 
+    -v /path/to/config:/path/to/secrets \
+    -e SECRET_PATH=/path/to/config \
+    -e PASSWORD=<your-encryption-password> \
     --mount type=tmpfs,destination=/dev/hugepages,tmpfs-mode=1770 \
     -dit formation-minimal:latest
 

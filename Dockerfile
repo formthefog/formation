@@ -1,6 +1,7 @@
 FROM ubuntu:22.04
 
-RUN apt-get update && apt-get upgrade
+RUN apt-get update -y 
+RUN apt-get upgrade -y
 RUN apt-get install -y protobuf-compiler libprotobuf-dev build-essential \
     clang llvm pkg-config iputils-ping wget curl \
     linux-headers-$(uname -r) qemu-kvm libvirt-dev \
@@ -44,6 +45,8 @@ COPY ./scripts/run-vmm-service.sh /usr/local/bin/run-vmm-service.sh
 COPY ./scripts/run-formnet.sh /usr/local/bin/run-formnet.sh
 # Copy the PackManager run script into /usr/local/bin
 COPY ./scripts/run-pack-manager.sh /usr/local/bin/run-pack-manager.sh
+# Copy the form-state run script into /usr/local/bin
+COPY ./scripts/run-form-state.sh /usr/local/bin/run-form-state.sh
 # Copy he formnet run script into /usr/local/bin
 COPY ./scripts/formation-minimal-entrypoint.sh /entrypoint.sh
 
@@ -52,8 +55,11 @@ COPY ./scripts/formation-minimal-entrypoint.sh /entrypoint.sh
 RUN chmod +x /usr/local/bin/run-vmm-service.sh
 # Provide the formnet run script with executable permission
 RUN chmod +x /usr/local/bin/run-formnet.sh
-# Provide the pack manage rrun script with executable permission
+# Provide the pack-manager run script with executable permission
 RUN chmod +x /usr/local/bin/run-pack-manager.sh
+# Provide the form-state run script with executable permission
+RUN chmod +x /usr/local/bin/run-form-state.sh
+
 # Provide the entrypoint script with executable permission
 RUN chmod +x /entrypoint.sh
 

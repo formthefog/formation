@@ -1,10 +1,16 @@
 use std::path::PathBuf;
-
+use clap::Subcommand;
 use anyhow::Result;
 use dialoguer::{theme::ColorfulTheme, Confirm, Input};
+use serde::{Serialize, Deserialize};
 use form_config::*;
 
-fn main() -> Result<()> {
+#[derive(Clone, Debug, Subcommand, Serialize, Deserialize)]
+pub enum Operator {
+    Config
+}
+
+pub fn operator_config() -> Result<()> {
     let config = run_config_wizard()?;
     
     // Ask about configuration save location
