@@ -135,6 +135,6 @@ pub fn build_peer_invitation(
     Ok(peer_invitation)
 }
 
-pub fn valid_hostname(name: &Hostname, peer_type: &PeerType) -> Result<(), Box<dyn std::error::Error>> {
-    todo!()
+pub fn valid_hostname(_name: &Hostname, _peer_type: &PeerType) -> Result<(), Box<dyn std::error::Error>> {
+    Ok(())
 }

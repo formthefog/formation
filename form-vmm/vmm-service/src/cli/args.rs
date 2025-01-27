@@ -17,6 +17,8 @@ pub enum CliCommand {
     /// Run the VMM service
     #[command(name = "run")]
     Run {
+        #[clap(aliases=["secret-key", "private-key"])]
+        signing_key: Option<String>,
         /// Message broker subscriber address
         #[arg(long, short)]
         sub_addr: Option<String>,

@@ -60,6 +60,7 @@ hyper = { version = "0.14", default-features = false, features = [
   "stream",
 ] }
 parking_lot = "0.12"
+form-config = { path = "../../form-config" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 socket2 = { version = "0.5.2", features = ["all"] }

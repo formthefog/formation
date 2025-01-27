@@ -11,23 +11,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = CliArgs::parse();
 
     match args.command {
-        CliCommand::Run { sub_addr, pub_addr } => {
-            /*
-            let config = if wizard {
-                info!("Running configuration wizard");
-                run_config_wizard()?
-            } else if let Some(config_path) = config {
-                info!("Loading configuration from {}", config_path.display());
-                ServiceConfig::from_file(&config_path.to_string_lossy())?
-            } else {
-                info!("Using default configuration");
-                ServiceConfig::default()
-            };
-            */
-
+        CliCommand::Run { signing_key, sub_addr, pub_addr } => {
             let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1024);
             let handle = tokio::task::spawn(async move {
                 if let Err(e) = run_vm_manager(
+                    signing_key,
                     shutdown_rx,
                     sub_addr.as_deref(), 
                     pub_addr
@@ -47,6 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn run_vm_manager(
+    signing_key: Option<String>,
     shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     subscriber_uri: Option<&str>,
     publisher_uri: Option<String>
@@ -58,6 +47,7 @@ async fn run_vm_manager(
         event_sender,
         api_addr,
         formnet_endpoint,
+        signing_key,
         subscriber_uri,
         publisher_uri,
     ).await?;

@@ -1,3 +1,4 @@
+#![allow(unused_assignments)]
 use std::io::{Cursor, Read, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -40,14 +41,12 @@ pub struct PackRequest {
 }
 
 pub struct FormPackManager {
-    vmm_service: Option<FormVmmService>,
     addr: SocketAddr
 }
 
 impl FormPackManager {
-    pub fn new(vmm_service: Option<FormVmmService>, addr: SocketAddr) -> Self {
+    pub fn new(addr: SocketAddr) -> Self {
         Self {
-            vmm_service,
             addr
         }
     }
@@ -97,10 +96,9 @@ async fn handle_ping() -> Json<Value> {
 }
 
 async fn handle_pack(
-    State(manager): State<Arc<Mutex<FormPackManager>>>,
+    State(_manager): State<Arc<Mutex<FormPackManager>>>,
     mut multipart: Multipart
 ) -> Json<PackResponse> {
-
     println!("Received a multipart Form, attempting to extract data...");
     let packdir = if let Ok(td) = tempdir() {
         td
@@ -168,9 +166,7 @@ async fn handle_pack(
     };
 
     println!("Building FormPackMonitor for {} build...", formfile.name);
-    let mut monitor = match FormPackMonitor::new(
-        manager.lock().await.vmm_service.clone()
-    ).await {
+    let mut monitor = match FormPackMonitor::new().await {
         Ok(monitor) => monitor,
         Err(e) => {
             println!("Error building monitor: {e}");
@@ -199,11 +195,10 @@ pub struct FormPackMonitor {
     build_server_id: Option<String>,
     build_server_uri: String,
     build_server_client: Client,
-    vmm_service: Option<FormVmmService>,
 }
 
 impl FormPackMonitor {
-    pub async fn new(vmm_service: Option<FormVmmService>) -> Result<Self, Box<dyn std::error::Error>> {
+    pub async fn new() -> Result<Self, Box<dyn std::error::Error>> {
         println!("Building default monitor...");
         let mut monitor = Self {
             docker: Docker::connect_with_local_defaults()?,
@@ -212,7 +207,6 @@ impl FormPackMonitor {
             build_server_id: None,
             build_server_uri: String::new(),
             build_server_client: Client::new(),
-            vmm_service,
         };
 
         println!("Attempting to start build container...");

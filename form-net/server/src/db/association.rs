@@ -59,14 +59,14 @@ impl DatabaseAssociation<CrdtMap, String, String> {
     pub async fn create(contents: AssociationContents<String>) -> Result<Association<String, String>, ServerError> {
         let cidr_1 = contents.cidr_id_1.clone();
         let cidr_2 = contents.cidr_id_2.clone();
-        let cidr_1_resp = reqwest::Client::new()
+        let _cidr_1_resp = reqwest::Client::new()
             .get(format!("http://127.0.0.1:3004/assoc/{cidr_1}/relationships"))
             .send()
             .await.map_err(|_| ServerError::InvalidQuery)?
             .json::<Response<Association<String, String>>>()
             .await.map_err(|_| ServerError::NotFound)?;
 
-        let cidr_2_resp = reqwest::Client::new()
+        let _cidr_2_resp = reqwest::Client::new()
             .get(format!("http://127.0.0.1:3004/assoc/{cidr_2}/relationships"))
             .send()
             .await.map_err(|_| ServerError::InvalidQuery)?

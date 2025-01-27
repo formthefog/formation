@@ -1,5 +1,6 @@
 use axum::Json;
 use form_types::PeerType;
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use shared::{interface_config::InterfaceConfig, NetworkOpts};
 
@@ -77,4 +78,40 @@ pub enum JoinResponse {
         invitation: InterfaceConfig,
     },
     Error(String) 
+}
+
+
+pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type: PeerType) -> Result<InterfaceConfig, Box<dyn std::error::Error>> {
+    let request = match peer_type { 
+        PeerType::Operator => JoinRequest::OperatorJoinRequest(
+            OperatorJoinRequest {
+                operator_id: address,
+            }
+        ),
+        PeerType::User => JoinRequest::UserJoinRequest(
+            UserJoinRequest {
+                user_id: address
+            }
+        ),
+        PeerType::Instance => JoinRequest::InstanceJoinRequest(
+            VmJoinRequest {
+                vm_id: address
+            }
+        )
+    };
+
+    while let Some(dial) = bootstrap.iter().next() {
+        match Client::new()
+        .post(&format!("http://{dial}/join"))
+        .json(&request)
+        .send()
+        .await {
+            Ok(response) => match response.json::<JoinResponse>().await {
+                Ok(JoinResponse::Success { invitation }) => return Ok(invitation),
+                _ => {}
+            }
+            _ => {}
+        }
+    }
+    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Did not receive a valid invitation")));
 }

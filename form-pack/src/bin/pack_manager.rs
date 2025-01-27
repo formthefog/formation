@@ -30,7 +30,7 @@ pub struct Cli {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let parser = Cli::parse();
     let addr = parser.interface.into_socketaddr(parser.port);
-    let manager = FormPackManager::new(None, addr);
+    let manager = FormPackManager::new(addr);
     let (tx, rx) = channel(1);
     tokio::task::spawn(async move {
         if let Err(e) = manager.run(rx).await {

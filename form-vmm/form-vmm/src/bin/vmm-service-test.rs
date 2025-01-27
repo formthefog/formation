@@ -48,6 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
         event_tx,
         api_addr,
         formnet_endpoint,
+        None,
         subscriber_uri,
         publisher_uri,
     ).await?;
