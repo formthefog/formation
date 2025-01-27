@@ -71,6 +71,7 @@ hyperlocal = "0.9.1"
 http-body-util = "0.1.2"
 hyper-util = "0.1.10"
 form-pack = { path = "../../form-pack" }
+form-config = { path = "../../form-config" }
 
 [dev-dependencies]
 dirs = "5.0.1"

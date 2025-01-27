@@ -367,7 +367,7 @@ pub struct VmManager {
     formnet_endpoint: String,
     api_response_sender: tokio::sync::mpsc::Sender<String>,
     subscriber: Option<VmmSubscriber>,
-    signing_key: Option<String>,
+    signing_key: String,
     publisher_addr: Option<String>,
 }
 
@@ -376,7 +376,7 @@ impl VmManager {
         event_sender: tokio::sync::mpsc::Sender<VmmEvent>,
         addr: SocketAddr,
         formnet_endpoint: String,
-        signing_key: Option<String>,
+        signing_key: String,
         subscriber_uri: Option<&str>,
         publisher_addr: Option<String>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync + 'static>> {
