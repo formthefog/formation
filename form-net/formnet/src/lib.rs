@@ -7,11 +7,13 @@ pub mod up;
 pub mod fetch;
 pub mod redeem;
 pub mod add_assoc;
+pub mod leave;
 
 pub use init::*;
 pub use add_peer::*;
 pub use serve::*;
 pub use join::*;
+pub use leave::*;
 pub use up::*;
 pub use fetch::*;
 pub use redeem::*;
