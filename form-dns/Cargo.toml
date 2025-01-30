@@ -1,0 +1,20 @@
+[package]
+name = "form-dns"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "form_dns"
+path = "src/lib.rs"
+
+[dependencies]
+trust-dns-server = { version = "0.23", features = ["dnssec"]}
+trust-dns-proto = { version = "0.23", features = ["dnssec", "openssl", "ring", "serde-config"]}
+trust-dns-client = "0.23"
+anyhow = "1"
+tokio = { version = "1", features = ["full"] }
+axum = "0.7"
+serde = { version = "1", features = ["derive"]}
+serde_json = "1"
+log = "0.4"
+simple_logger = "5"

@@ -6,11 +6,12 @@ use form_types::{BootCompleteRequest, PeerType, VmmResponse};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use shared::{interface_config::InterfaceConfig, NetworkOpts};
-
-use crate::{add_peer::add_peer, redeem, up};
+use crate::{add_peer::add_peer, handle_leave_request, redeem, up};
 
 pub fn create_router() -> axum::Router {
-    axum::Router::new().route("/join", axum::routing::post(handle_join_request))
+    axum::Router::new()
+        .route("/join", axum::routing::post(handle_join_request))
+        .route("/leave", axum::routing::post(handle_leave_request))
         //TODO: Add routes to request custom cidr, request custom assoc
         //Add routes to delete peer, delete custom cidr, delete assoc
 }
