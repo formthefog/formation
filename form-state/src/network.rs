@@ -1,16 +1,18 @@
-use std::{net::{IpAddr, SocketAddr}, time::{Duration, SystemTime}};
+use std::{net::IpAddr, time::{Duration, SystemTime}};
 use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, CmRDT, Map, Update};
 use ipnet::IpNet;
 use k256::ecdsa::SigningKey;
 use shared::{Association, AssociationContents, Cidr, CidrContents, Endpoint, Peer, PeerContents};
 use serde::{Serialize, Deserialize};
 use tiny_keccak::{Hasher, Sha3};
+use trust_dns_proto::rr::RecordType;
+use form_dns::store::FormDnsRecord;
 use crate::Actor;
 
 pub type PeerOp<T> = Op<String, BFTReg<CrdtPeer<T>, Actor>, Actor>; 
 pub type CidrOp<T> = Op<String, BFTReg<CrdtCidr<T>, Actor>, Actor>;
 pub type AssocOp<T> = Op<(String, String), BFTReg<CrdtAssociation<T>, Actor>, Actor>;
-pub type DnsOp = Op<String, BFTReg<DnsZone, Actor>, Actor>;
+pub type DnsOp = Op<String, BFTReg<CrdtDnsRecord, Actor>, Actor>;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CrdtPeer<T: Clone> {
@@ -217,80 +219,90 @@ impl From<AssociationContents<String>> for CrdtAssociation<String> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum EndpointProtocol {
-    Http,
-    Https,
-    Tcp,
-    Udp,
-    Quic
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PortMap {
-    public_port: u16,
-    private_port: u16,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq,)]
-pub enum RecordType {
-    A,
-    AAAA,
-    CNAME,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Entrypoint {
-    addr: SocketAddr,
-    protocol: EndpointProtocol,
-    gateway_id: String,
-    ports: Option<PortMap>
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct CrdtDnsRecord {
-    name: String,
-    ip: IpAddr,
-    entrypoints: Vec<Entrypoint>,
+    domain: String,
     record_type: RecordType,
-    owner: String,
-    ttl: u32,
-    last_updated: u64,
+    formnet_ip: Option<IpAddr>,
+    public_ip: Option<IpAddr>,
+    cname_target: Option<String>,
+    ttl: u32
 }
 
+impl CrdtDnsRecord {
+    pub fn domain(&self) -> String {
+        self.domain.clone()
+    }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub enum ZoneEntry {
-    Record(CrdtDnsRecord),
-    Subdomain(DnsZone),
+    pub fn record_type(&self) -> RecordType {
+        self.record_type
+    }
+
+    pub fn formnet_ip(&self) -> Option<IpAddr> {
+        self.formnet_ip
+    }
+
+    pub fn public_ip(&self) -> Option<IpAddr> {
+        self.public_ip
+    }
+
+    pub fn cname_target(&self) -> Option<String> {
+        self.cname_target.clone()
+    }
+
+    pub fn ttl(&self) -> u32 {
+        self.ttl
+    }
+
 }
 
-impl Sha3Hash for ZoneEntry {
-    fn hash(&self, hasher: &mut Sha3) {
-        hasher.update(&serde_json::to_vec(self).unwrap())
+impl From<FormDnsRecord> for CrdtDnsRecord {
+    fn from(value: FormDnsRecord) -> Self {
+        CrdtDnsRecord { 
+            domain: value.domain, 
+            record_type: value.record_type, 
+            formnet_ip: value.formnet_ip, 
+            public_ip: value.public_ip, 
+            cname_target: value.cname_target, 
+            ttl: value.ttl 
+        }
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct DnsZone {
-    records: Map<Actor, BFTReg<ZoneEntry, Actor>, Actor>,
-    owner: String,
-}
-
-impl Sha3Hash for DnsZone {
-    fn hash(&self, hasher: &mut Sha3) {
-        hasher.update(&serde_json::to_vec(self).unwrap())
+impl From<CrdtDnsRecord> for FormDnsRecord {
+    fn from(value: CrdtDnsRecord) -> Self {
+        FormDnsRecord { 
+            domain: value.domain, 
+            record_type: value.record_type, 
+            formnet_ip: value.formnet_ip, 
+            public_ip: value.public_ip, 
+            cname_target: value.cname_target, 
+            ttl: value.ttl 
+        }
     }
 }
 
-impl DnsZone {
-    pub fn new(owner: String) -> Self {
-        Self { owner, records: Map::new() }
+impl From<&CrdtDnsRecord> for FormDnsRecord {
+    fn from(value: &CrdtDnsRecord) -> Self {
+        FormDnsRecord { 
+            domain: value.domain.clone(), 
+            record_type: value.record_type, 
+            formnet_ip: value.formnet_ip, 
+            public_ip: value.public_ip, 
+            cname_target: value.cname_target.clone(), 
+            ttl: value.ttl 
+        }
+    }
+}
+
+impl Sha3Hash for CrdtDnsRecord {
+    fn hash(&self, hasher: &mut Sha3) {
+        hasher.update(&serde_json::to_vec(self).unwrap())
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DnsState {
-    pub zones: Map<Actor, BFTReg<DnsZone, Actor>, Actor>
+    pub zones: Map<Actor, BFTReg<CrdtDnsRecord, Actor>, Actor>
 }
 
 impl DnsState {
@@ -401,13 +413,6 @@ impl NetworkState {
         self.associations.rm(id, rm_ctx)
     }
 
-    pub fn add_dns_local(&mut self, _dns: ZoneEntry) { 
-        todo!()
-    }
-
-    pub fn remove_dns_local(&mut self, _id: String) { 
-        todo!()
-    }
 
     pub fn peer_op(&mut self, op: PeerOp<String>) -> Option<(String, String)> {
         log::info!("Applying peer op");
@@ -527,9 +532,60 @@ impl NetworkState {
         }
     }
 
+    pub fn update_dns_local(&mut self, dns: FormDnsRecord) -> DnsOp { 
+        log::info!("Acquiring add ctx...");
+        let add_ctx = self.dns_state.zones.read_ctx().derive_add_ctx(self.node_id.clone());
+        log::info!("Decoding our private key...");
+        let signing_key = SigningKey::from_slice(
+            &hex::decode(self.pk.clone())
+                .expect("PANIC: Invalid SigningKey Cannot Decode from Hex"))
+                .expect("PANIC: Invalid SigningKey cannot recover ffrom Bytes");
+        log::info!("Creating op...");
+        let op = self.dns_state.zones.update(dns.domain.clone(), add_ctx, |reg, ctx| {
+            let op = reg.update(dns.into(), self.node_id.clone(), signing_key).expect("PANIC: Unable to sign updates");
+            op
+        });
+        log::info!("Op created, returning...");
+        op
+    }
+
+    pub fn remove_dns_local(&mut self, domain: String) -> DnsOp { 
+        log::info!("Acquiring remove context...");
+        let rm_ctx = self.dns_state.zones.read_ctx().derive_rm_ctx();
+        log::info!("Building Rm Op...");
+        self.dns_state.zones.rm(domain, rm_ctx)
+    }
 
     pub fn dns_op(&mut self, op: DnsOp) {
         self.dns_state.apply(op);
+    }
+
+    pub fn dns_op_success(&self, domain: String, update: Update<CrdtDnsRecord, String>) -> (bool, CrdtDnsRecord) {
+        if let Some(reg) = self.dns_state.zones.get(&domain).val {
+            if let Some(v) = reg.val() {
+                // If the in the updated register equals the value in the Op it
+                // succeeded
+                if v.value() == update.op().value {
+                    return (true, v.value()) 
+                // Otherwise, it could be that it's a concurrent update and was added
+                // to the DAG as a head
+                } else if reg.dag_contains(&update.hash()) && reg.is_head(&update.hash()) {
+                    return (true, v.value()) 
+                // Otherwise, we could be missing a child, and this particular update
+                // is orphaned, if so we should requst the child we are missing from
+                // the actor who shared this update
+                } else if reg.is_orphaned(&update.hash()) {
+                    return (true, v.value())
+                // Otherwise it was a no-op for some reason
+                } else {
+                    return (false, v.value()) 
+                }
+            } else {
+                return (false, update.op().value) 
+            }
+        } else {
+            return (false, update.op().value);
+        }
     }
 
     fn handle_cached_peer_ops(&mut self, ops: Vec<PeerOp<String>>) {

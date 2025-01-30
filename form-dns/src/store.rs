@@ -7,6 +7,7 @@ use trust_dns_proto::rr::RecordType;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FormDnsRecord {
+    pub domain: String,
     pub record_type: RecordType,
     pub public_ip: Option<IpAddr>,
     pub formnet_ip: Option<IpAddr>,

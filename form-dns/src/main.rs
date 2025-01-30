@@ -22,13 +22,14 @@ async fn main() -> anyhow::Result<()> {
     {
         if let Ok(mut guard) = store.write() {
             let record = FormDnsRecord {
+                domain: "hello.fog".to_lowercase().to_string(),
                 record_type: RecordType::A,
                 formnet_ip: Some("10.0.0.42".parse().unwrap()),
                 public_ip: None,
                 cname_target: None,
                 ttl: 3600
             };
-            guard.insert("hello.fog", record);
+            guard.insert(&record.domain.clone(), record);
         }
     }
 

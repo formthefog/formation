@@ -66,6 +66,7 @@ async fn create_record(
                         return Json(DomainResponse::Failure(Some("A Record update requires an IP Address be provided".to_string())));
                     };
                     FormDnsRecord {
+                        domain: domain.clone(),
                         record_type,
                         formnet_ip,
                         public_ip,
@@ -80,6 +81,7 @@ async fn create_record(
                         return Json(DomainResponse::Failure(Some("AAAA Record updatte requires an IP address to be provided".to_string())));
                     };
                     FormDnsRecord {
+                        domain: domain.clone(),
                         record_type,
                         formnet_ip: None,
                         public_ip,
@@ -95,6 +97,7 @@ async fn create_record(
                     };
 
                     FormDnsRecord {
+                        domain: domain.clone(),
                         record_type,
                         formnet_ip: None,
                         public_ip: None,

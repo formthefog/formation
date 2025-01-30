@@ -191,6 +191,7 @@ impl FormAuthority {
                             changed = true;
                         } else {
                             let record = FormDnsRecord {
+                                domain: domain.clone(),
                                 record_type: rtype,
                                 formnet_ip: if v4.octets()[0] == 10 {
                                     Some(IpAddr::V4(v4.into()))
@@ -229,6 +230,7 @@ impl FormAuthority {
                             changed = true;
                         } else {
                             let record = FormDnsRecord {
+                                domain: domain.clone(),
                                 record_type: rtype,
                                 formnet_ip: if v4.octets()[0] == 10 {
                                     Some(IpAddr::V4(v4.into()))
@@ -254,6 +256,7 @@ impl FormAuthority {
                             changed = true;
                         } else {
                             let record = FormDnsRecord {
+                                domain: domain.clone(),
                                 record_type: rtype,
                                 formnet_ip: None,
                                 public_ip: Some(IpAddr::V6(v6.into())),
@@ -276,6 +279,7 @@ impl FormAuthority {
                             changed = true;
                         } else {
                             let record = FormDnsRecord {
+                                domain: domain.clone(),
                                 record_type: rtype,
                                 formnet_ip: None,
                                 public_ip: Some(IpAddr::V6(v6.into())),
@@ -293,6 +297,7 @@ impl FormAuthority {
                             changed = true;
                         } else {
                             let record = FormDnsRecord {
+                                domain: domain.clone(),
                                 record_type: rtype,
                                 formnet_ip: None,
                                 public_ip: None,
@@ -313,6 +318,7 @@ impl FormAuthority {
                             changed = true;
                         } else {
                             let record = FormDnsRecord {
+                                domain: domain.clone(),
                                 record_type: rtype,
                                 formnet_ip: None,
                                 public_ip: None,
