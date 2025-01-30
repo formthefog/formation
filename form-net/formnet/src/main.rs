@@ -8,7 +8,7 @@ use clap::{Parser, Subcommand, Args};
 use form_config::OperatorConfig;
 use form_types::PeerType;
 use formnet::{init::init, serve::serve};
-use formnet::{create_router, ensure_crdt_datastore, leave, redeem, request_to_join, uninstall, user_join_formnet, vm_join_formnet, NETWORK_NAME};
+use formnet::{create_router, ensure_crdt_datastore, leave, redeem, request_to_join, revert_formnet_resolver, set_formnet_resolver, uninstall, user_join_formnet, vm_join_formnet, NETWORK_NAME};
 
 #[derive(Clone, Debug, Parser)]
 struct Cli {
@@ -146,9 +146,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     });
 
                     log::info!("reverting existing resolver for formnet interface");
+                    #[cfg(target_os = "linux")]
                     revert_formnet_resolver().await?;
                     let peer = DatabasePeer::<String, CrdtMap>::get(address).await?;
-                    set_formnet_resolver(&peer.contents.ip.to_string()).await?;
+                    #[cfg(target_os = "linux")]
+                    set_formnet_resolver(&peer.contents.ip.to_string(), "~fog").await?;
                     log::info!("Setting up dns resolver");
 
                     tokio::signal::ctrl_c().await?;
@@ -195,56 +197,4 @@ pub async fn start_join_server() -> Result<(), Box<dyn std::error::Error>> {
     axum::serve(listener, router).await?;
 
     return Ok(())
-}
-
-pub async fn revert_formnet_resolver() -> Result<(), Box<dyn std::error::Error>> {
-    let output = std::process::Command::new("resolvectl")
-        .arg("revert")
-        .arg("formnet")
-        .output()?;
-
-    if output.status.success() {
-        let info = String::from_utf8_lossy(&output.stdout);
-        log::info!("Successfully reverted existing formnet resolver: {info}");
-    } else {
-        let err = String::from_utf8_lossy(&output.stderr);
-        log::error!("Error attempting to revert existing formnet {err}"); 
-        return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, err)));
-    }
-
-    Ok(())
-}
-
-pub async fn set_formnet_resolver(formnet_ip: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let output = std::process::Command::new("resolvectl")
-        .arg("domain")
-        .arg("formnet")
-        .arg("~fog")
-        .output()?;
-
-    if output.status.success() {
-        let info = String::from_utf8_lossy(&output.stdout);
-        log::info!("Successfully set formnet resolver: {info}");
-    } else {
-        let err = String::from_utf8_lossy(&output.stderr);
-        log::error!("Error attempting to revert existing formnet {err}"); 
-        return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, err)));
-    }
-
-    let output = std::process::Command::new("resolvectl")
-        .arg("dns")
-        .arg("formnet")
-        .arg(formnet_ip)
-        .output()?;
-
-    if output.status.success() {
-        let info = String::from_utf8_lossy(&output.stdout);
-        log::info!("Successfully set formnet resolver: {info}");
-    } else {
-        let err = String::from_utf8_lossy(&output.stderr);
-        log::error!("Error attempting to revert existing formnet {err}"); 
-        return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, err)));
-    }
-
-    Ok(())
 }

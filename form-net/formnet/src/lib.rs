@@ -8,6 +8,7 @@ pub mod fetch;
 pub mod redeem;
 pub mod add_assoc;
 pub mod leave;
+pub mod resolve;
 
 pub use init::*;
 pub use add_peer::*;
@@ -19,6 +20,7 @@ pub use fetch::*;
 pub use redeem::*;
 pub use add_cidr::*;
 pub use add_assoc::*;
+pub use resolve::*;
 
 pub const CONFIG_DIR: &'static str = "/etc/formnet";
 pub const DATA_DIR: &'static str = "/var/lib/formnet";
