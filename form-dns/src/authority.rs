@@ -1,6 +1,7 @@
 use std::net::IpAddr;
 
 use trust_dns_client::client::AsyncClient;
+use trust_dns_proto::rr::rdata::CNAME;
 use trust_dns_server::authority::{
     Authority, LookupOptions, UpdateResult, ZoneType, LookupError, MessageRequest,
     UpdateRequest
@@ -54,12 +55,15 @@ impl FormAuthority {
         rtype: RecordType,
         src: Option<IpAddr>,
     ) -> Option<RecordSet> {
+        log::info!("trimming name");
         let key = name.trim_end_matches('.').to_lowercase();
+        log::info!("trimmed name: {key}");
 
         let record_opt = {
             let guard = self.store.read().ok()?;
             guard.get(&key)
         };
+        log::info!("retreived record {record_opt:?}");
 
         if let Some(record) = record_opt {
             let is_formnet = {
@@ -69,6 +73,7 @@ impl FormAuthority {
                     None => false,
                 }
             };
+            log::info!("Request is formnet? {is_formnet}");
             let ip = if is_formnet {
                 if let Some(ip) = record.formnet_ip {
                     Some(ip)
@@ -85,6 +90,8 @@ impl FormAuthority {
                 }
             };
 
+            log::info!("IP: {ip:?}");
+
             if let Ok(rr_name) = Name::from_utf8(&key) {
                 let mut rrset = RecordSet::new(&rr_name, rtype, 300);
                 match (ip, rtype) {
@@ -100,8 +107,12 @@ impl FormAuthority {
                         rrset.add_rdata(rec.into_record_of_rdata().data()?.clone());
                     }
                     (None, RecordType::CNAME) => {
-                        let rec: Record<RData> = Record::with(rrset.name().clone(), RecordType::CNAME, 300);
-                        rrset.add_rdata(rec.into_record_of_rdata().data()?.clone());
+                        log::info!("Request is for CNAME record");
+                        if let Ok(name) = Name::from_utf8(record.cname_target?) {
+                            let rdata = RData::CNAME(CNAME(name));
+                            let rec: Record<RData> = Record::from_rdata(rrset.name().clone(), 300, rdata);
+                            rrset.insert(rec, 300);
+                        }
                     }
                     _ => {}
                 }
@@ -406,9 +417,11 @@ impl Authority for FormAuthority {
             let rtype = request.query.query_type();
             let name = request.query.name();
             if let Some(rrset) = self.lookup_local(&name.to_string(), rtype, Some(src.ip())) {
+                log::info!("Found record in local, returning...");
                 return Ok(SimpleLookup::from_record_set(rrset));
             }
 
+            log::info!("Unable to find record in checking fallback...");
             match self.lookup_fallback(name.into(), rtype).await {
                 Ok(rr) => Ok(SimpleLookup::from_record_set(rr)),
                 Err(e) => Err(e),

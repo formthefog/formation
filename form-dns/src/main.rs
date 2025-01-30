@@ -12,7 +12,9 @@ use trust_dns_server::ServerFuture;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    simple_logger::SimpleLogger::new().init().unwrap();
     let store: SharedStore = Arc::new(RwLock::new(DnsStore::new()));
+    log::info!("Set up shared DNS store");
 
     let inner_store = store.clone();
     tokio::spawn(async move {
@@ -30,26 +32,37 @@ async fn main() -> anyhow::Result<()> {
                 ttl: 3600
             };
             guard.insert(&record.domain.clone(), record);
+            log::info!("Inserted hello.fog as test record...");
         }
     }
 
+    log::warn!("Setting 8.8.8.8 as fallback for DNS lookup...");
     let fallback = "8.8.8.8:53".parse().unwrap();
     let stream: UdpClientConnect<UdpSocket> = UdpClientStream::new(fallback);
+    log::warn!("Built UDP Client Stream for communication with fallback...");
     let (fallback_client, bg) = AsyncClient::connect(stream).await?;
     tokio::spawn(bg);
+    log::warn!("Spawned AsyncClient in background...");
     
+    log::warn!("Setting authority origin to root...");
     let origin = Name::root();
     let auth = FormAuthority::new(origin, store, fallback_client);
 
+    log::debug!("Wrapping authority in an Atomic Reference Counter...");
     let auth_arc = Arc::new(auth);
 
+    log::warn!("Building catalog...");
     let mut catalog = Catalog::new();
     catalog.upsert(Name::root().into(), Box::new(auth_arc.clone()));
+    log::info!("Built catalog for FormAuthority with origin root...");
 
     let mut server_future = ServerFuture::new(catalog);
+    log::warn!("Built server future for catalog...");
     let udp_socket = UdpSocket::bind("0.0.0.0:5354").await?;
-    println!("DNS Server listening on port 5354 (UDP)");
+    log::info!("Bound udp socket to port 5354 on all active interfaces...");
     server_future.register_socket(udp_socket);
+
+    log::info!("DNS Server listening on port 5354 (UDP)");
 
     server_future.block_until_done().await?;
 

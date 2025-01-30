@@ -48,16 +48,20 @@ async fn create_record(
     State(state): State<SharedStore>,
     Json(request): Json<DomainRequest>,
 ) -> Json<DomainResponse> {
+    log::info!("Received Create request..."); 
     match request {
         DomainRequest::Create { domain, record_type, ip_addr, cname_target } => {
+            log::info!("Create request for {domain}: {record_type}..."); 
             let record = match record_type {
                 RecordType::A => {
                     let (formnet_ip, public_ip) = if let Some(addr) = ip_addr {
                         match addr { 
                             IpAddr::V4(v4) if v4.octets()[0] == 10 => {
+                                log::info!("Formnet IP: {v4}..."); 
                                 (ip_addr, None)
                             }
-                            IpAddr::V4(_v4) => {
+                            IpAddr::V4(v4) => {
+                                log::info!("Public IP: {v4}..."); 
                                 (None, ip_addr)
                             }
                             _ => return Json(DomainResponse::Failure(Some("IPV6 Addresses are not valid for A record".to_string()))),
@@ -75,7 +79,8 @@ async fn create_record(
                     }
                 }
                 RecordType::AAAA => {
-                    let public_ip = if let Some(ref _addr) = ip_addr {
+                    let public_ip = if let Some(ref addr) = ip_addr {
+                        log::info!("Public IP: {addr}..."); 
                         ip_addr
                     } else {
                         return Json(DomainResponse::Failure(Some("AAAA Record updatte requires an IP address to be provided".to_string())));
@@ -90,7 +95,8 @@ async fn create_record(
                     }
                 }
                 RecordType::CNAME => {
-                    let cname_target = if let Some(ref _target) = cname_target {
+                    let cname_target = if let Some(ref target) = cname_target {
+                        log::info!("CNAME Target: {target}..."); 
                         cname_target.clone()
                     } else {
                         return Json(DomainResponse::Failure(Some("CNAME Record update requires a CNAME target be provided".to_string())));
@@ -108,12 +114,15 @@ async fn create_record(
                 _ => return Json(DomainResponse::Failure(Some(format!("Sorry, the record type {record_type} is not currently supported"))))
             };
 
+            log::info!("Build record: {record:?}...");
             let mut guard = match state.write() {
                 Ok(g) => g,
                 Err(e) => return Json(DomainResponse::Failure(Some(e.to_string())))
             };
+            log::info!("Adding record for {domain}...");
             guard.insert(&domain, record);
             drop(guard);
+            log::info!("Domain {domain} record added successfully...");
             return Json(DomainResponse::Success(Success::None))
         },
         _ => return Json(DomainResponse::Failure(Some("Invalid request for endpoint /record/create".to_string())))
@@ -125,7 +134,7 @@ async fn update_record(
     Path(domain): Path<String>,
     Json(request): Json<DomainRequest>,
 ) -> Json<DomainResponse> {
-
+    log::info!("Received Update request for {domain}...");
     let mut guard = match state.write() {
         Ok(g) => g,
         Err(e) => return Json(DomainResponse::Failure(Some(e.to_string())))
@@ -189,8 +198,10 @@ async fn update_record(
                 _ => return Json(DomainResponse::Failure(Some(format!("Sorry, the record type {record_type} is not currently supported"))))
 
             };
+            log::info!("Successfully built record {record:?}");
             guard.insert(&domain, record);
             drop(guard);
+            log::info!("Successfully updated record for {domain}");
             return Json(DomainResponse::Success(Success::None))
         }
         _ => return Json(DomainResponse::Failure(Some("Invalid request for endpoint /record/create".to_string())))
@@ -201,6 +212,7 @@ async fn delete_record(
     State(state): State<SharedStore>,
     Path(domain): Path<String>,
 ) -> Json<DomainResponse> {
+    log::info!("Received request to delete record for {domain}...");
     let mut guard = match state.write() {
         Ok(g) => g,
         Err(e) => return Json(DomainResponse::Failure(Some(e.to_string())))
@@ -208,6 +220,7 @@ async fn delete_record(
 
     let removed = guard.remove(&domain);
     drop(guard);
+    log::info!("Successfully removed record for {domain}...");
 
     match removed {
         Some(ip_addr) => return Json(DomainResponse::Success(Success::Some(ip_addr))),
@@ -220,6 +233,7 @@ async fn get_record(
     State(state): State<SharedStore>,
     Path(domain): Path<String>
 ) -> Json<DomainResponse> {
+    log::info!("Received Get request for {domain}"); 
     let guard = match state.read() {
         Ok(g) => g,
         Err(e) => return Json(DomainResponse::Failure(Some(e.to_string()))),
@@ -228,7 +242,10 @@ async fn get_record(
     let opt = guard.get(&domain);
 
     match opt {
-        Some(ip_addr) => return Json(DomainResponse::Success(Success::Some(ip_addr))),
+        Some(ip_addr) => {
+            log::info!("Record for {domain} found, returning..."); 
+            return Json(DomainResponse::Success(Success::Some(ip_addr)))
+        }
         None => return Json(DomainResponse::Failure(Some(format!("Record does not exist for domain {domain}")))),
     }
 }
@@ -236,21 +253,27 @@ async fn get_record(
 async fn list_records(
     State(state): State<SharedStore>,
 ) -> Json<DomainResponse> {
+    log::info!("Received List request");
     let guard = match state.read() {
         Ok(g) => g,
         Err(e) => return Json(DomainResponse::Failure(Some(e.to_string()))),
     };
 
-    let cloned = guard.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let cloned: Vec<(String, FormDnsRecord)> = guard.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     drop(guard);
+    log::info!("Returning records list with {} records...", cloned.len());
 
     return Json(DomainResponse::Success(Success::List(cloned)))
 }
 
 pub async fn serve_api(state: SharedStore) -> Result<(), Box<dyn std::error::Error>> {
+    log::info!("Launching DNS server API");
     let listener = TcpListener::bind("127.0.0.1:3005").await?;
+    log::info!("Binding listener to localhost port 3005...");
     let routes = build_routes(state);
+    log::info!("Building endpoints...");
 
+    log::info!("DNS server api listening on localhost:3005...");
     axum::serve(listener, routes).await?;
 
     Ok(())

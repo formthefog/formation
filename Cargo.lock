@@ -3292,8 +3292,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
+ "log",
  "serde",
  "serde_json",
+ "simple_logger 5.0.0",
  "tokio",
  "trust-dns-client 0.23.2",
  "trust-dns-proto 0.23.2",
