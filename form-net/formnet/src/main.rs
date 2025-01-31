@@ -1,12 +1,14 @@
 //! A service to create and run formnet, a wireguard based p2p VPN tunnel, behind the scenes
 use std::path::PathBuf;
 use alloy_core::primitives::Address;
+use formnet_server::db::CrdtMap;
+use formnet_server::DatabasePeer;
 use k256::ecdsa::SigningKey;
 use clap::{Parser, Subcommand, Args};
 use form_config::OperatorConfig;
 use form_types::PeerType;
 use formnet::{init::init, serve::serve};
-use formnet::{create_router, ensure_crdt_datastore, leave, redeem, request_to_join, uninstall, user_join_formnet, vm_join_formnet, NETWORK_NAME};
+use formnet::{create_router, ensure_crdt_datastore, leave, redeem, request_to_join, revert_formnet_resolver, set_formnet_resolver, uninstall, user_join_formnet, vm_join_formnet, NETWORK_NAME};
 
 #[derive(Clone, Debug, Parser)]
 struct Cli {
@@ -106,13 +108,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if !parser.bootstraps.is_empty() {
                         let invitation = request_to_join(
                             parser.bootstraps.clone(),
-                            address,
+                            address.clone(),
                             PeerType::Operator
                         ).await?;
                         ensure_crdt_datastore().await?;
                         redeem(invitation)?;
                     } else {
-                        init(address).await?;
+                        init(address.clone()).await?;
                     }
 
                     let (shutdown, mut receiver) = tokio::sync::broadcast::channel::<()>(2);
@@ -142,6 +144,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     });
+
+                    log::info!("reverting existing resolver for formnet interface");
+                    #[cfg(target_os = "linux")]
+                    revert_formnet_resolver().await?;
+                    let peer = DatabasePeer::<String, CrdtMap>::get(address).await?;
+                    #[cfg(target_os = "linux")]
+                    set_formnet_resolver(&peer.contents.ip.to_string(), "~fog").await?;
+                    log::info!("Setting up dns resolver");
 
                     tokio::signal::ctrl_c().await?;
                     shutdown.send(())?;

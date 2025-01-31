@@ -9,16 +9,16 @@ use trust_dns_proto::rr::RecordType;
 pub struct FormDnsRecord {
     pub domain: String,
     pub record_type: RecordType,
-    pub public_ip: Option<IpAddr>,
-    pub formnet_ip: Option<IpAddr>,
+    pub public_ip: Vec<IpAddr>,
+    pub formnet_ip: Vec<IpAddr>,
     pub cname_target: Option<String>,
     pub ttl: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum FormTarget {
-    A(IpAddr),
-    AAAA(IpAddr),
+    A(Vec<IpAddr>),
+    AAAA(Vec<IpAddr>),
     CNAME(String),
     None
 }
@@ -53,17 +53,17 @@ impl DnsStore {
                     match src {
                         IpAddr::V4(addr) => {
                             if addr.octets()[0] == 10 {
-                                if let Some(fip) = rec.formnet_ip {
-                                    return FormTarget::A(fip)
-                                } else if let Some(pip) = rec.public_ip {
-                                    return FormTarget::A(pip)
+                                if !rec.formnet_ip.is_empty() {
+                                    return FormTarget::A(rec.formnet_ip.clone())
+                                } else if !rec.public_ip.is_empty() {
+                                    return FormTarget::A(rec.public_ip.clone())
                                 }
-                            } else if let Some(pip) = rec.public_ip {
-                                    return FormTarget::A(pip)
+                            } else if !rec.public_ip.is_empty() {
+                                return FormTarget::A(rec.public_ip.clone())
                             }
                         }
-                        IpAddr::V6(_) => if let Some(pip) = rec.public_ip {
-                            return FormTarget::A(pip)
+                        IpAddr::V6(_) => if !rec.public_ip.is_empty() {
+                            return FormTarget::A(rec.public_ip.clone())
                         }
                     }
                 }
@@ -76,20 +76,24 @@ impl DnsStore {
                     match src {
                         IpAddr::V4(addr) => {
                             if addr.octets()[0] == 10 {
-                                if let Some(fip) = rec.formnet_ip {
-                                    return FormTarget::AAAA(fip)
-                                } else if let Some(pip) = rec.public_ip {
-                                    return FormTarget::AAAA(pip)
+                                if !rec.formnet_ip.is_empty() {
+                                    let mut ips = rec.formnet_ip.clone();
+                                    if !rec.public_ip.is_empty(){
+                                        ips.extend(rec.public_ip.clone());
+                                    }
+                                    return FormTarget::AAAA(ips)
+                                } else if !rec.public_ip.is_empty() {
+                                    return FormTarget::AAAA(rec.public_ip.clone())
                                 }
                             } else {
-                                if let Some(pip) = rec.formnet_ip {
-                                    return FormTarget::AAAA(pip)
+                                if !rec.public_ip.is_empty() {
+                                    return FormTarget::AAAA(rec.public_ip.clone())
                                 }
                             }
                         }
                         IpAddr::V6(_) => {
-                            if let Some(pip) = rec.public_ip {
-                                return FormTarget::AAAA(pip)
+                            if !rec.public_ip.is_empty() {
+                                return FormTarget::AAAA(rec.public_ip.clone())
                             }
                         }
                     }

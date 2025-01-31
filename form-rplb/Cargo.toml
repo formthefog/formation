@@ -1,0 +1,22 @@
+[package]
+name = "form-rplb"
+version = "0.1.0"
+edition = "2021"
+
+[[example]]
+name = "http_proxy"
+
+[[example]]
+name = "tls_proxy"
+
+[dependencies]
+tokio = { version = "1", features = ["full"]}
+tokio-rustls = "0.25"
+rustls = "0.21"
+rustls-pemfile = "1.0"
+anyhow = "1"
+rand = "0.8"
+futures = "0.3"
+thiserror = "2"
+acme-lib = "0.9"
+hyper = { version = "0.14.32", features = ["full"] }

@@ -21,12 +21,13 @@ pub enum DomainRequest {
     Create {
         domain: String,
         record_type: RecordType,
-        ip_addr: Option<IpAddr>,
+        ip_addr: Vec<IpAddr>,
         cname_target: Option<String>
     },
     Update {
+        replace: bool,
         record_type: RecordType,
-        ip_addr: Option<IpAddr>,
+        ip_addr: Vec<IpAddr>,
         cname_target: Option<String>
     },
 }
@@ -52,20 +53,27 @@ async fn create_record(
     match request {
         DomainRequest::Create { domain, record_type, ip_addr, cname_target } => {
             log::info!("Create request for {domain}: {record_type}..."); 
+            log::info!("Create ips?: {ip_addr:?}...");
+            log::info!("Create CNAME target?: {cname_target:?}...");
             let record = match record_type {
                 RecordType::A => {
-                    let (formnet_ip, public_ip) = if let Some(addr) = ip_addr {
-                        match addr { 
-                            IpAddr::V4(v4) if v4.octets()[0] == 10 => {
-                                log::info!("Formnet IP: {v4}..."); 
-                                (ip_addr, None)
+                    let (formnet_ip, public_ip) = if !ip_addr.is_empty() {
+                        let mut formnet_ips = vec![];
+                        let mut public_ips = vec![];
+                        for addr in ip_addr { 
+                            match addr {
+                                IpAddr::V4(v4) if v4.octets()[0] == 10 => {
+                                    log::info!("Formnet IP: {v4}..."); 
+                                    formnet_ips.push(addr);
+                                }
+                                IpAddr::V4(v4) => {
+                                    log::info!("Public IP: {v4}..."); 
+                                    public_ips.push(addr);
+                                }
+                                _ => return Json(DomainResponse::Failure(Some("IPV6 Addresses are not valid for A record".to_string()))),
                             }
-                            IpAddr::V4(v4) => {
-                                log::info!("Public IP: {v4}..."); 
-                                (None, ip_addr)
-                            }
-                            _ => return Json(DomainResponse::Failure(Some("IPV6 Addresses are not valid for A record".to_string()))),
                         }
+                        (formnet_ips, public_ips)
                     } else {
                         return Json(DomainResponse::Failure(Some("A Record update requires an IP Address be provided".to_string())));
                     };
@@ -79,16 +87,27 @@ async fn create_record(
                     }
                 }
                 RecordType::AAAA => {
-                    let public_ip = if let Some(ref addr) = ip_addr {
-                        log::info!("Public IP: {addr}..."); 
-                        ip_addr
+                    let public_ip = if !ip_addr.is_empty() {
+                        let mut public_ips = vec![];
+                        for addr in ip_addr {
+                            match addr {
+                                IpAddr::V6(v6) => {
+                                    log::info!("Public IP: {v6}..."); 
+                                    public_ips.push(addr);
+                                }
+                                _ => {
+                                    return Json(DomainResponse::Failure(Some("AAAA Record requires a V6 IP Address".to_string())));
+                                }
+                            }
+                        }
+                        public_ips
                     } else {
-                        return Json(DomainResponse::Failure(Some("AAAA Record updatte requires an IP address to be provided".to_string())));
+                        return Json(DomainResponse::Failure(Some("AAAA Record update requires an IP address to be provided".to_string())));
                     };
                     FormDnsRecord {
                         domain: domain.clone(),
                         record_type,
-                        formnet_ip: None,
+                        formnet_ip: vec![],
                         public_ip,
                         cname_target: None,
                         ttl: 3600
@@ -105,8 +124,8 @@ async fn create_record(
                     FormDnsRecord {
                         domain: domain.clone(),
                         record_type,
-                        formnet_ip: None,
-                        public_ip: None,
+                        formnet_ip: vec![],
+                        public_ip: vec![],
                         cname_target,
                         ttl: 3600
                     }
@@ -141,24 +160,40 @@ async fn update_record(
     };
 
     match request {
-        DomainRequest::Update { record_type, ip_addr, cname_target} => {
+        DomainRequest::Update { replace, record_type, ip_addr, cname_target} => {
             let record = match record_type {
                 RecordType::A => {
                     let record = if let Entry::Occupied(ref mut entry) = guard.entry(&domain) {
                         let record = entry.get_mut();
                         record.record_type = record_type;
-                        if let Some(IpAddr::V4(ip)) = ip_addr {
-                            if ip.octets()[0] == 10 {
-                                record.formnet_ip = ip_addr;
-                            } else {
-                                record.public_ip = ip_addr;
+                        let (formnet_ips, public_ips) = if !ip_addr.is_empty() {
+                            let mut formnet_ips = vec![]; 
+                            let mut public_ips = vec![];
+                            for addr in ip_addr {
+                                match addr {
+                                    IpAddr::V4(ip) => {
+                                        if ip.octets()[0] == 10 {
+                                            formnet_ips.push(addr);
+                                        } else {
+                                            public_ips.push(addr);
+                                        }
+                                    }
+                                    _ => return Json(DomainResponse::Failure(Some("A Records require an IPV4 address".to_string())))
+                                }
                             }
-                        } else if let Some(_) = ip_addr {
-                            record.public_ip = ip_addr;
+                            (formnet_ips, public_ips)
+                        } else if !ip_addr.is_empty() {
+                            (vec![], ip_addr)
                         } else {
                             return Json(DomainResponse::Failure(Some("A Record update must include an IP Address".to_string())))
+                        };
+                        if replace {
+                            record.formnet_ip = formnet_ips;
+                            record.public_ip = public_ips;
+                        } else {
+                            record.formnet_ip.extend(formnet_ips);
+                            record.public_ip.extend(public_ips);
                         }
-
                         record.clone()
                     } else {
                         return Json(DomainResponse::Failure(Some("A Record updates can only occur if the record exists, use /record/create endpoint instead".to_string())))
@@ -169,8 +204,8 @@ async fn update_record(
                     let record = if let Entry::Occupied(ref mut entry) = guard.entry(&domain) {
                         let record = entry.get_mut();
                         record.record_type = record_type;
-                        if let Some(ref _addr) = ip_addr {
-                            record.public_ip = ip_addr;
+                        if !ip_addr.is_empty() {
+                            record.public_ip.extend(ip_addr);
                         } else {
                             return Json(DomainResponse::Failure(Some("AAAA Record updates must include an IP Address".to_string())));
                         }
