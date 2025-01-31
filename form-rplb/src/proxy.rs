@@ -1,12 +1,27 @@
 use crate::{backend::Backend, config::ProxyConfig, error::ProxyError, protocol::Protocol};
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt}, net::TcpStream
+    io::{AsyncReadExt, AsyncWriteExt}, net::TcpStream, sync::Mutex
 };
-use tokio_rustls::{rustls::{self, ServerConfig}, server::TlsStream, TlsAcceptor};
+use tokio_rustls::{rustls::{self, ServerConfig}, TlsAcceptor};
+use tokio_rustls_acme::{caches::DirCache, tokio_rustls::server::TlsStream, AcmeConfig, Incoming};
+use tokio_stream::wrappers::TcpListenerStream;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
 use futures::future::try_join_all;
+use futures::StreamExt;
 use rand::seq::SliceRandom;
+
+pub type StandardIncoming = Incoming<TcpStream, std::io::Error, TcpListenerStream, std::io::Error, std::io::Error>;
+
+pub struct TlsStreamManager {
+    pub incoming: StandardIncoming,
+}
+
+impl TlsStreamManager {
+    pub fn refresh(&mut self) {
+        todo!()
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct ReverseProxy {
@@ -20,6 +35,10 @@ impl ReverseProxy {
             routes: Arc::new(RwLock::new(HashMap::new())),
             config,
         }
+    }
+
+    pub fn config(&self) -> ProxyConfig {
+        self.config.clone()
     }
 
     pub async fn add_route(&self, domain: String, backend: Backend) {
@@ -37,7 +56,7 @@ impl ReverseProxy {
         routes.get(domain).cloned()
     }
 
-    async fn select_backend(&self, domain: &str) -> Result<SocketAddr, ProxyError> {
+    pub async fn select_backend(&self, domain: &str) -> Result<SocketAddr, ProxyError> {
         let routes = self.routes.read().await;
         let backend = routes.get(domain)
             .ok_or_else(|| ProxyError::NoBackend(domain.to_string()))?;
@@ -57,88 +76,36 @@ impl ReverseProxy {
         }
     }
 
-    async fn proxy_streams<A, B>(&self, stream_a: A, stream_b: B) -> Result<(), ProxyError> 
-        where 
-            A: AsyncRead+ AsyncWrite+ Unpin + Send + 'static,
-            B: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-    {
-
-        let (mut a_read, mut a_write) = tokio::io::split(stream_a);
-        let (mut b_read, mut b_write) = tokio::io::split(stream_b);
-
-        const BUFFER_SIZE: usize = 8192;
-
-        let client_to_backend = async move {
-            let mut buffer = vec![0u8; BUFFER_SIZE];
-            loop {
-                let bytes_read = match a_read.read(&mut buffer).await {
-                    Ok(0) => break, // EOF reached
-                    Ok(n) => n,
-                    Err(e) => return Err(ProxyError::Io(e)),
-                };
-
-                if let Err(e) = b_write.write_all(&buffer[..bytes_read]).await {
-                    return Err(ProxyError::Io(e));
-                }
-
-                if let Err(e) = b_write.flush().await {
-                    return Err(ProxyError::Io(e));
-                }
-
-            }
-            Ok(())
-        };
-
-        let backend_to_client = async move {
-            let mut buffer = vec![0u8; BUFFER_SIZE];
-            loop {
-                let bytes_read = match b_read.read(&mut buffer).await {
-                    Ok(0) => break,
-                    Ok(n) => n,
-                    Err(e) => return Err(ProxyError::Io(e)),
-                };
-
-                if let Err(e) = a_write.write_all(&buffer[..bytes_read]).await {
-                    return Err(ProxyError::Io(e));
-                }
-
-                if let Err(e) = a_write.flush().await {
-                    return Err(ProxyError::Io(e));
-                }
-            }
-
-            Ok(())
-        };
-
-        match tokio::try_join!(client_to_backend, backend_to_client) {
-            Ok(_) => return Ok(()),
-            Err(e) => return Err(e),
-        }
-    }
-
     pub async fn handle_connection(
         &self,
         mut client_stream: TcpStream,
     ) -> Result<(), ProxyError> {
+        println!("Peeking into request");
         let mut peek_buffer = vec![0; self.config.buffer_size];
         let n = client_stream.peek(&mut peek_buffer).await?;
         let is_tls = n >= 5 && peek_buffer[0] == 0x16 && peek_buffer[1] == 0x03;
 
         if is_tls {
+            println!("Request is TLS");
             // 1. Extract the SNI to know which cert to user
             // 2. Perform TLS handshake
             // 3. Process the HTTP request inside the TLS tunnel
+            println!("Extracting SNI");
             let domain = extract_sni(&peek_buffer[..n])?;
+            println!("Domain for request: {domain}");
 
             let backend = self.get_backend(&domain).await?;
+            println!("Backends for request: {backend:?}");
 
             match &backend.protocol() {
                 Protocol::HTTPS(tls_config) => {
+                    println!("Building server config");
                     // Set up TLS connection with client
                     let server_config = Arc::new(tls_config.get_config().clone());
 
                     // Create TLS stream and perform handshake
                     let mut tls_stream = establish_tls_connection(client_stream, server_config.clone()).await?;
+                    println!("Creating TLS stream to perform handshake");
 
                     let mut buffer = vec![0; self.config.buffer_size];
                     let n = tls_stream.read(&mut buffer).await?;
@@ -151,7 +118,16 @@ impl ReverseProxy {
 
                     backend_stream.write_all(&buffer[..n]).await?;
 
-                    self.proxy_streams(tls_stream, backend_stream).await?;
+                    let backend_tls_stream = establish_tls_connection(backend_stream, server_config.clone()).await?;
+
+                    println!("Handshake complete creating proxy stream");
+                    let (mut client_read, mut client_write) = tokio::io::split(tls_stream);
+                    let (mut backend_read, mut backend_write) = tokio::io::split(backend_tls_stream);
+
+                    let client_to_backend = tokio::io::copy(&mut client_read, &mut backend_write);
+                    let backend_to_client = tokio::io::copy(&mut backend_read, &mut client_write);
+
+                    try_join_all(vec![client_to_backend, backend_to_client]).await?;
 
                 }
                 _ => {
@@ -187,13 +163,52 @@ impl ReverseProxy {
         Ok(())
     }
 
-    fn extract_domain(&self, request: &str) -> Result<String, ProxyError> {
+    pub fn extract_domain(&self, request: &str) -> Result<String, ProxyError> {
         let host_line = request.lines()
             .find(|line| line.starts_with("Host: "))
             .ok_or_else(|| ProxyError::InvalidRequest("No Host header found".to_string()))?;
         
         Ok(host_line[6..].trim().to_string())
     }
+}
+
+async fn handle_tls_connection(mut stream: TlsStream<TcpStream>, proxy: Arc<Mutex<ReverseProxy>>) -> Result<(), Box<dyn std::error::Error>> {
+    Ok(())
+}
+
+async fn build_tls_config(tcp_incoming: TcpListenerStream) -> StandardIncoming {
+    AcmeConfig::new(["example.formation.cloud"])
+        .directory_lets_encrypt(true)
+        .contact_push("mailto:admin@formation.cloud")
+        .cache(DirCache::new("./rustls_acme_cache"))
+        .incoming(tcp_incoming, vec![b"http/1.1".to_vec()])
+}
+
+async fn serve_tls(
+    mut shutdown: tokio::sync::broadcast::Receiver<()>,
+    tls_stream: Arc<Mutex<TlsStreamManager>>, 
+    proxy: Arc<Mutex<ReverseProxy>>
+) -> Result<(), Box<dyn std::error::Error>> {
+    loop {
+        if let Ok(_) = shutdown.recv().await {
+            break;
+        }
+
+        while let Some(tls_conn) = tls_stream.lock().await.incoming.next().await {
+            match tls_conn {
+                Ok(tls_stream) => {
+                    let proxy_clone = proxy.clone(); 
+                    if let Err(e) = handle_tls_connection(tls_stream, proxy_clone).await {
+                        todo!()
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+
+        tls_stream.lock().await.refresh();
+    }
+    Ok(())
 }
 
 /// Creates a TLS stream from a TCP connection using the provided server configuration.
@@ -203,14 +218,7 @@ async fn establish_tls_connection(
     tcp_stream: TcpStream,
     server_config: Arc<ServerConfig>,
 ) -> Result<TlsStream<TcpStream>, ProxyError> {
-    // Create a TLS acceptor from our server config
-    let acceptor = TlsAcceptor::from(server_config.clone());
-    
-    // Accept the connection and perform the TLS handshake
-    // This returns a TlsStream in server mode
-    acceptor.accept(tcp_stream)
-        .await
-        .map_err(|e| ProxyError::InvalidRequest(e.to_string()))
+    todo!()
 }
 
 /// Extracts the Server Name Indication (SNI) from a TLS ClientHello message.

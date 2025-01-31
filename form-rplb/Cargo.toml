@@ -7,7 +7,10 @@ edition = "2021"
 name = "http_proxy"
 
 [[example]]
-name = "tls_proxy"
+name = "tls_vanity_proxy"
+
+[[example]]
+name = "tls_public_proxy"
 
 [dependencies]
 tokio = { version = "1", features = ["full"]}
@@ -20,3 +23,8 @@ futures = "0.3"
 thiserror = "2"
 acme-lib = "0.9"
 hyper = { version = "0.14.32", features = ["full"] }
+tokio-rustls-acme = "0.6.0"
+log = "0.4"
+simple_logger = "4"
+tokio-stream = { version = "0.1.9", features = ["net"] }
+tokio-util = { version = "0.7.3", features = ["compat"] }

@@ -10,7 +10,6 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, server::Server, StatusCode};
 use rustls_pemfile::certs;
 use tokio_rustls::rustls::crypto::ring::sign::any_supported_type;
-use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::rustls::server::{ClientHello, ResolvesServerCert};
 use tokio_rustls::rustls::sign::CertifiedKey;
@@ -25,25 +24,25 @@ pub struct ChallengeMap {
 }
 
 impl ChallengeMap {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             tokens: Mutex::new(HashMap::new())
         }
     }
 
-    fn insert(&self, token: String, proof: String) {
+    pub fn insert(&self, token: String, proof: String) {
         if let Ok(mut map) = self.tokens.lock() {
             map.insert(token, proof);
         }
     }
 
-    fn remove(&self, token: &str) {
+    pub fn remove(&self, token: &str) {
         if let Ok(mut map) = self.tokens.lock() {
             map.remove(token);
         }
     }
 
-    fn get(&self, token: &str) -> Option<String> {
+    pub fn get(&self, token: &str) -> Option<String> {
         if let Ok(map) = self.tokens.lock() {
             return map.get(token).cloned()
         }
@@ -104,6 +103,24 @@ impl ResolvesServerCert for FormSniResolver {
             None
         }
     }
+}
+
+pub fn find_cert_file(acme_dir: &Path, domain: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let transformed_domain = domain.replace('.', "_");
+
+    for entry in std::fs::read_dir(acme_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() {
+            if let Some(fname) = path.file_name().and_then(|f| f.to_str()) {
+                if fname.contains("_crt_") && fname.contains(&transformed_domain) {
+                    return Ok(path);
+                }
+            }
+        }
+    }
+
+    Err(Box::new(std::io::Error::new(std::io::ErrorKind::NotFound, format!("Certificate not found for domain {domain}"))))
 }
 
 /// Load raw certificate data from a PEM file
@@ -167,64 +184,85 @@ async fn handle_request(
     Ok(resp)
 }
 
-fn obtain_cert_http_challenge(domain: &str, challenge_map: Arc<ChallengeMap>) -> Result<FormDomainCert, Box<dyn std::error::Error>> {
+pub fn obtain_cert_http_challenge(domain: &str, challenge_map: Arc<ChallengeMap>) -> Result<FormDomainCert, Box<dyn std::error::Error>> {
     println!("Starting ACME for domain: {}", domain);
 
     // 1) Create or load an existing account with Let’s Encrypt Staging
     //    Switch to DirectoryUrl::LetsEncrypt for production
     let dir_url = DirectoryUrl::LetsEncryptStaging;
+    println!("Setting up FilePersist at ./acme-data");
+    std::fs::create_dir_all("./acme-data")?;
     let persist = FilePersist::new("./acme-data");
+    println!("Getting directory from url");
     let dir = Directory::from_url(persist, dir_url)?;
     // Creates or loads account key from persistence
-    let acc = dir.account("admin@example.com")?;
+    println!("loading account");
+    let acc = dir.account("admin@formation.cloud")?;
 
     // 2) Create a new certificate order
+    println!("Creating certificate order");
     let mut order = acc.new_order(domain, &[])?;
 
     // Attempt to finalize if domain is already authorized in a prior run
     let ord_csr = loop {
+        println!("Attempting to confirm validations");
         if let Some(ord_csr) = order.confirm_validations() {
+            println!("Validations confirmed");
             // Already validated
             break ord_csr;
         }
 
         // 3) We must validate domain ownership
+        println!("Getting auths");
         let auths = order.authorizations()?;
         if auths.is_empty() {
+            println!("ERROR: auths is empty");
             return Err(Box::new(Error::Other("No authorizations found".into())));
         }
 
+        println!("Getting challenge ");
         let auth = &auths[0]; // single domain => single auth
         let chall = auth.http_challenge();
 
         // The token is the filename
+        println!("Getting Token");
         let token = chall.http_token();
         // The proof is the content that must be served
+        println!("Getting Proof");
         let proof = chall.http_proof();
 
         println!("Inserting challenge token => /{token}");
         challenge_map.insert(token.to_string(), proof);
 
         // 4) Now tell ACME that we are ready to validate
+        println!("Validating challenge");
         chall.validate(5000)?;  // poll every 5000 ms
         // 5) Refresh the order status
+        println!("Refreshing order");
         order.refresh()?;
     };
 
+    println!("Authorization complete");
     // 6) We are authorized, so finalize the order with a new private key
+    println!("Creating p384 key");
     let pkey_pri = create_p384_key();
+    println!("Finalizing p384 key");
     let ord_cert = ord_csr.finalize_pkey(pkey_pri, 5000)?;
 
     // 7) Download the certificate
+    println!("Downloading certificate");
     let cert = ord_cert.download_and_save_cert()?;
-    let cert_bytes: CertificateDer<'static> = cert.certificate_der().clone().into();
-    let private_key_bytes = PrivateKeyDer::from_pem_slice(&cert.private_key_der())?;
+    let full_chain = load_certs(find_cert_file(&PathBuf::from("./acme-data").as_ref(), domain)?)?;
+    println!("Converting into PrivateKeyDer");
+    let private_key_bytes = PrivateKeyDer::Pkcs8(cert.private_key_der().to_vec().into());
     println!("Certificate successfully obtained! Files saved in ./acme-data.\n");
 
     //TODO: Get token and remove from challenge map in case we want a clean slate
     // challenge_map.remove(token);
-    let domain_cert = FormDomainCert::new(vec![cert_bytes], private_key_bytes);
+    println!("Building FormDomainCert");
+    let domain_cert = FormDomainCert::new(full_chain, private_key_bytes);
 
+    println!("Returning FormDomainCert");
     Ok(domain_cert)
 }
 
