@@ -26,8 +26,12 @@ async fn main() -> anyhow::Result<()> {
             let record = FormDnsRecord {
                 domain: "hello.fog".to_lowercase().to_string(),
                 record_type: RecordType::A,
-                formnet_ip: Some("10.0.0.42".parse().unwrap()),
-                public_ip: None,
+                formnet_ip: vec![
+                    "10.0.0.42".parse().unwrap(),
+                    "10.0.0.43".parse().unwrap(),
+                    "10.0.0.44".parse().unwrap(),
+                ],
+                public_ip: vec![],
                 cname_target: None,
                 ttl: 3600
             };

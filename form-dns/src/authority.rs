@@ -1,5 +1,4 @@
 use std::net::IpAddr;
-
 use trust_dns_client::client::AsyncClient;
 use trust_dns_proto::rr::rdata::CNAME;
 use trust_dns_server::authority::{
@@ -74,39 +73,50 @@ impl FormAuthority {
                 }
             };
             log::info!("Request is formnet? {is_formnet}");
-            let ip = if is_formnet {
-                if let Some(ip) = record.formnet_ip {
-                    Some(ip)
-                } else if let Some(ip) = record.public_ip {
-                    Some(ip)
+            let ips = if is_formnet {
+                if !record.formnet_ip.is_empty() {
+                    let mut ips = record.formnet_ip.clone();
+                    if !record.public_ip.is_empty() {
+                        ips.extend(record.public_ip.clone());
+                    }
+                    ips
+                } else if !record.public_ip.is_empty() {
+                    record.public_ip.clone()
                 } else {
-                    None
+                    vec![]
                 }
             } else {
-                if let Some(ip) = record.public_ip {
-                    Some(ip)
+                if !record.public_ip.is_empty() {
+                    record.public_ip.clone()
                 } else {
-                    None
+                    vec![]
                 }
             };
 
-            log::info!("IP: {ip:?}");
+            log::info!("IPS: {ips:?}");
 
             if let Ok(rr_name) = Name::from_utf8(&key) {
                 let mut rrset = RecordSet::new(&rr_name, rtype, 300);
-                match (ip, rtype) {
-                    (Some(IpAddr::V4(v4)), RecordType::A) => {
-                        let mut rec = Record::with(rrset.name().clone(), RecordType::A, 300);
-                        rec.set_data(Some(trust_dns_proto::rr::rdata::A(v4)));
-                        rrset.add_rdata(rec.into_record_of_rdata().data()?.clone());
-
+                match rtype {
+                    RecordType::A => {
+                        for ip in ips { 
+                            if let IpAddr::V4(v4) = ip {
+                                let mut rec = Record::with(rrset.name().clone(), RecordType::A, 300);
+                                rec.set_data(Some(trust_dns_proto::rr::rdata::A(v4)));
+                                rrset.add_rdata(rec.into_record_of_rdata().data()?.clone());
+                            }
+                        }
                     }
-                    (Some(IpAddr::V6(v6)), RecordType::AAAA) => {
-                        let mut rec = Record::with(rrset.name().clone(), RecordType::AAAA, 300);
-                        rec.set_data(Some(trust_dns_proto::rr::rdata::AAAA(v6)));
-                        rrset.add_rdata(rec.into_record_of_rdata().data()?.clone());
+                    RecordType::AAAA => {
+                        for ip in ips {
+                            if let IpAddr::V6(v6) = ip {
+                                let mut rec = Record::with(rrset.name().clone(), RecordType::AAAA, 300);
+                                rec.set_data(Some(trust_dns_proto::rr::rdata::AAAA(v6)));
+                                rrset.add_rdata(rec.into_record_of_rdata().data()?.clone());
+                            }
+                        }
                     }
-                    (None, RecordType::CNAME) => {
+                    RecordType::CNAME => {
                         log::info!("Request is for CNAME record");
                         if let Ok(name) = Name::from_utf8(record.cname_target?) {
                             let rdata = RData::CNAME(CNAME(name));
@@ -205,14 +215,14 @@ impl FormAuthority {
                                 domain: domain.clone(),
                                 record_type: rtype,
                                 formnet_ip: if v4.octets()[0] == 10 {
-                                    Some(IpAddr::V4(v4.into()))
+                                    vec![IpAddr::V4(v4.into())]
                                 } else {
-                                    None
+                                    vec![]
                                 },
                                 public_ip: if !v4.octets()[0] == 10 {
-                                    Some(IpAddr::V4(v4.into()))
+                                    vec![IpAddr::V4(v4.into())]
                                 } else {
-                                    None
+                                    vec![]
                                 },
                                 cname_target: None,
                                 ttl: 0
@@ -221,18 +231,20 @@ impl FormAuthority {
                             changed = true;
                         }
                     } else {
-                        if let Some(record) = store_guard.get(&domain) {
+                        if let Some(mut record) = store_guard.get(&domain) {
                             let form_record = FormDnsRecord {
                                 record_type: rtype,
                                 formnet_ip: if v4.octets()[0] == 10 {
-                                    Some(IpAddr::V4(v4.into()))
-                                } else {
-                                    None
+                                    record.formnet_ip.push(IpAddr::V4(v4.into()));
+                                    record.formnet_ip.clone()
+                                } else { 
+                                    record.formnet_ip.clone()
                                 },
                                 public_ip: if !v4.octets()[0] == 10 {
-                                    Some(IpAddr::V4(v4.into()))
+                                    record.public_ip.push(IpAddr::V4(v4.into()));
+                                    record.public_ip.clone()
                                 } else {
-                                    None
+                                    vec![]
                                 },
                                 ttl,
                                 ..record
@@ -244,14 +256,14 @@ impl FormAuthority {
                                 domain: domain.clone(),
                                 record_type: rtype,
                                 formnet_ip: if v4.octets()[0] == 10 {
-                                    Some(IpAddr::V4(v4.into()))
+                                    vec![IpAddr::V4(v4.into())]
                                 } else {
-                                    None
+                                    vec![]
                                 },
                                 public_ip: if !v4.octets()[0] == 10 {
-                                    Some(IpAddr::V4(v4.into()))
+                                    vec![IpAddr::V4(v4.into())]
                                 } else {
-                                    None
+                                    vec![]
                                 },
                                 cname_target: None,
                                 ttl
@@ -269,8 +281,8 @@ impl FormAuthority {
                             let record = FormDnsRecord {
                                 domain: domain.clone(),
                                 record_type: rtype,
-                                formnet_ip: None,
-                                public_ip: Some(IpAddr::V6(v6.into())),
+                                formnet_ip: vec![],
+                                public_ip: vec![IpAddr::V6(v6.into())],
                                 cname_target: None,
                                 ttl: 0
                             };
@@ -278,11 +290,14 @@ impl FormAuthority {
                             changed = true;
                         }
                     } else {
-                        if let Some(record) = store_guard.get(&domain) {
+                        if let Some(mut record) = store_guard.get(&domain) {
                             let form_record = FormDnsRecord {
                                 record_type: rtype,
-                                formnet_ip: None,
-                                public_ip: Some(IpAddr::V6(v6.into())),
+                                formnet_ip: vec![],
+                                public_ip: {
+                                    record.public_ip.push(IpAddr::V6(v6.into()));
+                                    record.public_ip
+                                },
                                 ttl,
                                 ..record
                             };
@@ -292,8 +307,8 @@ impl FormAuthority {
                             let record = FormDnsRecord {
                                 domain: domain.clone(),
                                 record_type: rtype,
-                                formnet_ip: None,
-                                public_ip: Some(IpAddr::V6(v6.into())),
+                                formnet_ip: vec![],
+                                public_ip: vec![IpAddr::V6(v6.into())],
                                 cname_target: None,
                                 ttl
                             };
@@ -310,8 +325,8 @@ impl FormAuthority {
                             let record = FormDnsRecord {
                                 domain: domain.clone(),
                                 record_type: rtype,
-                                formnet_ip: None,
-                                public_ip: None,
+                                formnet_ip: vec![],
+                                public_ip: vec![],
                                 cname_target: Some(target.0.to_string()),
                                 ttl
                             };
@@ -331,8 +346,8 @@ impl FormAuthority {
                             let record = FormDnsRecord {
                                 domain: domain.clone(),
                                 record_type: rtype,
-                                formnet_ip: None,
-                                public_ip: None,
+                                formnet_ip: vec![],
+                                public_ip: vec![],
                                 cname_target: Some(target.0.to_string()),
                                 ttl
                             };

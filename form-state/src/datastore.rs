@@ -1111,25 +1111,42 @@ pub async fn request_associations_state(to_dial: String) -> Result<AssocMap, Box
     Ok(resp)
 }
 
-async fn build_dns_request(v: Option<CrdtDnsRecord>, op_type: &str) -> (Vec<DomainRequest>, Option<Response<FormDnsRecord>>) {
+async fn build_dns_request(v: Option<CrdtDnsRecord>, op_type: &str) -> (DomainRequest, Option<Response<FormDnsRecord>>) {
     if op_type == "create" {
         if v.is_none() {
-            return (vec![], Some(Response::Failure { reason: Some("Create request requires a record".into()) }))
+            let request = DomainRequest::Create {
+                domain: "".to_string(), 
+                record_type: RecordType::NULL,
+                ip_addr: vec![],
+                cname_target: None,
+            };
+            return (request, Some(Response::Failure { reason: Some("Create request requires a record".into()) }))
         }
         return build_create_request(v.unwrap()).await
     }
 
     if op_type == "update" {
         if v.is_none() {
-            return (vec![], Some(Response::Failure { reason: Some("Update request requires a record".into()) }))
+            let request = DomainRequest::Update {
+                replace: false, 
+                record_type: RecordType::NULL,
+                ip_addr: vec![],
+                cname_target: None,
+            };
+            return (request, Some(Response::Failure { reason: Some("Update request requires a record".into()) }))
         }
         return build_update_request(v.unwrap()).await
     }
-
-    (vec![], Some(Response::Failure { reason: Some("Unable to create request(s)".to_string()) }))
+    let request = DomainRequest::Update {
+        replace: false, 
+        record_type: RecordType::NULL,
+        ip_addr: vec![],
+        cname_target: None,
+    };
+    return (request, Some(Response::Failure { reason: Some("Update request requires a record".into()) }))
 }
 
-async fn build_create_request(v: CrdtDnsRecord) -> (Vec<DomainRequest>, Option<Response<FormDnsRecord>>) {
+async fn build_create_request(v: CrdtDnsRecord) -> (DomainRequest, Option<Response<FormDnsRecord>>) {
     if let RecordType::A = v.record_type() { 
         return build_create_a_record_request(v).await
     } else if let RecordType::AAAA = v.record_type() {
@@ -1137,11 +1154,17 @@ async fn build_create_request(v: CrdtDnsRecord) -> (Vec<DomainRequest>, Option<R
     } else if let RecordType::CNAME = v.record_type() {
         return build_create_cname_record_request(v).await
     } else {
-        return (vec![], Some(Response::Failure { reason: Some("Only A, AAAA and CNAME records are supported".to_string()) }));
+        let request = DomainRequest::Create {
+            domain: v.domain(), 
+            record_type: RecordType::NULL,
+            ip_addr: vec![],
+            cname_target: None,
+        };
+        return (request, Some(Response::Failure { reason: Some("Only A, AAAA and CNAME records are supported".to_string()) }));
     };
 }
 
-async fn build_update_request(v: CrdtDnsRecord) -> (Vec<DomainRequest>, Option<Response<FormDnsRecord>>) {
+async fn build_update_request(v: CrdtDnsRecord) -> (DomainRequest, Option<Response<FormDnsRecord>>) {
     if let RecordType::A = v.record_type() { 
         return build_update_a_record_request(v).await
     } else if let RecordType::AAAA = v.record_type() {
@@ -1149,148 +1172,120 @@ async fn build_update_request(v: CrdtDnsRecord) -> (Vec<DomainRequest>, Option<R
     } else if let RecordType::CNAME = v.record_type() {
         return build_update_cname_record_request(v).await
     } else {
-        return (vec![], Some(Response::Failure { reason: Some("Only A, AAAA and CNAME records are supported".to_string()) }));
+        let request = DomainRequest::Update {
+            replace: false, 
+            record_type: RecordType::NULL,
+            ip_addr: vec![],
+            cname_target: None,
+        };
+        return (request, Some(Response::Failure { reason: Some("Only A, AAAA and CNAME records are supported".to_string()) }));
     }
 }
 
-async fn build_create_a_record_request(v: CrdtDnsRecord) -> (Vec<DomainRequest>, Option<Response<FormDnsRecord>>) {
-    let mut requests = vec![];
-    if let (Some(_fip), Some(_pip)) = (v.formnet_ip(), v.public_ip()) {
-        let request_1 = DomainRequest::Create { 
+async fn build_create_a_record_request(v: CrdtDnsRecord) -> (DomainRequest, Option<Response<FormDnsRecord>>) {
+    if !v.formnet_ip().is_empty() {
+        let mut ips = v.formnet_ip();
+        if !v.public_ip().is_empty() {
+            ips.extend(v.public_ip());
+        }
+        let request = DomainRequest::Create { 
             domain: v.domain().clone(),
             record_type: v.record_type(), 
-            ip_addr: v.formnet_ip(), 
+            ip_addr: ips,
             cname_target: None 
         };
-        let request_2 = DomainRequest::Update {
-            record_type: v.record_type(),
-            ip_addr: v.public_ip(),
-            cname_target: None
-        };
-        requests.push(request_1);
-        requests.push(request_2);
-    } else if let Some(_fip) = v.formnet_ip() {
-        let request = DomainRequest::Create { 
-            domain: v.domain().clone(), 
-            record_type: v.record_type(),
-            ip_addr: v.formnet_ip(), 
-            cname_target: None 
-        }; 
-        requests.push(request);
-    } else if let Some(_pip) = v.public_ip() {
+        return (request, None)
+    } else {
         let request = DomainRequest::Create { 
             domain: v.domain().clone(), 
             record_type: v.record_type(),
             ip_addr: v.public_ip(), 
             cname_target: None 
         }; 
-        requests.push(request);
-    } else {
-        return (vec![], Some(Response::Failure { reason: Some("A Record Updates require either a Formnet or Public IPV4 Address".to_string()) }));
+        return (request, None)
     }
-
-    (requests, None)
 }
 
-async fn build_update_a_record_request(v: CrdtDnsRecord) -> (Vec<DomainRequest>, Option<Response<FormDnsRecord>>) {
-    let mut requests = vec![];
-    if let (Some(_fip), Some(_pip)) = (v.formnet_ip(), v.public_ip()) {
-        let request_1 = DomainRequest::Update { 
-            record_type: v.record_type(), 
-            ip_addr: v.formnet_ip(), 
-            cname_target: None 
-        };
-        let request_2 = DomainRequest::Update {
-            record_type: v.record_type(),
-            ip_addr: v.public_ip(),
-            cname_target: None
-        };
-        requests.push(request_1);
-        requests.push(request_2);
-    } else if let Some(_fip) = v.formnet_ip() {
-        let request = DomainRequest::Create { 
-            domain: v.domain().clone(), 
-            record_type: v.record_type(),
-            ip_addr: v.formnet_ip(), 
-            cname_target: None 
-        }; 
-        requests.push(request);
-    } else if let Some(_pip) = v.public_ip() {
-        let request = DomainRequest::Create { 
-            domain: v.domain().clone(), 
-            record_type: v.record_type(),
-            ip_addr: v.public_ip(), 
-            cname_target: None 
-        }; 
-        requests.push(request);
-    } else {
-        return (vec![], Some(Response::Failure { reason: Some("A Record Updates require either a Formnet or Public IPV4 Address".to_string()) }));
-    }
-    (requests, None)
-}
-
-async fn build_create_aaaa_record_request(v: CrdtDnsRecord) -> (Vec<DomainRequest>, Option<Response<FormDnsRecord>>) {
-    let mut requests = vec![];
-    if let Some(_pip) = v.public_ip() {
-        let request = DomainRequest::Create { 
-            domain: v.domain().clone(), 
-            record_type: v.record_type(),
-            ip_addr: v.public_ip(), 
-            cname_target: None 
-        }; 
-        requests.push(request);
-    } else {
-        return (vec![], Some(Response::Failure { reason: Some("AAAA Record Updates require a public IP V6 address".to_string()) }))
-    }
-    (requests, None)
-}
-
-async fn build_update_aaaa_record_request(v: CrdtDnsRecord) -> (Vec<DomainRequest>, Option<Response<FormDnsRecord>>) {
-    let mut requests = vec![];
-    if let Some(_pip) = v.public_ip() {
+async fn build_update_a_record_request(v: CrdtDnsRecord) -> (DomainRequest, Option<Response<FormDnsRecord>>) {
+    if !v.formnet_ip().is_empty() {
+        let mut ips = v.formnet_ip();
+        if !v.public_ip().is_empty() {
+            ips.extend(v.public_ip());
+        }
         let request = DomainRequest::Update { 
+            replace: true,
+            record_type: v.record_type(), 
+            ip_addr: ips, 
+            cname_target: None 
+        };
+        return(request, None);
+    } else {
+        let request = DomainRequest::Create { 
+            domain: v.domain().clone(), 
             record_type: v.record_type(),
             ip_addr: v.public_ip(), 
             cname_target: None 
         }; 
-        requests.push(request);
-    } else {
-        return (vec![], Some(Response::Failure { reason: Some("AAAA Record Updates require a public IP V6 address".to_string()) }))
+        (request, None)
     }
-    (requests, None)
 }
 
-async fn build_create_cname_record_request(v: CrdtDnsRecord) -> (Vec<DomainRequest>, Option<Response<FormDnsRecord>>) {
-    let mut requests = vec![];
-    if let Some(_target) = v.cname_target() {
+async fn build_create_aaaa_record_request(v: CrdtDnsRecord) -> (DomainRequest, Option<Response<FormDnsRecord>>) {
+    if !v.public_ip().is_empty() {
+        let request = DomainRequest::Create { 
+            domain: v.domain().clone(), 
+            record_type: v.record_type(),
+            ip_addr: v.public_ip(), 
+            cname_target: None 
+        }; 
+        return (request, None)
+    } else {
         let request = DomainRequest::Create {
             domain: v.domain().clone(),
             record_type: v.record_type(),
-            ip_addr: None,
-            cname_target: v.cname_target().clone()
+            ip_addr: v.public_ip(), 
+            cname_target: None 
         };
-        requests.push(request);
-    } else {
-        return (vec![], Some(Response::Failure { reason: Some("CNAME Record Updates require a CNAME target".to_string()) }))
+        return (request, Some(Response::Failure { reason: Some("AAAA Record Updates require a public IP V6 address".to_string()) }))
     }
-
-    (requests, None)
 }
 
-async fn build_update_cname_record_request(v: CrdtDnsRecord) -> (Vec<DomainRequest>, Option<Response<FormDnsRecord>>) {
-    let mut requests = vec![];
-    if let Some(_target) = v.cname_target() {
-        let request = DomainRequest::Update {
-            record_type: v.record_type(),
-            ip_addr: None,
-            cname_target: v.cname_target().clone()
-        };
-        requests.push(request);
-    } else {
-        return (vec![], Some(Response::Failure { reason: Some("CNAME Record Updates require a CNAME target".to_string()) }))
-    }
+async fn build_update_aaaa_record_request(v: CrdtDnsRecord) -> (DomainRequest, Option<Response<FormDnsRecord>>) {
+    let request = DomainRequest::Update { 
+        replace: true, 
+        record_type: v.record_type(),
+        ip_addr: v.public_ip(), 
+        cname_target: None 
+    }; 
+    (request, None)
+}
 
-    (requests, None)
+async fn build_create_cname_record_request(v: CrdtDnsRecord) -> (DomainRequest, Option<Response<FormDnsRecord>>) {
+    let request = DomainRequest::Create {
+        domain: v.domain().clone(),
+        record_type: v.record_type(),
+        ip_addr: {
+            let mut ips = v.formnet_ip();
+            ips.extend(v.public_ip());
+            ips
+        },
+        cname_target: v.cname_target().clone()
+    };
+    (request, None)
+}
+
+async fn build_update_cname_record_request(v: CrdtDnsRecord) -> (DomainRequest, Option<Response<FormDnsRecord>>) {
+    let request = DomainRequest::Update {
+        replace: true,
+        record_type: v.record_type(),
+        ip_addr: {
+            let mut ips = v.formnet_ip();
+            ips.extend(v.public_ip());
+            ips
+        },
+        cname_target: v.cname_target().clone()
+    };
+    (request, None)
 }
 
 async fn send_dns_create_request(r: DomainRequest) -> Option<Response<FormDnsRecord>> {
@@ -1359,24 +1354,15 @@ async fn send_dns_delete_request(domain: &str) -> Response<FormDnsRecord> {
 
 async fn handle_create_dns_op(network_state: &NetworkState, key: &str, op: Update<CrdtDnsRecord, String>) -> Response<FormDnsRecord> {
     if let (true, v) = network_state.dns_op_success(key.to_string(), op.clone()) {
-        log::info!("DNS Op succesfully applied...");
-        let (requests, failure) = build_dns_request(Some(v.clone()), "create").await;
+        log::info!("DNS Op succesfully applied... Attempting to build dns request with {v:?}");
+        let (request, failure) = build_dns_request(Some(v.clone()), "create").await;
         if let Some(failure) = failure {
             return failure
         }
 
-        for (idx, request) in requests.iter().enumerate() {
-            if idx == 0 {
-                let failure = send_dns_create_request(request.clone()).await;
-                if let Some(failure) = failure {
-                    return failure;
-                }
-            } else {
-                let failure = send_dns_update_request(request.clone(), &v.domain()).await;
-                if let Some(failure) = failure {
-                    return failure;
-                }
-            }
+        let failure = send_dns_create_request(request.clone()).await;
+        if let Some(failure) = failure {
+            return failure;
         }
         return Response::Success(Success::Some(v.into()))
     } else {
@@ -1388,6 +1374,14 @@ async fn handle_create_dns_op(network_state: &NetworkState, key: &str, op: Updat
 async fn handle_update_dns_op(network_state: &NetworkState, key: &str, op: Update<CrdtDnsRecord, String>) -> Response<FormDnsRecord> {
     if let (true, v) = network_state.dns_op_success(key.to_string(), op.clone()) {
         log::info!("Peer Op succesffully applied...");
+        let (request, failure) = build_dns_request(Some(v.clone()), "create").await;
+        if let Some(failure) = failure {
+            return failure
+        }
+        let failure = send_dns_update_request(request.clone(), &v.domain()).await;
+        if let Some(failure) = failure {
+            return failure;
+        }
         return Response::Success(Success::Some(v.into()))
     } else {
         log::info!("Peer Op rejected...");

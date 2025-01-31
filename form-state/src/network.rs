@@ -222,8 +222,8 @@ impl From<AssociationContents<String>> for CrdtAssociation<String> {
 pub struct CrdtDnsRecord {
     domain: String,
     record_type: RecordType,
-    formnet_ip: Option<IpAddr>,
-    public_ip: Option<IpAddr>,
+    formnet_ip: Vec<IpAddr>,
+    public_ip: Vec<IpAddr>,
     cname_target: Option<String>,
     ttl: u32
 }
@@ -237,12 +237,12 @@ impl CrdtDnsRecord {
         self.record_type
     }
 
-    pub fn formnet_ip(&self) -> Option<IpAddr> {
-        self.formnet_ip
+    pub fn formnet_ip(&self) -> Vec<IpAddr> {
+        self.formnet_ip.clone()
     }
 
-    pub fn public_ip(&self) -> Option<IpAddr> {
-        self.public_ip
+    pub fn public_ip(&self) -> Vec<IpAddr> {
+        self.public_ip.clone()
     }
 
     pub fn cname_target(&self) -> Option<String> {
@@ -286,8 +286,8 @@ impl From<&CrdtDnsRecord> for FormDnsRecord {
         FormDnsRecord { 
             domain: value.domain.clone(), 
             record_type: value.record_type, 
-            formnet_ip: value.formnet_ip, 
-            public_ip: value.public_ip, 
+            formnet_ip: value.formnet_ip.clone(), 
+            public_ip: value.public_ip.clone(), 
             cname_target: value.cname_target.clone(), 
             ttl: value.ttl 
         }
