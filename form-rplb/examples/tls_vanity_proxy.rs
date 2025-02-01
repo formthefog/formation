@@ -105,6 +105,7 @@ async fn run_mock_server(addr: SocketAddr, server_name: &'static str) {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /*
     let backend1_addr: SocketAddr = "127.0.0.1:8081".parse()?;
     let backend2_addr: SocketAddr = "127.0.0.1:8082".parse()?;
 
@@ -179,4 +180,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     }
+*/
+    Ok(())
 }

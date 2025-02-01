@@ -1,12 +1,12 @@
 use std::sync::Arc;
-use tokio_rustls::rustls::ServerConfig;
+use tokio_rustls_acme::tokio_rustls::rustls::ServerConfig;
 
 #[derive(Debug, Clone)]
 pub struct TlsConfig(Arc<ServerConfig>);
 
 impl TlsConfig {
-    pub fn new(config: ServerConfig) -> Self {
-        Self(Arc::new(config))
+    pub fn new(config: Arc<ServerConfig>) -> Self {
+        Self(config)
     }
 
     pub fn get_config(&self) -> &ServerConfig {
