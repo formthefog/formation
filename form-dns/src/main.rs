@@ -1,8 +1,11 @@
-use std::sync::{Arc, RwLock};
-
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use form_dns::api::serve_api;
+use form_dns::proxy::IntegratedProxy;
 use form_dns::store::{DnsStore, SharedStore, FormDnsRecord};
 use form_dns::authority::FormAuthority;
+use form_rplb::config::ProxyConfig;
+use form_rplb::resolver::TlsManager;
 use tokio::net::UdpSocket;
 use trust_dns_client::client::AsyncClient;
 use trust_dns_proto::rr::{Name, RecordType};
@@ -13,31 +16,42 @@ use trust_dns_server::ServerFuture;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     simple_logger::SimpleLogger::new().init().unwrap();
-    let store: SharedStore = Arc::new(RwLock::new(DnsStore::new()));
+    let (tx, rx) = tokio::sync::mpsc::channel(1024);
+    let store: SharedStore = Arc::new(RwLock::new(DnsStore::new(tx.clone())));
     log::info!("Set up shared DNS store");
 
     let inner_store = store.clone();
-    tokio::spawn(async move {
+    let tls_manager = TlsManager::new(vec![("hello.fog".to_string(), false)]).await.map_err(|e| {
+        Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+    })?;
+    let proxy_config = ProxyConfig::default();
+    let reverse_proxy = IntegratedProxy::new(store.clone(), tls_manager, proxy_config).await.map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    let reverse_proxy_handle = tokio::spawn(async move {
+        if let Err(e) = reverse_proxy.run(rx).await {
+            eprintln!("Error in run process for Reverse Proxy: {e}");
+        }
+    });
+    
+    let dns_store_api_handle = tokio::spawn(async move {
         let _ = serve_api(inner_store).await;
     });
 
     {
-        if let Ok(mut guard) = store.write() {
-            let record = FormDnsRecord {
-                domain: "hello.fog".to_lowercase().to_string(),
-                record_type: RecordType::A,
-                formnet_ip: vec![
-                    "10.0.0.42".parse().unwrap(),
-                    "10.0.0.43".parse().unwrap(),
-                    "10.0.0.44".parse().unwrap(),
-                ],
-                public_ip: vec![],
-                cname_target: None,
-                ttl: 3600
-            };
-            guard.insert(&record.domain.clone(), record);
-            log::info!("Inserted hello.fog as test record...");
-        }
+        let mut guard = store.write().await;
+        let record = FormDnsRecord {
+            domain: "hello.fog".to_lowercase().to_string(),
+            record_type: RecordType::A,
+            formnet_ip: vec![
+                "10.0.0.42".parse().unwrap(),
+                "10.0.0.43".parse().unwrap(),
+                "10.0.0.44".parse().unwrap(),
+            ],
+            public_ip: vec![],
+            cname_target: None,
+            ttl: 3600
+        };
+        guard.insert(&record.domain.clone(), record);
+        log::info!("Inserted hello.fog as test record...");
     }
 
     log::warn!("Setting 8.8.8.8 as fallback for DNS lookup...");
@@ -50,7 +64,7 @@ async fn main() -> anyhow::Result<()> {
     
     log::warn!("Setting authority origin to root...");
     let origin = Name::root();
-    let auth = FormAuthority::new(origin, store, fallback_client);
+    let auth = FormAuthority::new(origin, store.clone(), fallback_client);
 
     log::debug!("Wrapping authority in an Atomic Reference Counter...");
     let auth_arc = Arc::new(auth);
@@ -66,9 +80,12 @@ async fn main() -> anyhow::Result<()> {
     log::info!("Bound udp socket to port 5354 on all active interfaces...");
     server_future.register_socket(udp_socket);
 
+
     log::info!("DNS Server listening on port 5354 (UDP)");
 
     server_future.block_until_done().await?;
+    reverse_proxy_handle.await?;
+    dns_store_api_handle.await?;
 
     Ok(())
 }

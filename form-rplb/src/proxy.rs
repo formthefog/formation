@@ -1,19 +1,34 @@
-use crate::{backend::Backend, config::ProxyConfig, error::ProxyError, protocol::Protocol};
+use crate::{backend::Backend, config::ProxyConfig, error::ProxyError, protocol::{Protocol, TlsConfig}};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt}, net::TcpStream, sync::Mutex
+    io::{AsyncReadExt, AsyncWriteExt}, net::TcpStream
 };
-use tokio_rustls::{rustls::{self, ServerConfig}, TlsAcceptor};
-use tokio_rustls_acme::{caches::DirCache, tokio_rustls::server::TlsStream, AcmeConfig, Incoming};
-use tokio_stream::wrappers::TcpListenerStream;
-use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+use tokio_rustls_acme::tokio_rustls::{rustls::ServerConfig, server::TlsStream};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 use futures::future::try_join_all;
-use futures::StreamExt;
 use rand::seq::SliceRandom;
+
+#[derive(Debug, Clone, Default)]
+pub struct DomainProtocols {
+    pub http_enabled: bool,
+    pub tls_enabled: bool,
+    pub force_tls: bool,
+    pub tcp_enabled: bool,
+    pub udp_enabled: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct ProxyBackends {
+    domain_protocols: DomainProtocols,
+    http: Backend,
+    tls: Option<Backend>,
+    tcp: Option<Backend>,
+    udp: Option<Backend>
+}
 
 #[derive(Clone, Debug)]
 pub struct ReverseProxy {
-    routes: Arc<RwLock<HashMap<String, Backend>>>,
+    routes: Arc<RwLock<HashMap<String, ProxyBackends>>>,
     config: ProxyConfig,
 }
 
@@ -31,31 +46,143 @@ impl ReverseProxy {
 
     pub async fn add_route(&self, domain: String, backend: Backend) {
         let mut routes = self.routes.write().await;
-        routes.insert(domain, backend);
+        let proxy_backend = if let Protocol::HTTPS(_config) = backend.protocol() {
+            let addresses: Vec<SocketAddr> = backend.addresses().iter().map(|addr| SocketAddr::new(addr.ip(), 80)).collect();
+            let http_backend = Backend::new(
+                addresses.clone(),
+                Protocol::HTTP,
+                Duration::from_secs(30),
+                1000
+            );
+            let domain_protocols = DomainProtocols {
+                http_enabled: true,
+                tls_enabled: true,
+                force_tls: true,
+                ..Default::default()
+            };
+            ProxyBackends {
+                domain_protocols,
+                http: http_backend,
+                tls: Some(backend),
+                tcp: None,
+                udp: None,
+            }
+        } else if let Protocol::TCP = backend.protocol() {
+            let addresses: Vec<SocketAddr> = backend.addresses().iter().map(|addr| SocketAddr::new(addr.ip(), 80)).collect();
+            let http_backend = Backend::new(
+                addresses,
+                Protocol::HTTP,
+                Duration::from_secs(30),
+                1000,
+            );
+
+            let domain_protocols = DomainProtocols {
+                http_enabled: true,
+                tcp_enabled: true,
+                ..Default::default()
+            };
+            ProxyBackends {
+                domain_protocols,
+                http: http_backend,
+                tls: None,
+                tcp: Some(backend),
+                udp: None,
+            }
+        } else if let Protocol::UDP = backend.protocol() {
+            let addresses: Vec<SocketAddr> = backend.addresses().iter().map(|addr| SocketAddr::new(addr.ip(), 80)).collect();
+            let http_backend = Backend::new(
+                addresses,
+                Protocol::HTTP,
+                Duration::from_secs(30),
+                1000,
+            );
+
+            let domain_protocols = DomainProtocols {
+                http_enabled: true,
+                udp_enabled: true,
+                ..Default::default()
+            };
+
+            ProxyBackends {
+                domain_protocols,
+                http: http_backend,
+                tls: None,
+                tcp: None,
+                udp: Some(backend),
+            }
+        } else {
+            let addresses: Vec<SocketAddr> = backend.addresses().iter().map(|addr| SocketAddr::new(addr.ip(), 80)).collect();
+            let http_backend = Backend::new(
+                addresses,
+                Protocol::HTTP,
+                Duration::from_secs(30),
+                1000,
+            );
+
+            let domain_protocols = DomainProtocols {
+                http_enabled: true,
+                ..Default::default()
+            };
+
+            ProxyBackends {
+                domain_protocols,
+                http: http_backend,
+                tls: None,
+                tcp: None,
+                udp: None,
+            }
+        };
+        routes.insert(domain, proxy_backend);
     }
 
-    pub async fn remove_route(&self, domain: &str) -> Option<Backend> {
+    pub async fn remove_route(&self, domain: &str) -> Option<ProxyBackends> {
         let mut routes = self.routes.write().await;
         routes.remove(domain)
     }
 
-    pub async fn get_route(&self, domain: &str) -> Option<Backend> {
+    pub async fn get_route(&self, domain: &str) -> Option<ProxyBackends> {
         let routes = self.routes.read().await;
         routes.get(domain).cloned()
     }
 
-    pub async fn select_backend(&self, domain: &str) -> Result<SocketAddr, ProxyError> {
+    pub async fn select_backend(&self, domain: &str, protocol: Protocol) -> Result<SocketAddr, ProxyError> {
         let routes = self.routes.read().await;
         let backend = routes.get(domain)
             .ok_or_else(|| ProxyError::NoBackend(domain.to_string()))?;
-            
-        backend.addresses()
-            .choose(&mut rand::thread_rng())
-            .copied()
-            .ok_or_else(|| ProxyError::NoBackend(domain.to_string()))
+
+        match protocol {
+            Protocol::HTTP => {
+                if backend.domain_protocols.force_tls {
+                    if let Some(tls_backend) = backend.tls.clone() {
+                        return tls_backend.addresses().choose(&mut rand::thread_rng())
+                            .copied().ok_or_else(|| ProxyError::NoBackend(format!("Missing TLS backend but force_tls is true for {domain}")))
+                    } else {
+                        return Err(ProxyError::NoBackend("Missing TLS backend but force_tls is true".to_string()))
+                    }
+                } else {
+                    return backend.http.addresses().choose(&mut rand::thread_rng())
+                        .copied().ok_or_else(|| ProxyError::NoBackend(format!("Missing HTTP backend for {domain}")))
+                }
+            }
+            Protocol::HTTPS(_config) => {
+                let tls_backend = backend.tls.clone().ok_or_else(|| ProxyError::NoBackend(format!("Missing TLS backend for {domain}")))?;
+                return tls_backend.addresses().choose(&mut rand::thread_rng()).copied()
+                    .ok_or_else(|| ProxyError::NoBackend(format!("Missing TLS backend for {domain}")))
+            }
+            Protocol::TCP => {
+                let tcp_backend = backend.tcp.clone().ok_or_else(|| ProxyError::NoBackend(format!("Missing TCP backend for {domain}")))?;
+                return tcp_backend.addresses().choose(&mut rand::thread_rng()).copied()
+                    .ok_or_else(|| ProxyError::NoBackend(format!("Missing TCP backend for {domain}")))
+            }
+            Protocol::UDP => {
+                let udp_backend = backend.udp.clone().ok_or_else(|| ProxyError::NoBackend(format!("Missing UDP backend for {domain}")))?;
+                return udp_backend.addresses().choose(&mut rand::thread_rng()).copied()
+                    .ok_or_else(|| ProxyError::NoBackend(format!("Missing UDP backend for {domain}")))
+            }
+        }
     }
 
-    async fn get_backend(&self, domain: &str) -> Result<Backend, ProxyError> {
+    pub async fn get_backend(&self, domain: &str) -> Result<ProxyBackends, ProxyError> {
         let routes = self.routes.read().await;
         if let Some(backend) = routes.get(domain) {
             Ok(backend.clone())
@@ -74,7 +201,7 @@ impl ReverseProxy {
         let request = String::from_utf8_lossy(&buffer[..n]);
         let domain = self.extract_domain(&request)?;
 
-        let backend_addr = self.select_backend(&domain).await?;
+        let backend_addr = self.select_backend(&domain, Protocol::HTTP).await?;
         let mut backend_stream = tokio::time::timeout(
             self.config.connection_timeout,
             TcpStream::connect(backend_addr)
@@ -103,11 +230,18 @@ impl ReverseProxy {
         Ok(host_line[6..].trim().to_string())
     }
 
-    pub async fn handle_tls_connection(&self, mut stream: TlsStream<TcpStream>, domain: &str) -> Result<(), ProxyError> {
+    pub async fn handle_tls_connection(
+        &self,
+        mut stream: TlsStream<TcpStream>,
+        domain: &str,
+        config: Arc<ServerConfig>,
+    ) -> Result<(), ProxyError> {
         let mut buffer = vec![0; self.config.buffer_size];
         let n = stream.read(&mut buffer).await?;
 
-        let backend_addr = self.select_backend(domain).await?;
+        let backend_addr = self.select_backend(
+            domain,
+            Protocol::HTTPS(TlsConfig::new(config.clone()))).await?;
         let mut backend_stream = tokio::time::timeout(
             self.config.connection_timeout,
             TcpStream::connect(backend_addr)

@@ -135,8 +135,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     match handshake.into_stream(server_config.clone()).await {
                                         Ok(tls_stream) => {
                                             let inner_proxy = proxy.clone();
+                                            let inner_config = server_config.clone();
                                             tokio::spawn(async move {
-                                                if let Err(e) = inner_proxy.handle_tls_connection(tls_stream, &domain).await {
+                                                if let Err(e) = inner_proxy.handle_tls_connection(tls_stream, &domain, inner_config.clone()).await {
                                                     eprintln!("Error handling TLS connection from {}: {e}", client_addr.to_string());
                                                 }
                                             });

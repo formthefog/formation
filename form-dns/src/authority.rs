@@ -48,7 +48,7 @@ impl FormAuthority {
         }
     }
 
-    fn lookup_local(
+    async fn lookup_local(
         &self,
         name: &str,
         rtype: RecordType,
@@ -59,7 +59,7 @@ impl FormAuthority {
         log::info!("trimmed name: {key}");
 
         let record_opt = {
-            let guard = self.store.read().ok()?;
+            let guard = self.store.blocking_read();
             guard.get(&key)
         };
         log::info!("retreived record {record_opt:?}");
@@ -188,7 +188,7 @@ impl FormAuthority {
         self.lookup_upstream(name, rtype).await
     }
 
-    fn apply_update(&self, msg: &MessageRequest) -> Result<bool, ResponseCode> {
+    async fn apply_update(&self, msg: &MessageRequest) -> Result<bool, ResponseCode> {
         let _zone_name = msg.query().name();
 
         let updates = msg.updates();
@@ -198,7 +198,7 @@ impl FormAuthority {
 
         let mut changed = false;
 
-        let mut store_guard = self.store.write().map_err(|_| ResponseCode::Refused)?;
+        let mut store_guard = self.store.write().await;
 
         for rec in updates {
             let domain = rec.name().to_string().to_lowercase();
@@ -400,7 +400,7 @@ impl Authority for FormAuthority {
 
     fn update<'life0,'life1,'async_trait>(&'life0 self,update: &'life1 MessageRequest) ->  ::core::pin::Pin<Box<dyn ::core::future::Future<Output = UpdateResult<bool> > + ::core::marker::Send+'async_trait> >where 'life0:'async_trait,'life1:'async_trait,Self:'async_trait {
         Box::pin(async move {
-            match self.apply_update(update) {
+            match self.apply_update(update).await {
                 Ok(changed) => Ok(changed),
                 Err(rcode) => Err(rcode.into())
 
@@ -415,7 +415,7 @@ impl Authority for FormAuthority {
     fn lookup<'life0,'life1,'async_trait>(&'life0 self,name: &'life1 LowerName,rtype:RecordType,_lookup_options:LookupOptions,) ->  ::core::pin::Pin<Box<dyn ::core::future::Future<Output = std::result::Result<Self::Lookup,LookupError> > + ::core::marker::Send+'async_trait> >where 'life0:'async_trait,'life1:'async_trait,Self:'async_trait {
         Box::pin(async move {
             let name_str = name.to_string();
-            if let Some(rrset) = self.lookup_local(&name_str, rtype, None) {
+            if let Some(rrset) = self.lookup_local(&name_str, rtype, None).await {
                 return Ok(SimpleLookup::from_record_set(rrset));
             }
 
@@ -431,7 +431,7 @@ impl Authority for FormAuthority {
             let src = request.src;
             let rtype = request.query.query_type();
             let name = request.query.name();
-            if let Some(rrset) = self.lookup_local(&name.to_string(), rtype, Some(src.ip())) {
+            if let Some(rrset) = self.lookup_local(&name.to_string(), rtype, Some(src.ip())).await {
                 log::info!("Found record in local, returning...");
                 return Ok(SimpleLookup::from_record_set(rrset));
             }

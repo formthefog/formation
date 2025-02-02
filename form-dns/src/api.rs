@@ -134,10 +134,7 @@ async fn create_record(
             };
 
             log::info!("Build record: {record:?}...");
-            let mut guard = match state.write() {
-                Ok(g) => g,
-                Err(e) => return Json(DomainResponse::Failure(Some(e.to_string())))
-            };
+            let mut guard = state.write().await;
             log::info!("Adding record for {domain}...");
             guard.insert(&domain, record);
             drop(guard);
@@ -154,11 +151,7 @@ async fn update_record(
     Json(request): Json<DomainRequest>,
 ) -> Json<DomainResponse> {
     log::info!("Received Update request for {domain}...");
-    let mut guard = match state.write() {
-        Ok(g) => g,
-        Err(e) => return Json(DomainResponse::Failure(Some(e.to_string())))
-    };
-
+    let mut guard = state.write().await;
     match request {
         DomainRequest::Update { replace, record_type, ip_addr, cname_target} => {
             let record = match record_type {
@@ -248,11 +241,7 @@ async fn delete_record(
     Path(domain): Path<String>,
 ) -> Json<DomainResponse> {
     log::info!("Received request to delete record for {domain}...");
-    let mut guard = match state.write() {
-        Ok(g) => g,
-        Err(e) => return Json(DomainResponse::Failure(Some(e.to_string())))
-    };
-
+    let mut guard = state.write().await;
     let removed = guard.remove(&domain);
     drop(guard);
     log::info!("Successfully removed record for {domain}...");
@@ -269,11 +258,7 @@ async fn get_record(
     Path(domain): Path<String>
 ) -> Json<DomainResponse> {
     log::info!("Received Get request for {domain}"); 
-    let guard = match state.read() {
-        Ok(g) => g,
-        Err(e) => return Json(DomainResponse::Failure(Some(e.to_string()))),
-    };
-
+    let guard = state.read().await;
     let opt = guard.get(&domain);
 
     match opt {
@@ -289,11 +274,7 @@ async fn list_records(
     State(state): State<SharedStore>,
 ) -> Json<DomainResponse> {
     log::info!("Received List request");
-    let guard = match state.read() {
-        Ok(g) => g,
-        Err(e) => return Json(DomainResponse::Failure(Some(e.to_string()))),
-    };
-
+    let guard = state.read().await; 
     let cloned: Vec<(String, FormDnsRecord)> = guard.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     drop(guard);
     log::info!("Returning records list with {} records...", cloned.len());

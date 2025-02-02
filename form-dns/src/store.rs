@@ -1,7 +1,8 @@
 use std::collections::hash_map::{Entry, Iter};
 use std::net::IpAddr;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use tokio::sync::{RwLock, mpsc::Sender};
+use std::sync::Arc;
 use serde::{Serialize, Deserialize};
 use trust_dns_proto::rr::RecordType;
 
@@ -25,13 +26,16 @@ pub enum FormTarget {
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
 pub struct DnsStore {
-    records: HashMap<String, FormDnsRecord>
+    records: HashMap<String, FormDnsRecord>,
+    #[serde(skip)]
+    sender: Option<Sender<FormDnsRecord>>,
 }
 
 impl DnsStore {
-    pub fn new() -> Self {
+    pub fn new(sender: Sender<FormDnsRecord>) -> Self {
         Self {
-            records: HashMap::new()
+            records: HashMap::new(),
+            sender: Some(sender),
         }
     }
 
@@ -41,6 +45,9 @@ impl DnsStore {
         record: FormDnsRecord
     ) {
         let key = domain.trim_end_matches('.').to_lowercase();
+        if let Some(ref mut sender) = &mut self.sender {
+            let _ = sender.blocking_send(record.clone());
+        }
         self.records.insert(key, record);
     }
 
