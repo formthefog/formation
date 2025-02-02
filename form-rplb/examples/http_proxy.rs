@@ -8,7 +8,7 @@ use tokio::{
 // Mock HTTP server implementation
 async fn run_mock_server(addr: SocketAddr, server_name: &'static str) {
     let listener = TcpListener::bind(addr).await.unwrap();
-    println!("Mock server {} listening on {}", server_name, addr);
+    log::info!("Mock server {} listening on {}", server_name, addr);
 
     loop {
         let (mut socket, _) = listener.accept().await.unwrap();
@@ -111,11 +111,11 @@ async fn main() {
     
     // Main proxy loop
     loop {
-        let (client_stream, client_addr) = listener.accept().await.unwrap();
+        let (client_stream, _client_addr) = listener.accept().await.unwrap();
         let proxy = proxy.clone();
         
         tokio::spawn(async move {
-            if let Err(e) = proxy.handle_connection(client_stream).await {
+            if let Err(e) = proxy.handle_http_connection(client_stream).await {
                 eprintln!("Error handling connection: {}", e);
             }
         });

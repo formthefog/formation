@@ -1,9 +1,11 @@
+//examples/tls_vanity_proxy.rs
 use form_rplb::{proxy::ReverseProxy, backend::Backend, protocol::{Protocol, TlsConfig}, config::ProxyConfig};
 use std::{
-    fs::File, io::BufReader, net::SocketAddr, path::{Path, PathBuf}, time::Duration
+    fs::File, io::BufReader, net::SocketAddr, path::{Path, PathBuf}, sync::Arc, time::Duration
 };
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpListener};
-use tokio_rustls::rustls::{ServerConfig, pki_types::{CertificateDer, PrivateKeyDer}};
+use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use tokio_rustls_acme::tokio_rustls::rustls::ServerConfig;
 
 /// Load raw certificate data from a PEM file
 fn load_certs(path: impl AsRef<Path>) -> std::io::Result<Vec<CertificateDer<'static>>> {
@@ -130,8 +132,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("Failed to set proxy certificate");
     
     // Create our TlsConfig instances
-    let api_tls = TlsConfig::new(api_config);
-    let proxy_tls = TlsConfig::new(proxy_config);
+    let api_tls = TlsConfig::new(Arc::new(api_config));
+    let proxy_tls = TlsConfig::new(Arc::new(proxy_config));
     
     // Configure and start the reverse proxy
     let config = ProxyConfig::default();
@@ -174,7 +176,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let proxy = proxy.clone();
         
         tokio::spawn(async move {
-            if let Err(e) = proxy.handle_connection(client_stream).await {
+            if let Err(e) = proxy.handle_http_connection(client_stream).await {
                 eprintln!("Error handling TLS connection: {}", e);
             }
         });

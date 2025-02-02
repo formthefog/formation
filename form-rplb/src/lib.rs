@@ -5,3 +5,4 @@ pub mod proxy;
 pub mod error;
 pub mod certs;
 pub mod keys;
+pub mod resolver;

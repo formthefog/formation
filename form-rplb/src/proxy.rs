@@ -1,11 +1,14 @@
 use crate::{backend::Backend, config::ProxyConfig, error::ProxyError, protocol::Protocol};
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt}, net::TcpStream
+    io::{AsyncReadExt, AsyncWriteExt}, net::TcpStream, sync::Mutex
 };
-use tokio_rustls::{rustls::{self, ServerConfig}, server::TlsStream, TlsAcceptor};
+use tokio_rustls::{rustls::{self, ServerConfig}, TlsAcceptor};
+use tokio_rustls_acme::{caches::DirCache, tokio_rustls::server::TlsStream, AcmeConfig, Incoming};
+use tokio_stream::wrappers::TcpListenerStream;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
 use futures::future::try_join_all;
+use futures::StreamExt;
 use rand::seq::SliceRandom;
 
 #[derive(Clone, Debug)]
@@ -20,6 +23,10 @@ impl ReverseProxy {
             routes: Arc::new(RwLock::new(HashMap::new())),
             config,
         }
+    }
+
+    pub fn config(&self) -> ProxyConfig {
+        self.config.clone()
     }
 
     pub async fn add_route(&self, domain: String, backend: Backend) {
@@ -37,7 +44,7 @@ impl ReverseProxy {
         routes.get(domain).cloned()
     }
 
-    async fn select_backend(&self, domain: &str) -> Result<SocketAddr, ProxyError> {
+    pub async fn select_backend(&self, domain: &str) -> Result<SocketAddr, ProxyError> {
         let routes = self.routes.read().await;
         let backend = routes.get(domain)
             .ok_or_else(|| ProxyError::NoBackend(domain.to_string()))?;
@@ -57,160 +64,72 @@ impl ReverseProxy {
         }
     }
 
-    async fn proxy_streams<A, B>(&self, stream_a: A, stream_b: B) -> Result<(), ProxyError> 
-        where 
-            A: AsyncRead+ AsyncWrite+ Unpin + Send + 'static,
-            B: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-    {
-
-        let (mut a_read, mut a_write) = tokio::io::split(stream_a);
-        let (mut b_read, mut b_write) = tokio::io::split(stream_b);
-
-        const BUFFER_SIZE: usize = 8192;
-
-        let client_to_backend = async move {
-            let mut buffer = vec![0u8; BUFFER_SIZE];
-            loop {
-                let bytes_read = match a_read.read(&mut buffer).await {
-                    Ok(0) => break, // EOF reached
-                    Ok(n) => n,
-                    Err(e) => return Err(ProxyError::Io(e)),
-                };
-
-                if let Err(e) = b_write.write_all(&buffer[..bytes_read]).await {
-                    return Err(ProxyError::Io(e));
-                }
-
-                if let Err(e) = b_write.flush().await {
-                    return Err(ProxyError::Io(e));
-                }
-
-            }
-            Ok(())
-        };
-
-        let backend_to_client = async move {
-            let mut buffer = vec![0u8; BUFFER_SIZE];
-            loop {
-                let bytes_read = match b_read.read(&mut buffer).await {
-                    Ok(0) => break,
-                    Ok(n) => n,
-                    Err(e) => return Err(ProxyError::Io(e)),
-                };
-
-                if let Err(e) = a_write.write_all(&buffer[..bytes_read]).await {
-                    return Err(ProxyError::Io(e));
-                }
-
-                if let Err(e) = a_write.flush().await {
-                    return Err(ProxyError::Io(e));
-                }
-            }
-
-            Ok(())
-        };
-
-        match tokio::try_join!(client_to_backend, backend_to_client) {
-            Ok(_) => return Ok(()),
-            Err(e) => return Err(e),
-        }
-    }
-
-    pub async fn handle_connection(
+    pub async fn handle_http_connection(
         &self,
         mut client_stream: TcpStream,
     ) -> Result<(), ProxyError> {
-        let mut peek_buffer = vec![0; self.config.buffer_size];
-        let n = client_stream.peek(&mut peek_buffer).await?;
-        let is_tls = n >= 5 && peek_buffer[0] == 0x16 && peek_buffer[1] == 0x03;
+        let mut buffer = vec![0; self.config.buffer_size];
+        let n = client_stream.read(&mut buffer).await?;
 
-        if is_tls {
-            // 1. Extract the SNI to know which cert to user
-            // 2. Perform TLS handshake
-            // 3. Process the HTTP request inside the TLS tunnel
-            let domain = extract_sni(&peek_buffer[..n])?;
+        let request = String::from_utf8_lossy(&buffer[..n]);
+        let domain = self.extract_domain(&request)?;
 
-            let backend = self.get_backend(&domain).await?;
+        let backend_addr = self.select_backend(&domain).await?;
+        let mut backend_stream = tokio::time::timeout(
+            self.config.connection_timeout,
+            TcpStream::connect(backend_addr)
+        ).await.map_err(|e| ProxyError::InvalidRequest(e.to_string()))??;
 
-            match &backend.protocol() {
-                Protocol::HTTPS(tls_config) => {
-                    // Set up TLS connection with client
-                    let server_config = Arc::new(tls_config.get_config().clone());
+        backend_stream.write_all(&buffer[..n]).await.map_err(|e| {
+            ProxyError::Io(e)
+        })?;
 
-                    // Create TLS stream and perform handshake
-                    let mut tls_stream = establish_tls_connection(client_stream, server_config.clone()).await?;
+        let (mut client_read, mut client_write) = client_stream.split();
+        let (mut backend_read, mut backend_write) = backend_stream.split();
 
-                    let mut buffer = vec![0; self.config.buffer_size];
-                    let n = tls_stream.read(&mut buffer).await?;
+        let client_to_backend = tokio::io::copy(&mut client_read, &mut backend_write);
+        let backend_to_client = tokio::io::copy(&mut backend_read, &mut client_write);
 
-                    let backend_addr = self.select_backend(&domain).await?;
-                    let mut backend_stream = tokio::time::timeout(
-                        self.config.connection_timeout,
-                        TcpStream::connect(backend_addr)
-                    ).await.map_err(|e| ProxyError::InvalidRequest(e.to_string()))??;
-
-                    backend_stream.write_all(&buffer[..n]).await?;
-
-                    self.proxy_streams(tls_stream, backend_stream).await?;
-
-                }
-                _ => {
-                    return Err(ProxyError::InvalidRequest(format!("Expected TLS protocol, did not find it")));
-                }
-            }
-        } else {
-            let mut buffer = vec![0; self.config.buffer_size];
-            let n = client_stream.read(&mut buffer).await?;
-
-            let request = String::from_utf8_lossy(&buffer[..n]);
-            let domain = self.extract_domain(&request)?;
-
-            let backend_addr = self.select_backend(&domain).await?;
-            let mut backend_stream = tokio::time::timeout(
-                self.config.connection_timeout,
-                TcpStream::connect(backend_addr)
-            ).await.map_err(|e| ProxyError::InvalidRequest(e.to_string()))??;
-
-            backend_stream.write_all(&buffer[..n]).await.map_err(|e| {
-                ProxyError::Io(e)
-            })?;
-
-            let (mut client_read, mut client_write) = client_stream.split();
-            let (mut backend_read, mut backend_write) = backend_stream.split();
-
-            let client_to_backend = tokio::io::copy(&mut client_read, &mut backend_write);
-            let backend_to_client = tokio::io::copy(&mut backend_read, &mut client_write);
-
-            try_join_all(vec![client_to_backend, backend_to_client]).await?;
-        };
+        try_join_all(vec![client_to_backend, backend_to_client]).await?;
 
         Ok(())
     }
 
-    fn extract_domain(&self, request: &str) -> Result<String, ProxyError> {
+    pub fn extract_domain(&self, request: &str) -> Result<String, ProxyError> {
         let host_line = request.lines()
             .find(|line| line.starts_with("Host: "))
             .ok_or_else(|| ProxyError::InvalidRequest("No Host header found".to_string()))?;
         
         Ok(host_line[6..].trim().to_string())
     }
-}
 
-/// Creates a TLS stream from a TCP connection using the provided server configuration.
-/// This function handles the TLS handshake process and returns a properly configured
-/// server-side TLS stream.
-async fn establish_tls_connection(
-    tcp_stream: TcpStream,
-    server_config: Arc<ServerConfig>,
-) -> Result<TlsStream<TcpStream>, ProxyError> {
-    // Create a TLS acceptor from our server config
-    let acceptor = TlsAcceptor::from(server_config.clone());
-    
-    // Accept the connection and perform the TLS handshake
-    // This returns a TlsStream in server mode
-    acceptor.accept(tcp_stream)
-        .await
-        .map_err(|e| ProxyError::InvalidRequest(e.to_string()))
+    pub async fn handle_tls_connection(&self, mut stream: TlsStream<TcpStream>, domain: &str) -> Result<(), ProxyError> {
+        let mut buffer = vec![0; self.config.buffer_size];
+        let n = stream.read(&mut buffer).await?;
+
+        let backend_addr = self.select_backend(domain).await?;
+        let mut backend_stream = tokio::time::timeout(
+            self.config.connection_timeout,
+            TcpStream::connect(backend_addr)
+        ).await.map_err(|e| ProxyError::InvalidRequest(e.to_string()))??;
+
+        backend_stream.write_all(&buffer[..n]).await.map_err(|e| {
+            ProxyError::Io(e)
+        })?;
+
+        let (mut client_read, mut client_write) = tokio::io::split(stream);
+        let (mut backend_read, mut backend_write) = backend_stream.split();
+
+        let client_to_backend = tokio::io::copy(&mut client_read, &mut backend_write);
+        let backend_to_client = tokio::io::copy(&mut backend_read, &mut client_write);
+
+        tokio::try_join!(
+            client_to_backend,
+            backend_to_client
+        )?;
+
+        Ok(())
+    }
 }
 
 /// Extracts the Server Name Indication (SNI) from a TLS ClientHello message.
