@@ -4,15 +4,13 @@ use form_rplb::protocol::Protocol;
 use form_rplb::protocol::TlsConfig;
 use form_rplb::proxy::ReverseProxy;
 use form_rplb::resolver::TlsManager;
-use tokio_rustls_acme::tokio_rustls::rustls::ServerConfig;
 use std::net::SocketAddr;
-use std::sync::Mutex;
+use tokio::sync::Mutex;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use std::sync::Arc;
-
 
 async fn run_mock_server(addr: SocketAddr, server_name: &'static str) {
     let listener = TcpListener::bind(addr).await.unwrap();
@@ -87,16 +85,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(run_mock_server(backend1_addr, "BACKEND_ONE"));
     tokio::spawn(run_mock_server(backend2_addr, "BACKEND_TWO"));
 
-    let tls_manager = Arc::new(Mutex::new(TlsManager::new(vec!["example.formation.cloud".to_string()])));
+    let tls_manager = Arc::new(Mutex::new(TlsManager::new(vec![]).await?));
+    let domain = "example.formation.cloud".to_string();
     
     // Add our test domain to the TLS manager
-//    if let Ok(mut guard) = tls_manager.lock() {
-//        guard.add_domain("example.formation.cloud".to_string(), true)?;
-//        println!("Added domain...");
-//    }
+    tls_manager.lock().await.add_domain(domain.clone(), false).await?;
 
-    let guard = tls_manager.lock().unwrap();
-    let _resolver = guard.resolver.clone(); 
+    let guard = tls_manager.lock().await;
     let server_config = guard.config.clone(); 
 
     let config = ProxyConfig::default();
@@ -119,7 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Configured for domains:");
     println!("  - https://example.formation.cloud/");
 
-    let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(1024);
     let inner_manager = tls_manager.clone();
 
     let handle = tokio::spawn(async move {
@@ -138,7 +133,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }; 
                                     println!("For domain: {}", domain.clone());
                                     match handshake.into_stream(server_config.clone()).await {
-                                        Ok(mut tls_stream) => {
+                                        Ok(tls_stream) => {
                                             let inner_proxy = proxy.clone();
                                             tokio::spawn(async move {
                                                 if let Err(e) = inner_proxy.handle_tls_connection(tls_stream, &domain).await {
@@ -159,20 +154,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 domain_opt = rx.recv() => {
+                    let inner_proxy = proxy.clone();
                     if let Some(domain) = domain_opt {
-                        if let Ok(mut guard) = inner_manager.lock() {
-                            if let Err(e) = guard.add_domain(domain, true) {
-                                eprintln!("Error adding domain to tls manager: {e}");
-                            }
+                        if let Err(e) = inner_manager.lock().await.add_domain(domain.clone(), true).await {
+                            eprintln!("Error adding domain to tls manager: {e}");
                         }
+
+                        let backend = Backend::new(
+                            vec![backend1_addr.clone(), backend2_addr.clone()],
+                            Protocol::HTTPS(TlsConfig::new(server_config.clone())),
+                            Duration::from_secs(30),
+                            1000
+                        );
+
+                        inner_proxy.add_route(domain.clone(), backend).await;
                     }
                 }
             }
         }
     });
 
+    tx.send("example.fog".to_string()).await?;
     tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-    tx.send("dev.formation.cloud".to_string()).await?;
     tokio::signal::ctrl_c().await?;
     handle.abort();
 

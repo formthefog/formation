@@ -19,22 +19,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "acme-lib"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6bcfe879d8669cfe09f2dd1bef4dc8cb232ca7b9ce46f4621cda9e7cc729cf73"
-dependencies = [
- "base64 0.21.7",
- "lazy_static",
- "log",
- "openssl",
- "serde",
- "serde_json",
- "time 0.1.45",
- "ureq 2.12.1",
-]
-
-[[package]]
 name = "acpi_tables"
 version = "0.1.0"
 source = "git+https://github.com/rust-vmm/acpi_tables?branch=main#849d5950196f66dd10f2b2606d8fe8c7cb39ec24"
@@ -3430,7 +3414,6 @@ dependencies = [
 name = "form-rplb"
 version = "0.1.0"
 dependencies = [
- "acme-lib 0.9.1",
  "anyhow",
  "futures",
  "hyper 0.14.32",
@@ -6820,7 +6803,6 @@ version = "0.23.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f287924602bf649d949c63dc8ac8b235fa5387d394020705b80c4eb597ce5b8"
 dependencies = [
- "log",
  "once_cell",
  "ring 0.17.8",
  "rustls-pki-types",
@@ -7896,8 +7878,7 @@ dependencies = [
 [[package]]
 name = "tokio-rustls-acme"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3184e8e292a828dd4bca5b2a60aba830ec5ed873a66c9ebb6e65038fa649e827"
+source = "git+http://github.com/cryptonomikhan/tokio-rustls-acme#03ae4136dd6a930c8e20ac151cd35beb6d7aee39"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -8518,15 +8499,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "02d1a66277ed75f640d608235660df48c8e3c19f3b4edb6a263315626cc3c01d"
 dependencies = [
  "base64 0.22.1",
- "flate2",
  "log",
  "once_cell",
- "rustls 0.23.21",
- "rustls-pki-types",
  "serde",
  "serde_json",
  "url 2.5.4",
- "webpki-roots 0.26.7",
 ]
 
 [[package]]
@@ -8897,7 +8874,7 @@ dependencies = [
 name = "vmm-service"
 version = "0.1.0"
 dependencies = [
- "acme-lib 0.5.2",
+ "acme-lib",
  "arch",
  "async-trait",
  "axum 0.7.9",

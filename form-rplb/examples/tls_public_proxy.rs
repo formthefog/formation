@@ -1,5 +1,4 @@
 use tokio_rustls_acme::tokio_rustls::rustls::ServerConfig;
-use std::net::Ipv6Addr;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio_rustls_acme::caches::DirCache;
@@ -28,10 +27,10 @@ async fn main() {
         }
     });
 
-    serve(acceptor, Arc::new(rustls_config), 443).await;
+    serve(acceptor, Arc::new(rustls_config)).await;
 }
 
-async fn serve(acceptor: AcmeAcceptor, rustls_config: Arc<ServerConfig>, port: u16) {
+async fn serve(acceptor: AcmeAcceptor, rustls_config: Arc<ServerConfig>) {
     let listener = tokio::net::TcpListener::bind("0.0.0.0:443")
         .await
         .unwrap();

@@ -21,9 +21,8 @@ anyhow = "1"
 rand = "0.8"
 futures = "0.3"
 thiserror = "2"
-acme-lib = "0.9"
 hyper = { version = "0.14.32", features = ["full"] }
-tokio-rustls-acme = "0.6.0"
+tokio-rustls-acme = { git = "http://github.com/cryptonomikhan/tokio-rustls-acme" }
 log = "0.4"
 simple_logger = "4"
 tokio-stream = { version = "0.1.9", features = ["net"] }
