@@ -45,15 +45,18 @@ impl ReverseProxy {
     }
 
     pub async fn add_route(&self, domain: String, backend: Backend) {
+        log::info!("Attempting to add route for {domain}");
         let mut routes = self.routes.write().await;
         let proxy_backend = if let Protocol::HTTPS(_config) = backend.protocol() {
-            let addresses: Vec<SocketAddr> = backend.addresses().iter().map(|addr| SocketAddr::new(addr.ip(), 80)).collect();
+            let addresses: Vec<SocketAddr> = backend.addresses().iter().map(|addr| *addr).collect();
+                log::info!("Building HTTP routes to {addresses:?}");
             let http_backend = Backend::new(
                 addresses.clone(),
                 Protocol::HTTP,
                 Duration::from_secs(30),
                 1000
             );
+            log::info!("Protocol includes HTTPS Adding to domain protocol");
             let domain_protocols = DomainProtocols {
                 http_enabled: true,
                 tls_enabled: true,
@@ -68,7 +71,7 @@ impl ReverseProxy {
                 udp: None,
             }
         } else if let Protocol::TCP = backend.protocol() {
-            let addresses: Vec<SocketAddr> = backend.addresses().iter().map(|addr| SocketAddr::new(addr.ip(), 80)).collect();
+            let addresses: Vec<SocketAddr> = backend.addresses().iter().map(|addr| *addr).collect();
             let http_backend = Backend::new(
                 addresses,
                 Protocol::HTTP,
@@ -89,7 +92,7 @@ impl ReverseProxy {
                 udp: None,
             }
         } else if let Protocol::UDP = backend.protocol() {
-            let addresses: Vec<SocketAddr> = backend.addresses().iter().map(|addr| SocketAddr::new(addr.ip(), 80)).collect();
+            let addresses: Vec<SocketAddr> = backend.addresses().iter().map(|addr| *addr).collect();
             let http_backend = Backend::new(
                 addresses,
                 Protocol::HTTP,
@@ -111,7 +114,8 @@ impl ReverseProxy {
                 udp: Some(backend),
             }
         } else {
-            let addresses: Vec<SocketAddr> = backend.addresses().iter().map(|addr| SocketAddr::new(addr.ip(), 80)).collect();
+            let addresses: Vec<SocketAddr> = backend.addresses().iter().map(|addr| *addr).collect();
+            log::info!("Protocol does not include HTTPS...");
             let http_backend = Backend::new(
                 addresses,
                 Protocol::HTTP,
@@ -194,35 +198,41 @@ impl ReverseProxy {
     pub async fn handle_http_connection(
         &self,
         mut client_stream: TcpStream,
+        domain: &str,
+        request: String,
     ) -> Result<(), ProxyError> {
-        let mut buffer = vec![0; self.config.buffer_size];
-        let n = client_stream.read(&mut buffer).await?;
-
-        let request = String::from_utf8_lossy(&buffer[..n]);
-        let domain = self.extract_domain(&request)?;
+        log::info!("HTTP Request received");
+        log::info!("Extracted domain {domain}...");
 
         let backend_addr = self.select_backend(&domain, Protocol::HTTP).await?;
+        log::info!("Selected backend {backend_addr}...");
+        log::info!("Buildingg backend stream...");
         let mut backend_stream = tokio::time::timeout(
             self.config.connection_timeout,
             TcpStream::connect(backend_addr)
         ).await.map_err(|e| ProxyError::InvalidRequest(e.to_string()))??;
 
-        backend_stream.write_all(&buffer[..n]).await.map_err(|e| {
+        log::info!("Writing request to backend...");
+        backend_stream.write_all(&request.as_bytes()).await.map_err(|e| {
             ProxyError::Io(e)
         })?;
 
+        log::info!("Splitting client and backend stream...");
         let (mut client_read, mut client_write) = client_stream.split();
         let (mut backend_read, mut backend_write) = backend_stream.split();
 
+        log::info!("Setting pipeline...");
         let client_to_backend = tokio::io::copy(&mut client_read, &mut backend_write);
         let backend_to_client = tokio::io::copy(&mut backend_read, &mut client_write);
 
+        log::info!("Proxy complete...");
         try_join_all(vec![client_to_backend, backend_to_client]).await?;
 
         Ok(())
     }
 
     pub fn extract_domain(&self, request: &str) -> Result<String, ProxyError> {
+        log::info!("Request received, attempting to extract domain: {request}");
         let host_line = request.lines()
             .find(|line| line.starts_with("Host: "))
             .ok_or_else(|| ProxyError::InvalidRequest("No Host header found".to_string()))?;
@@ -236,27 +246,40 @@ impl ReverseProxy {
         domain: &str,
         config: Arc<ServerConfig>,
     ) -> Result<(), ProxyError> {
+        log::info!("Received tls connectionr request");
         let mut buffer = vec![0; self.config.buffer_size];
         let n = stream.read(&mut buffer).await?;
+        log::info!("Read {n} bytes from client stream");
 
         let backend_addr = self.select_backend(
             domain,
-            Protocol::HTTPS(TlsConfig::new(config.clone()))).await?;
+            Protocol::HTTPS(
+                TlsConfig::new(
+                    config.clone()
+                )
+            )
+        ).await?;
+        log::info!("Selected {backend_addr} as backend address..");
         let mut backend_stream = tokio::time::timeout(
             self.config.connection_timeout,
             TcpStream::connect(backend_addr)
         ).await.map_err(|e| ProxyError::InvalidRequest(e.to_string()))??;
+        log::info!("Built backend stream..");
 
         backend_stream.write_all(&buffer[..n]).await.map_err(|e| {
             ProxyError::Io(e)
         })?;
 
+        log::info!("Wrote request to backend..");
+        log::info!("Splitting streams..");
         let (mut client_read, mut client_write) = tokio::io::split(stream);
         let (mut backend_read, mut backend_write) = backend_stream.split();
 
+        log::info!("Setting pipeline..");
         let client_to_backend = tokio::io::copy(&mut client_read, &mut backend_write);
         let backend_to_client = tokio::io::copy(&mut backend_read, &mut client_write);
 
+        log::info!("Proxy complete..");
         tokio::try_join!(
             client_to_backend,
             backend_to_client

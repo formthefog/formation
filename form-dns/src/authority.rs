@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use trust_dns_client::client::AsyncClient;
 use trust_dns_proto::rr::rdata::CNAME;
 use trust_dns_server::authority::{
@@ -59,7 +59,7 @@ impl FormAuthority {
         log::info!("trimmed name: {key}");
 
         let record_opt = {
-            let guard = self.store.blocking_read();
+            let guard = self.store.read().await;
             guard.get(&key)
         };
         log::info!("retreived record {record_opt:?}");
@@ -100,7 +100,7 @@ impl FormAuthority {
                 match rtype {
                     RecordType::A => {
                         for ip in ips { 
-                            if let IpAddr::V4(v4) = ip {
+                            if let IpAddr::V4(v4) = ip.ip() {
                                 let mut rec = Record::with(rrset.name().clone(), RecordType::A, 300);
                                 rec.set_data(Some(trust_dns_proto::rr::rdata::A(v4)));
                                 rrset.add_rdata(rec.into_record_of_rdata().data()?.clone());
@@ -109,7 +109,7 @@ impl FormAuthority {
                     }
                     RecordType::AAAA => {
                         for ip in ips {
-                            if let IpAddr::V6(v6) = ip {
+                            if let IpAddr::V6(v6) = ip.ip() {
                                 let mut rec = Record::with(rrset.name().clone(), RecordType::AAAA, 300);
                                 rec.set_data(Some(trust_dns_proto::rr::rdata::AAAA(v6)));
                                 rrset.add_rdata(rec.into_record_of_rdata().data()?.clone());
@@ -215,19 +215,20 @@ impl FormAuthority {
                                 domain: domain.clone(),
                                 record_type: rtype,
                                 formnet_ip: if v4.octets()[0] == 10 {
-                                    vec![IpAddr::V4(v4.into())]
+                                    vec![SocketAddr::V4(SocketAddrV4::new(v4.into(), 80))]
                                 } else {
                                     vec![]
                                 },
                                 public_ip: if !v4.octets()[0] == 10 {
-                                    vec![IpAddr::V4(v4.into())]
+                                    vec![SocketAddr::V4(SocketAddrV4::new(v4.into(), 80))]
                                 } else {
                                     vec![]
                                 },
                                 cname_target: None,
+                                ssl_cert: true,
                                 ttl: 0
                             };
-                            store_guard.insert(&domain, record);
+                            store_guard.insert(&domain, record).await;
                             changed = true;
                         }
                     } else {
@@ -235,13 +236,13 @@ impl FormAuthority {
                             let form_record = FormDnsRecord {
                                 record_type: rtype,
                                 formnet_ip: if v4.octets()[0] == 10 {
-                                    record.formnet_ip.push(IpAddr::V4(v4.into()));
+                                    record.formnet_ip.push(SocketAddr::V4(SocketAddrV4::new(v4.into(), 80)));
                                     record.formnet_ip.clone()
                                 } else { 
                                     record.formnet_ip.clone()
                                 },
                                 public_ip: if !v4.octets()[0] == 10 {
-                                    record.public_ip.push(IpAddr::V4(v4.into()));
+                                    record.public_ip.push(SocketAddr::V4(SocketAddrV4::new(v4.into(), 80)));
                                     record.public_ip.clone()
                                 } else {
                                     vec![]
@@ -249,26 +250,27 @@ impl FormAuthority {
                                 ttl,
                                 ..record
                             };
-                            store_guard.insert(&domain, form_record);
+                            store_guard.insert(&domain, form_record).await;
                             changed = true;
                         } else {
                             let record = FormDnsRecord {
                                 domain: domain.clone(),
                                 record_type: rtype,
                                 formnet_ip: if v4.octets()[0] == 10 {
-                                    vec![IpAddr::V4(v4.into())]
+                                    vec![SocketAddr::V4(SocketAddrV4::new(v4.into(), 80))]
                                 } else {
                                     vec![]
                                 },
                                 public_ip: if !v4.octets()[0] == 10 {
-                                    vec![IpAddr::V4(v4.into())]
+                                    vec![SocketAddr::V4(SocketAddrV4::new(v4.into(), 80))]
                                 } else {
                                     vec![]
                                 },
+                                ssl_cert: true,
                                 cname_target: None,
                                 ttl
                             };
-                            store_guard.insert(&domain, record);
+                            store_guard.insert(&domain, record).await;
                             changed = true;
                         }
                     }
@@ -282,11 +284,12 @@ impl FormAuthority {
                                 domain: domain.clone(),
                                 record_type: rtype,
                                 formnet_ip: vec![],
-                                public_ip: vec![IpAddr::V6(v6.into())],
+                                public_ip: vec![SocketAddr::V6(SocketAddrV6::new(v6.into(), 80, 0, 0))],
                                 cname_target: None,
+                                ssl_cert: true,
                                 ttl: 0
                             };
-                            store_guard.insert(&domain, record);
+                            store_guard.insert(&domain, record).await;
                             changed = true;
                         }
                     } else {
@@ -295,24 +298,25 @@ impl FormAuthority {
                                 record_type: rtype,
                                 formnet_ip: vec![],
                                 public_ip: {
-                                    record.public_ip.push(IpAddr::V6(v6.into()));
+                                    record.public_ip.push(SocketAddr::V6(SocketAddrV6::new(v6.into(), 80, 0, 0)));
                                     record.public_ip
                                 },
                                 ttl,
                                 ..record
                             };
-                            store_guard.insert(&domain, form_record);
+                            store_guard.insert(&domain, form_record).await;
                             changed = true;
                         } else {
                             let record = FormDnsRecord {
                                 domain: domain.clone(),
                                 record_type: rtype,
                                 formnet_ip: vec![],
-                                public_ip: vec![IpAddr::V6(v6.into())],
+                                public_ip: vec![SocketAddr::V6(SocketAddrV6::new(v6.into(), 80, 0, 0))],
                                 cname_target: None,
+                                ssl_cert: true,
                                 ttl
                             };
-                            store_guard.insert(&domain, record);
+                            store_guard.insert(&domain, record).await;
                             changed = true;
                         }
                     }
@@ -328,9 +332,10 @@ impl FormAuthority {
                                 formnet_ip: vec![],
                                 public_ip: vec![],
                                 cname_target: Some(target.0.to_string()),
+                                ssl_cert: true,
                                 ttl
                             };
-                            store_guard.insert(&domain, record);
+                            store_guard.insert(&domain, record).await;
                         }
                     } else {
                         if let Some(record) = store_guard.get(&domain) {
@@ -340,7 +345,7 @@ impl FormAuthority {
                                 ttl,
                                 ..record
                             };
-                            store_guard.insert(&domain, form_record);
+                            store_guard.insert(&domain, form_record).await;
                             changed = true;
                         } else {
                             let record = FormDnsRecord {
@@ -349,9 +354,10 @@ impl FormAuthority {
                                 formnet_ip: vec![],
                                 public_ip: vec![],
                                 cname_target: Some(target.0.to_string()),
+                                ssl_cert: true,
                                 ttl
                             };
-                            store_guard.insert(&domain, record);
+                            store_guard.insert(&domain, record).await;
                             changed = true;
                         }
                     }

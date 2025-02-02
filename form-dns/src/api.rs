@@ -1,4 +1,4 @@
-use std::{collections::hash_map::Entry, net::IpAddr};
+use std::{collections::hash_map::Entry, net::{IpAddr, Ipv4Addr, SocketAddr}};
 
 use crate::store::{FormDnsRecord, SharedStore};
 use serde::{Serialize, Deserialize};
@@ -13,6 +13,7 @@ pub fn build_routes(state: SharedStore) -> Router {
         .route("/record/:domain/delete", delete(delete_record))
         .route("/record/:domain/get", get(get_record))
         .route("/record/list", get(list_records))
+        .route("/server/create", post(new_server))
         .with_state(state)
 }
 
@@ -21,14 +22,16 @@ pub enum DomainRequest {
     Create {
         domain: String,
         record_type: RecordType,
-        ip_addr: Vec<IpAddr>,
-        cname_target: Option<String>
+        ip_addr: Vec<SocketAddr>,
+        cname_target: Option<String>,
+        ssl_cert: bool,
     },
     Update {
         replace: bool,
         record_type: RecordType,
-        ip_addr: Vec<IpAddr>,
-        cname_target: Option<String>
+        ip_addr: Vec<SocketAddr>,
+        cname_target: Option<String>,
+        ssl_cert: bool,
     },
 }
 
@@ -51,7 +54,7 @@ async fn create_record(
 ) -> Json<DomainResponse> {
     log::info!("Received Create request..."); 
     match request {
-        DomainRequest::Create { domain, record_type, ip_addr, cname_target } => {
+        DomainRequest::Create { domain, record_type, ip_addr, cname_target, ssl_cert } => {
             log::info!("Create request for {domain}: {record_type}..."); 
             log::info!("Create ips?: {ip_addr:?}...");
             log::info!("Create CNAME target?: {cname_target:?}...");
@@ -61,7 +64,7 @@ async fn create_record(
                         let mut formnet_ips = vec![];
                         let mut public_ips = vec![];
                         for addr in ip_addr { 
-                            match addr {
+                            match addr.ip() {
                                 IpAddr::V4(v4) if v4.octets()[0] == 10 => {
                                     log::info!("Formnet IP: {v4}..."); 
                                     formnet_ips.push(addr);
@@ -83,6 +86,7 @@ async fn create_record(
                         formnet_ip,
                         public_ip,
                         cname_target: None,
+                        ssl_cert,
                         ttl: 3600
                     }
                 }
@@ -90,7 +94,7 @@ async fn create_record(
                     let public_ip = if !ip_addr.is_empty() {
                         let mut public_ips = vec![];
                         for addr in ip_addr {
-                            match addr {
+                            match addr.ip() {
                                 IpAddr::V6(v6) => {
                                     log::info!("Public IP: {v6}..."); 
                                     public_ips.push(addr);
@@ -110,6 +114,7 @@ async fn create_record(
                         formnet_ip: vec![],
                         public_ip,
                         cname_target: None,
+                        ssl_cert,
                         ttl: 3600
                     }
                 }
@@ -127,6 +132,7 @@ async fn create_record(
                         formnet_ip: vec![],
                         public_ip: vec![],
                         cname_target,
+                        ssl_cert,
                         ttl: 3600
                     }
                 }
@@ -136,7 +142,7 @@ async fn create_record(
             log::info!("Build record: {record:?}...");
             let mut guard = state.write().await;
             log::info!("Adding record for {domain}...");
-            guard.insert(&domain, record);
+            guard.insert(&domain, record).await;
             drop(guard);
             log::info!("Domain {domain} record added successfully...");
             return Json(DomainResponse::Success(Success::None))
@@ -153,7 +159,7 @@ async fn update_record(
     log::info!("Received Update request for {domain}...");
     let mut guard = state.write().await;
     match request {
-        DomainRequest::Update { replace, record_type, ip_addr, cname_target} => {
+        DomainRequest::Update { replace, record_type, ip_addr, cname_target, ssl_cert} => {
             let record = match record_type {
                 RecordType::A => {
                     let record = if let Entry::Occupied(ref mut entry) = guard.entry(&domain) {
@@ -163,7 +169,7 @@ async fn update_record(
                             let mut formnet_ips = vec![]; 
                             let mut public_ips = vec![];
                             for addr in ip_addr {
-                                match addr {
+                                match addr.ip() {
                                     IpAddr::V4(ip) => {
                                         if ip.octets()[0] == 10 {
                                             formnet_ips.push(addr);
@@ -183,9 +189,11 @@ async fn update_record(
                         if replace {
                             record.formnet_ip = formnet_ips;
                             record.public_ip = public_ips;
+                            record.ssl_cert = ssl_cert;
                         } else {
                             record.formnet_ip.extend(formnet_ips);
                             record.public_ip.extend(public_ips);
+                            record.ssl_cert = ssl_cert;
                         }
                         record.clone()
                     } else {
@@ -199,6 +207,7 @@ async fn update_record(
                         record.record_type = record_type;
                         if !ip_addr.is_empty() {
                             record.public_ip.extend(ip_addr);
+                            record.ssl_cert = ssl_cert;
                         } else {
                             return Json(DomainResponse::Failure(Some("AAAA Record updates must include an IP Address".to_string())));
                         }
@@ -214,6 +223,7 @@ async fn update_record(
                         record.record_type = record_type;
                         if let Some(ref _target) = cname_target {
                             record.cname_target = cname_target.clone();
+                            record.ssl_cert = ssl_cert;
                         } else {
                             return Json(DomainResponse::Failure(Some("CNAME Record update must include a CNAME target".to_string())))
                         }
@@ -227,7 +237,7 @@ async fn update_record(
 
             };
             log::info!("Successfully built record {record:?}");
-            guard.insert(&domain, record);
+            guard.insert(&domain, record).await;
             drop(guard);
             log::info!("Successfully updated record for {domain}");
             return Json(DomainResponse::Success(Success::None))
@@ -280,6 +290,18 @@ async fn list_records(
     log::info!("Returning records list with {} records...", cloned.len());
 
     return Json(DomainResponse::Success(Success::List(cloned)))
+}
+
+async fn new_server(
+    State(state): State<SharedStore>,
+    Json(ip_addr): Json<Ipv4Addr>
+) -> Json<()> {
+    let mut guard = state.write().await;
+    if let Err(e) = guard.add_server(ip_addr) {
+        log::error!("Error trying to add server {}: {}", ip_addr.clone(), e);
+    }
+
+    Json(())
 }
 
 pub async fn serve_api(state: SharedStore) -> Result<(), Box<dyn std::error::Error>> {

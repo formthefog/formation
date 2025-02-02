@@ -1,31 +1,35 @@
 use std::collections::hash_map::{Entry, Iter};
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::collections::HashMap;
 use tokio::sync::{RwLock, mpsc::Sender};
 use std::sync::Arc;
 use serde::{Serialize, Deserialize};
 use trust_dns_proto::rr::RecordType;
 
+use crate::resolvectl_dns;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FormDnsRecord {
     pub domain: String,
     pub record_type: RecordType,
-    pub public_ip: Vec<IpAddr>,
-    pub formnet_ip: Vec<IpAddr>,
+    pub public_ip: Vec<SocketAddr>,
+    pub formnet_ip: Vec<SocketAddr>,
     pub cname_target: Option<String>,
+    pub ssl_cert: bool,
     pub ttl: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum FormTarget {
-    A(Vec<IpAddr>),
-    AAAA(Vec<IpAddr>),
+    A(Vec<SocketAddr>),
+    AAAA(Vec<SocketAddr>),
     CNAME(String),
     None
 }
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
 pub struct DnsStore {
+    servers: Vec<Ipv4Addr>,
     records: HashMap<String, FormDnsRecord>,
     #[serde(skip)]
     sender: Option<Sender<FormDnsRecord>>,
@@ -34,19 +38,27 @@ pub struct DnsStore {
 impl DnsStore {
     pub fn new(sender: Sender<FormDnsRecord>) -> Self {
         Self {
+            servers: Vec::new(),
             records: HashMap::new(),
             sender: Some(sender),
         }
     }
 
-    pub fn insert(
+    pub fn add_server(&mut self, server: Ipv4Addr) -> Result<(), Box<dyn std::error::Error>> {
+        self.servers.push(server);
+        let all_servers = self.servers.clone();
+        resolvectl_dns(all_servers)?;
+        Ok(())
+    }
+
+    pub async fn insert(
         &mut self,
         domain: &str,
         record: FormDnsRecord
     ) {
         let key = domain.trim_end_matches('.').to_lowercase();
         if let Some(ref mut sender) = &mut self.sender {
-            let _ = sender.blocking_send(record.clone());
+            let _ = sender.send(record.clone()).await;
         }
         self.records.insert(key, record);
     }

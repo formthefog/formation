@@ -78,9 +78,10 @@ impl IntegratedProxy {
         let domain_config = protocols.get(domain).cloned().unwrap_or_default();
 
         if domain_config.http_enabled {
-            let addresses: Vec<SocketAddr> = record.formnet_ip.iter()
-                .map(|ip| SocketAddr::new(*ip, 80))
+            let mut addresses: Vec<SocketAddr> = record.formnet_ip.iter()
+                .map(|ip| *ip)
                 .collect();
+            addresses.extend(record.public_ip.clone());
             backends.push((
                 Protocol::HTTP,
                 Backend::new(
@@ -94,9 +95,10 @@ impl IntegratedProxy {
 
         if domain_config.tls_enabled {
             let tls_config = TlsConfig::new(self.tls_manager.lock().await.config.clone());
-            let addresses: Vec<SocketAddr> = record.formnet_ip.iter()
-                .map(|ip| SocketAddr::new(*ip, 443))
+            let mut addresses: Vec<SocketAddr> = record.formnet_ip.iter()
+                .map(|ip| *ip)
                 .collect();
+            addresses.extend(record.public_ip.clone());
             backends.push((
                 Protocol::HTTPS(tls_config.clone()),
                 Backend::new(
@@ -114,7 +116,13 @@ impl IntegratedProxy {
     pub async fn add_routes(&self, domain: &str) -> Result<(), Box<dyn std::error::Error>> {
         let dns_guard = self.store.read().await;
         if let Some(record) = dns_guard.get(domain) {
-            let should_enable_tls = domain.ends_with(".fog") || self.tls_manager.lock().await.domains.contains_key(domain);
+            let mut should_enable_tls = domain.ends_with(".fog") || self.tls_manager.lock().await.domains.contains_key(domain);
+            if !should_enable_tls {
+                if record.ssl_cert {
+                    let _ = self.tls_manager.lock().await.add_domain(domain.to_string(), false).await;
+                }
+                should_enable_tls = true;
+            }
             if !self.domain_protocols.lock().await.contains_key(domain) {
                 self.configure_domain_protocols(
                     domain, 
@@ -158,7 +166,7 @@ impl IntegratedProxy {
             }
         }
 
-        self.reverse_proxy.handle_http_connection(stream).await
+        self.reverse_proxy.handle_http_connection(stream, &domain, request.to_string()).await
     }
 
     pub async fn handle_https(&self, stream: TcpStream) -> Result<(), ProxyError> {

@@ -7,6 +7,10 @@ edition = "2021"
 name = "form_dns"
 path = "src/lib.rs"
 
+[[example]]
+name = "run_mock_server"
+path = "examples/run-mock-server.rs"
+
 [dependencies]
 trust-dns-server = { version = "0.23", features = ["dnssec"]}
 trust-dns-proto = { version = "0.23", features = ["dnssec", "openssl", "ring", "serde-config"]}
