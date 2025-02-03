@@ -571,6 +571,10 @@ impl InstanceState {
         }
     }
 
+    pub fn map(&self) -> Map<String, BFTReg<Instance, Actor>, Actor> {
+        self.map.clone()
+    }
+
     pub fn update_instance_local(&mut self, instance: Instance) -> InstanceOp {
         log::info!("Acquiring add ctx...");
         let add_ctx = self.map.read_ctx().derive_add_ctx(self.node_id.clone());
