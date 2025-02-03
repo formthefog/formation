@@ -3437,6 +3437,7 @@ version = "0.1.0"
 dependencies = [
  "alloy-primitives 0.8.19",
  "axum 0.7.9",
+ "bincode",
  "clap",
  "crdts 7.3.2 (git+https://github.com/cryptonomikhan/rust-crdt.git?rev=6d0a2f3)",
  "form-config",

@@ -1,4 +1,4 @@
-use std::{net::IpAddr, time::{Duration, SystemTime}};
+use std::{net::{IpAddr, SocketAddr}, time::{Duration, SystemTime}};
 use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, CmRDT, Map, Update};
 use ipnet::IpNet;
 use k256::ecdsa::SigningKey;
@@ -222,10 +222,11 @@ impl From<AssociationContents<String>> for CrdtAssociation<String> {
 pub struct CrdtDnsRecord {
     domain: String,
     record_type: RecordType,
-    formnet_ip: Vec<IpAddr>,
-    public_ip: Vec<IpAddr>,
+    formnet_ip: Vec<SocketAddr>,
+    public_ip: Vec<SocketAddr>,
     cname_target: Option<String>,
-    ttl: u32
+    ttl: u32,
+    ssl_cert: bool,
 }
 
 impl CrdtDnsRecord {
@@ -237,11 +238,11 @@ impl CrdtDnsRecord {
         self.record_type
     }
 
-    pub fn formnet_ip(&self) -> Vec<IpAddr> {
+    pub fn formnet_ip(&self) -> Vec<SocketAddr> {
         self.formnet_ip.clone()
     }
 
-    pub fn public_ip(&self) -> Vec<IpAddr> {
+    pub fn public_ip(&self) -> Vec<SocketAddr> {
         self.public_ip.clone()
     }
 
@@ -251,6 +252,10 @@ impl CrdtDnsRecord {
 
     pub fn ttl(&self) -> u32 {
         self.ttl
+    }
+
+    pub fn ssl_cert(&self) -> bool {
+        self.ssl_cert
     }
 
 }
@@ -263,7 +268,8 @@ impl From<FormDnsRecord> for CrdtDnsRecord {
             formnet_ip: value.formnet_ip, 
             public_ip: value.public_ip, 
             cname_target: value.cname_target, 
-            ttl: value.ttl 
+            ttl: value.ttl,
+            ssl_cert: value.ssl_cert
         }
     }
 }
@@ -276,7 +282,8 @@ impl From<CrdtDnsRecord> for FormDnsRecord {
             formnet_ip: value.formnet_ip, 
             public_ip: value.public_ip, 
             cname_target: value.cname_target, 
-            ttl: value.ttl 
+            ttl: value.ttl,
+            ssl_cert: value.ssl_cert
         }
     }
 }
@@ -289,7 +296,8 @@ impl From<&CrdtDnsRecord> for FormDnsRecord {
             formnet_ip: value.formnet_ip.clone(), 
             public_ip: value.public_ip.clone(), 
             cname_target: value.cname_target.clone(), 
-            ttl: value.ttl 
+            ttl: value.ttl,
+            ssl_cert: value.ssl_cert
         }
     }
 }

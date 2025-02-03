@@ -23,3 +23,4 @@ rand = "0.8"
 form-config = { path = "../form-config" }
 trust-dns-proto = { version = "0.23", features = ["dnssec", "openssl", "ring", "serde-config"]}
 form-dns = { path = "../form-dns" }
+bincode = "1.3.3"
