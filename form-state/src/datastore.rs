@@ -1119,6 +1119,7 @@ async fn build_dns_request(v: Option<CrdtDnsRecord>, op_type: &str) -> (DomainRe
                 record_type: RecordType::NULL,
                 ip_addr: vec![],
                 cname_target: None,
+                ssl_cert: false
             };
             return (request, Some(Response::Failure { reason: Some("Create request requires a record".into()) }))
         }
@@ -1132,6 +1133,7 @@ async fn build_dns_request(v: Option<CrdtDnsRecord>, op_type: &str) -> (DomainRe
                 record_type: RecordType::NULL,
                 ip_addr: vec![],
                 cname_target: None,
+                ssl_cert: false,
             };
             return (request, Some(Response::Failure { reason: Some("Update request requires a record".into()) }))
         }
@@ -1142,6 +1144,7 @@ async fn build_dns_request(v: Option<CrdtDnsRecord>, op_type: &str) -> (DomainRe
         record_type: RecordType::NULL,
         ip_addr: vec![],
         cname_target: None,
+        ssl_cert: false,
     };
     return (request, Some(Response::Failure { reason: Some("Update request requires a record".into()) }))
 }
@@ -1159,6 +1162,7 @@ async fn build_create_request(v: CrdtDnsRecord) -> (DomainRequest, Option<Respon
             record_type: RecordType::NULL,
             ip_addr: vec![],
             cname_target: None,
+            ssl_cert: v.ssl_cert()
         };
         return (request, Some(Response::Failure { reason: Some("Only A, AAAA and CNAME records are supported".to_string()) }));
     };
@@ -1177,6 +1181,7 @@ async fn build_update_request(v: CrdtDnsRecord) -> (DomainRequest, Option<Respon
             record_type: RecordType::NULL,
             ip_addr: vec![],
             cname_target: None,
+            ssl_cert: v.ssl_cert()
         };
         return (request, Some(Response::Failure { reason: Some("Only A, AAAA and CNAME records are supported".to_string()) }));
     }
@@ -1192,7 +1197,8 @@ async fn build_create_a_record_request(v: CrdtDnsRecord) -> (DomainRequest, Opti
             domain: v.domain().clone(),
             record_type: v.record_type(), 
             ip_addr: ips,
-            cname_target: None 
+            cname_target: None,
+            ssl_cert: v.ssl_cert()
         };
         return (request, None)
     } else {
@@ -1200,7 +1206,8 @@ async fn build_create_a_record_request(v: CrdtDnsRecord) -> (DomainRequest, Opti
             domain: v.domain().clone(), 
             record_type: v.record_type(),
             ip_addr: v.public_ip(), 
-            cname_target: None 
+            cname_target: None,
+            ssl_cert: v.ssl_cert()
         }; 
         return (request, None)
     }
@@ -1216,7 +1223,8 @@ async fn build_update_a_record_request(v: CrdtDnsRecord) -> (DomainRequest, Opti
             replace: true,
             record_type: v.record_type(), 
             ip_addr: ips, 
-            cname_target: None 
+            cname_target: None,
+            ssl_cert: v.ssl_cert()
         };
         return(request, None);
     } else {
@@ -1224,7 +1232,8 @@ async fn build_update_a_record_request(v: CrdtDnsRecord) -> (DomainRequest, Opti
             domain: v.domain().clone(), 
             record_type: v.record_type(),
             ip_addr: v.public_ip(), 
-            cname_target: None 
+            cname_target: None,
+            ssl_cert: v.ssl_cert()
         }; 
         (request, None)
     }
@@ -1236,7 +1245,8 @@ async fn build_create_aaaa_record_request(v: CrdtDnsRecord) -> (DomainRequest, O
             domain: v.domain().clone(), 
             record_type: v.record_type(),
             ip_addr: v.public_ip(), 
-            cname_target: None 
+            cname_target: None,
+            ssl_cert: v.ssl_cert()
         }; 
         return (request, None)
     } else {
@@ -1244,7 +1254,8 @@ async fn build_create_aaaa_record_request(v: CrdtDnsRecord) -> (DomainRequest, O
             domain: v.domain().clone(),
             record_type: v.record_type(),
             ip_addr: v.public_ip(), 
-            cname_target: None 
+            cname_target: None,
+            ssl_cert: v.ssl_cert()
         };
         return (request, Some(Response::Failure { reason: Some("AAAA Record Updates require a public IP V6 address".to_string()) }))
     }
@@ -1255,7 +1266,8 @@ async fn build_update_aaaa_record_request(v: CrdtDnsRecord) -> (DomainRequest, O
         replace: true, 
         record_type: v.record_type(),
         ip_addr: v.public_ip(), 
-        cname_target: None 
+        cname_target: None,
+        ssl_cert: v.ssl_cert()
     }; 
     (request, None)
 }
@@ -1269,7 +1281,8 @@ async fn build_create_cname_record_request(v: CrdtDnsRecord) -> (DomainRequest, 
             ips.extend(v.public_ip());
             ips
         },
-        cname_target: v.cname_target().clone()
+        cname_target: v.cname_target().clone(),
+        ssl_cert: v.ssl_cert()
     };
     (request, None)
 }
@@ -1283,7 +1296,8 @@ async fn build_update_cname_record_request(v: CrdtDnsRecord) -> (DomainRequest, 
             ips.extend(v.public_ip());
             ips
         },
-        cname_target: v.cname_target().clone()
+        cname_target: v.cname_target().clone(),
+        ssl_cert: v.ssl_cert()
     };
     (request, None)
 }
