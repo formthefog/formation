@@ -8,7 +8,7 @@ use tokio::{net::TcpListener, sync::Mutex};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use crdts::{BFTReg, CvRDT, Map, Update};
 use trust_dns_proto::rr::RecordType;
-use crate::{instances::{Instance, InstanceOp, InstanceState}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}};
+use crate::{instances::{Instance, InstanceOp, InstanceState}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}};
 
 pub type PeerMap = Map<String, BFTReg<CrdtPeer<String>, String>, String>;
 pub type CidrMap = Map<String, BFTReg<CrdtCidr<String>, String>, String>;
@@ -18,8 +18,7 @@ pub type AssocMap = Map<(String, String), BFTReg<CrdtAssociation<String>, String
 pub struct DataStore {
     network_state: NetworkState,
     instance_state: InstanceState,
-    // Add Node State
-    // Add Instance State
+    node_state: NodeState
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -76,12 +75,21 @@ pub enum InstanceRequest {
     Delete
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum NodeRequest {
+    Op(NodeOp),
+    Create(Node),
+    Update(Node),
+    Delete
+}
+
 impl DataStore {
     pub fn new(node_id: String, pk: String) -> Self {
         let network_state = NetworkState::new(node_id.clone(), pk.clone());
         let instance_state = InstanceState::new(node_id.clone(), pk.clone());
+        let node_state = NodeState::new(node_id.clone(), pk.clone());
 
-        Self { network_state, instance_state }
+        Self { network_state, instance_state, node_state }
     }
 
     pub fn new_from_state(
@@ -243,6 +251,12 @@ impl DataStore {
             .route("/instance/:id/get", get(get_instance))
             .route("/instance/:id/delete", post(delete_instance))
             .route("/instance/list", get(list_instances))
+            .route("/node/create", post(create_node))
+            .route("/node/update", post(update_node))
+            .route("/node/:id/get", get(get_node))
+            .route("/node/:id/delete", post(delete_node))
+            .route("/node/list", get(list_nodes))
+
             .with_state(state)
     }
 
@@ -1589,6 +1603,190 @@ async fn list_instances(
 ) -> Json<Response<Instance>> {
     let datastore = state.lock().await;
     let list: Vec<Instance> = datastore.instance_state.map().iter().filter_map(|ctx| {
+        let (_, value) = ctx.val;
+        match value.val() {
+            Some(node) => {
+                return Some(node.value())
+            }
+            None => return None
+        }
+    }).collect(); 
+
+    return Json(Response::Success(Success::List(list)))
+}
+
+async fn create_node(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Json(request): Json<NodeRequest>
+) -> Json<Response<Node>> {
+    let mut datastore = state.lock().await;
+    match request {
+        NodeRequest::Op(map_op) => {
+            log::info!("Create Node request is an Op from another peer");
+            match &map_op {
+                crdts::map::Op::Up { ref key, ref op, .. } => {
+                    datastore.node_state.node_op(map_op.clone());
+                    if let (true, v) = datastore.node_state.node_op_success(key.clone(), op.clone()) {
+                        log::info!("Node Op succesffully applied...");
+                        return Json(Response::Success(Success::Some(v.into())))
+                    } else {
+                        log::info!("Node Op rejected...");
+                        return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
+                    }
+                }
+                crdts::map::Op::Rm { .. } => {
+                    return Json(Response::Failure { reason: Some("Invalid Op type for Create Node".into()) });
+                }
+            }
+        }
+        NodeRequest::Create(contents) => {
+            log::info!("Create Node request was a direct request...");
+            log::info!("Building Map Op...");
+            let map_op = datastore.node_state.update_node_local(contents);
+            log::info!("Map op created... Applying...");
+            datastore.node_state.node_op(map_op.clone());
+            match &map_op {
+                crdts::map::Op::Rm { .. } => {
+                    return Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Create request".to_string()) });
+                }
+                crdts::map::Op::Up { ref key, ref op, .. } => {
+                    if let (true, v) = datastore.node_state.node_op_success(key.clone(), op.clone()) {
+                        log::info!("Map Op was successful, broadcasting...");
+                        let request = NodeRequest::Op(map_op);
+                        match datastore.broadcast::<Response<Node>>(request, "/node/create").await {
+                            Ok(()) => return Json(Response::Success(Success::Some(v.into()))),
+                            Err(e) => eprintln!("Error broadcasting Node Create Request: {e}")
+                        }
+                        return Json(Response::Success(Success::Some(v.into())))
+                    } else {
+                        return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
+                    }
+                }
+            }
+        }
+        _ => {
+            return Json(Response::Failure { reason: Some("Invalid request for create node".into()) });
+        }
+    }
+}
+
+async fn update_node(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Json(request): Json<NodeRequest>
+) -> Json<Response<Node>> {
+    let mut datastore = state.lock().await;
+    match request {
+        NodeRequest::Op(map_op) => {
+            log::info!("Update Node request is an Op from another peer");
+            match &map_op {
+                crdts::map::Op::Up { ref key, ref op, .. } => {
+                    datastore.node_state.node_op(map_op.clone());
+                    if let (true, v) = datastore.node_state.node_op_success(key.clone(), op.clone()) {
+                        log::info!("Node Op succesffully applied...");
+                        return Json(Response::Success(Success::Some(v.into())))
+                    } else {
+                        log::info!("Node Op rejected...");
+                        return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
+                    }
+                }
+                crdts::map::Op::Rm { .. } => {
+                    return Json(Response::Failure { reason: Some("Invalid Op type for Create Node".into()) });
+                }
+            }
+        }
+        NodeRequest::Update(contents) => {
+            log::info!("Update Node request was a direct request...");
+            log::info!("Building Map Op...");
+            let map_op = datastore.node_state.update_node_local(contents);
+            log::info!("Map op created... Applying...");
+            datastore.node_state.node_op(map_op.clone());
+            match &map_op {
+                crdts::map::Op::Rm { .. } => {
+                    return Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Create request".to_string()) });
+                }
+                crdts::map::Op::Up { ref key, ref op, .. } => {
+                    if let (true, v) = datastore.node_state.node_op_success(key.clone(), op.clone()) {
+                        log::info!("Map Op was successful, broadcasting...");
+                        let request = NodeRequest::Op(map_op);
+                        match datastore.broadcast::<Response<Node>>(request, "/node/update").await {
+                            Ok(()) => return Json(Response::Success(Success::Some(v.into()))),
+                            Err(e) => eprintln!("Error broadcasting Node Update Request: {e}")
+                        }
+                        return Json(Response::Success(Success::Some(v.into())))
+                    } else {
+                        return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
+                    }
+                }
+            }
+        }
+        _ => {
+            return Json(Response::Failure { reason: Some("Invalid request for Update Node".into()) });
+        }
+    }
+}
+
+async fn delete_node(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path(node_id): Path<String>,
+    Json(request): Json<NodeRequest>
+) -> Json<Response<Node>> {
+    let mut datastore = state.lock().await;
+    match request {
+        NodeRequest::Op(map_op) => {
+            log::info!("Delete Node request is an Op from another peer");
+            match &map_op {
+                crdts::map::Op::Up { .. } => {
+                    return Json(Response::Failure { reason: Some("Invalid Op type for delete dns".into()) });
+                }
+                crdts::map::Op::Rm { .. } => {
+                    datastore.node_state.node_op(map_op);
+                    return Json(Response::Success(Success::None))
+                }
+            }
+        }
+        NodeRequest::Delete => {
+            log::info!("Delete Node request was a direct request...");
+            log::info!("Building Map Op...");
+            let map_op = datastore.node_state.remove_node_local(node_id.clone());
+            log::info!("Map op created... Applying...");
+            datastore.node_state.node_op(map_op.clone());
+            match &map_op {
+                crdts::map::Op::Rm { .. } => {
+                    let request = NodeRequest::Op(map_op);
+                    match datastore.broadcast::<Response<Node>>(request, &format!("/node/{}/delete", node_id.clone())).await {
+                        Ok(()) => return Json(Response::Success(Success::None)),
+                        Err(e) => eprintln!("Error broadcasting Delete Node request: {e}")
+                    }
+                    return Json(Response::Success(Success::None));
+                }
+                crdts::map::Op::Up { .. } => {
+                    return Json(Response::Failure { reason: Some("Map generated Add context instead of Rm context on Delete request".to_string()) });
+                }
+            }
+        }
+        _ => {
+            return Json(Response::Failure { reason: Some("Invalid request for delete Node".into()) });
+        }
+    }
+}
+
+async fn get_node(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path(node_id): Path<String>,
+) -> Json<Response<Node>> {
+    let datastore = state.lock().await;
+    if let Some(node) = datastore.node_state.get_node(node_id.clone()) {
+        return Json(Response::Success(Success::Some(node)))
+    }
+
+    return Json(Response::Failure { reason: Some(format!("Unable to find instance with id: {node_id}"))})
+}
+
+async fn list_nodes(
+    State(state): State<Arc<Mutex<DataStore>>>,
+) -> Json<Response<Node>> {
+    let datastore = state.lock().await;
+    let list: Vec<Node> = datastore.node_state.map().iter().filter_map(|ctx| {
         let (_, value) = ctx.val;
         match value.val() {
             Some(node) => {

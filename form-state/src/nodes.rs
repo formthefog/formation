@@ -1,4 +1,4 @@
-use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, Map, CmRDT};
+use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, CmRDT, Map, Update};
 use k256::ecdsa::SigningKey;
 use tiny_keccak::Hasher;
 use crate::Actor;
@@ -254,6 +254,34 @@ impl NodeState {
         match op {
             Op::Up { dot, key, op: _ } => Some((dot.actor, key)),
             Op::Rm { .. } => None,
+        }
+    }
+
+    pub fn node_op_success(&self, key: String, update: Update<Node, String>) -> (bool, Node) {
+        if let Some(reg) = self.map.get(&key).val {
+            if let Some(v) = reg.val() {
+                // If the in the updated register equals the value in the Op it
+                // succeeded
+                if v.value() == update.op().value {
+                    return (true, v.value()) 
+                // Otherwise, it could be that it's a concurrent update and was added
+                // to the DAG as a head
+                } else if reg.dag_contains(&update.hash()) && reg.is_head(&update.hash()) {
+                    return (true, v.value()) 
+                // Otherwise, we could be missing a child, and this particular update
+                // is orphaned, if so we should requst the child we are missing from
+                // the actor who shared this update
+                } else if reg.is_orphaned(&update.hash()) {
+                    return (true, v.value())
+                // Otherwise it was a no-op for some reason
+                } else {
+                    return (false, v.value()) 
+                }
+            } else {
+                return (false, update.op().value) 
+            }
+        } else {
+            return (false, update.op().value);
         }
     }
 
