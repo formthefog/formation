@@ -8,7 +8,7 @@ use tokio::{net::TcpListener, sync::Mutex};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use crdts::{BFTReg, CvRDT, Map, Update};
 use trust_dns_proto::rr::RecordType;
-use crate::network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp};
+use crate::{instances::InstanceState, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}};
 
 pub type PeerMap = Map<String, BFTReg<CrdtPeer<String>, String>, String>;
 pub type CidrMap = Map<String, BFTReg<CrdtCidr<String>, String>, String>;
@@ -17,6 +17,7 @@ pub type AssocMap = Map<(String, String), BFTReg<CrdtAssociation<String>, String
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DataStore {
     network_state: NetworkState,
+    instance_state: InstanceState,
     // Add Node State
     // Add Instance State
 }
@@ -69,9 +70,10 @@ pub enum DnsRequest {
 
 impl DataStore {
     pub fn new(node_id: String, pk: String) -> Self {
-        let network_state = NetworkState::new(node_id, pk);
+        let network_state = NetworkState::new(node_id.clone(), pk.clone());
+        let instance_state = InstanceState::new(node_id.clone(), pk.clone());
 
-        Self { network_state }
+        Self { network_state, instance_state }
     }
 
     pub fn new_from_state(

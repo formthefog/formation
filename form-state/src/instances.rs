@@ -1,7 +1,13 @@
-use std::collections::{hash_map::{Iter, IterMut}, HashMap};
+use std::collections::{btree_map::{Iter, IterMut}, BTreeMap};
+use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, CmRDT, Map, Update};
+use k256::ecdsa::SigningKey;
 use serde::{Serialize, Deserialize};
+use tiny_keccak::Hasher;
+use crate::Actor;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+pub type InstanceOp = Op<String, BFTReg<Instance, Actor>, Actor>; 
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Instance {
     instance_id: String,
     instance_owner: String,
@@ -15,6 +21,12 @@ pub struct Instance {
     formfile: String, 
     snapshots: Option<Snapshots>,
     metadata: InstanceMetadata,
+}
+
+impl Sha3Hash for Instance {
+    fn hash(&self, hasher: &mut tiny_keccak::Sha3) {
+        hasher.update(&bincode::serialize(self).unwrap());
+    }
 }
 
 impl Instance {
@@ -94,7 +106,7 @@ impl Instance {
         self.resources.gpu_usage()
     }
 
-    pub fn cluster_members(&self) -> &HashMap<String, ClusterMember> {
+    pub fn cluster_members(&self) -> &BTreeMap<String, ClusterMember> {
         self.cluster().members()
     }
 
@@ -198,7 +210,7 @@ impl Instance {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstanceResources {
     vcpus: u8,
     memory_mb: u32,
@@ -252,7 +264,7 @@ impl InstanceResources {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstanceGpu {
     count: u8,
     model: String,
@@ -279,17 +291,17 @@ impl InstanceGpu {
 
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstanceCluster {
-    members: HashMap<String, ClusterMember>
+    members: BTreeMap<String, ClusterMember>
 }
 
 impl InstanceCluster {
-    pub fn members(&self) -> &HashMap<String, ClusterMember> {
+    pub fn members(&self) -> &BTreeMap<String, ClusterMember> {
         &self.members
     }
 
-    pub fn members_mut(&mut self) -> &mut HashMap<String, ClusterMember> {
+    pub fn members_mut(&mut self) -> &mut BTreeMap<String, ClusterMember> {
         &mut self.members
     }
 
@@ -373,7 +385,7 @@ impl ClusterMember {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Snapshots {
     snapshot_id: String,
     timestamp: i64,
@@ -399,7 +411,7 @@ impl Snapshots {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstanceMetadata {
     tags: Vec<String>,
     description: String,
@@ -458,7 +470,7 @@ impl InstanceMetadata {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstanceAnnotations {
     deployed_by: String,
     network_id: u16,
@@ -479,7 +491,7 @@ impl InstanceAnnotations {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstanceSecurity {
     encryption: InstanceEncryption,
     tee: bool,
@@ -508,7 +520,7 @@ impl InstanceSecurity {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstanceMonitoring {
     logging_enabled: bool,
     metrics_endpoint: String,
@@ -524,7 +536,7 @@ impl InstanceMonitoring {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstanceEncryption {
     is_encrypted: bool,
     scheme: Option<String>,
@@ -537,5 +549,96 @@ impl InstanceEncryption {
 
     pub fn scheme(&self) -> Option<String> {
         self.scheme.clone()
+    }
+}
+
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InstanceState {
+    node_id: String,
+    pk: String,
+    map: Map<String, BFTReg<Instance, Actor>, Actor> 
+}
+
+
+impl InstanceState {
+
+    pub fn new(node_id: String, pk: String) -> Self {
+        Self {
+            node_id,
+            pk,
+            map: Map::new()
+        }
+    }
+
+    pub fn update_instance_local(&mut self, instance: Instance) -> InstanceOp {
+        log::info!("Acquiring add ctx...");
+        let add_ctx = self.map.read_ctx().derive_add_ctx(self.node_id.clone());
+        log::info!("Decoding our private key...");
+        let signing_key = SigningKey::from_slice(
+            &hex::decode(self.pk.clone())
+                .expect("PANIC: Invalid SigningKey Cannot Decode from Hex"))
+                .expect("PANIC: Invalid SigningKey cannot recover ffrom Bytes");
+        log::info!("Creating op...");
+        let op = self.map.update(instance.instance_id().to_string(), add_ctx, |reg, _ctx| {
+            let op = reg.update(instance.into(), self.node_id.clone(), signing_key).expect("PANIC: Unable to sign updates");
+            op
+        });
+        log::info!("Op created, returning...");
+        op
+    }
+
+    pub fn remove_instance_local(&mut self, id: String) -> InstanceOp {
+        log::info!("Acquiring remove context...");
+        let rm_ctx = self.map.read_ctx().derive_rm_ctx();
+        log::info!("Building Rm Op...");
+        self.map.rm(id, rm_ctx)
+    }
+
+    pub fn instance_op(&mut self, op: InstanceOp) -> Option<(String, String)> {
+        log::info!("Applying peer op");
+        self.map.apply(op.clone());
+        match op {
+            Op::Up { dot, key, op: _ } => Some((dot.actor, key)),
+            Op::Rm { .. } => None
+        }
+    }
+
+    pub fn instance_op_success(&self, key: String, update: Update<Instance, String>) -> (bool, Instance) {
+        if let Some(reg) = self.map.get(&key).val {
+            if let Some(v) = reg.val() {
+                // If the in the updated register equals the value in the Op it
+                // succeeded
+                if v.value() == update.op().value {
+                    return (true, v.value()) 
+                // Otherwise, it could be that it's a concurrent update and was added
+                // to the DAG as a head
+                } else if reg.dag_contains(&update.hash()) && reg.is_head(&update.hash()) {
+                    return (true, v.value()) 
+                // Otherwise, we could be missing a child, and this particular update
+                // is orphaned, if so we should requst the child we are missing from
+                // the actor who shared this update
+                } else if reg.is_orphaned(&update.hash()) {
+                    return (true, v.value())
+                // Otherwise it was a no-op for some reason
+                } else {
+                    return (false, v.value()) 
+                }
+            } else {
+                return (false, update.op().value) 
+            }
+        } else {
+            return (false, update.op().value);
+        }
+    }
+
+    pub fn get_instance(&self, key: String) -> Option<Instance> {
+        if let Some(reg) = self.map.get(&key).val {
+            if let Some(v) = reg.val() {
+                return Some(v.value())
+            }
+        }
+
+        return None
     }
 }
