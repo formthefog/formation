@@ -1,6 +1,6 @@
 use std::{collections::{HashMap, HashSet}, sync::Arc, time::{SystemTime, UNIX_EPOCH}};
 use axum::{extract::{State, Path}, routing::{get, post}, Json, Router};
-use form_dns::{api::{DomainRequest, DomainResponse}, store::FormDnsRecord};
+use form_dns::{api::{DomainRequest, DomainResponse}, store::{FormDnsRecord, SharedStore}};
 use reqwest::Client;
 use serde_json::Value;
 use shared::{Association, AssociationContents, Cidr, CidrContents, Peer, PeerContents};
@@ -8,7 +8,7 @@ use tokio::{net::TcpListener, sync::Mutex};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use crdts::{BFTReg, CvRDT, Map, Update};
 use trust_dns_proto::rr::RecordType;
-use crate::{instances::InstanceState, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}};
+use crate::{instances::{Instance, InstanceOp, InstanceState}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}};
 
 pub type PeerMap = Map<String, BFTReg<CrdtPeer<String>, String>, String>;
 pub type CidrMap = Map<String, BFTReg<CrdtCidr<String>, String>, String>;
@@ -65,6 +65,14 @@ pub enum DnsRequest {
     Op(DnsOp),
     Create(FormDnsRecord),
     Update(FormDnsRecord),
+    Delete
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum InstanceRequest {
+    Op(InstanceOp),
+    Create(Instance),
+    Update(Instance),
     Delete
 }
 
@@ -230,6 +238,11 @@ impl DataStore {
             .route("/dns/:domain/delete", post(delete_dns))
             .route("/dns/:domain/get", post(get_dns_record))
             .route("/dns/list", post(list_dns_records))
+            .route("/instance/create", post(create_instance))
+            .route("/instance/update", post(update_instance))
+            .route("/instance/:id/get", get(get_instance))
+            .route("/instance/:id/delete", post(delete_instance))
+            .route("/instance/list", get(list_instances))
             .with_state(state)
     }
 
@@ -1404,3 +1417,38 @@ async fn handle_update_dns_op(network_state: &NetworkState, key: &str, op: Updat
         return Response::Failure { reason: Some("update was rejected".to_string()) }
     }
 }
+
+async fn create_instance(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Json(request): Json<InstanceRequest>
+) -> Json<Response<Instance>> {
+    todo!()
+}
+
+async fn update_instance(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Json(request): Json<InstanceRequest>
+) -> Json<Response<Instance>> {
+    todo!()
+}
+
+async fn get_instance(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path(id): Path<String>
+) -> Json<Response<Instance>> {
+    todo!()
+}
+
+async fn delete_instance(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path(id): Path<String>
+) -> Json<Response<Instance>> {
+    todo!()
+}
+
+async fn list_instances(
+    State(state): State<Arc<Mutex<DataStore>>>,
+) -> Json<Response<Instance>> {
+    todo!()
+}
+
