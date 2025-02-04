@@ -1,5 +1,5 @@
 use std::collections::{btree_map::{Iter, IterMut}, BTreeMap};
-use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, CmRDT, Map, Update};
+use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, CmRDT, Map, bft_reg::Update};
 use k256::ecdsa::SigningKey;
 use serde::{Serialize, Deserialize};
 use tiny_keccak::Hasher;

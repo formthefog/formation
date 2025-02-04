@@ -1,4 +1,4 @@
-use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, CmRDT, Map, Update};
+use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, CmRDT, Map, bft_reg::Update};
 use k256::ecdsa::SigningKey;
 use tiny_keccak::Hasher;
 use crate::Actor;

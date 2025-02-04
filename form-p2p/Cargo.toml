@@ -22,7 +22,9 @@ uuid = { version = "1.8.0", features = [ "v4", "fast-rng", "macro-diagnostics", 
 hex = "0.4.3"
 base64 = "0.22.1"
 sha3 = "0.10.8"
-crdts = "7"
+url = "2"
+crdts = { git = "https://github.com/cryptonomikhan/rust-crdt.git" } 
+bincode = "1"
 
 [build-dependencies]
 tonic-build = "0.11.0"

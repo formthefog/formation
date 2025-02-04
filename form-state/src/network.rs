@@ -1,5 +1,5 @@
 use std::{net::{IpAddr, SocketAddr}, time::{Duration, SystemTime}};
-use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, CmRDT, Map, Update};
+use crdts::{bft_reg::Update, map::Op, merkle_reg::Sha3Hash, BFTReg, CmRDT, Map};
 use ipnet::IpNet;
 use k256::ecdsa::SigningKey;
 use shared::{Association, AssociationContents, Cidr, CidrContents, Endpoint, Peer, PeerContents};
