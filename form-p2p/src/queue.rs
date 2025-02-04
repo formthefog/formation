@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, fmt::Debug, net::IpAddr};
+use std::{collections::BTreeMap, fmt::Debug, net::IpAddr};
 use alloy::signers::k256::ecdsa::SigningKey;
 use crdts::{bft_queue::Message, bft_topic_queue::TopicQueue, map::Op, merkle_reg::Sha3Hash, BFTQueue, CmRDT, VClock};
 use form_state::datastore::{Response, Success};
@@ -12,7 +12,10 @@ pub type QueueOp<T> = Op<[u8; 32], BFTQueue<T>, String>;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum QueueRequest {
     Op(QueueOp<Vec<u8>>),
-    Write(Message<Vec<u8>>),
+    Write {
+        content: Vec<u8>,
+        topic: [u8; 32],
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -20,7 +23,9 @@ pub enum QueueResponse {
     OpSuccess,
     Op(QueueOp<Vec<u8>>),
     Some(Vec<u8>),
-    List(Vec<Vec<u8>>)
+    List(Vec<Vec<u8>>),
+    Failure { reason: Option<String> },
+    Full(BTreeMap<[u8; 32], Vec<Vec<u8>>>)
 }
 
 
@@ -41,6 +46,10 @@ impl FormMQ<Vec<u8>> {
             state_uri,
             client: Client::new()
         }
+    }
+
+    pub fn queue(&self) -> &TopicQueue<Vec<u8>> {
+        &self.queue
     }
 
     pub fn read(&self, topic: [u8; 32]) -> Option<Vec<Message<Vec<u8>>>> {
@@ -74,19 +83,17 @@ impl FormMQ<Vec<u8>> {
         &mut self,
         topic: [u8; 32],
         content: Vec<u8>,
-        deps: BTreeSet<[u8; 32]>
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<QueueOp<Vec<u8>>, Box<dyn std::error::Error>> {
         let signing_key = SigningKey::from_slice(&hex::decode(self.pk.clone())?)?;
         let op = self.queue.enqueue(
             topic,
             content,
-            deps,
             self.node_id.clone(),
             signing_key
         )?;
 
         self.apply(op.clone());
-        Ok(())
+        Ok(op)
     }
 
     pub fn apply(

@@ -2481,7 +2481,7 @@ dependencies = [
 [[package]]
 name = "crdts"
 version = "7.3.2"
-source = "git+https://github.com/cryptonomikhan/rust-crdt.git?rev=8ab95c5#8ab95c570847d4d8a93f1da28d7cd83bec1f188f"
+source = "git+https://github.com/cryptonomikhan/rust-crdt.git?rev=4088bd3#4088bd358075255b5731d261d74eb5e7c0485dc8"
 dependencies = [
  "alloy-primitives 0.8.19",
  "hex",
@@ -3381,7 +3381,7 @@ dependencies = [
  "bincode",
  "chrono",
  "conductor",
- "crdts 7.3.2 (git+https://github.com/cryptonomikhan/rust-crdt.git?rev=8ab95c5)",
+ "crdts 7.3.2 (git+https://github.com/cryptonomikhan/rust-crdt.git?rev=4088bd3)",
  "form-state",
  "form-traits",
  "form-types",
