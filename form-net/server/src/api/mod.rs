@@ -1,6 +1,8 @@
+use std::fmt::Display;
+
 use shared::Peer;
 
-use crate::Session;
+use crate::{DatastoreContext, Session};
 
 pub mod admin;
 pub mod user;
@@ -10,10 +12,11 @@ pub mod user;
 /// already has an endpoint specified (by calling the override-endpoint) API,
 /// the relatively recent wireguard endpoint will be added to the list of NAT
 /// candidates, so other peers have a better chance of connecting.
-pub fn inject_endpoints(session: &Session, peers: &mut Vec<Peer>) {
+pub fn inject_endpoints<C: DatastoreContext, T: Display + Clone + PartialEq, D>(session: &Session<C, T, D>, peers: &mut Vec<Peer<T>>) {
     for peer in peers {
-        let endpoints = session.context.endpoints.read();
-        if let Some(wg_endpoint) = endpoints.get(&peer.public_key) {
+        let endpoints = session.context.endpoints().clone();
+        let reader = endpoints.read();
+        if let Some(wg_endpoint) = reader.get(&peer.public_key) {
             if peer.contents.endpoint.is_none() {
                 peer.contents.endpoint = Some(wg_endpoint.to_owned().into());
             } else {

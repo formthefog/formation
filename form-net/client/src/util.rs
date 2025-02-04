@@ -6,7 +6,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use shared::{
     interface_config::ServerInfo, Interface, PeerChange, PeerDiff, INNERNET_PUBKEY_HEADER,
 };
-use std::{ffi::OsStr, io, path::Path, time::Duration};
+use std::{ffi::OsStr, fmt::Display, io, path::Path, time::Duration};
 use ureq::{Agent, AgentBuilder};
 
 static LOGGER: Logger = Logger;
@@ -156,7 +156,7 @@ impl ChangeAction {
     }
 }
 
-pub fn print_peer_diff(store: &DataStore, diff: &PeerDiff) {
+pub fn print_peer_diff<T: Display + Clone + PartialEq + Serialize + DeserializeOwned>(store: &DataStore<T>, diff: &PeerDiff<T>) {
     let public_key = diff.public_key().to_base64();
 
     let change_action = match (diff.old, diff.new) {

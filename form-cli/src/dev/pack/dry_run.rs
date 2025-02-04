@@ -1,10 +1,9 @@
 use clap::Args;
-use vmm_service::util::default_formfile;
 use std::path::PathBuf;
 use reqwest::Client;
 use form_pack::image_builder::FormfileResponse;
 use form_pack::formfile::{Formfile, FormfileParser};
-use crate::default_context;
+use crate::{default_context, default_formfile};
 
 #[derive(Debug, Clone, Args)]
 pub struct DryRunCommand {

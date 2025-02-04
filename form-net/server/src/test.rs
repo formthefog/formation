@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 use crate::{
-    db::{DatabaseCidr, DatabasePeer},
+    db::{DatabaseCidr, DatabasePeer, Sqlite},
     initialize::{init_wizard, InitializeOpts},
-    Context, Db, Endpoints, ServerConfig,
+    SqlContext, Db, Endpoints, ServerConfig, sqlite_service::hyper_service 
 };
 use anyhow::anyhow;
 use hyper::{header::HeaderValue, http, Body, Request, Response};
@@ -102,6 +102,7 @@ impl Server {
             external_endpoint: Some("155.155.155.155:54321".parse().unwrap()),
             listen_port: Some(54321),
             auto_external_endpoint: false,
+            address: "test-address-1".to_string()
         };
         init_wizard(&conf, opts).map_err(|_| anyhow!("init_wizard failed"))?;
 
@@ -112,7 +113,7 @@ impl Server {
         assert_eq!(ADMIN_CIDR_ID, create_cidr(&db, "admin", ADMIN_CIDR)?.id);
         assert_eq!(
             ADMIN_PEER_ID,
-            DatabasePeer::create(&db, admin_peer_contents("admin", ADMIN_PEER_IP)?)?.id
+            DatabasePeer::<i64, Sqlite>::create(&db, admin_peer_contents("admin", ADMIN_PEER_IP)?)?.id
         );
         assert_eq!(
             DEVELOPER_CIDR_ID,
@@ -123,23 +124,23 @@ impl Server {
         let developer_1_public_key = developer_1.public_key.clone();
         assert_eq!(
             DEVELOPER1_PEER_ID,
-            DatabasePeer::create(&db, developer_1,)?.id
+            DatabasePeer::<i64, Sqlite>::create(&db, developer_1,)?.id
         );
 
         let developer_2 = developer_peer_contents("developer2", DEVELOPER2_PEER_IP)?;
         let developer_2_public_key = developer_2.public_key.clone();
         assert_eq!(
             DEVELOPER2_PEER_ID,
-            DatabasePeer::create(&db, developer_2)?.id
+            DatabasePeer::<i64, Sqlite>::create(&db, developer_2)?.id
         );
         assert_eq!(USER_CIDR_ID, create_cidr(&db, "user", USER_CIDR)?.id);
         assert_eq!(
             USER1_PEER_ID,
-            DatabasePeer::create(&db, user_peer_contents("user1", USER1_PEER_IP)?)?.id
+            DatabasePeer::<i64, Sqlite>::create(&db, user_peer_contents("user1", USER1_PEER_IP)?)?.id
         );
         assert_eq!(
             USER2_PEER_ID,
-            DatabasePeer::create(&db, user_peer_contents("user2", USER2_PEER_IP)?)?.id
+            DatabasePeer::<i64, Sqlite>::create(&db, user_peer_contents("user2", USER2_PEER_IP)?)?.id
         );
 
         let db = Arc::new(Mutex::new(db));
@@ -170,8 +171,8 @@ impl Server {
         self.db.clone()
     }
 
-    pub fn context(&self) -> Context {
-        Context {
+    pub fn context(&self) -> SqlContext {
+        SqlContext {
             db: self.db.clone(),
             interface: self.interface,
             endpoints: self.endpoints.clone(),
@@ -189,7 +190,7 @@ impl Server {
 
     pub async fn raw_request(&self, ip_str: &str, req: Request<Body>) -> Response<Body> {
         let port = 54321u16;
-        crate::hyper_service(
+        hyper_service(
             req,
             self.context(),
             SocketAddr::new(ip_str.parse().unwrap(), port),
@@ -236,8 +237,8 @@ impl Server {
     }
 }
 
-pub fn create_cidr(db: &Connection, name: &str, cidr_str: &str) -> Result<Cidr, Error> {
-    let cidr = DatabaseCidr::create(
+pub fn create_cidr(db: &Connection, name: &str, cidr_str: &str) -> Result<Cidr<i64>, Error> {
+    let cidr = DatabaseCidr::<i64, Sqlite>::create(
         db,
         CidrContents {
             name: name.to_string(),
@@ -258,7 +259,7 @@ pub fn peer_contents(
     ip_str: &str,
     cidr_id: i64,
     is_admin: bool,
-) -> Result<PeerContents, Error> {
+) -> Result<PeerContents<i64>, Error> {
     let public_key = KeyPair::generate().public;
 
     Ok(PeerContents {
@@ -276,18 +277,18 @@ pub fn peer_contents(
     })
 }
 
-pub fn admin_peer_contents(name: &str, ip_str: &str) -> Result<PeerContents, Error> {
+pub fn admin_peer_contents(name: &str, ip_str: &str) -> Result<PeerContents<i64>, Error> {
     peer_contents(name, ip_str, ADMIN_CIDR_ID, true)
 }
 
-pub fn infra_peer_contents(name: &str, ip_str: &str) -> Result<PeerContents, Error> {
+pub fn infra_peer_contents(name: &str, ip_str: &str) -> Result<PeerContents<i64>, Error> {
     peer_contents(name, ip_str, INFRA_CIDR_ID, false)
 }
 
-pub fn developer_peer_contents(name: &str, ip_str: &str) -> Result<PeerContents, Error> {
+pub fn developer_peer_contents(name: &str, ip_str: &str) -> Result<PeerContents<i64>, Error> {
     peer_contents(name, ip_str, DEVELOPER_CIDR_ID, false)
 }
 
-pub fn user_peer_contents(name: &str, ip_str: &str) -> Result<PeerContents, Error> {
+pub fn user_peer_contents(name: &str, ip_str: &str) -> Result<PeerContents<i64>, Error> {
     peer_contents(name, ip_str, USER_CIDR_ID, false)
 }

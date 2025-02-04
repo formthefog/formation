@@ -5,7 +5,8 @@ edition = "2021"
 
 [dependencies]
 conductor = { git = "https://github.com/versatus/conductor" }
-alloy = { version = "0.1.3", features = [ "full", "signer-mnemonic", "signer-mnemonic-all-languages" ] }
+alloy-core = { version = "0.8.19", features = ["rand", "serde", "k256"]}
+k256 = { version = "0.13", features = ["ecdsa"] }
 tokio = { version = "1.38.0", features = ["full"] }
 tokio-serde = { version = "0.9.0", features = ["cbor", "messagepack", "bincode", "json"] }
 async-trait = "0.1.80"

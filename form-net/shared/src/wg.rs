@@ -1,9 +1,7 @@
 use crate::{Error, IoErrorContext, NetworkOpts, Peer, PeerDiff};
 use ipnet::IpNet;
 use std::{
-    io,
-    net::{IpAddr, SocketAddr},
-    time::Duration,
+    fmt::Display, io, net::{IpAddr, SocketAddr}, time::Duration
 };
 use wireguard_control::{
     Backend, Device, DeviceUpdate, InterfaceName, Key, PeerConfigBuilder, PeerInfo,
@@ -170,14 +168,14 @@ pub use super::netlink::add_route;
 
 pub trait DeviceExt {
     /// Diff the output of a wgctrl device with a list of server-reported peers.
-    fn diff<'a>(&'a self, peers: &'a [Peer]) -> Vec<PeerDiff<'a>>;
+    fn diff<'a, T: Display + Clone + PartialEq>(&'a self, peers: &'a [Peer<T>]) -> Vec<PeerDiff<'a, T>>;
 
     // /// Get a peer by their public key, a helper function.
     fn get_peer(&self, public_key: &str) -> Option<&PeerInfo>;
 }
 
 impl DeviceExt for Device {
-    fn diff<'a>(&'a self, peers: &'a [Peer]) -> Vec<PeerDiff<'a>> {
+    fn diff<'a, T: Display + Clone + PartialEq>(&'a self, peers: &'a [Peer<T>]) -> Vec<PeerDiff<'a, T>> {
         let interface_public_key = self
             .public_key
             .as_ref()

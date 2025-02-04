@@ -157,6 +157,7 @@ impl<'a> TryFrom<&'a [WgDeviceAttrs]> for Device {
             fwmark,
             peers,
             linked_name: None,
+            #[cfg(target_os = "linux")]
             backend: Backend::Kernel,
             __cant_construct_me: (),
         })

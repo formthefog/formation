@@ -39,7 +39,10 @@ members = [
   "form-p2p",
   "form-vmm/form-vmm", 
   "form-cli", 
-  "form-pack"
+  "form-pack", 
+  "form-config", 
+  "form-dns", 
+  "form-rplb", 
 ]
 
 [workspace.dependencies]

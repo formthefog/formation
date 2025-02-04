@@ -1,5 +1,6 @@
 use clap::Parser;
 use vmm_service::{CliArgs, CliCommand, VmManager}; 
+use form_config::OperatorConfig;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -9,25 +10,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Parse command line args
     let args = CliArgs::parse();
-
+    let config = OperatorConfig::from_file(args.config, args.encrypted, args.password.as_deref()).ok();
     match args.command {
-        CliCommand::Run { sub_addr, pub_addr } => {
-            /*
-            let config = if wizard {
-                info!("Running configuration wizard");
-                run_config_wizard()?
-            } else if let Some(config_path) = config {
-                info!("Loading configuration from {}", config_path.display());
-                ServiceConfig::from_file(&config_path.to_string_lossy())?
+        CliCommand::Run { signing_key, sub_addr, pub_addr } => {
+            let signing_key = if signing_key.is_none() {
+                let config = config.unwrap();
+                config.secret_key.unwrap()
             } else {
-                info!("Using default configuration");
-                ServiceConfig::default()
+                signing_key.unwrap()
             };
-            */
-
             let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1024);
             let handle = tokio::task::spawn(async move {
                 if let Err(e) = run_vm_manager(
+                    signing_key,
                     shutdown_rx,
                     sub_addr.as_deref(), 
                     pub_addr
@@ -47,6 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn run_vm_manager(
+    signing_key: String,
     shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     subscriber_uri: Option<&str>,
     publisher_uri: Option<String>
@@ -58,6 +54,7 @@ async fn run_vm_manager(
         event_sender,
         api_addr,
         formnet_endpoint,
+        signing_key,
         subscriber_uri,
         publisher_uri,
     ).await?;

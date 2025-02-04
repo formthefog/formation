@@ -137,15 +137,6 @@ impl VirtCustomize {
     }
 }
 
-macro_rules! try_failure {
-    ($expr:expr) => {
-        match $expr {
-            Ok(value) => value,
-            Err(_) => return Json(FormfileResponse::Failure),
-        }
-    };
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum FormfileResponse {
     Success,

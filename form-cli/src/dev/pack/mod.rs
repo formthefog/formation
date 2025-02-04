@@ -11,6 +11,10 @@ pub use validate::*;
 pub use ship::*;
 pub use dry_run::*;
 
+pub fn default_formfile(context: PathBuf) -> PathBuf {
+    context.join("Formfile")
+}
+
 pub fn default_context() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| ".".into())
 }
