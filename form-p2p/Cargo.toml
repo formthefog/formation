@@ -3,6 +3,10 @@ name = "form-p2p"
 version = "0.1.0"
 edition = "2021"
 
+[[example]]
+name = "two_local_queues"
+path = "examples/two-local-queues.rs"
+
 [dependencies]
 serde = { version = "1.0.199", features = ["derive"] }
 serde_json = "1.0.116"
@@ -30,6 +34,7 @@ bincode = "1"
 tiny-keccak = { version = "2.0.2", features = ["sha3"] }
 reqwest = { version = "0.12", features = ["json"] }
 axum = { version = "0.7.9", features = ["multipart"] } 
+rand = "0.8"
 
 [build-dependencies]
 tonic-build = "0.11.0"

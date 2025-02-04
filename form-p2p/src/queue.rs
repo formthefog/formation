@@ -116,20 +116,24 @@ impl FormMQ<Vec<u8>> {
         false
     }
 
+    pub async fn send_op(&self, op: QueueOp<Vec<u8>>, addr: IpAddr, port: u16) -> Result<(), Box<dyn std::error::Error>> {
+        let request = QueueRequest::Op(op.clone()); 
+        match self.client.post(format!("http://{}:{}/queue/write_op", addr, port))
+            .json(&request)
+            .send()
+            .await?
+            .json::<QueueResponse>()
+            .await {
+                Ok(_resp) => Ok(()), 
+                Err(e) => Err(Box::new(e)) 
+        }
+    }
+
     pub async fn broadcast_op(&self, op: QueueOp<Vec<u8>>) -> Result<(), Box<dyn std::error::Error>> {
         let peers = self.get_peers().await?;
         if self.op_success(op.clone()) {
-            let request = QueueRequest::Op(op.clone()); 
             for peer in peers {
-                match self.client.post(format!("http://{}:{}/queue/write_op", peer, QUEUE_PORT))
-                    .json(&request)
-                    .send()
-                    .await?
-                    .json::<QueueResponse>()
-                    .await {
-                        Ok(_resp) => {},
-                        Err(_e) => {}
-                }
+                self.send_op(op.clone(), peer, QUEUE_PORT).await?;
             }
         }
 
