@@ -1,14 +1,17 @@
 use std::{collections::{HashMap, HashSet}, sync::Arc, time::{SystemTime, UNIX_EPOCH}};
 use axum::{extract::{State, Path}, routing::{get, post}, Json, Router};
 use form_dns::{api::{DomainRequest, DomainResponse}, store::FormDnsRecord};
+use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
 use reqwest::Client;
 use serde_json::Value;
 use shared::{Association, AssociationContents, Cidr, CidrContents, Peer, PeerContents};
+use tiny_keccak::{Hasher, Sha3};
 use tokio::{net::TcpListener, sync::Mutex};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use crdts::{BFTReg, CvRDT, Map, bft_reg::Update};
+use crdts::{bft_queue::Message, bft_reg::Update, BFTReg, CvRDT, Map};
 use trust_dns_proto::rr::RecordType;
 use crate::{instances::{Instance, InstanceOp, InstanceState}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}};
+use form_types::state::{Response, Success};
 
 pub type PeerMap = Map<String, BFTReg<CrdtPeer<String>, String>, String>;
 pub type CidrMap = Map<String, BFTReg<CrdtCidr<String>, String>, String>;
@@ -27,20 +30,6 @@ pub enum PeerRequest {
     Join(PeerContents<String>),
     Update(PeerContents<String>),
     Delete(String),
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Success<T> {
-    Some(T),
-    List(Vec<T>),
-    Relationships(Vec<(Cidr<String>, Cidr<String>)>),
-    None,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Response<T> {
-    Success(Success<T>),
-    Failure { reason: Option<String> }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -175,6 +164,65 @@ impl DataStore {
                 None => None,
             }
         }).collect()
+    }
+
+    pub async fn write_to_queue(
+        &self,
+        message: impl Serialize + Clone,
+        sub_topic: u8,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut hasher = Sha3::v256();
+        let mut topic_hash = [0u8; 32];
+        hasher.update(b"state");
+        hasher.finalize(&mut topic_hash);
+        let mut message_code = vec![sub_topic];
+        message_code.extend(serde_json::to_vec(&message)?);
+        let request = QueueRequest::Write { 
+            content: message_code, 
+            topic: topic_hash 
+        };
+
+        match Client::new()
+            .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
+            .json(&request)
+            .send().await?
+            .json::<QueueResponse>().await? {
+                QueueResponse::OpSuccess => return Ok(()),
+                QueueResponse::Failure { reason } => return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("{reason:?}")))),
+                _ => return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Invalid response variant for write_local endpoint")))
+        }
+    }
+
+    pub async fn read_from_queue(
+        &self,
+        last: Option<usize>,
+        n: Option<usize>,
+    ) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error>> {
+        let mut endpoint = format!("http://127.0.0.1:{}/queue/state", QUEUE_PORT);
+        if let Some(idx) = last {
+            let idx = idx + 1;
+            endpoint.push_str(&format!("/{idx}"));
+            if let Some(n) = n {
+                endpoint.push_str(&format!("/{n}/get_n_after"));
+            } else {
+                endpoint.push_str("/get_after");
+            }
+        } else {
+            if let Some(n) = n {
+                endpoint.push_str(&format!("/{n}/get_n"))
+            } else {
+                endpoint.push_str("/get")
+            }
+        }
+
+        match Client::new()
+            .get(endpoint.clone())
+            .send().await?
+            .json::<QueueResponse>().await? {
+                QueueResponse::List(list) => Ok(list),
+                QueueResponse::Failure { reason } => Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("{reason:?}")))),
+                _ => Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Invalid response variant for {endpoint}")))) 
+        }
     }
 
     pub async fn broadcast<R: DeserializeOwned>(

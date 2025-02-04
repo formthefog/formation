@@ -16,7 +16,6 @@ tonic-reflection = "0.11.0"
 conductor = { git = "https://github.com/versatus/conductor" }
 form-types = { path = "../form-types" }
 form-traits = { path = "../form-traits" }
-form-state = { path = "../form-state" }
 shared = { path = "../form-net/shared" }
 chrono = "0.4"
 tokio = { version = "1.38.0", features = ["full"] }
