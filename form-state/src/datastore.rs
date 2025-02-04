@@ -6,7 +6,7 @@ use serde_json::Value;
 use shared::{Association, AssociationContents, Cidr, CidrContents, Peer, PeerContents};
 use tokio::{net::TcpListener, sync::Mutex};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use crdts::{BFTReg, CvRDT, Map, Update};
+use crdts::{BFTReg, CvRDT, Map, bft_reg::Update};
 use trust_dns_proto::rr::RecordType;
 use crate::{instances::{Instance, InstanceOp, InstanceState}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}};
 
@@ -230,6 +230,7 @@ impl DataStore {
             .route("/user/delete", post(delete_user))
             .route("/user/:id/get_all_allowed", get(get_all_allowed))
             .route("/user/list", get(list_users))
+            .route("/user/list_admin", get(list_admin))
             .route("/user/:cidr/list", get(list_by_cidr))
             .route("/user/delete_expired", post(delete_expired))
             .route("/cidr/create", post(create_cidr))
@@ -631,6 +632,15 @@ async fn list_users(
 ) -> Json<Response<Peer<String>>> {
     log::info!("Requesting a list of all users in the network...");
     let peers = state.lock().await.get_all_users().iter().map(|(_, v)| v.clone().into()).collect();
+    log::info!("Retrieved a list of all users in the network... Returning...");
+    Json(Response::Success(Success::List(peers)))
+}
+
+async fn list_admin(
+    State(state): State<Arc<Mutex<DataStore>>>,
+) -> Json<Response<Peer<String>>> {
+    log::info!("Requesting a list of all users in the network...");
+    let peers = state.lock().await.get_all_active_admin().iter().map(|(_, v)| v.clone().into()).collect();
     log::info!("Retrieved a list of all users in the network... Returning...");
     Json(Response::Success(Success::List(peers)))
 }

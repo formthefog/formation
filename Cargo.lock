@@ -2481,7 +2481,22 @@ dependencies = [
 [[package]]
 name = "crdts"
 version = "7.3.2"
-source = "git+https://github.com/cryptonomikhan/rust-crdt.git?rev=6d0a2f3#6d0a2f3c2cb7f389c15d07b21fa86f964b17d615"
+source = "git+https://github.com/cryptonomikhan/rust-crdt.git?rev=4088bd3#4088bd358075255b5731d261d74eb5e7c0485dc8"
+dependencies = [
+ "alloy-primitives 0.8.19",
+ "hex",
+ "k256",
+ "num",
+ "quickcheck",
+ "serde",
+ "serde_json",
+ "tiny-keccak",
+]
+
+[[package]]
+name = "crdts"
+version = "7.3.2"
+source = "git+https://github.com/cryptonomikhan/rust-crdt.git#e133c0ca989e38b0a77fbabdaaa0270af66c3c5b"
 dependencies = [
  "alloy-primitives 0.8.19",
  "hex",
@@ -3361,24 +3376,32 @@ name = "form-p2p"
 version = "0.1.0"
 dependencies = [
  "alloy 0.1.4",
+ "axum 0.7.9",
  "base64 0.22.1",
+ "bincode",
  "chrono",
  "conductor",
- "crdts 7.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crdts 7.3.2 (git+https://github.com/cryptonomikhan/rust-crdt.git?rev=4088bd3)",
+ "form-state",
  "form-traits",
  "form-types",
  "getset",
  "hex",
  "log",
  "prost",
+ "rand",
+ "reqwest 0.12.12",
  "serde",
  "serde_json",
  "sha3",
+ "shared",
+ "tiny-keccak",
  "tokio",
  "tokio-serde",
  "tonic",
  "tonic-build",
  "tonic-reflection",
+ "url 2.5.4",
  "uuid",
 ]
 
@@ -3439,7 +3462,7 @@ dependencies = [
  "axum 0.7.9",
  "bincode",
  "clap",
- "crdts 7.3.2 (git+https://github.com/cryptonomikhan/rust-crdt.git?rev=6d0a2f3)",
+ "crdts 7.3.2 (git+https://github.com/cryptonomikhan/rust-crdt.git)",
  "form-config",
  "form-dns",
  "hex",

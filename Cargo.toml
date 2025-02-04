@@ -39,8 +39,11 @@ members = [
   "form-p2p",
   "form-vmm/form-vmm", 
   "form-cli", 
-  "form-pack"
-, "form-config", "form-dns", "form-rplb"]
+  "form-pack", 
+  "form-config", 
+  "form-dns", 
+  "form-rplb", 
+]
 
 [workspace.dependencies]
 acpi_tables = { git = "https://github.com/rust-vmm/acpi_tables", branch = "main" }
