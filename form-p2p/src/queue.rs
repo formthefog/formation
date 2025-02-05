@@ -133,7 +133,9 @@ impl FormMQ<Vec<u8>> {
         let peers = self.get_peers().await?;
         if self.op_success(op.clone()) {
             for peer in peers {
-                self.send_op(op.clone(), peer, QUEUE_PORT).await?;
+                if let Err(e) = self.send_op(op.clone(), peer, QUEUE_PORT).await {
+                    eprintln!("Error attempting to send op to {peer}: {e}");
+                }
             }
         }
 

@@ -51,6 +51,9 @@ pub async fn write_local(
         QueueRequest::Write { content, topic } => {
             match queue.write_local(topic, content) {
                 Ok(op) => if queue.op_success(op.clone()) {
+                    if let Err(e) = queue.broadcast_op(op).await {
+                        eprintln!("Error attempting to broadcast operation: {e}");
+                    }
                     return Json(QueueResponse::OpSuccess)
                 } else {
                     return Json(QueueResponse::Failure { reason: Some(format!("Error trying to write local: Op not successfully written to queue.")) })
