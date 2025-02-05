@@ -8881,6 +8881,7 @@ name = "vmm-service"
 version = "0.1.0"
 dependencies = [
  "acme-lib",
+ "alloy-primitives 0.8.19",
  "arch",
  "async-trait",
  "axum 0.7.9",
@@ -8889,6 +8890,7 @@ dependencies = [
  "bytes",
  "clap",
  "clap_derive",
+ "crdts 7.3.2 (git+https://github.com/cryptonomikhan/rust-crdt.git)",
  "dialoguer 0.11.0",
  "form-broker",
  "form-p2p",
@@ -8898,6 +8900,7 @@ dependencies = [
  "formnet",
  "futures",
  "gabble",
+ "hex",
  "http-body-util",
  "httparse",
  "hyper 1.6.0",
@@ -8906,6 +8909,7 @@ dependencies = [
  "hypervisor",
  "ipnet",
  "ipnetwork",
+ "k256",
  "libc",
  "log",
  "neli",

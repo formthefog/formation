@@ -180,10 +180,7 @@ pub enum VmmEvent {
         name: String,
     },
     Create { 
-        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         owner: String,
-        #[cfg(any(feature = "testnet", feature = "mainnet"))]
-        recovery_id: u32,
         #[cfg(any(feature = "testnet", feature = "mainnet"))]
         requestor: String,
         formfile: String,

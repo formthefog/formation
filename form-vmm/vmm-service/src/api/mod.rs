@@ -1,3 +1,4 @@
+use alloy_primitives::Address;
 use axum::{
     routing::{get, post},
     Router,
@@ -5,6 +6,7 @@ use axum::{
     extract::State,
 };
 use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
+use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
 use reqwest::Client;
 use serde::{de::DeserializeOwned, Serialize}; 
 use tiny_keccak::{Hasher, Sha3};
@@ -109,13 +111,47 @@ impl VmmApi {
         Ok(())
     }
 
+    pub fn extract_owner_from_create_request(request: CreateVmRequest) -> Result<String, VmmError> {
+        let bytes = match hex::decode(&request.signature.ok_or(VmmError::Config("Signature is required".to_string()))?) {
+            Ok(bytes) => bytes,
+            Err(e) => return Err(VmmError::Config(e.to_string())) 
+        };
+        let sig = match Signature::from_slice(&bytes) {
+            Ok(sig) => sig,
+            Err(e) => return Err(VmmError::Config(e.to_string())) 
+        };
+        let prehash = {
+            let mut hasher = Sha3::v256();
+            let mut hash = [0u8; 32];
+            hasher.update(&request.formfile.as_ref());
+            hasher.update(&request.name.as_ref());
+            hasher.finalize(&mut hash);
+            hash
+        };
+        let rec_id = match RecoveryId::from_byte(request.recovery_id.to_be_bytes()[3]) {
+            Some(n) => n,
+            None => return Err(VmmError::Config("Recovery ID is invalid".to_string())) 
+        };
+        let pubkey = match VerifyingKey::recover_from_prehash(
+            &prehash,
+            &sig, 
+            rec_id
+        ) {
+            Ok(pubkey) => pubkey,
+            Err(e) => return Err(VmmError::Config(e.to_string())) 
+        }; 
+        Ok(hex::encode(Address::from_public_key(&pubkey)))
+    }
+
     pub async fn handle_create_vm_message(msg: &[u8], channel: Arc<Mutex<VmmApiChannel>>) -> Result<(), VmmError> {
         let request: CreateVmRequest = serde_json::from_slice(msg).map_err(|e| {
             VmmError::Config(e.to_string())
         })?;
+        let owner = Self::extract_owner_from_create_request(request.clone())?;
         let event = VmmEvent::Create { 
             formfile: request.formfile, 
             name: request.name, 
+            owner,
         };
 
         channel.lock().await.send(event).await.map_err(|e| {
@@ -342,8 +378,41 @@ async fn create(
         request.name
     );
     let event = VmmEvent::Create {
-        formfile: request.formfile,
+        formfile: request.formfile.clone(),
         name: request.name.clone(),
+        owner: if let Some(sig) = request.signature {
+            let bytes = match hex::decode(&sig) {
+                Ok(bytes) => bytes,
+                Err(e) => return Json(VmmResponse::Failure(e.to_string()))
+            };
+            let sig = match Signature::from_slice(&bytes) {
+                Ok(sig) => sig,
+                Err(e) => return Json(VmmResponse::Failure(e.to_string()))
+            };
+            let prehash = {
+                let mut hasher = Sha3::v256();
+                let mut hash = [0u8; 32];
+                hasher.update(&request.formfile.as_ref());
+                hasher.update(&request.name.as_ref());
+                hasher.finalize(&mut hash);
+                hash
+            };
+            let rec_id = match RecoveryId::from_byte(request.recovery_id.to_be_bytes()[3]) {
+                Some(n) => n,
+                None => return Json(VmmResponse::Failure("Recovery ID is not valid".to_string()))
+            };
+            let pubkey = match VerifyingKey::recover_from_prehash(
+                &prehash,
+                &sig, 
+                rec_id
+            ) {
+                Ok(pubkey) => pubkey,
+                Err(e) => return Json(VmmResponse::Failure(e.to_string()))
+            }; 
+            hex::encode(Address::from_public_key(&pubkey))
+        } else {
+            return Json(VmmResponse::Failure("Signature is required".to_string()));
+        },
     };
 
     if let Err(e) = channel.lock().await
