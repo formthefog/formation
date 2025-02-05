@@ -1,11 +1,13 @@
 use super::{CrdtMap, DatabaseCidr, Sqlite};
 use crate::ServerError;
+use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
 use form_state::datastore::PeerRequest;
 use form_types::state::{Response, Success};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use rusqlite::{params, types::Type, Connection};
 use shared::{IpNetExt, Peer, PeerContents, PERSISTENT_KEEPALIVE_INTERVAL_SECS};
+use tiny_keccak::{Hasher, Sha3};
 use std::{
     fmt::Display, marker::PhantomData, net::IpAddr, ops::{Deref, DerefMut}, time::{Duration, SystemTime}
 };
@@ -96,20 +98,41 @@ impl DatabasePeer<String, CrdtMap> {
             return Err(ServerError::InvalidQuery);
         }
 
-        let request = PeerRequest::Join(contents);
+        let request = Self::build_queue_request(PeerRequest::Join(contents.clone()))
+            .map_err(|_| ServerError::InvalidQuery)?;
 
         let resp = reqwest::Client::new()
-            .post("http://127.0.0.1:3004/user/create")
+            .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
             .json(&request)
             .send()
             .await.map_err(|_| ServerError::NotFound)?
-            .json::<Response<Peer<String>>>()
+            .json::<QueueResponse>()
             .await.map_err(|_| ServerError::NotFound)?;
 
+        let id = contents.name.to_string();
+        let db_peer = DatabasePeer {
+            inner: Peer {
+                id,
+                contents,
+            },
+            marker: PhantomData,
+        };
         match resp {
-            Response::Success(Success::Some(peer)) => Ok(peer.into()),
+            QueueResponse::OpSuccess => Ok(db_peer),
             _ => Err(ServerError::NotFound),
         }
+    }
+
+    pub fn build_queue_request(request: PeerRequest) -> Result<QueueRequest, Box<dyn std::error::Error>> {
+        let mut message_code = vec![0];
+        message_code.extend(serde_json::to_vec(&request)?);
+        let topic = b"state";
+        let mut hasher = Sha3::v256();
+        let mut topic_hash = [0u8; 32];
+        hasher.update(topic);
+        hasher.finalize(&mut topic_hash);
+        let queue_request = QueueRequest::Write { content: message_code, topic: topic_hash };
+        Ok(queue_request)
     }
 
     pub async fn update(&mut self, contents: PeerContents<String>) -> Result<(), ServerError> {
@@ -124,30 +147,31 @@ impl DatabasePeer<String, CrdtMap> {
         // In the future, we may allow re-assignments of peers to new CIDRs, but it's easiest to
         // disregard that case for now to prevent possible attacks.
         let new_contents = PeerContents {
-            name: contents.name,
-            endpoint: contents.endpoint,
+            name: contents.name.clone(),
+            endpoint: contents.endpoint.clone(),
             is_admin: contents.is_admin,
             is_disabled: contents.is_disabled,
-            candidates: contents.candidates,
+            candidates: contents.candidates.clone(),
             ..self.contents.clone()
         };
 
-        let request = PeerRequest::Update(new_contents.clone());
+        let request = Self::build_queue_request(PeerRequest::Update(new_contents.clone()))
+            .map_err(|_| ServerError::InvalidQuery)?;
 
         let resp = reqwest::Client::new()
-            .post("http://127.0.0.1:3004/user/update")
+            .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
             .json(&request)
             .send()
             .await.map_err(|_| ServerError::NotFound)?
-            .json::<Response<Peer<String>>>()
+            .json::<QueueResponse>()
             .await.map_err(|_| ServerError::NotFound)?;
 
         match resp {
-            Response::Success(Success::Some(_)) => {
+            QueueResponse::OpSuccess => {
                 self.contents = new_contents;
-                return Ok(())
-            }
-            _ => Err(ServerError::NotFound)
+                Ok(())
+            },
+            _ => Err(ServerError::NotFound),
         }
 
     }
@@ -174,18 +198,22 @@ impl DatabasePeer<String, CrdtMap> {
             ..peer_contents.clone()
         };
 
-        let request = PeerRequest::Update(new_contents.clone()); 
+        let request = Self::build_queue_request(PeerRequest::Update(new_contents.clone()))
+            .map_err(|_| ServerError::InvalidQuery)?;
+
         let resp = reqwest::Client::new()
-            .post("http://127.0.0.1:3004/user/disable")
+            .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
             .json(&request)
             .send()
             .await.map_err(|_| ServerError::NotFound)?
-            .json::<Response<Peer<String>>>()
+            .json::<QueueResponse>()
             .await.map_err(|_| ServerError::NotFound)?;
 
         match resp {
-            Response::Success(Success::Some(_)) => Ok(()),
-            _ => Err(ServerError::NotFound)
+            QueueResponse::OpSuccess => {
+                Ok(())
+            },
+            _ => Err(ServerError::NotFound),
         }
     }
 
@@ -194,18 +222,23 @@ impl DatabasePeer<String, CrdtMap> {
             is_redeemed: true,
             ..self.contents.clone()
         };
-        let request = PeerRequest::Update(new_contents.clone());
+
+        let request = Self::build_queue_request(PeerRequest::Update(new_contents.clone()))
+            .map_err(|_| ServerError::InvalidQuery)?;
+
         let resp = reqwest::Client::new()
-            .post("http://127.0.0.1:3004/user/update")
+            .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
             .json(&request)
             .send()
             .await.map_err(|_| ServerError::NotFound)?
-            .json::<Response<Peer<String>>>()
+            .json::<QueueResponse>()
             .await.map_err(|_| ServerError::NotFound)?;
 
         match resp {
-            Response::Success(Success::Some(_)) => Ok(()),
-            _ => Err(ServerError::NotFound)
+            QueueResponse::OpSuccess => {
+                Ok(())
+            },
+            _ => Err(ServerError::NotFound),
         }
     }
 
