@@ -3,15 +3,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 // src/service/vmm.rs
 use std::{collections::HashMap, path::PathBuf};
 use std::net::SocketAddr;
+use alloy_primitives::Address;
 use form_pack::formfile::Formfile;
 use form_state::datastore::InstanceRequest;
-use form_state::instances::{Instance, InstanceAnnotations, InstanceCluster, InstanceEncryption, InstanceMetadata, InstanceMonitoring, InstanceResources, InstanceSecurity, InstanceStatus};
+use form_state::instances::{ClusterMember, Instance, InstanceAnnotations, InstanceCluster, InstanceEncryption, InstanceMetadata, InstanceMonitoring, InstanceResources, InstanceSecurity, InstanceStatus};
 use formnet::{JoinRequest, JoinResponse, VmJoinRequest};
 use http_body_util::{BodyExt, Full};
 use hyper::StatusCode;
 use hyper::{body::{Bytes, Incoming},  Method, Request, Response};
 use hyper_util::client::legacy::Client;
 use hyperlocal::{UnixConnector, UnixClientExt, Uri};
+use k256::ecdsa::SigningKey;
+use publicip::Preference;
 use serde::{Serialize, Deserialize, de::DeserializeOwned};
 use shared::interface_config::InterfaceConfig;
 use tokio::net::TcpListener;
@@ -418,6 +421,14 @@ impl VmManager {
         })
     }
 
+    pub async fn derive_address(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync + 'static>> {
+        let pk = SigningKey::from_slice(
+            &hex::decode(&self.signing_key)?
+        )?;
+
+        Ok(hex::encode(Address::from_private_key(&pk)))
+    }
+
     pub async fn create(
         &mut self,
         config: &VmInstanceConfig
@@ -757,15 +768,58 @@ Formpack for {name} doesn't exist:
             VmmEvent::BootComplete { id, formnet_ip } => {
                 //TODO: Write this information into State so that 
                 //users/developers can "get" the IP address
+                let mut instance = Instance::get(id).await.ok_or(
+                    Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Instance doesn't exist")))?;
+                instance.cluster.insert(ClusterMember {
+                    instance_id: instance.instance_id.clone(),
+                    node_id: self.derive_address().await?,
+                    node_public_ip: publicip::get_any(Preference::Ipv4).ok_or(
+                        Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Unable to get node public ip"))
+                    )?,
+                    node_formnet_ip: self.formnet_endpoint.parse()?,
+                    instance_formnet_ip: formnet_ip.parse()?,
+                    status: "Started".to_string(),
+                    last_heartbeat: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
+                    heartbeats_skipped: 0,
+                });
+
+                let request = InstanceRequest::Update(instance);
+                VmmApi::write_to_queue(request, 4, "state").await?; 
                 log::info!("Boot Complete for {id}: formnet id: {formnet_ip}");
             }
             VmmEvent::Stop { id, .. } => {
                 //TODO: verify ownership/authorization, etc.
                 self.pause(id).await?;
+                let mut instance = Instance::get(id).await.ok_or(
+                    Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Instance doesn't exist"))
+                )?;
+                instance.status = InstanceStatus::Stopped;
+                let node_id = self.derive_address().await?;
+                instance.cluster.members = instance.cluster.members.iter_mut().map(|(k, v)| {
+                    if v.node_id == node_id {
+                        v.status = "Stopped".to_string();
+                    }
+                    (k.clone(), v.clone())
+                }).collect();
+                let request = InstanceRequest::Update(instance);
+                VmmApi::write_to_queue(request, 4, "state").await?; 
             }
             VmmEvent::Start {  id, .. } => {
                 //TODO: verify ownership/authorization, etc.
                 self.boot(id).await?;
+                let mut instance = Instance::get(id).await.ok_or(
+                    Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Instance doesn't exist"))
+                )?;
+                instance.status = InstanceStatus::Started;
+                let node_id = self.derive_address().await?;
+                instance.cluster.members = instance.cluster.members.iter_mut().map(|(k, v)| {
+                    if v.node_id == node_id {
+                        v.status = "Started".to_string();
+                    }
+                    (k.clone(), v.clone())
+                }).collect();
+                let request = InstanceRequest::Update(instance);
+                VmmApi::write_to_queue(request, 4, "state").await?; 
             }
             VmmEvent::Delete { id, .. } => {
                 self.delete(id).await?;

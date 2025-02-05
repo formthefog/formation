@@ -8918,6 +8918,7 @@ dependencies = [
  "netlink-packet-route 0.17.1",
  "nix 0.29.0",
  "option_parser",
+ "publicip",
  "rand",
  "random_word",
  "reqwest 0.11.27",

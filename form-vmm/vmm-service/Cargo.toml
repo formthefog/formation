@@ -71,6 +71,7 @@ crdts = { git = "https://github.com/cryptonomikhan/rust-crdt.git" }
 alloy-primitives = { version = "0.8", features = ["k256"] } 
 k256 = { version = "0.13", features = ["ecdsa", "ecdsa-core"]}
 hex = "0.4"
+publicip = { path = "../../form-net/publicip" }
 
 [dev-dependencies]
 ipnet = "2.9"
