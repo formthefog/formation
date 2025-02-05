@@ -8,19 +8,30 @@ use crate::Actor;
 pub type InstanceOp = Op<String, BFTReg<Instance, Actor>, Actor>; 
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum InstanceStatus {
+    Built,
+    Created,
+    Started,
+    Stopped,
+    Killed,
+    CriticalError,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Instance {
-    instance_id: String,
-    instance_owner: String,
-    created_at: i64,
-    updated_at: i64,
-    last_snapshot: i64,
-    host_region: String,
-    resources: InstanceResources,
-    cluster: InstanceCluster,
+    pub instance_id: String,
+    pub instance_owner: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub last_snapshot: i64,
+    pub status: InstanceStatus,
+    pub host_region: String,
+    pub resources: InstanceResources,
+    pub cluster: InstanceCluster,
     /// Base64 encoded formfile
-    formfile: String, 
-    snapshots: Option<Snapshots>,
-    metadata: InstanceMetadata,
+    pub formfile: String, 
+    pub snapshots: Option<Snapshots>,
+    pub metadata: InstanceMetadata,
 }
 
 impl Sha3Hash for Instance {
@@ -212,10 +223,10 @@ impl Instance {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstanceResources {
-    vcpus: u8,
-    memory_mb: u32,
-    bandwidth_mbps: u32,
-    gpu: Option<InstanceGpu>
+    pub vcpus: u8,
+    pub memory_mb: u32,
+    pub bandwidth_mbps: u32,
+    pub gpu: Option<InstanceGpu>
 }
 
 impl InstanceResources {
@@ -266,10 +277,10 @@ impl InstanceResources {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstanceGpu {
-    count: u8,
-    model: String,
-    vram_mb: u32,
-    usage: u32,
+    pub count: u8,
+    pub model: String,
+    pub vram_mb: u32,
+    pub usage: u32,
 }
 
 impl InstanceGpu {
@@ -293,7 +304,7 @@ impl InstanceGpu {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstanceCluster {
-    members: BTreeMap<String, ClusterMember>
+    pub members: BTreeMap<String, ClusterMember>
 }
 
 impl InstanceCluster {
@@ -361,10 +372,10 @@ impl InstanceCluster {
 
 #[derive(Clone, Debug, Serialize, Deserialize, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ClusterMember {
-    instance_id: String,
-    status: String,
-    last_heartbeat: i64,
-    heartbeats_skipped: u32,
+    pub instance_id: String,
+    pub status: String,
+    pub last_heartbeat: i64,
+    pub heartbeats_skipped: u32,
 }
 
 impl ClusterMember {
@@ -387,10 +398,10 @@ impl ClusterMember {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Snapshots {
-    snapshot_id: String,
-    timestamp: i64,
-    description: Option<String>,
-    previous_snapshot: Box<Option<Snapshots>>
+    pub snapshot_id: String,
+    pub timestamp: i64,
+    pub description: Option<String>,
+    pub previous_snapshot: Box<Option<Snapshots>>
 }
 
 impl Snapshots {
@@ -413,11 +424,11 @@ impl Snapshots {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstanceMetadata {
-    tags: Vec<String>,
-    description: String,
-    annotations: InstanceAnnotations,
-    security: InstanceSecurity,
-    monitoring: InstanceMonitoring
+    pub tags: Vec<String>,
+    pub description: String,
+    pub annotations: InstanceAnnotations,
+    pub security: InstanceSecurity,
+    pub monitoring: InstanceMonitoring
 }
 
 impl InstanceMetadata {
@@ -472,9 +483,9 @@ impl InstanceMetadata {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstanceAnnotations {
-    deployed_by: String,
-    network_id: u16,
-    build_commit: Option<String>
+    pub deployed_by: String,
+    pub network_id: u16,
+    pub build_commit: Option<String>
 }
 
 impl InstanceAnnotations {
@@ -493,9 +504,9 @@ impl InstanceAnnotations {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstanceSecurity {
-    encryption: InstanceEncryption,
-    tee: bool,
-    hsm: bool,
+    pub encryption: InstanceEncryption,
+    pub tee: bool,
+    pub hsm: bool,
 }
 
 impl InstanceSecurity {
@@ -522,8 +533,8 @@ impl InstanceSecurity {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstanceMonitoring {
-    logging_enabled: bool,
-    metrics_endpoint: String,
+    pub logging_enabled: bool,
+    pub metrics_endpoint: String,
 }
 
 impl InstanceMonitoring {
@@ -538,8 +549,8 @@ impl InstanceMonitoring {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstanceEncryption {
-    is_encrypted: bool,
-    scheme: Option<String>,
+    pub is_encrypted: bool,
+    pub  scheme: Option<String>,
 }
 
 impl InstanceEncryption {

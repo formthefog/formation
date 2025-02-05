@@ -35,3 +35,10 @@ tower = { version = "0.5", features = ["make"] }
 hyper-util = { version = "0.1", features = ["server"] }
 hyperlocal = "0.9"
 random_word = { version = "0.4.3", features = ["en"] }
+tiny-keccak = { version = "2.0.2", features = ["sha3"] }
+form-p2p = { path = "../form-p2p/" }
+form-state = { path = "../form-state" }
+crdts = { git = "https://github.com/cryptonomikhan/rust-crdt.git" }
+hex = "0.4" 
+alloy-primitives = { version = "0.8", features = ["k256"] } 
+k256 = { version = "0.13", features = ["ecdsa", "ecdsa-core"]}
