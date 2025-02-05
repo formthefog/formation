@@ -16,10 +16,11 @@ impl ShipCommand {
         let mut parser = FormfileParser::new();
         let contents = std::fs::read_to_string(&self.formfile)?;
         let formfile = parser.parse(&contents)?;
+        let formfile_string = serde_json::to_string(&formfile)?;
         let name = formfile.name.clone();
         let request = CreateVmRequest {
             name,
-            formfile,
+            formfile: formfile_string,
             signature: None,
             recovery_id: 0
         };

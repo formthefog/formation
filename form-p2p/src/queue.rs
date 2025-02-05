@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, fmt::Debug, net::IpAddr};
 use alloy::signers::k256::ecdsa::SigningKey;
 use crdts::{bft_queue::Message, bft_topic_queue::TopicQueue, map::Op, merkle_reg::Sha3Hash, BFTQueue, CmRDT, VClock};
-use form_state::datastore::{Response, Success};
+use form_types::state::{Response, Success};
 use shared::Peer;
 use serde::{Deserialize, Serialize};
 use reqwest::Client;
@@ -28,7 +28,7 @@ pub enum QueueResponse {
     Full(BTreeMap<[u8; 32], Vec<Vec<u8>>>)
 }
 
-
+#[allow(unused)]
 pub struct FormMQ<T: Sha3Hash + Default + Debug + Clone + Ord> {
     queue: TopicQueue<T>,
     node_id: String,
@@ -116,9 +116,9 @@ impl FormMQ<Vec<u8>> {
         false
     }
 
-    pub async fn send_op(&self, op: QueueOp<Vec<u8>>, addr: IpAddr, port: u16) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn send_op(op: QueueOp<Vec<u8>>, addr: IpAddr, port: u16) -> Result<(), Box<dyn std::error::Error>> {
         let request = QueueRequest::Op(op.clone()); 
-        match self.client.post(format!("http://{}:{}/queue/write_op", addr, port))
+        match Client::new().post(format!("http://{}:{}/queue/write_op", addr, port))
             .json(&request)
             .send()
             .await?
@@ -129,20 +129,20 @@ impl FormMQ<Vec<u8>> {
         }
     }
 
-    pub async fn broadcast_op(&self, op: QueueOp<Vec<u8>>) -> Result<(), Box<dyn std::error::Error>> {
-        let peers = self.get_peers().await?;
-        if self.op_success(op.clone()) {
-            for peer in peers {
-                self.send_op(op.clone(), peer, QUEUE_PORT).await?;
+    pub async fn broadcast_op(op: QueueOp<Vec<u8>>) -> Result<(), Box<dyn std::error::Error>> {
+        let peers = Self::get_peers().await?;
+        for peer in peers {
+            if let Err(e) = Self::send_op(op.clone(), peer, QUEUE_PORT).await {
+                eprintln!("Error attempting to send op to {peer}: {e}");
             }
         }
 
         Ok(())
     }
 
-    pub async fn get_peers(&self) -> Result<Vec<IpAddr>, Box<dyn std::error::Error>> {
-        let uri = format!("http://{}/user/list_admin", self.state_uri);
-        let resp = self.client.get(&uri).send().await?.json::<Response<Peer<String>>>().await?;
+    pub async fn get_peers() -> Result<Vec<IpAddr>, Box<dyn std::error::Error>> {
+        let uri = "http://127.0.0.1:3004/user/list_admin";
+        let resp = Client::new().get(uri).send().await?.json::<Response<Peer<String>>>().await?;
         match resp {
             Response::Success(Success::List(admins)) => return Ok(admins.iter().map(|peer| peer.ip.clone()).collect()), 
             Response::Success(Success::None) => return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Returned Success::None, instead of Success::List"))),

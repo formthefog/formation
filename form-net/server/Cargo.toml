@@ -52,9 +52,12 @@ thiserror = "1"
 tokio = { version = "1.28.0", features = ["macros", "rt-multi-thread", "time"] }
 toml = "0.8.10"
 url = "2"
+tiny-keccak = { version = "2.0.2", features = ["sha3"] }
 wireguard-control = { path = "../wireguard-control" }
 form-state = { path = "../../form-state" }
 form-types = { path = "../../form-types" }
+form-p2p = { path = "../../form-p2p/" }
+crdts = { git = "https://github.com/cryptonomikhan/rust-crdt.git", rev = "4088bd3" }
 reqwest = { version = "0.12", features = ["json"] }
 async-trait = "0.1"
 

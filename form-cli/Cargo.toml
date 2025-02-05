@@ -36,9 +36,11 @@ form-pack = { path = "../form-pack" }
 shared = { path = "../form-net/shared" }
 formnet = { path = "../form-net/formnet" }
 form-config = { path = "../form-config" }
+form-p2p = { path = "../form-p2p" }
 tokio-util = "0.7"
 bytes = "1"
 bs58 = "0.5"
 daemonize = "0.5"
 argon2 = "0.5"
 anyhow = "1"
+tiny-keccak = { version = "2.0.2", features = ["sha3"] }
