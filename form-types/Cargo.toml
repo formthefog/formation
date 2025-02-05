@@ -20,5 +20,4 @@ log = "0.4"
 clap = { "version" = "4.5", features=["derive"] }
 form-traits = { path = "../form-traits" }
 form-broker = { path = "../form-broker" }
-form-pack = { path = "../form-pack" }
 shared = { path = "../form-net/shared" }
