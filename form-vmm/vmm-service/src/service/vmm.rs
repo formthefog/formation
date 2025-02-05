@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 // src/service/vmm.rs
 use std::{collections::HashMap, path::PathBuf};
@@ -20,7 +21,7 @@ use shared::interface_config::InterfaceConfig;
 use tokio::net::TcpListener;
 use libc::EFD_NONBLOCK;
 use tokio::io::AsyncReadExt;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 use tokio::sync::broadcast;
 use vmm_sys_util::signal::block_signal;
 use vmm::{api::{VmAddDevice, VmAddUserDevice, VmCoredumpData, VmCounters, VmInfo, VmReceiveMigrationData, VmRemoveDevice, VmResize, VmResizeZone, VmSendMigrationData, VmSnapshotConfig, VmmPingResponse}, config::RestoreConfig, vm_config::{DiskConfig, FsConfig, NetConfig, PmemConfig, VdpaConfig, VsockConfig}, PciDeviceInfo, VmmThreadHandle};
@@ -30,6 +31,7 @@ use tokio::task::JoinHandle;
 use form_types::{FormnetMessage, FormnetTopic, GenericPublisher, PeerType, VmmEvent, VmmSubscriber};
 use form_broker::{subscriber::SubStream, publisher::PubStream};
 use futures::future::join_all;
+use crate::api::VmmApiChannel;
 use crate::{api::VmmApi, util::ensure_directory};
 use crate::util::add_tap_to_bridge;
 use crate::{ChError, IMAGE_DIR};
@@ -371,6 +373,7 @@ impl FormVmApi {
 pub struct VmManager {
     vm_monitors: HashMap<String, FormVmm>, 
     server: JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>>,
+    queue_reader: JoinHandle<()>,
     tap_counter: u32,
     formnet_endpoint: String,
     api_response_sender: tokio::sync::mpsc::Sender<String>,
@@ -387,10 +390,16 @@ impl VmManager {
         signing_key: String,
         subscriber_uri: Option<&str>,
         publisher_addr: Option<String>,
+        shutdown_rx: broadcast::Receiver<()>
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync + 'static>> {
         let (resp_tx, resp_rx) = tokio::sync::mpsc::channel(1024);
+        let api_channel = Arc::new(Mutex::new(VmmApiChannel::new(
+            event_sender,
+            resp_rx
+        )));
+        let api_channel_server = api_channel.clone();
         let server = tokio::task::spawn(async move {
-            let server = VmmApi::new(event_sender, resp_rx, addr);
+            let server = VmmApi::new(api_channel_server.clone(), addr);
             server.start().await?;
             Ok::<(), Box<dyn std::error::Error + Send + Sync + 'static>>(())
         });
@@ -407,6 +416,9 @@ impl VmManager {
         };
 
         let queue_handle = tokio::task::spawn(async move {
+            if let Err(e) = VmmApi::start_queue_reader(api_channel.clone(), shutdown_rx).await {
+                eprintln!("Error in queue_reader: {e}");
+            }
         });
 
         Ok(Self {
@@ -418,6 +430,7 @@ impl VmManager {
             api_response_sender: resp_tx,
             subscriber,
             publisher_addr,
+            queue_reader: queue_handle
         })
     }
 

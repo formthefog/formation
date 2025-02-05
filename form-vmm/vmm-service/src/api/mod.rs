@@ -70,27 +70,30 @@ pub struct VmmApi {
 
 impl VmmApi {
     pub fn new(
-        event_sender: mpsc::Sender<VmmEvent>,
-        response_receiver: mpsc::Receiver<String>,
+        api_channel: Arc<Mutex<VmmApiChannel>>,
         addr: SocketAddr
     ) -> Self {
-        let api_channel = Arc::new(Mutex::new(VmmApiChannel::new(
-            event_sender,
-            response_receiver
-        )));
         Self {
             channel: api_channel, addr
         }
     }
 
-    pub async fn start_queue_reader(&self, channel: Arc<Mutex<VmmApiChannel>>) -> Result<(), VmmError> { 
+    pub async fn start_queue_reader(
+        channel: Arc<Mutex<VmmApiChannel>>,
+        mut shutdown: tokio::sync::broadcast::Receiver<()>
+    ) -> Result<(), VmmError> { 
         let mut n = 0;
         loop {
-            if let Ok(messages) = Self::read_from_queue(Some(n), None).await {
-                for message in &messages {
-                    Self::handle_message(message.to_vec(), channel.clone()).await;
+            tokio::select! {
+                Ok(messages) = Self::read_from_queue(Some(n), None) => {
+                    for message in &messages {
+                        Self::handle_message(message.to_vec(), channel.clone()).await;
+                    }
+                    n += messages.len();
                 }
-                n += messages.len();
+                _ = shutdown.recv() => {
+                    break;
+                }
             }
         }
         Ok(())
