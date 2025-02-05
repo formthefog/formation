@@ -398,6 +398,9 @@ impl VmManager {
             None
         };
 
+        let queue_handle = tokio::task::spawn(async move {
+        });
+
         Ok(Self {
             vm_monitors: HashMap::new(),
             server, 

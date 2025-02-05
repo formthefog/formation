@@ -4,7 +4,10 @@ use axum::{
     Json,
     extract::State,
 };
-use serde::de::DeserializeOwned; 
+use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
+use reqwest::Client;
+use serde::{de::DeserializeOwned, Serialize}; 
+use tiny_keccak::{Hasher, Sha3};
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use vmm::api::{VmInfo, VmmPingResponse};
@@ -75,6 +78,101 @@ impl VmmApi {
         )));
         Self {
             channel: api_channel, addr
+        }
+    }
+
+    pub async fn start_queue_reader(&self, channel: Arc<Mutex<VmmApiChannel>>) -> Result<(), VmmError> { 
+        let mut n = 0;
+        loop {
+            if let Ok(messages) = Self::read_from_queue(Some(n), None).await {
+                for message in &messages {
+                    Self::handle_message(message.to_vec(), channel.clone()).await;
+                }
+                n += messages.len();
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn handle_message(message: Vec<u8>, channel: Arc<Mutex<VmmApiChannel>>) -> Result<(), VmmError> {
+        let subtopic = message[0];
+        let msg = &message[1..];
+        match subtopic {
+            1 => {
+                let request: CreateVmRequest = serde_json::from_slice(msg).map_err(|e| {
+                    VmmError::Config(e.to_string())
+                })?;
+                let event = VmmEvent::Create { 
+                    formfile: request.formfile, 
+                    name: request.name, 
+                };
+
+                channel.lock().await.send(event).await.map_err(|e| {
+                    VmmError::SystemError(e.to_string())
+                })?;
+            }
+            2 => {}
+            3 => {}
+            _ => unreachable!()
+        }
+        Ok(())
+    }
+
+    pub async fn write_to_queue(
+        message: impl Serialize + Clone,
+        sub_topic: u8,
+        topic: &str
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut hasher = Sha3::v256();
+        let mut topic_hash = [0u8; 32];
+        hasher.update(topic.as_bytes());
+        hasher.finalize(&mut topic_hash);
+        let mut message_code = vec![sub_topic];
+        message_code.extend(serde_json::to_vec(&message)?);
+        let request = QueueRequest::Write { 
+            content: message_code, 
+            topic: topic_hash 
+        };
+
+        match Client::new()
+            .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
+            .json(&request)
+            .send().await?
+            .json::<QueueResponse>().await? {
+                QueueResponse::OpSuccess => return Ok(()),
+                QueueResponse::Failure { reason } => return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("{reason:?}")))),
+                _ => return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Invalid response variant for write_local endpoint")))
+        }
+    }
+
+    pub async fn read_from_queue(
+        last: Option<usize>,
+        n: Option<usize>,
+    ) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
+        let mut endpoint = format!("http://127.0.0.1:{}/queue/vmm", QUEUE_PORT);
+        if let Some(idx) = last {
+            let idx = idx + 1;
+            endpoint.push_str(&format!("/{idx}"));
+            if let Some(n) = n {
+                endpoint.push_str(&format!("/{n}/get_n_after"));
+            } else {
+                endpoint.push_str("/get_after");
+            }
+        } else {
+            if let Some(n) = n {
+                endpoint.push_str(&format!("/{n}/get_n"))
+            } else {
+                endpoint.push_str("/get")
+            }
+        }
+
+        match Client::new()
+            .get(endpoint.clone())
+            .send().await?
+            .json::<QueueResponse>().await? {
+                QueueResponse::List(list) => Ok(list),
+                QueueResponse::Failure { reason } => Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("{reason:?}")))),
+                _ => Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Invalid response variant for {endpoint}")))) 
         }
     }
 
