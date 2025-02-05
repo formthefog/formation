@@ -2,13 +2,14 @@ use std::{collections::{HashMap, HashSet}, sync::Arc, time::{SystemTime, UNIX_EP
 use axum::{extract::{State, Path}, routing::{get, post}, Json, Router};
 use form_dns::{api::{DomainRequest, DomainResponse}, store::FormDnsRecord};
 use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
+use futures::stream::FuturesUnordered;
 use reqwest::Client;
 use serde_json::Value;
 use shared::{Association, AssociationContents, Cidr, CidrContents, Peer, PeerContents};
 use tiny_keccak::{Hasher, Sha3};
 use tokio::{net::TcpListener, sync::Mutex};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use crdts::{bft_queue::Message, bft_reg::Update, BFTReg, CvRDT, Map};
+use crdts::{bft_reg::Update, map::Op, BFTReg, CvRDT, Map};
 use trust_dns_proto::rr::RecordType;
 use crate::{instances::{Instance, InstanceOp, InstanceState}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}};
 use form_types::state::{Response, Success};
@@ -53,7 +54,7 @@ pub enum DnsRequest {
     Op(DnsOp),
     Create(FormDnsRecord),
     Update(FormDnsRecord),
-    Delete
+    Delete(String)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -61,7 +62,7 @@ pub enum InstanceRequest {
     Op(InstanceOp),
     Create(Instance),
     Update(Instance),
-    Delete
+    Delete(String),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -69,7 +70,7 @@ pub enum NodeRequest {
     Op(NodeOp),
     Create(Node),
     Update(Node),
-    Delete
+    Delete(String),
 }
 
 impl DataStore {
@@ -166,8 +167,353 @@ impl DataStore {
         }).collect()
     }
 
+    async fn handle_peer_request(&mut self, peer_request: PeerRequest) -> Result<(), Box<dyn std::error::Error>> {
+        match peer_request {
+            PeerRequest::Op(op) => self.handle_peer_op(op).await?,
+            PeerRequest::Join(join) => self.handle_peer_join(join).await?,
+            PeerRequest::Update(up) => self.handle_peer_update(up).await?,
+            PeerRequest::Delete(del) => self.handle_peer_delete(del).await?,
+        }
+
+        Ok(())
+    }
+
+    async fn handle_peer_op(&mut self, peer_op: PeerOp<String>) -> Result<(), Box<dyn std::error::Error>> {
+        match &peer_op {
+            Op::Up { dot: _, key, op } => {
+                self.network_state.peer_op(peer_op.clone());
+                if let (true, _) = self.network_state.peer_op_success(key.clone(), op.clone()) {
+                    log::info!("Peer Op succesffully applied...");
+                    DataStore::write_to_queue(peer_op.clone(), 0).await?;
+                } else {
+                    log::info!("Peer Op rejected...");
+                    return Err(
+                        Box::new(
+                            std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                "update was rejected".to_string()
+                            )
+                        )
+                    )
+                }
+            }
+            Op::Rm { .. } => {
+                self.network_state.peer_op(peer_op.clone());
+                return Ok(());
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn handle_peer_join(&mut self, contents: PeerContents<String>) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.network_state.update_peer_local(contents);
+        self.handle_peer_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_peer_update(&mut self, contents: PeerContents<String>) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.network_state.update_peer_local(contents);
+        self.handle_peer_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_peer_delete(&mut self, id: String) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.network_state.remove_peer_local(id);
+        self.handle_peer_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_cidr_request(&mut self, cidr_request: CidrRequest) -> Result<(), Box<dyn std::error::Error>> {
+        match cidr_request {
+            CidrRequest::Op(op) => self.handle_cidr_op(op).await?,
+            CidrRequest::Create(create) => self.handle_cidr_create(create).await?,
+            CidrRequest::Update(update) => self.handle_cidr_update(update).await?,
+            CidrRequest::Delete(delete) => self.handle_cidr_delete(delete).await?,
+        }
+
+        Ok(())
+    }
+
+    async fn handle_cidr_op(&mut self, cidr_op: CidrOp<String>) -> Result<(), Box<dyn std::error::Error>> {
+        match &cidr_op {
+            Op::Up { dot: _, key, op } => {
+                self.network_state.cidr_op(cidr_op.clone());
+                if let (true, _) = self.network_state.cidr_op_success(key.clone(), op.clone()) {
+                    log::info!("Peer Op succesffully applied...");
+                    DataStore::write_to_queue(cidr_op.clone(), 1).await?;
+                } else {
+                    log::info!("Peer Op rejected...");
+                    return Err(
+                        Box::new(
+                            std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                "update was rejected".to_string()
+                            )
+                        )
+                    )
+                }
+            }
+            Op::Rm { .. } => {
+                self.network_state.cidr_op(cidr_op.clone());
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+
+    async fn handle_cidr_create(&mut self, create: CidrContents<String>) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.network_state.update_cidr_local(create);
+        self.handle_cidr_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_cidr_update(&mut self, update: CidrContents<String>) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.network_state.update_cidr_local(update);
+        self.handle_cidr_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_cidr_delete(&mut self, delete: String) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.network_state.remove_cidr_local(delete);
+        self.handle_cidr_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_assoc_request(&mut self, assoc_request: AssocRequest) -> Result<(), Box<dyn std::error::Error>> {
+        match assoc_request {
+            AssocRequest::Op(op) => self.handle_assoc_op(op).await?,
+            AssocRequest::Create(create) => self.handle_assoc_create(create).await?,
+            AssocRequest::Delete(delete) => self.handle_assoc_delete(delete).await?,
+        }
+        Ok(())
+    }
+
+    async fn handle_assoc_op(&mut self, assoc_op: AssocOp<String>) -> Result<(), Box<dyn std::error::Error>> {
+        match &assoc_op {
+            Op::Up { dot: _, key, op } => {
+                self.network_state.associations_op(assoc_op.clone());
+                if let (true, _) = self.network_state.associations_op_success(key.clone(), op.clone()) {
+                    log::info!("Peer Op succesffully applied...");
+                    DataStore::write_to_queue(op.clone(), 2).await?;
+                } else {
+                    log::info!("Peer Op rejected...");
+                    return Err(
+                        Box::new(
+                            std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                "update was rejected".to_string()
+                            )
+                        )
+                    )
+                }
+            }
+            Op::Rm { .. } => {
+                self.network_state.associations_op(assoc_op.clone());
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+
+    async fn handle_assoc_create(&mut self, create: AssociationContents<String>) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.network_state.update_association_local(create);
+        self.handle_assoc_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_assoc_delete(&mut self, delete: (String, String)) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.network_state.remove_association_local(delete);
+        self.handle_assoc_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_dns_request(&mut self, dns_request: DnsRequest) -> Result<(), Box<dyn std::error::Error>> {
+        match dns_request {
+            DnsRequest::Op(op) => self.handle_dns_op(op).await?,
+            DnsRequest::Create(create) => self.handle_dns_create(create).await?,
+            DnsRequest::Update(update) => self.handle_dns_update(update).await?,
+            DnsRequest::Delete(domain) => self.handle_dns_delete(domain).await? 
+        }
+
+        Ok(())
+    }
+
+    async fn handle_dns_op(&mut self, dns_op: DnsOp) -> Result<(), Box<dyn std::error::Error>> {
+        match &dns_op {
+            Op::Up { dot: _, key, op } => {
+                self.network_state.dns_op(dns_op.clone());
+                if let (true, _) = self.network_state.dns_op_success(key.clone(), op.clone()) {
+                    log::info!("Peer Op succesffully applied...");
+                    DataStore::write_to_queue(op.clone(), 2).await?;
+                } else {
+                    log::info!("Peer Op rejected...");
+                    return Err(
+                        Box::new(
+                            std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                "update was rejected".to_string()
+                            )
+                        )
+                    )
+                }
+            }
+            Op::Rm { .. } => {
+                self.network_state.dns_op(dns_op.clone());
+                return Ok(());
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn handle_dns_create(&mut self, create: FormDnsRecord) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.network_state.update_dns_local(create);
+        self.handle_dns_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_dns_update(&mut self, update: FormDnsRecord) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.network_state.update_dns_local(update);
+        self.handle_dns_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_dns_delete(&mut self, delete: String) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.network_state.remove_dns_local(delete);
+        self.handle_dns_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_instance_request(&mut self, instance_request: InstanceRequest) -> Result<(), Box<dyn std::error::Error>> {
+        match instance_request {
+            InstanceRequest::Op(op) => self.handle_instance_op(op).await?,
+            InstanceRequest::Create(create) => self.handle_instance_create(create).await?,
+            InstanceRequest::Update(update) => self.handle_instance_update(update).await?,
+            InstanceRequest::Delete(id) => self.handle_instance_delete(id).await? 
+        }
+
+        Ok(())
+    }
+
+    async fn handle_instance_op(&mut self, instance_op: InstanceOp) -> Result<(), Box<dyn std::error::Error>> {
+        match &instance_op {
+            Op::Up { dot: _, key, op } => {
+                self.instance_state.instance_op(instance_op.clone());
+                if let (true, _) = self.instance_state.instance_op_success(key.clone(), op.clone()) {
+                    log::info!("Peer Op succesffully applied...");
+                    DataStore::write_to_queue(op.clone(), 2).await?;
+                } else {
+                    log::info!("Peer Op rejected...");
+                    return Err(
+                        Box::new(
+                            std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                "update was rejected".to_string()
+                            )
+                        )
+                    )
+                }
+            }
+            Op::Rm { .. } => {
+                self.instance_state.instance_op(instance_op.clone());
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+
+    async fn handle_instance_create(&mut self, create: Instance) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.instance_state.update_instance_local(create);
+        self.handle_instance_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_instance_update(&mut self, update: Instance) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.instance_state.update_instance_local(update);
+        self.handle_instance_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_instance_delete(&mut self, delete: String) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.instance_state.remove_instance_local(delete);
+        self.handle_instance_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_node_request(&mut self, node_request: NodeRequest) -> Result<(), Box<dyn std::error::Error>> {
+        match node_request {
+            NodeRequest::Op(op) => self.handle_node_op(op).await?,
+            NodeRequest::Create(create) => self.handle_node_create(create).await?,
+            NodeRequest::Update(update) => self.handle_node_update(update).await?,
+            NodeRequest::Delete(id) => self.handle_node_delete(id).await? 
+        }
+        Ok(())
+    }
+
+    async fn handle_node_op(&mut self, node_op: NodeOp) -> Result<(), Box<dyn std::error::Error>> {
+        match &node_op {
+            Op::Up { dot: _, key, op } => {
+                self.node_state.node_op(node_op.clone());
+                if let (true, _) = self.node_state.node_op_success(key.clone(), op.clone()) {
+                    log::info!("Peer Op succesffully applied...");
+                    DataStore::write_to_queue(op.clone(), 2).await?;
+                } else {
+                    log::info!("Peer Op rejected...");
+                    return Err(
+                        Box::new(
+                            std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                "update was rejected".to_string()
+                            )
+                        )
+                    )
+                }
+            }
+            Op::Rm { .. } => {
+                self.node_state.node_op(node_op.clone());
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+
+    async fn handle_node_create(&mut self, create: Node) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.node_state.update_node_local(create);
+        self.handle_node_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_node_update(&mut self, update: Node) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.node_state.update_node_local(update);
+        self.handle_node_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_node_delete(&mut self, delete: String) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.node_state.remove_node_local(delete);
+        self.handle_node_op(op).await?;
+
+        Ok(())
+    }
+
     pub async fn write_to_queue(
-        &self,
         message: impl Serialize + Clone,
         sub_topic: u8,
     ) -> Result<(), Box<dyn std::error::Error>> {
@@ -194,7 +540,6 @@ impl DataStore {
     }
 
     pub async fn read_from_queue(
-        &self,
         last: Option<usize>,
         n: Option<usize>,
     ) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error>> {
@@ -305,18 +650,81 @@ impl DataStore {
             .route("/node/:id/get", get(get_node))
             .route("/node/:id/delete", post(delete_node))
             .route("/node/list", get(list_nodes))
-
             .with_state(state)
     }
 
-    pub async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
-        let router = Self::app(Arc::new(Mutex::new(self)));
+    pub async fn run(self, mut shutdown: tokio::sync::broadcast::Receiver<()>) -> Result<(), Box<dyn std::error::Error>> {
+        let datastore = Arc::new(Mutex::new(self));
+        let router = Self::app(datastore.clone());
         let listener = TcpListener::bind("0.0.0.0:3004").await?;
         log::info!("Running datastore server...");
-        let _ = axum::serve(listener, router).await?;
+        tokio::spawn(async move {
+            if let Err(e) = axum::serve(listener, router).await {
+                eprintln!("Error serving State API Server: {e}");
+            }
+        });
+
+        let mut n = 0;
+        let futures = FuturesUnordered::new();
+        loop {
+            tokio::select! {
+                Ok(messages) = DataStore::read_from_queue(Some(n), None) => {
+                    n += messages.len();
+                    for message in messages {
+                        futures.push(process_message(message, datastore.clone()))
+                    }
+                }
+                _ = shutdown.recv() => {
+                    break;
+                }
+            }
+        }
 
         Ok(())
     }
+}
+
+pub async fn process_message(message: Vec<u8>, state: Arc<Mutex<DataStore>>) -> Result<(), Box<dyn std::error::Error>> {
+    if message.is_empty() {
+        return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Message was empty")));
+    }
+
+    let subtopic = message[0];
+    let payload = &message[1..];
+
+    let mut guard = state.lock().await;
+
+    match subtopic {
+        0 => {
+            let peer_request: PeerRequest = serde_json::from_slice(payload)?;
+            guard.handle_peer_request(peer_request).await?;
+        },
+        1 => {
+            let cidr_request: CidrRequest = serde_json::from_slice(payload)?;
+            guard.handle_cidr_request(cidr_request).await?;
+        },
+        2 => {
+            let assoc_request: AssocRequest = serde_json::from_slice(payload)?;
+            guard.handle_assoc_request(assoc_request).await?;
+        },
+        3 => {
+            let dns_request: DnsRequest = serde_json::from_slice(payload)?;
+            guard.handle_dns_request(dns_request).await?;
+        },
+        4 => {
+            let instance_request: InstanceRequest = serde_json::from_slice(payload)?;
+            guard.handle_instance_request(instance_request).await?;
+        },
+        5 => {
+            let node_request: NodeRequest = serde_json::from_slice(payload)?;
+            guard.handle_node_request(node_request).await?;
+        },
+        _ => unreachable!()
+    }
+
+    drop(guard);
+
+    Ok(())
 }
 
 async fn pong() -> Json<Value> {
@@ -1099,7 +1507,7 @@ async fn delete_dns(
                 }
             }
         }
-        DnsRequest::Delete => {
+        DnsRequest::Delete(domain) => {
             log::info!("Delete DNS request was a direct request...");
             log::info!("Building Map Op...");
             let map_op = datastore.network_state.remove_dns_local(domain.clone());
@@ -1613,7 +2021,7 @@ async fn get_instance(
 
 async fn delete_instance(
     State(state): State<Arc<Mutex<DataStore>>>,
-    Path(id): Path<String>,
+    Path(_id): Path<String>,
     Json(request): Json<InstanceRequest>
 ) -> Json<Response<Instance>> {
     let mut datastore = state.lock().await;
@@ -1630,7 +2038,7 @@ async fn delete_instance(
                 }
             }
         }
-        InstanceRequest::Delete => {
+        InstanceRequest::Delete(id) => {
             log::info!("Delete Instance request was a direct request...");
             log::info!("Building Map Op...");
             let map_op = datastore.instance_state.remove_instance_local(id.clone());
@@ -1802,7 +2210,7 @@ async fn delete_node(
                 }
             }
         }
-        NodeRequest::Delete => {
+        NodeRequest::Delete(_id) => {
             log::info!("Delete Node request was a direct request...");
             log::info!("Building Map Op...");
             let map_op = datastore.node_state.remove_node_local(node_id.clone());

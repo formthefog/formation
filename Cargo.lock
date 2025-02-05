@@ -3466,6 +3466,7 @@ dependencies = [
  "form-dns",
  "form-p2p",
  "form-types",
+ "futures",
  "hex",
  "ipnet",
  "k256",

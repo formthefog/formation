@@ -1,5 +1,6 @@
 use crate::ServerError;
-use form_state::datastore::{CidrRequest, Response, Success};
+use form_state::datastore::CidrRequest;
+use form_types::state::{Response, Success};
 use ipnet::IpNet;
 use rusqlite::{params, Connection};
 use shared::{Cidr, CidrContents};
