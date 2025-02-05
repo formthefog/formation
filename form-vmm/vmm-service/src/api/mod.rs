@@ -98,23 +98,105 @@ impl VmmApi {
         let subtopic = message[0];
         let msg = &message[1..];
         match subtopic {
-            1 => {
-                let request: CreateVmRequest = serde_json::from_slice(msg).map_err(|e| {
-                    VmmError::Config(e.to_string())
-                })?;
-                let event = VmmEvent::Create { 
-                    formfile: request.formfile, 
-                    name: request.name, 
-                };
-
-                channel.lock().await.send(event).await.map_err(|e| {
-                    VmmError::SystemError(e.to_string())
-                })?;
-            }
-            2 => {}
-            3 => {}
+            1 => Self::handle_create_vm_message(msg, channel.clone()).await?,
+            2 => Self::handle_boot_vm_message(msg, channel.clone()).await?, 
+            3 => Self::handle_delete_vm_message(msg, channel.clone()).await?,
+            4 => Self::handle_stop_vm_message(msg, channel.clone()).await?,
+            5 => Self::handle_reboot_vm_message(msg, channel.clone()).await?,
+            6 => Self::handle_start_vm_message(msg, channel.clone()).await?,
             _ => unreachable!()
         }
+        Ok(())
+    }
+
+    pub async fn handle_create_vm_message(msg: &[u8], channel: Arc<Mutex<VmmApiChannel>>) -> Result<(), VmmError> {
+        let request: CreateVmRequest = serde_json::from_slice(msg).map_err(|e| {
+            VmmError::Config(e.to_string())
+        })?;
+        let event = VmmEvent::Create { 
+            formfile: request.formfile, 
+            name: request.name, 
+        };
+
+        channel.lock().await.send(event).await.map_err(|e| {
+            VmmError::SystemError(e.to_string())
+        })?;
+
+        Ok(())
+    }
+
+    pub async fn handle_boot_vm_message(msg: &[u8], channel: Arc<Mutex<VmmApiChannel>>) -> Result<(), VmmError> {
+        let request: StartVmRequest = serde_json::from_slice(msg).map_err(|e| {
+            VmmError::Config(e.to_string())
+        })?;
+
+        let event = VmmEvent::Start { id: request.id };
+        channel.lock().await.send(event).await.map_err(|e| {
+            VmmError::SystemError(e.to_string())
+        })?;
+
+        Ok(())
+    }
+
+    pub async fn handle_delete_vm_message(msg: &[u8], channel: Arc<Mutex<VmmApiChannel>>) -> Result<(), VmmError> {
+        let request: DeleteVmRequest = serde_json::from_slice(msg).map_err(|e| {
+            VmmError::Config(e.to_string())
+        })?;
+
+        let event = VmmEvent::Delete { id: request.id };
+
+        channel.lock().await.send(event).await.map_err(|e| {
+            VmmError::SystemError(e.to_string())
+        })?;
+
+        Ok(())
+    }
+
+    pub async fn handle_stop_vm_message(msg: &[u8], channel: Arc<Mutex<VmmApiChannel>>) -> Result<(), VmmError> {
+        let request: StopVmRequest = serde_json::from_slice(msg).map_err(|e| {
+            VmmError::Config(e.to_string())
+        })?;
+
+        let event = VmmEvent::Stop { id: request.id };
+
+        channel.lock().await.send(event).await.map_err(|e| {
+            VmmError::SystemError(e.to_string())
+        })?;
+        
+        Ok(())
+    }
+
+    pub async fn handle_reboot_vm_message(msg: &[u8], channel: Arc<Mutex<VmmApiChannel>>) -> Result<(), VmmError> {
+        let request: StopVmRequest = serde_json::from_slice(msg).map_err(|e| {
+            VmmError::Config(e.to_string())
+        })?;
+
+        let event = VmmEvent::Stop { id: request.id.clone() };
+
+        channel.lock().await.send(event).await.map_err(|e| {
+            VmmError::SystemError(e.to_string())
+        })?;
+
+        let event = VmmEvent::Start { id: request.id };
+        
+        channel.lock().await.send(event).await.map_err(|e| {
+            VmmError::SystemError(e.to_string())
+        })?;
+
+        Ok(())
+    }
+
+    pub async fn handle_start_vm_message(msg: &[u8], channel: Arc<Mutex<VmmApiChannel>>) -> Result<(), VmmError> {
+        let request: StartVmRequest = serde_json::from_slice(msg).map_err(|e| {
+            VmmError::Config(e.to_string())
+        })?;
+
+        let event = VmmEvent::Start { id: request.id };
+
+        channel.lock().await.send(event).await.map_err(|e| {
+            VmmError::SystemError(e.to_string())
+        })?;
+
         Ok(())
     }
 
@@ -393,6 +475,7 @@ async fn list(
 
     request_receive(channel, event).await
 }
+
 async fn power_button() {}
 async fn reboot() {}
 async fn commit() {}
