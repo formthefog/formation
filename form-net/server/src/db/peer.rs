@@ -1,6 +1,7 @@
 use super::{CrdtMap, DatabaseCidr, Sqlite};
 use crate::ServerError;
-use form_state::datastore::{PeerRequest, Response, Success};
+use form_state::datastore::PeerRequest;
+use form_types::state::{Response, Success};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use rusqlite::{params, types::Type, Connection};

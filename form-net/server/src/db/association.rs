@@ -3,7 +3,8 @@
 //! A peer belongs to one parent CIDR, and can by default see all peers within that parent.
 
 use crate::ServerError;
-use form_state::datastore::{Response, AssocRequest, Success};
+use form_types::state::{Response, Success};
+use form_state::datastore::AssocRequest;
 use rusqlite::{params, Connection};
 use shared::{Cidr, Association, AssociationContents};
 use std::{fmt::Display, marker::PhantomData, ops::{Deref, DerefMut}};
