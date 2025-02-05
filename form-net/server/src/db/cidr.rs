@@ -124,7 +124,7 @@ impl DatabaseCidr<String, CrdtMap> {
             return Err(ServerError::InvalidQuery);
         }
 
-        let request = Self::build_queue_request(CidrRequest::Create(contents.clone()))
+        let request = Self::build_cidr_queue_request(CidrRequest::Create(contents.clone()))
             .map_err(|_| ServerError::InvalidQuery)?;
 
         let resp = client 
@@ -150,7 +150,7 @@ impl DatabaseCidr<String, CrdtMap> {
         }
     }
 
-    pub fn build_queue_request(request: CidrRequest) -> Result<QueueRequest, Box<dyn std::error::Error>> {
+    pub fn build_cidr_queue_request(request: CidrRequest) -> Result<QueueRequest, Box<dyn std::error::Error>> {
         let mut message_code = vec![1];
         message_code.extend(serde_json::to_vec(&request)?);
         let topic = b"state";
@@ -168,7 +168,7 @@ impl DatabaseCidr<String, CrdtMap> {
             ..self.contents.clone()
         };
 
-        let request = Self::build_queue_request(CidrRequest::Update(new_contents.clone()))
+        let request = Self::build_cidr_queue_request(CidrRequest::Update(new_contents.clone()))
             .map_err(|_| ServerError::InvalidQuery)?;
 
         let resp = reqwest::Client::new() 
@@ -193,7 +193,7 @@ impl DatabaseCidr<String, CrdtMap> {
 
     pub async fn delete(id: String) -> Result<(), ServerError> {
         let request = CidrRequest::Delete(id.to_string());
-        let request = Self::build_queue_request(request)
+        let request = Self::build_cidr_queue_request(request)
             .map_err(|_| ServerError::InvalidQuery)?;
 
         let resp = reqwest::Client::new() 

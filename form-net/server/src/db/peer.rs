@@ -98,7 +98,7 @@ impl DatabasePeer<String, CrdtMap> {
             return Err(ServerError::InvalidQuery);
         }
 
-        let request = Self::build_queue_request(PeerRequest::Join(contents.clone()))
+        let request = Self::build_peer_queue_request(PeerRequest::Join(contents.clone()))
             .map_err(|_| ServerError::InvalidQuery)?;
 
         let resp = reqwest::Client::new()
@@ -123,7 +123,7 @@ impl DatabasePeer<String, CrdtMap> {
         }
     }
 
-    pub fn build_queue_request(request: PeerRequest) -> Result<QueueRequest, Box<dyn std::error::Error>> {
+    pub fn build_peer_queue_request(request: PeerRequest) -> Result<QueueRequest, Box<dyn std::error::Error>> {
         let mut message_code = vec![0];
         message_code.extend(serde_json::to_vec(&request)?);
         let topic = b"state";
@@ -155,7 +155,7 @@ impl DatabasePeer<String, CrdtMap> {
             ..self.contents.clone()
         };
 
-        let request = Self::build_queue_request(PeerRequest::Update(new_contents.clone()))
+        let request = Self::build_peer_queue_request(PeerRequest::Update(new_contents.clone()))
             .map_err(|_| ServerError::InvalidQuery)?;
 
         let resp = reqwest::Client::new()
@@ -198,7 +198,7 @@ impl DatabasePeer<String, CrdtMap> {
             ..peer_contents.clone()
         };
 
-        let request = Self::build_queue_request(PeerRequest::Update(new_contents.clone()))
+        let request = Self::build_peer_queue_request(PeerRequest::Update(new_contents.clone()))
             .map_err(|_| ServerError::InvalidQuery)?;
 
         let resp = reqwest::Client::new()
@@ -223,7 +223,7 @@ impl DatabasePeer<String, CrdtMap> {
             ..self.contents.clone()
         };
 
-        let request = Self::build_queue_request(PeerRequest::Update(new_contents.clone()))
+        let request = Self::build_peer_queue_request(PeerRequest::Update(new_contents.clone()))
             .map_err(|_| ServerError::InvalidQuery)?;
 
         let resp = reqwest::Client::new()

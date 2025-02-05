@@ -3,10 +3,12 @@
 //! A peer belongs to one parent CIDR, and can by default see all peers within that parent.
 
 use crate::ServerError;
+use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
 use form_types::state::{Response, Success};
 use form_state::datastore::AssocRequest;
 use rusqlite::{params, Connection};
 use shared::{Cidr, Association, AssociationContents};
+use tiny_keccak::{Hasher, Sha3};
 use std::{fmt::Display, marker::PhantomData, ops::{Deref, DerefMut}};
 
 use super::{CrdtMap, Sqlite};
@@ -102,22 +104,40 @@ impl DatabaseAssociation<CrdtMap, String, String> {
             return Err(ServerError::InvalidQuery);
         }
 
-        let request = AssocRequest::Create(contents);
+        let request = Self::build_association_queue_request(AssocRequest::Create(contents.clone()))
+            .map_err(|_| ServerError::InvalidQuery)?;
 
         let resp = reqwest::Client::new()
-            .post("http://127.0.0.1:3004/assoc/create")
+            .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
             .json(&request)
             .send()
             .await.map_err(|_| ServerError::InvalidQuery)?
-            .json::<Response<Association<String, String>>>()
+            .json::<QueueResponse>()
             .await.map_err(|_| ServerError::NotFound)?;
 
+        let assoc = Association {
+            id: format!("{}-{}", contents.cidr_id_1.clone(), contents.cidr_id_2.clone()),
+            contents,
+        };
+
         match resp {
-            Response::Success(Success::Some(assoc)) => {
-                return Ok(assoc.clone())
+            QueueResponse::OpSuccess => {
+                return Ok(assoc)
             }
             _ => return Err(ServerError::NotFound)
         }
+    }
+
+    pub fn build_association_queue_request(request: AssocRequest) -> Result<QueueRequest, Box<dyn std::error::Error>> {
+        let mut message_code = vec![2];
+        message_code.extend(serde_json::to_vec(&request)?);
+        let topic = b"state";
+        let mut hasher = Sha3::v256();
+        let mut topic_hash = [0u8; 32];
+        hasher.update(topic);
+        hasher.finalize(&mut topic_hash);
+        let queue_request = QueueRequest::Write { content: message_code, topic: topic_hash };
+        Ok(queue_request)
     }
 
     pub async fn list() -> Result<Vec<Association<String, String>>, ServerError> {
@@ -139,18 +159,19 @@ impl DatabaseAssociation<CrdtMap, String, String> {
     }
 
     pub async fn delete(id: i64) -> Result<(), ServerError> {
-        let request = AssocRequest::Delete((id.to_string(), id.to_string()));
+        let request = Self::build_association_queue_request(AssocRequest::Delete((id.to_string(), id.to_string())))
+            .map_err(|_| ServerError::InvalidQuery)?;
         let resp = reqwest::Client::new()
-            .post("http://127.0.0.1:3004/assoc/delete")
+            .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
             .json(&request)
             .send()
             .await.map_err(|_| ServerError::InvalidQuery)?
-            .json::<Response<Association<String, String>>>()
+            .json::<QueueResponse>()
             .await.map_err(|_| ServerError::NotFound)?;
 
         match resp {
-            Response::Success(_) => return Ok(()),
-            Response::Failure { .. } => return Err(ServerError::NotFound),
+            QueueResponse::OpSuccess => return Ok(()),
+            _ => return Err(ServerError::NotFound)
         }
     }
 }
