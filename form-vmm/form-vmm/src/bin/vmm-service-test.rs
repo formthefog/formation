@@ -88,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
     let create_vm_request = CreateVmRequest {
         name: format!("test-vm-{}", parser.test_run),
         recovery_id: 0,
-        formfile,
+        formfile: serde_json::to_string(&formfile)?,
         signature: Some("test-signature".to_string())
     };
 

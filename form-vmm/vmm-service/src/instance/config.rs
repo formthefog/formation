@@ -1,6 +1,7 @@
 use std::net::Ipv4Addr;
 use std::str::FromStr;
 use std::path::PathBuf;
+use form_pack::formfile::Formfile;
 use net_util::MacAddr;
 use serde::{Deserialize, Serialize};
 use crate::error::VmmError;
@@ -115,9 +116,13 @@ impl TryFrom<&VmmEvent> for VmInstanceConfig {
             VmmEvent::Create { 
                 formfile,
                 name,
+                ..
             } => { 
 
                 let rootfs_path = PathBuf::from(IMAGE_DIR).join(name).with_extension("raw"); 
+                let formfile: Formfile = serde_json::from_str(&formfile).map_err(|e| {
+                    VmmError::Config(e.to_string())
+                })?; 
                 let memory_mb = formfile.get_memory();
                 let vcpu_count = formfile.get_vcpus();
 

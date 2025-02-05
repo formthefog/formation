@@ -27,7 +27,7 @@ pub struct Cli {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let parser = Cli::parse();
     let addr = parser.interface.into_socketaddr(parser.port);
     let manager = FormPackManager::new(addr);
