@@ -20,10 +20,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 signing_key.unwrap()
             };
             let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1024);
+            let manager_shutdown = shutdown_tx.subscribe();
             let handle = tokio::task::spawn(async move {
                 if let Err(e) = run_vm_manager(
                     signing_key,
                     shutdown_rx,
+                    manager_shutdown,
                     sub_addr.as_deref(), 
                     pub_addr
                 ).await {
@@ -44,6 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn run_vm_manager(
     signing_key: String,
     shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+    manager_shutdown: tokio::sync::broadcast::Receiver<()>,
     subscriber_uri: Option<&str>,
     publisher_uri: Option<String>
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
@@ -57,6 +60,7 @@ async fn run_vm_manager(
         signing_key,
         subscriber_uri,
         publisher_uri,
+        manager_shutdown
     ).await?;
 
     vm_manager.run(shutdown_rx, event_receiver).await 

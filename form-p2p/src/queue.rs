@@ -28,6 +28,7 @@ pub enum QueueResponse {
     Full(BTreeMap<[u8; 32], Vec<Vec<u8>>>)
 }
 
+#[allow(unused)]
 pub struct FormMQ<T: Sha3Hash + Default + Debug + Clone + Ord> {
     queue: TopicQueue<T>,
     node_id: String,

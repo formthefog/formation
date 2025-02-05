@@ -1,6 +1,8 @@
-use std::collections::{btree_map::{Iter, IterMut}, BTreeMap};
+use std::{collections::{btree_map::{Iter, IterMut}, BTreeMap}, net::IpAddr};
 use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, CmRDT, Map, bft_reg::Update};
+use form_types::state::{Response, Success};
 use k256::ecdsa::SigningKey;
+use reqwest::Client;
 use serde::{Serialize, Deserialize};
 use tiny_keccak::Hasher;
 use crate::Actor;
@@ -219,6 +221,18 @@ impl Instance {
     pub fn scheme(&self) -> Option<String> {
         self.encryption().scheme()
     }
+
+    pub async fn get(id: &str) -> Option<Self> {
+        let resp = Client::new()
+            .get(format!("http://127.0.0.1:3004/{}/get", id))
+            .send().await.ok()?
+            .json::<Response<Self>>().await.ok()?;
+
+        match resp {
+            Response::Success(Success::Some(instance)) => return Some(instance),
+            _ => return None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -372,7 +386,11 @@ impl InstanceCluster {
 
 #[derive(Clone, Debug, Serialize, Deserialize, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ClusterMember {
+    pub node_id: String,
+    pub node_public_ip: IpAddr,
+    pub node_formnet_ip: IpAddr,
     pub instance_id: String,
+    pub instance_formnet_ip: IpAddr,
     pub status: String,
     pub last_heartbeat: i64,
     pub heartbeats_skipped: u32,
