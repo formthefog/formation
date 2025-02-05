@@ -87,7 +87,9 @@ impl VmmApi {
             tokio::select! {
                 Ok(messages) = Self::read_from_queue(Some(n), None) => {
                     for message in &messages {
-                        Self::handle_message(message.to_vec(), channel.clone()).await;
+                        if let Err(e) = Self::handle_message(message.to_vec(), channel.clone()).await {
+                            eprintln!("Error handling message in queue reader: {e}");
+                        }
                     }
                     n += messages.len();
                 }

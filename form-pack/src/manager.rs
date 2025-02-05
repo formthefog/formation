@@ -52,9 +52,11 @@ pub struct PackBuildRequest {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PackRequest {
-    name: String,
-    formfile: Formfile,
-    artifacts: Vec<u8>,
+    pub name: String,
+    pub formfile: Formfile,
+    pub artifacts: Vec<u8>,
+    pub signature: String,
+    pub recovery_id: u8,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -124,7 +126,7 @@ impl FormPackManager {
             0 =>  {
                 let msg: PackBuildRequest = serde_json::from_slice(request)?; 
                 if let Err(e) = self.handle_pack_request(msg.clone()).await {
-                    Self::write_pack_status_failed(&msg, e.to_string());
+                    Self::write_pack_status_failed(&msg, e.to_string()).await?;
                     return Err(e)
                 }
             }
