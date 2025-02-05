@@ -1,9 +1,11 @@
 use crate::ServerError;
+use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
 use form_state::datastore::CidrRequest;
 use form_types::state::{Response, Success};
 use ipnet::IpNet;
 use rusqlite::{params, Connection};
 use shared::{Cidr, CidrContents};
+use tiny_keccak::{Hasher, Sha3};
 use std::{fmt::Display, marker::PhantomData, ops::{Deref, DerefMut}};
 
 use super::{CrdtMap, Sqlite};
@@ -122,23 +124,42 @@ impl DatabaseCidr<String, CrdtMap> {
             return Err(ServerError::InvalidQuery);
         }
 
-        let request = CidrRequest::Create(contents.clone());
+        let request = Self::build_queue_request(CidrRequest::Create(contents.clone()))
+            .map_err(|_| ServerError::InvalidQuery)?;
 
         let resp = client 
-            .post("http://127.0.0.1:3004/cidr/create")
+            .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
             .json(&request)
             .send()
             .await.map_err(|_| ServerError::InvalidQuery)?
-            .json::<Response<Cidr<String>>>()
+            .json::<QueueResponse>()
             .await.map_err(|_| ServerError::NotFound)?;
 
+        let db_cidr = DatabaseCidr {
+            inner: Cidr {
+                id: contents.name.clone(),
+                contents: contents.clone()
+            },
+            marker: PhantomData::<String>
+        };
         match resp {
-            Response::Success(Success::Some(cidr)) => {
-                let cidr: DatabaseCidr<String, CrdtMap> = cidr.into();
-                return Ok(cidr.inner)
+            QueueResponse::OpSuccess => {
+                return Ok(db_cidr.inner)
             }
             _ => return Err(ServerError::NotFound),
         }
+    }
+
+    pub fn build_queue_request(request: CidrRequest) -> Result<QueueRequest, Box<dyn std::error::Error>> {
+        let mut message_code = vec![1];
+        message_code.extend(serde_json::to_vec(&request)?);
+        let topic = b"state";
+        let mut hasher = Sha3::v256();
+        let mut topic_hash = [0u8; 32];
+        hasher.update(topic);
+        hasher.finalize(&mut topic_hash);
+        let queue_request = QueueRequest::Write { content: message_code, topic: topic_hash };
+        Ok(queue_request)
     }
 
     pub async fn update(&mut self, contents: CidrContents<String>) -> Result<(), ServerError> {
@@ -147,42 +168,50 @@ impl DatabaseCidr<String, CrdtMap> {
             ..self.contents.clone()
         };
 
-        let request = CidrRequest::Update(new_contents.clone());
-        let resp = reqwest::Client::new()
-            .post("http://127.0.0.1:3004/cidr/update")
+        let request = Self::build_queue_request(CidrRequest::Update(new_contents.clone()))
+            .map_err(|_| ServerError::InvalidQuery)?;
+
+        let resp = reqwest::Client::new() 
+            .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
             .json(&request)
             .send()
             .await.map_err(|_| ServerError::InvalidQuery)?
-            .json::<Response<Cidr<String>>>()
+            .json::<QueueResponse>()
             .await.map_err(|_| ServerError::NotFound)?;
+
         match resp {
-            Response::Success(_) => {
+            QueueResponse::OpSuccess => {
                 self.contents = new_contents;
                 return Ok(())
             }
-            Response::Failure { .. }=> {
+            QueueResponse::Failure { .. }=> {
                 return Err(ServerError::NotFound)
             }
+            _ => return Err(ServerError::Unauthorized)
         }
     }
 
     pub async fn delete(id: String) -> Result<(), ServerError> {
         let request = CidrRequest::Delete(id.to_string());
-        let resp = reqwest::Client::new()
-            .post("http://127.0.0.1:3004/cidr/delete")
+        let request = Self::build_queue_request(request)
+            .map_err(|_| ServerError::InvalidQuery)?;
+
+        let resp = reqwest::Client::new() 
+            .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
             .json(&request)
             .send()
             .await.map_err(|_| ServerError::InvalidQuery)?
-            .json::<Response<Cidr<String>>>()
+            .json::<QueueResponse>()
             .await.map_err(|_| ServerError::NotFound)?;
 
         match resp {
-            Response::Success(_) => {
+            QueueResponse::OpSuccess => {
                 return Ok(())
             }
-            Response::Failure { .. }=> {
+            QueueResponse::Failure { .. }=> {
                 return Err(ServerError::NotFound)
             }
+            _ => return Err(ServerError::Unauthorized)
         }
     }
 
