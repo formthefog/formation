@@ -1,8 +1,11 @@
+use std::collections::BTreeMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 // src/service/vmm.rs
 use std::{collections::HashMap, path::PathBuf};
 use std::net::SocketAddr;
-use crdts::bft_reg::RecoverableSignature;
-use form_state::instances::Instance;
+use form_pack::formfile::Formfile;
+use form_state::datastore::InstanceRequest;
+use form_state::instances::{Instance, InstanceAnnotations, InstanceCluster, InstanceEncryption, InstanceMetadata, InstanceMonitoring, InstanceResources, InstanceSecurity, InstanceStatus};
 use formnet::{JoinRequest, JoinResponse, VmJoinRequest};
 use http_body_util::{BodyExt, Full};
 use hyper::StatusCode;
@@ -525,11 +528,60 @@ impl VmManager {
                 )
             )
         })?;
+
+        let formfile: Formfile = serde_json::from_str(&config.formfile)?;
         
+        let mut instance = Instance {
+            instance_id: config.name.clone(),
+            instance_owner: config.owner.clone(),
+            created_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
+            updated_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
+            status: InstanceStatus::Created,
+            last_snapshot: 0,
+            host_region: String::new(),
+            formfile: config.formfile.clone(),
+            cluster: InstanceCluster {
+                members: BTreeMap::new()
+            },
+            snapshots: None,
+            metadata: InstanceMetadata {
+                annotations: InstanceAnnotations {
+                    deployed_by: config.owner.clone(),
+                    build_commit: None,
+                    network_id: 0,
+                },
+                description: String::new(),
+                monitoring: InstanceMonitoring {
+                    logging_enabled: false,
+                    metrics_endpoint: String::new()
+                },
+                security: InstanceSecurity {
+                    encryption: InstanceEncryption {
+                        is_encrypted: false,
+                        scheme: None,
+                    },
+                    hsm: false,
+                    tee: false
+                },
+                tags: vec![]
+            },
+            resources: InstanceResources {
+                vcpus: formfile.get_vcpus(),
+                memory_mb: formfile.get_memory() as u32,
+                bandwidth_mbps: 1024,
+                gpu: None
+            },
+        };
+
+        VmmApi::write_to_queue(InstanceRequest::Update(instance.clone()), 4, "state").await?;
+
         log::info!("Inserting Form VMM into vm_monitoris map");
         self.vm_monitors.insert(config.name.clone(), vmm);
         log::info!("Calling `boot` on FormVmm");
         self.boot(&config.name).await?;
+
+        instance.status = InstanceStatus::Started;
+        instance.updated_at = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
 
         if let Err(e) = add_tap_to_bridge("br0", &config.tap_device.clone()).await {
             log::error!("Error attempting to add tap device {} to bridge: {e}", &config.tap_device)

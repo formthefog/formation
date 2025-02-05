@@ -143,14 +143,27 @@ impl VmmApi {
         Ok(hex::encode(Address::from_public_key(&pubkey)))
     }
 
+    pub fn extract_instance_id(name: String, owner: String) -> Result<String, VmmError> {
+        let mut hasher = Sha3::v256();
+        let mut hash = [0u8; 32];
+        let owner = Address::from_slice(&hex::decode(owner).map_err(|e| {
+            VmmError::Config(e.to_string())
+        })?);
+        hasher.update(owner.as_ref());
+        hasher.update(name.as_bytes());
+        hasher.finalize(&mut hash);
+        Ok(hex::encode(hash))
+    }
+
     pub async fn handle_create_vm_message(msg: &[u8], channel: Arc<Mutex<VmmApiChannel>>) -> Result<(), VmmError> {
         let request: CreateVmRequest = serde_json::from_slice(msg).map_err(|e| {
             VmmError::Config(e.to_string())
         })?;
         let owner = Self::extract_owner_from_create_request(request.clone())?;
+        let instance_id = Self::extract_instance_id(request.name, owner.clone())?;
         let event = VmmEvent::Create { 
             formfile: request.formfile, 
-            name: request.name, 
+            name: instance_id, 
             owner,
         };
 

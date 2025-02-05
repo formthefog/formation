@@ -24,6 +24,7 @@ pub struct VmInstanceConfig {
     pub custom_cmdline: Option<String>,
     pub rng_source: Option<String>,
     pub console_type: ConsoleType,
+    pub formfile: String,
     pub owner: String,
 }
 
@@ -38,6 +39,7 @@ impl Default for VmInstanceConfig {
             ip_addr: "11.0.0.44".to_string(),
             memory_mb: 1024,
             vcpu_count: 2,
+            formfile: String::new(),
             name: name.to_string(),
             custom_cmdline: None,
             rng_source: None,
@@ -137,6 +139,7 @@ impl TryFrom<&VmmEvent> for VmInstanceConfig {
                     vcpu_count,
                     name: name.clone(),
                     owner: owner.to_string(),
+                    formfile: serde_json::to_string(&formfile).map_err(|e| VmmError::Config(e.to_string()))?,
                     ..Default::default()
                 })
             },
