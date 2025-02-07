@@ -40,6 +40,8 @@ COPY ./target/release/form-pack-manager /usr/local/bin/form-pack-manager
 # Copy our formnet binary into /usr/local/bin 
 COPY ./target/release/formnet /usr/local/bin/formnet
 
+# Copy our formnet binary into /usr/local/bin 
+COPY ./target/release/form-p2p /usr/local/bin/form-p2p
 
 # Copy the form-state run script into /usr/local/bin
 COPY ./scripts/run-form-state.sh /usr/local/bin/run-form-state.sh
@@ -56,6 +58,8 @@ COPY ./scripts/run-formnet.sh /usr/local/bin/run-formnet.sh
 # Copy the PackManager run script into /usr/local/bin
 COPY ./scripts/run-pack-manager.sh /usr/local/bin/run-pack-manager.sh
 
+COPY ./scripts/run-form-p2p.sh /usr/local/bin/run-form-p2p.sh
+
 # Copy he formnet run script into /usr/local/bin
 COPY ./scripts/formation-minimal-entrypoint.sh /entrypoint.sh
 
@@ -67,6 +71,7 @@ RUN chmod +x /usr/local/bin/run-formnet.sh
 RUN chmod +x /usr/local/bin/run-pack-manager.sh
 # Provide the form-state run script with executable permission
 RUN chmod +x /usr/local/bin/run-form-state.sh
+RUN chmod +x /usr/local/bin/run-form-p2p.sh
 
 # Provide the entrypoint script with executable permission
 RUN chmod +x /entrypoint.sh
@@ -81,6 +86,7 @@ EXPOSE 3002
 EXPOSE 3003
 EXPOSE 3004
 EXPOSE 3005
+EXPOSE 53333
 EXPOSE 51820
 
 WORKDIR /app

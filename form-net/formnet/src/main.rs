@@ -114,6 +114,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ).await?;
                         ensure_crdt_datastore().await?;
                         redeem(invitation)?;
+                    } else if !operator_config.unwrap().bootstrap_nodes.is_empty() {
+                        let invitation = request_to_join(
+                            parser.bootstraps.clone(),
+                            address.clone(),
+                            PeerType::Operator
+                        ).await?;
+                        ensure_crdt_datastore().await?;
+                        redeem(invitation)?;
                     } else {
                         init(address.clone()).await?;
                     }
