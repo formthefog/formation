@@ -45,7 +45,7 @@ pub fn create_vm_config(config: &VmInstanceConfig) -> VmConfig {
                 file: None,
                 mode: ConsoleOutputMode::Socket,
                 iommu: false,
-                socket: Some(PathBuf::from(&format!("/run/form-vm/{}-console.sock", &config.name))), 
+                socket: Some(PathBuf::from(&format!("/run/form-vmm/{}-console.sock", &config.name))), 
             },
             ConsoleConfig {
                 file: None,
@@ -59,7 +59,7 @@ pub fn create_vm_config(config: &VmInstanceConfig) -> VmConfig {
                 file: None,
                 mode: ConsoleOutputMode::Socket,
                 iommu: false,
-                socket: Some(PathBuf::from(&format!("/run/form-vm/{}-console.sock", &config.name))), 
+                socket: Some(PathBuf::from(&format!("/run/form-vmm/{}-console.sock", &config.name))), 
             },
             ConsoleConfig {
                 file: None,

@@ -48,20 +48,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     simple_logger::init_with_level(log::Level::Info)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
-    let args = CliArgs::parse();
-    let config = OperatorConfig::from_file(args.config, args.encrypted, args.password.as_deref()).ok();
-
     // Parse command line args
     let args = CliArgs::parse();
     let config = OperatorConfig::from_file(args.config, args.encrypted, args.password.as_deref()).ok();
     match args.command {
-        CliCommand::Run { signing_key, sub_addr, pub_addr } => {
+        CliCommand::Run { signing_key, sub_addr: _, pub_addr: _ } => {
+            log::info!("Acquiring signing key");
             let signing_key = if signing_key.is_none() {
                 let config = config.unwrap();
                 config.secret_key.unwrap()
             } else {
                 signing_key.unwrap()
             };
+            log::info!("Deriving address from signing key");
             let address = hex::encode(
                 Address::from_private_key(
                     &SigningKey::from_slice(
@@ -69,17 +68,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     )?
                 )
             );
+            log::info!("Building shared queue");
             let queue = Arc::new(RwLock::new(FormMQ::new(address, signing_key, String::new())));
             let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1024);
             let inner_queue = queue.clone();
             let handle = tokio::spawn(async move {
+                log::info!("Serving queue api on 0.0.0.0:{QUEUE_PORT}");
                 if let Err(e) = form_p2p::api::serve(inner_queue, QUEUE_PORT).await {
                     eprintln!("Error serving queue api: {e}");
                 } 
             });
-            let _ = tokio::signal::ctrl_c().await;
+            log::info!("Awaiting shutdown signal");
+            let _ = tokio::signal::ctrl_c().await?;
             shutdown_tx.send(())?;
-            handle.await?;
+            handle.abort();
         }
         _ => {}
     }

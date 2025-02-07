@@ -238,6 +238,7 @@ pub enum VmmEvent {
     },
     BootComplete {
         id: String,
+        build_id: String,
         formnet_ip: String,
         #[cfg(any(feature = "testnet", feature = "mainnet"))]
         signature: String,

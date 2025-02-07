@@ -87,20 +87,24 @@ impl DatabasePeer<String, CrdtMap> {
             return Err(ServerError::InvalidQuery);
         }
 
+        log::info!("Name is valid getting, getting cidr: {}", contents.cidr_id.clone()); 
         let cidr = DatabaseCidr::<String, CrdtMap>::get(contents.cidr_id.clone()).await?;
         if !cidr.cidr.contains(&contents.ip) {
             log::warn!("Tried to add peer with IP outside of parent CIDR range.");
             return Err(ServerError::InvalidQuery);
         }
 
+        log::info!("CIDR is valid and contains proposed ip");
         if !cidr.cidr.is_assignable(&contents.ip) {
             log::warn!("Peer IP {} is not unicast assignable in CIDR {}", contents.ip, cidr.cidr);
             return Err(ServerError::InvalidQuery);
         }
 
+        log::info!("ip is assignable");
         let request = Self::build_peer_queue_request(PeerRequest::Join(contents.clone()))
             .map_err(|_| ServerError::InvalidQuery)?;
 
+        log::info!("Writing create peer to queue...");
         let resp = reqwest::Client::new()
             .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
             .json(&request)

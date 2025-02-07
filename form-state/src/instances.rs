@@ -22,6 +22,8 @@ pub enum InstanceStatus {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Instance {
     pub instance_id: String,
+    pub node_id: String,
+    pub build_id: String,
     pub instance_owner: String,
     pub created_at: i64,
     pub updated_at: i64,
@@ -224,7 +226,7 @@ impl Instance {
 
     pub async fn get(id: &str) -> Option<Self> {
         let resp = Client::new()
-            .get(format!("http://127.0.0.1:3004/{}/get", id))
+            .get(format!("http://127.0.0.1:3004/instance/{}/get", id))
             .send().await.ok()?
             .json::<Response<Self>>().await.ok()?;
 

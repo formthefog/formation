@@ -6,6 +6,7 @@ use colored::*;
 use form_cli::{
     decrypt_file, default_config_dir, default_data_dir, default_keystore_dir, join_formnet, operator_config, Config, Init, Keystore, KitCommand, ManageCommand, Operator, PackCommand, WalletCommand
 };
+use form_p2p::queue::QUEUE_PORT;
 
 /// The official developer CLI for building, deploying and managing 
 /// verifiable confidential VPS instances in the Formation network
@@ -44,11 +45,13 @@ pub struct Form {
     /// The port where the providers formnet api listens
     #[clap(default_value="3001")]
     formnet_port: u16,
-    #[clap()]
+    #[clap(short='q', default_value_t=true)]
+    queue: bool,
+    #[clap(short='P', long="password")]
     keystore_password: Option<String>,
     /// The subcommand that will be called 
     #[clap(subcommand)]
-    pub command: FormCommand 
+    pub command: FormCommand
 }
 
 #[derive(Debug, Subcommand)]
@@ -72,10 +75,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         FormCommand::Pack(ref pack_command) => {
             match pack_command {
                 PackCommand::Build(build_command) => {
-                    let (config, _keystore) = load_config_and_keystore(&parser).await?;
+                    println!("Attempting to acquire config and keystore");
+                    let (config, keystore) = load_config_and_keystore(&parser).await?;
+                    println!("getting provider from config");
                     let provider = config.hosts[0].clone();
-                    let resp = build_command.clone().handle(&provider, config.pack_manager_port).await?;
-                    println!("Response: {resp:?}");
+                    if parser.queue {
+                        let resp = build_command.clone().handle_queue(&provider, QUEUE_PORT, keystore).await;
+                        println!("Response: {resp:?}");
+                    } else {
+                        let resp = build_command.clone().handle(&provider, config.pack_manager_port).await;
+                        println!("Response: {resp:?}");
+                    }
                 }
                 PackCommand::DryRun(dry_run_command) => {
                     let resp = dry_run_command.clone().handle().await?;
@@ -88,10 +98,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 PackCommand::Ship(ship_command) => {
-                    let (config, _keystore) = load_config_and_keystore(&parser).await?;
+                    let (config, keystore) = load_config_and_keystore(&parser).await?;
                     let provider = config.hosts[0].clone();
-                    let resp = ship_command.handle(&provider, config.vmm_port).await?;
-                    println!("Response: {resp:?}");
+                    if parser.queue {
+                        let resp = ship_command.clone().handle_queue(&provider, Some(keystore)).await;
+                        println!("Response: {resp:?}");
+                    } else {
+                        let resp = ship_command.clone().handle(&provider, config.pack_manager_port).await;
+                        println!("Response: {resp:?}");
+                    }
                 }
             }
         }
@@ -120,8 +135,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 pub async fn load_config_and_keystore(parser: &Form) -> Result<(Config, Keystore), Box<dyn std::error::Error>> {
+    println!("loading config");
     let config = load_config(parser).await?;
     let host = config.hosts[0].clone();
+    println!("loading keystore");
     let keystore = load_keystore(&parser, &config).await?;
 
     if config.join_formnet {
@@ -134,7 +151,8 @@ pub async fn load_config_and_keystore(parser: &Form) -> Result<(Config, Keystore
 pub async fn load_keystore(parser: &Form, config: &Config) -> Result<Keystore, Box<dyn std::error::Error>> {
     let keystore: Keystore = {
         if let Some(password) = &parser.keystore_password {
-            let path = config.keystore_path.clone();
+            println!("Password provided, assuming encryption...");
+            let path = config.keystore_path.clone().join("form_id");
             let data = std::fs::read(path)?;
             serde_json::from_slice(&decrypt_file(&data, &password)?)?
         } else {

@@ -9,6 +9,7 @@ pub struct PingVmmRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BootCompleteRequest {
+    pub build_id: String,
     pub name: String,
     pub formnet_ip: String,
 }

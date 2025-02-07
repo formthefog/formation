@@ -67,7 +67,8 @@ form-broker = { path = "../../form-broker" }
 form-pack = { path = "../../form-pack" }
 form-p2p = { path = "../../form-p2p" }
 form-state = { path = "../../form-state" }
-crdts = { git = "https://github.com/cryptonomikhan/rust-crdt.git" }
+formnet-server = { path = "../../form-net/server" }
+crdts = { path = "../../../external/rust-crdt" }
 alloy-primitives = { version = "0.8", features = ["k256"] } 
 k256 = { version = "0.13", features = ["ecdsa", "ecdsa-core"]}
 hex = "0.4"

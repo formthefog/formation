@@ -1,8 +1,7 @@
-use std::{collections::{HashMap, HashSet}, sync::Arc, time::{SystemTime, UNIX_EPOCH}};
+use std::{collections::{HashMap, HashSet}, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
 use axum::{extract::{State, Path}, routing::{get, post}, Json, Router};
 use form_dns::{api::{DomainRequest, DomainResponse}, store::FormDnsRecord};
 use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
-use futures::stream::FuturesUnordered;
 use reqwest::Client;
 use serde_json::Value;
 use shared::{Association, AssociationContents, Cidr, CidrContents, Peer, PeerContents};
@@ -109,6 +108,7 @@ impl DataStore {
 
     pub fn get_all_cidrs(&self) -> HashMap<String, CrdtCidr<String>> {
         log::info!("Getting all cidrs from datastore network state...");
+        log::info!("CIDRS: {:?}", self.network_state.cidrs);
         self.network_state.cidrs.iter().filter_map(|item| {
             match item.val.1.val() {
                 Some(v) => Some((item.val.0.clone(), v.value().clone())),
@@ -184,7 +184,7 @@ impl DataStore {
                 self.network_state.peer_op(peer_op.clone());
                 if let (true, _) = self.network_state.peer_op_success(key.clone(), op.clone()) {
                     log::info!("Peer Op succesffully applied...");
-                    DataStore::write_to_queue(peer_op.clone(), 0).await?;
+                    DataStore::write_to_queue(PeerRequest::Op(peer_op.clone()), 0).await?;
                 } else {
                     log::info!("Peer Op rejected...");
                     return Err(
@@ -243,10 +243,10 @@ impl DataStore {
             Op::Up { dot: _, key, op } => {
                 self.network_state.cidr_op(cidr_op.clone());
                 if let (true, _) = self.network_state.cidr_op_success(key.clone(), op.clone()) {
-                    log::info!("Peer Op succesffully applied...");
-                    DataStore::write_to_queue(cidr_op.clone(), 1).await?;
+                    log::info!("CIDR Op succesffully applied...");
+                    DataStore::write_to_queue(CidrRequest::Op(cidr_op.clone()), 1).await?;
                 } else {
-                    log::info!("Peer Op rejected...");
+                    log::info!("CIDR Op rejected...");
                     return Err(
                         Box::new(
                             std::io::Error::new(
@@ -300,10 +300,10 @@ impl DataStore {
             Op::Up { dot: _, key, op } => {
                 self.network_state.associations_op(assoc_op.clone());
                 if let (true, _) = self.network_state.associations_op_success(key.clone(), op.clone()) {
-                    log::info!("Peer Op succesffully applied...");
-                    DataStore::write_to_queue(op.clone(), 2).await?;
+                    log::info!("Assoc Op succesffully applied...");
+                    DataStore::write_to_queue(AssocRequest::Op(assoc_op.clone()), 2).await?;
                 } else {
-                    log::info!("Peer Op rejected...");
+                    log::info!("Assoc Op rejected...");
                     return Err(
                         Box::new(
                             std::io::Error::new(
@@ -352,10 +352,10 @@ impl DataStore {
             Op::Up { dot: _, key, op } => {
                 self.network_state.dns_op(dns_op.clone());
                 if let (true, _) = self.network_state.dns_op_success(key.clone(), op.clone()) {
-                    log::info!("Peer Op succesffully applied...");
-                    DataStore::write_to_queue(op.clone(), 2).await?;
+                    log::info!("DNS Op succesffully applied...");
+                    DataStore::write_to_queue(DnsRequest::Op(dns_op.clone()), 3).await?;
                 } else {
-                    log::info!("Peer Op rejected...");
+                    log::info!("DNS Op rejected...");
                     return Err(
                         Box::new(
                             std::io::Error::new(
@@ -412,10 +412,10 @@ impl DataStore {
             Op::Up { dot: _, key, op } => {
                 self.instance_state.instance_op(instance_op.clone());
                 if let (true, _) = self.instance_state.instance_op_success(key.clone(), op.clone()) {
-                    log::info!("Peer Op succesffully applied...");
-                    DataStore::write_to_queue(op.clone(), 2).await?;
+                    log::info!("Instance Op succesffully applied...");
+                    DataStore::write_to_queue(InstanceRequest::Op(instance_op.clone()), 4).await?;
                 } else {
-                    log::info!("Peer Op rejected...");
+                    log::info!("Instance Op rejected...");
                     return Err(
                         Box::new(
                             std::io::Error::new(
@@ -471,7 +471,7 @@ impl DataStore {
                 self.node_state.node_op(node_op.clone());
                 if let (true, _) = self.node_state.node_op_success(key.clone(), op.clone()) {
                     log::info!("Peer Op succesffully applied...");
-                    DataStore::write_to_queue(op.clone(), 2).await?;
+                    DataStore::write_to_queue(NodeRequest::Op(node_op.clone()), 5).await?;
                 } else {
                     log::info!("Peer Op rejected...");
                     return Err(
@@ -545,7 +545,7 @@ impl DataStore {
     ) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error>> {
         let mut endpoint = format!("http://127.0.0.1:{}/queue/state", QUEUE_PORT);
         if let Some(idx) = last {
-            let idx = idx + 1;
+            let idx = idx;
             endpoint.push_str(&format!("/{idx}"));
             if let Some(n) = n {
                 endpoint.push_str(&format!("/{n}/get_n_after"));
@@ -564,8 +564,13 @@ impl DataStore {
             .get(endpoint.clone())
             .send().await?
             .json::<QueueResponse>().await? {
-                QueueResponse::List(list) => Ok(list),
-                QueueResponse::Failure { reason } => Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("{reason:?}")))),
+                QueueResponse::List(list) => {
+                    log::info!("read from queue...");
+                    Ok(list)
+                },
+                QueueResponse::Failure { reason } => {
+                    Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("{reason:?}"))))
+                },
                 _ => Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Invalid response variant for {endpoint}")))) 
         }
     }
@@ -642,8 +647,8 @@ impl DataStore {
             .route("/dns/list", post(list_dns_records))
             .route("/instance/create", post(create_instance))
             .route("/instance/update", post(update_instance))
-            .route("/instance/:id/get", get(get_instance))
-            .route("/instance/:id/delete", post(delete_instance))
+            .route("/instance/:instance_id/get", get(get_instance))
+            .route("/instance/:instance_id/delete", post(delete_instance))
             .route("/instance/list", get(list_instances))
             .route("/node/create", post(create_node))
             .route("/node/update", post(update_node))
@@ -665,14 +670,22 @@ impl DataStore {
         });
 
         let mut n = 0;
-        let futures = FuturesUnordered::new();
+        let polling_interval = 100;
         loop {
             tokio::select! {
                 Ok(messages) = DataStore::read_from_queue(Some(n), None) => {
                     n += messages.len();
                     for message in messages {
-                        futures.push(process_message(message, datastore.clone()))
+                        log::info!("pulled message from queue");
+                        let ds = datastore.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = process_message(message, ds).await {
+                                eprintln!("Error processing message: {e}");
+                            }
+                        });
                     }
+                }
+                _ = tokio::time::sleep(Duration::from_millis(polling_interval)) => {
                 }
                 _ = shutdown.recv() => {
                     break;
@@ -696,10 +709,12 @@ pub async fn process_message(message: Vec<u8>, state: Arc<Mutex<DataStore>>) -> 
 
     match subtopic {
         0 => {
+            log::info!("Pulled peer request from queue, processing...");
             let peer_request: PeerRequest = serde_json::from_slice(payload)?;
             guard.handle_peer_request(peer_request).await?;
         },
         1 => {
+            log::info!("Pulled cidr request from queue, processing...");
             let cidr_request: CidrRequest = serde_json::from_slice(payload)?;
             guard.handle_cidr_request(cidr_request).await?;
         },
@@ -1288,7 +1303,11 @@ async fn get_cidr(
     State(state): State<Arc<Mutex<DataStore>>>,
     Path(id): Path<String>
 ) -> Json<Response<Cidr<String>>> {
-    if let Some(cidr) = state.lock().await.network_state.cidrs.get(&id).val {
+    let guard = state.lock().await;
+    log::info!("Request to get cidr: {id}");
+    let keys: Vec<String> = guard.network_state.cidrs.keys().map(|ctx| ctx.val.clone()).collect();
+    log::info!("Existing keys: {keys:?}");
+    if let Some(cidr) = guard.network_state.cidrs.get(&id).val {
         if let Some(val) = cidr.val() {
             return Json(Response::Success(Success::Some(val.value().into())))
         } else {
@@ -1301,6 +1320,7 @@ async fn get_cidr(
 async fn list_cidr(
     State(state): State<Arc<Mutex<DataStore>>>,
 ) -> Json<Response<Cidr<String>>> {
+    log::info!("Received list cidr request");
     let cidrs = state.lock().await.get_all_cidrs().iter().map(|(_, v)| v.clone().into()).collect();
     Json(Response::Success(Success::List(cidrs)))
 } 
@@ -2012,16 +2032,17 @@ async fn get_instance(
     Path(id): Path<String>,
 ) -> Json<Response<Instance>> {
     let datastore = state.lock().await;
+    log::info!("Attempting to get instance {id}");
     if let Some(instance) = datastore.instance_state.get_instance(id.clone()) {
         return Json(Response::Success(Success::Some(instance)))
     }
 
-    return Json(Response::Failure { reason: Some(format!("Unable to find instance with id: {id}"))})
+    return Json(Response::Failure { reason: Some(format!("Unable to find instance with instance_id, node_id: {}", id))})
 }
 
 async fn delete_instance(
     State(state): State<Arc<Mutex<DataStore>>>,
-    Path(_id): Path<String>,
+    Path(_id): Path<(String, String)>,
     Json(request): Json<InstanceRequest>
 ) -> Json<Response<Instance>> {
     let mut datastore = state.lock().await;

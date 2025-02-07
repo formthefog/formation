@@ -21,17 +21,20 @@ use form_types::{BootCompleteRequest, CreateVmRequest, DeleteVmRequest, GetVmReq
 
 pub struct VmmApiChannel {
     event_sender: mpsc::Sender<VmmEvent>,
-    response_receiver: mpsc::Receiver<String>
+    response_receiver: mpsc::Receiver<String>,
+    node_id: String,
 }
 
 impl VmmApiChannel {
     pub fn new(
         tx: mpsc::Sender<VmmEvent>,
-        rx: mpsc::Receiver<String>
+        rx: mpsc::Receiver<String>,
+        node_id: String,
     ) -> Self {
         Self{
             event_sender: tx,
-            response_receiver: rx
+            response_receiver: rx,
+            node_id,
         }
     }
 
@@ -93,6 +96,7 @@ impl VmmApi {
                     }
                     n += messages.len();
                 }
+                _ = tokio::time::sleep(Duration::from_millis(100)) => {}
                 _ = shutdown.recv() => {
                     break;
                 }
@@ -103,14 +107,15 @@ impl VmmApi {
 
     pub async fn handle_message(message: Vec<u8>, channel: Arc<Mutex<VmmApiChannel>>) -> Result<(), VmmError> {
         let subtopic = message[0];
+        log::info!("Received subtopic: {subtopic}");
         let msg = &message[1..];
         match subtopic {
-            1 => Self::handle_create_vm_message(msg, channel.clone()).await?,
-            2 => Self::handle_boot_vm_message(msg, channel.clone()).await?, 
-            3 => Self::handle_delete_vm_message(msg, channel.clone()).await?,
-            4 => Self::handle_stop_vm_message(msg, channel.clone()).await?,
-            5 => Self::handle_reboot_vm_message(msg, channel.clone()).await?,
-            6 => Self::handle_start_vm_message(msg, channel.clone()).await?,
+            0 => Self::handle_create_vm_message(msg, channel.clone()).await?,
+            1 => Self::handle_boot_vm_message(msg, channel.clone()).await?, 
+            2 => Self::handle_delete_vm_message(msg, channel.clone()).await?,
+            3 => Self::handle_stop_vm_message(msg, channel.clone()).await?,
+            4 => Self::handle_reboot_vm_message(msg, channel.clone()).await?,
+            5 => Self::handle_start_vm_message(msg, channel.clone()).await?,
             _ => unreachable!()
         }
         Ok(())
@@ -137,7 +142,7 @@ impl VmmApi {
             Some(n) => n,
             None => return Err(VmmError::Config("Recovery ID is invalid".to_string())) 
         };
-        let pubkey = match VerifyingKey::recover_from_prehash(
+        let pubkey = match VerifyingKey::recover_from_msg(
             &prehash,
             &sig, 
             rec_id
@@ -148,7 +153,7 @@ impl VmmApi {
         Ok(hex::encode(Address::from_public_key(&pubkey)))
     }
 
-    pub fn extract_instance_id(name: String, owner: String) -> Result<String, VmmError> {
+    pub fn extract_build_id(name: String, owner: String) -> Result<String, VmmError> {
         let mut hasher = Sha3::v256();
         let mut hash = [0u8; 32];
         let owner = Address::from_slice(&hex::decode(owner).map_err(|e| {
@@ -165,16 +170,18 @@ impl VmmApi {
             VmmError::Config(e.to_string())
         })?;
         let owner = Self::extract_owner_from_create_request(request.clone())?;
-        let instance_id = Self::extract_instance_id(request.name, owner.clone())?;
         let event = VmmEvent::Create { 
             formfile: request.formfile, 
-            name: instance_id, 
+            name: request.name, 
             owner,
         };
 
-        channel.lock().await.send(event).await.map_err(|e| {
+        let guard = channel.lock().await; 
+        guard.send(event).await.map_err(|e| {
             VmmError::SystemError(e.to_string())
         })?;
+
+        drop(guard);
 
         Ok(())
     }
@@ -185,10 +192,12 @@ impl VmmApi {
         })?;
 
         let event = VmmEvent::Start { id: request.id };
-        channel.lock().await.send(event).await.map_err(|e| {
+        let guard = channel.lock().await; 
+        guard.send(event).await.map_err(|e| {
             VmmError::SystemError(e.to_string())
         })?;
 
+        drop(guard);
         Ok(())
     }
 
@@ -199,9 +208,11 @@ impl VmmApi {
 
         let event = VmmEvent::Delete { id: request.id };
 
-        channel.lock().await.send(event).await.map_err(|e| {
+        let guard = channel.lock().await; 
+        guard.send(event).await.map_err(|e| {
             VmmError::SystemError(e.to_string())
         })?;
+        drop(guard);
 
         Ok(())
     }
@@ -213,9 +224,12 @@ impl VmmApi {
 
         let event = VmmEvent::Stop { id: request.id };
 
-        channel.lock().await.send(event).await.map_err(|e| {
+        let guard = channel.lock().await; 
+        guard.send(event).await.map_err(|e| {
             VmmError::SystemError(e.to_string())
         })?;
+
+        drop(guard);
         
         Ok(())
     }
@@ -227,15 +241,19 @@ impl VmmApi {
 
         let event = VmmEvent::Stop { id: request.id.clone() };
 
-        channel.lock().await.send(event).await.map_err(|e| {
+        let guard = channel.lock().await; 
+        guard.send(event).await.map_err(|e| {
             VmmError::SystemError(e.to_string())
         })?;
 
         let event = VmmEvent::Start { id: request.id };
         
-        channel.lock().await.send(event).await.map_err(|e| {
+        let guard = channel.lock().await; 
+        guard.send(event).await.map_err(|e| {
             VmmError::SystemError(e.to_string())
         })?;
+
+        drop(guard);
 
         Ok(())
     }
@@ -247,9 +265,12 @@ impl VmmApi {
 
         let event = VmmEvent::Start { id: request.id };
 
-        channel.lock().await.send(event).await.map_err(|e| {
+        let guard = channel.lock().await; 
+        guard.send(event).await.map_err(|e| {
             VmmError::SystemError(e.to_string())
         })?;
+
+        drop(guard);
 
         Ok(())
     }
@@ -287,7 +308,6 @@ impl VmmApi {
     ) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
         let mut endpoint = format!("http://127.0.0.1:{}/queue/vmm", QUEUE_PORT);
         if let Some(idx) = last {
-            let idx = idx + 1;
             endpoint.push_str(&format!("/{idx}"));
             if let Some(n) = n {
                 endpoint.push_str(&format!("/{n}/get_n_after"));
@@ -419,7 +439,7 @@ async fn create(
                 Some(n) => n,
                 None => return Json(VmmResponse::Failure("Recovery ID is not valid".to_string()))
             };
-            let pubkey = match VerifyingKey::recover_from_prehash(
+            let pubkey = match VerifyingKey::recover_from_msg(
                 &prehash,
                 &sig, 
                 rec_id
@@ -433,8 +453,9 @@ async fn create(
         },
     };
 
-    if let Err(e) = channel.lock().await
-        .send(event.clone())
+    let guard = channel.lock().await;
+
+    if let Err(e) = guard.send(event.clone())
         .await {
             log::info!("Error sending {event:?}: {e}");
             return Json(
@@ -446,6 +467,8 @@ async fn create(
                 )
             )
     }
+
+    drop(guard);
 
     Json(VmmResponse::Success(VmResponse {
         id: "pending".to_string(),
@@ -460,14 +483,17 @@ async fn boot_complete(
     Json(request): Json<BootCompleteRequest>,
 ) -> Json<VmmResponse> {
 
+    let guard = channel.lock().await;
+
     log::info!("Received BootCompleteRequest for VM {}", request.name);
     let event = VmmEvent::BootComplete {
         id: request.name.clone(),
+        build_id: request.build_id.clone(),
         formnet_ip: request.formnet_ip,
     };
 
     log::info!("Built BootComplete VmmEvent, sending across api channel");
-    if let Err(e) = channel.lock().await.send(event.clone()).await {
+    if let Err(e) = guard.send(event.clone()).await {
         log::info!("Error receiving response back from API channel: {e}");
         return Json(
             VmmResponse::Failure(
@@ -475,6 +501,7 @@ async fn boot_complete(
             )
         )
     }
+    drop(guard);
     log::info!("BootCompleteRequest handled succesfully, responding...");
     Json(VmmResponse::Success(
         VmResponse { 

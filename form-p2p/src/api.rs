@@ -46,9 +46,11 @@ pub async fn write_local(
     State(state): State<Arc<RwLock<FormMQ<Vec<u8>>>>>,
     Json(request): Json<QueueRequest>
 ) -> Json<QueueResponse> {
+    log::info!("Received write local request");
     let mut queue = state.write().await;
     match request {
         QueueRequest::Write { content, topic } => {
+            log::info!("For topic: {topic:?}");
             match queue.write_local(topic, content) {
                 Ok(op) => if queue.op_success(op.clone()) {
                     tokio::spawn(async move {
@@ -109,8 +111,7 @@ pub async fn get_topic_n(
 }
 pub async fn get_topic_after(
     State(state): State<Arc<RwLock<FormMQ<Vec<u8>>>>>,
-    Path(topic): Path<String>,
-    Path(idx): Path<usize>
+    Path((topic, idx)): Path<(String, usize)>,
 ) -> Json<QueueResponse> {
     let queue = state.read().await;
     let mut hasher = Sha3::v256();

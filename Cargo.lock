@@ -1606,7 +1606,7 @@ checksum = "d9b39be18770d11421cdb1b9947a45dd3f37e93092cbf377614828a319d5fee8"
 dependencies = [
  "hermit-abi 0.1.19",
  "libc",
- "winapi",
+ "winapi 0.3.9",
 ]
 
 [[package]]
@@ -1972,7 +1972,7 @@ dependencies = [
  "tokio-util",
  "tower-service",
  "url 2.5.4",
- "winapi",
+ "winapi 0.3.9",
 ]
 
 [[package]]
@@ -2070,6 +2070,12 @@ dependencies = [
  "once_cell",
  "serde",
 ]
+
+[[package]]
+name = "c_linked_list"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4964518bd3b4a8190e832886cdc0da9794f12e8e6c1613a9e90ff331c4c8724b"
 
 [[package]]
 name = "cc"
@@ -2469,38 +2475,11 @@ dependencies = [
 [[package]]
 name = "crdts"
 version = "7.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "387808c885b79055facbd4b2e806a683fe1bc37abc7dfa5fea1974ad2d4137b0"
-dependencies = [
- "num",
- "quickcheck",
- "serde",
- "tiny-keccak",
-]
-
-[[package]]
-name = "crdts"
-version = "7.3.2"
-source = "git+https://github.com/cryptonomikhan/rust-crdt.git?rev=4088bd3#4088bd358075255b5731d261d74eb5e7c0485dc8"
 dependencies = [
  "alloy-primitives 0.8.19",
  "hex",
  "k256",
- "num",
- "quickcheck",
- "serde",
- "serde_json",
- "tiny-keccak",
-]
-
-[[package]]
-name = "crdts"
-version = "7.3.2"
-source = "git+https://github.com/cryptonomikhan/rust-crdt.git#e133c0ca989e38b0a77fbabdaaa0270af66c3c5b"
-dependencies = [
- "alloy-primitives 0.8.19",
- "hex",
- "k256",
+ "log",
  "num",
  "quickcheck",
  "serde",
@@ -3313,6 +3292,7 @@ dependencies = [
  "bytes",
  "clap",
  "colored 3.0.0",
+ "crdts",
  "daemonize",
  "dialoguer 0.10.4",
  "form-config",
@@ -3384,10 +3364,11 @@ dependencies = [
  "chrono",
  "clap",
  "conductor",
- "crdts 7.3.2 (git+https://github.com/cryptonomikhan/rust-crdt.git?rev=4088bd3)",
+ "crdts",
  "form-config",
  "form-traits",
  "form-types",
+ "get_if_addrs",
  "getset",
  "hex",
  "log",
@@ -3418,12 +3399,14 @@ dependencies = [
  "base64 0.22.1",
  "bollard",
  "clap",
- "crdts 7.3.2 (git+https://github.com/cryptonomikhan/rust-crdt.git)",
+ "crdts",
  "flate2",
+ "form-config",
  "form-p2p",
  "form-state",
  "futures",
  "futures-util",
+ "get_if_addrs",
  "hex",
  "hyper 1.6.0",
  "hyper-util",
@@ -3473,7 +3456,7 @@ dependencies = [
  "axum 0.7.9",
  "bincode",
  "clap",
- "crdts 7.3.2 (git+https://github.com/cryptonomikhan/rust-crdt.git)",
+ "crdts",
  "form-config",
  "form-dns",
  "form-p2p",
@@ -3594,7 +3577,7 @@ dependencies = [
  "client",
  "colored 3.0.0",
  "conductor",
- "crdts 7.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crdts",
  "daemonize",
  "form-config",
  "form-state",
@@ -3633,7 +3616,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "colored 2.2.0",
- "crdts 7.3.2 (git+https://github.com/cryptonomikhan/rust-crdt.git?rev=4088bd3)",
+ "crdts",
  "dialoguer 0.10.4",
  "form-p2p",
  "form-state",
@@ -3789,6 +3772,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "gcc"
+version = "0.3.55"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f5f3913fa0bfe7ee1fd8248b6b9f42a5af4b9d65ec2dd2c3c26132b950ecfc2"
+
+[[package]]
 name = "gdbstub"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3821,6 +3810,28 @@ dependencies = [
  "typenum",
  "version_check",
  "zeroize",
+]
+
+[[package]]
+name = "get_if_addrs"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "abddb55a898d32925f3148bd281174a68eeb68bbfd9a5938a57b18f506ee4ef7"
+dependencies = [
+ "c_linked_list",
+ "get_if_addrs-sys",
+ "libc",
+ "winapi 0.2.8",
+]
+
+[[package]]
+name = "get_if_addrs-sys"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d04f9fb746cf36b191c00f3ede8bde9c8e64f9f4b05ae2694a9ccf5e3f5ab48"
+dependencies = [
+ "gcc",
+ "libc",
 ]
 
 [[package]]
@@ -4186,7 +4197,7 @@ dependencies = [
  "pin-project-lite",
  "tokio",
  "tower-service",
- "winapi",
+ "winapi 0.3.9",
 ]
 
 [[package]]
@@ -4958,7 +4969,7 @@ dependencies = [
  "thiserror 1.0.69",
  "thread-id",
  "typemap-ors",
- "winapi",
+ "winapi 0.3.9",
 ]
 
 [[package]]
@@ -5921,7 +5932,7 @@ dependencies = [
  "libc",
  "pnet_base",
  "pnet_sys",
- "winapi",
+ "winapi 0.3.9",
 ]
 
 [[package]]
@@ -5964,7 +5975,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d4643d3d4db6b08741050c2f3afa9a892c4244c085a72fcda93c9c2c9a00f4b"
 dependencies = [
  "libc",
- "winapi",
+ "winapi 0.3.9",
 ]
 
 [[package]]
@@ -6567,7 +6578,7 @@ dependencies = [
  "spin 0.5.2",
  "untrusted 0.7.1",
  "web-sys",
- "winapi",
+ "winapi 0.3.9",
 ]
 
 [[package]]
@@ -7715,7 +7726,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfe8f25bbdd100db7e1d34acf7fd2dc59c4bf8f7483f505eaa7d4f12f76cc0ea"
 dependencies = [
  "libc",
- "winapi",
+ "winapi 0.3.9",
 ]
 
 [[package]]
@@ -7735,7 +7746,7 @@ checksum = "1b797afad3f312d1c66a56d11d0316f916356d11bd158fbc6ca6389ff6bf805a"
 dependencies = [
  "libc",
  "wasi 0.10.0+wasi-snapshot-preview1",
- "winapi",
+ "winapi 0.3.9",
 ]
 
 [[package]]
@@ -8389,7 +8400,7 @@ checksum = "89daebc3e6fd160ac4aa9fc8b3bf71e1f74fbf92367ae71fb83a037e8bf164b9"
 dependencies = [
  "memoffset 0.9.1",
  "tempfile",
- "winapi",
+ "winapi 0.3.9",
 ]
 
 [[package]]
@@ -8799,7 +8810,7 @@ dependencies = [
  "arc-swap",
  "libc",
  "thiserror 1.0.69",
- "winapi",
+ "winapi 0.3.9",
 ]
 
 [[package]]
@@ -8895,7 +8906,7 @@ dependencies = [
  "bytes",
  "clap",
  "clap_derive",
- "crdts 7.3.2 (git+https://github.com/cryptonomikhan/rust-crdt.git)",
+ "crdts",
  "dialoguer 0.11.0",
  "form-broker",
  "form-p2p",
@@ -8903,6 +8914,7 @@ dependencies = [
  "form-state",
  "form-types",
  "formnet",
+ "formnet-server",
  "futures",
  "gabble",
  "hex",
@@ -9179,6 +9191,12 @@ name = "widestring"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7219d36b6eac893fa81e84ebe06485e7dcbb616177469b142df14f1f4deb1311"
+
+[[package]]
+name = "winapi"
+version = "0.2.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "167dc9d6949a9b857f3451275e911c3f44255842c1f7a76f33c55103a909087a"
 
 [[package]]
 name = "winapi"

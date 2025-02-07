@@ -84,6 +84,7 @@ impl FormMQ<Vec<u8>> {
         topic: [u8; 32],
         content: Vec<u8>,
     ) -> Result<QueueOp<Vec<u8>>, Box<dyn std::error::Error>> {
+        log::info!("Received write_local request");
         let signing_key = SigningKey::from_slice(&hex::decode(self.pk.clone())?)?;
         let op = self.queue.enqueue(
             topic,
@@ -92,7 +93,9 @@ impl FormMQ<Vec<u8>> {
             signing_key
         )?;
 
+        log::info!("Built enqueue Op, applying...");
         self.apply(op.clone());
+        log::info!("Op applied...");
         Ok(op)
     }
 
@@ -107,6 +110,7 @@ impl FormMQ<Vec<u8>> {
         match op {
             Op::Up { dot: _, key, op } => {
                 if let Some(ref q) = self.queue.read_topic(&key) {
+                    log::info!("Update Op applied successfully...");
                     return q.contains(op.hash)
                 }
             }
@@ -117,6 +121,7 @@ impl FormMQ<Vec<u8>> {
     }
 
     pub async fn send_op(op: QueueOp<Vec<u8>>, addr: IpAddr, port: u16) -> Result<(), Box<dyn std::error::Error>> {
+        log::info!("Attempting to send op to peers");
         let request = QueueRequest::Op(op.clone()); 
         match Client::new().post(format!("http://{}:{}/queue/write_op", addr, port))
             .json(&request)

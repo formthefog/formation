@@ -57,14 +57,14 @@ pub async fn init(address: String) -> Result<(), Box<dyn std::error::Error>> {
     let db_init_data = DbInitData {
         network_name: name.to_string(),
         network_cidr: root_cidr,
-        server_cidr: IpNet::new(our_ip, root_cidr.max_prefix_len())?,
+        server_cidr: IpNet::new(our_ip, 8)?,
         our_ip,
         public_key_base64: our_keypair.public.to_base64(),
         endpoint,
     };
 
     let database_path = data_dir.join(&name.to_string()).with_extension("db");
-    let _ = tokio::time::sleep(Duration::from_secs(5)).await;
+    let _ = tokio::time::sleep(Duration::from_secs(1)).await;
     ensure_crdt_datastore().await?;
     populate_crdt_datastore(
         db_init_data,
@@ -124,6 +124,7 @@ async fn populate_crdt_datastore(
     db_init_data: DbInitData,
     server_name: String
 ) -> Result<(), Box<dyn std::error::Error>> {
+    log::info!("Creating root cidr");
     let root_cidr = DatabaseCidr::<String, CrdtMap>::create(
         CidrContents {
             name: db_init_data.network_name.clone(),
@@ -132,6 +133,11 @@ async fn populate_crdt_datastore(
         },
     ).await?;
 
+    log::info!("Succesfully created root cidr");
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    log::info!("Creating server cidr");
     let server_cidr = DatabaseCidr::<String, CrdtMap>::create(
         CidrContents {
             name: "peers-1".into(),
@@ -139,6 +145,10 @@ async fn populate_crdt_datastore(
             parent: Some(root_cidr.id),
         },
     ).await?;
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    log::info!("Creating local peer");
 
     let _me = DatabasePeer::<String, CrdtMap>::create(
         PeerContents {
@@ -155,6 +165,8 @@ async fn populate_crdt_datastore(
             candidates: vec![],
         }
     ).await?;
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
     Ok(())
 }

@@ -13,7 +13,7 @@ use flate2::read::GzDecoder;
 use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
 use form_state::datastore::InstanceRequest;
 use futures::{StreamExt, TryStreamExt};
-use k256::ecdsa::SigningKey;
+use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
 use tiny_keccak::{Hasher, Sha3};
 use tokio::sync::broadcast::Receiver;
 use axum::{Router, routing::{post, get}, Json, extract::Multipart};
@@ -45,9 +45,9 @@ pub enum PackResponse {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PackBuildRequest {
-    sig: RecoverableSignature,
-    hash: [u8; 32],
-    request: PackRequest,
+    pub sig: RecoverableSignature,
+    pub hash: [u8; 32],
+    pub request: PackRequest,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -55,8 +55,6 @@ pub struct PackRequest {
     pub name: String,
     pub formfile: Formfile,
     pub artifacts: Vec<u8>,
-    pub signature: String,
-    pub recovery_id: u8,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -78,12 +76,14 @@ pub enum PackBuildStatus {
 
 pub struct FormPackManager {
     addr: SocketAddr,
+    node_id: String,
 }
 
 impl FormPackManager {
-    pub fn new(addr: SocketAddr) -> Self {
+    pub fn new(addr: SocketAddr, node_id: String,) -> Self {
         Self {
             addr,
+            node_id
         }
     }
 
@@ -99,20 +99,23 @@ impl FormPackManager {
         });
 
         let mut n = 0;
-        tokio::select! {
-            Ok(messages) = Self::read_from_queue(Some(n), None) => {
-                for message in &messages {
-                    let mut manager = pack_manager.lock().await;
-                    if let Err(e) = manager.handle_message(message.to_vec()).await {
-                        eprintln!("Error handling message: {e}");
-                    };
+        loop {
+            tokio::select! {
+                Ok(messages) = Self::read_from_queue(Some(n), None) => {
+                    for message in &messages {
+                        let mut manager = pack_manager.lock().await;
+                        if let Err(e) = manager.handle_message(message.to_vec()).await {
+                            eprintln!("Error handling message: {e}");
+                        };
+                    }
+                    n += messages.len();
+                },
+                _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                _ = shutdown.recv() => {
+                    eprintln!("Received shutdown signal");
+                    handle.abort();
+                    break
                 }
-                n += messages.len();
-            },
-            _ = shutdown.recv() => {
-                eprintln!("Received shutdown signal");
-                handle.abort();
-                return Ok(())
             }
         }
 
@@ -131,7 +134,7 @@ impl FormPackManager {
                 }
             }
             1 => {
-                let _msg: PackBuildStatus = serde_json::from_slice(request)?;
+                let _msg: PackBuildResponse = serde_json::from_slice(request)?;
             }
             _ => unreachable!()
         }
@@ -172,7 +175,6 @@ impl FormPackManager {
     ) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
         let mut endpoint = format!("http://127.0.0.1:{}/queue/pack", QUEUE_PORT);
         if let Some(idx) = last {
-            let idx = idx + 1;
             endpoint.push_str(&format!("/{idx}"));
             if let Some(n) = n {
                 endpoint.push_str(&format!("/{n}/get_n_after"));
@@ -199,13 +201,17 @@ impl FormPackManager {
 
     pub async fn write_pack_status_started(message: &PackBuildRequest) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let signer_address = {
-            let pk = SigningKey::from_slice(&hex::decode(&message.sig.sig)?)?;
-            Address::from_private_key(&pk)
+            let pk = VerifyingKey::recover_from_msg(
+                &message.hash,
+                &Signature::from_slice(&hex::decode(message.sig.sig.clone())?)?,
+                RecoveryId::from_byte(message.sig.rec).ok_or(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "invalid recovery id")))?
+            )?;
+            Address::from_public_key(&pk)
         };
         let mut hasher = Sha3::v256();
         let mut hash = [0u8; 32];
         hasher.update(signer_address.as_ref());
-        hasher.update(message.request.name.as_bytes());
+        hasher.update(message.request.formfile.name.as_bytes());
         hasher.finalize(&mut hash);
         let status_message = PackBuildResponse {
             status: PackBuildStatus::Started(hex::encode(hash)),
@@ -217,19 +223,27 @@ impl FormPackManager {
         Ok(())
     }
 
-    pub async fn write_pack_status_completed(message: &PackBuildRequest) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn write_pack_status_completed(message: &PackBuildRequest, node_id: String) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let signer_address = {
-            let pk = SigningKey::from_slice(&hex::decode(&message.sig.sig)?)?;
-            Address::from_private_key(&pk)
+            let pk = VerifyingKey::recover_from_msg(
+                &message.hash,
+                &Signature::from_slice(&hex::decode(message.sig.sig.clone())?)?,
+                RecoveryId::from_byte(message.sig.rec).ok_or(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "invalid recovery id")))?
+            )?;
+            Address::from_public_key(&pk)
         };
+        println!("signer address: {signer_address:x}");
         let mut hasher = Sha3::v256();
-        let mut hash = [0u8; 32];
+        let mut build_id = [0u8; 32];
         hasher.update(signer_address.as_ref());
-        hasher.update(message.request.name.as_bytes());
-        hasher.finalize(&mut hash);
+        hasher.update(message.request.formfile.name.as_bytes());
+        hasher.finalize(&mut build_id);
+        let instance_id = build_instance_id(node_id.clone(), hex::encode(build_id))?;
 
         let instance = Instance {
-            instance_id: hex::encode(&hash),
+            instance_id,
+            node_id,
+            build_id: hex::encode(build_id),
             instance_owner: hex::encode(signer_address),
             created_at: 0,
             updated_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
@@ -286,13 +300,17 @@ impl FormPackManager {
 
     pub async fn write_pack_status_failed(message: &PackBuildRequest, reason: String) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let signer_address = {
-            let pk = SigningKey::from_slice(&hex::decode(&message.sig.sig)?)?;
-            Address::from_private_key(&pk)
+            let pk = VerifyingKey::recover_from_msg(
+                &message.hash,
+                &Signature::from_slice(&hex::decode(message.sig.sig.clone())?)?,
+                RecoveryId::from_byte(message.sig.rec).ok_or(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "invalid recovery id")))?
+            )?;
+            Address::from_public_key(&pk)
         };
         let mut hasher = Sha3::v256();
         let mut hash = [0u8; 32];
         hasher.update(signer_address.as_ref());
-        hasher.update(message.request.name.as_bytes());
+        hasher.update(message.request.formfile.name.as_bytes());
         hasher.finalize(&mut hash);
 
         let status_message = PackBuildResponse {
@@ -336,11 +354,13 @@ impl FormPackManager {
         let mut monitor = FormPackMonitor::new().await?; 
         println!("Attmpting to build image for {}...", formfile.name);
         monitor.build_image(
+            self.node_id.clone(),
+            message.request.name.clone(),
             formfile,
             artifacts_path,
         ).await?; 
 
-        Self::write_pack_status_completed(&message).await?;
+        Self::write_pack_status_completed(&message, self.node_id.clone()).await?;
 
         Ok(())
     }
@@ -442,7 +462,7 @@ async fn handle_ping() -> Json<Value> {
 }
 
 async fn handle_pack(
-    State(_manager): State<Arc<Mutex<FormPackManager>>>,
+    State(manager): State<Arc<Mutex<FormPackManager>>>,
     mut multipart: Multipart
 ) -> Json<PackResponse> {
     println!("Received a multipart Form, attempting to extract data...");
@@ -520,8 +540,13 @@ async fn handle_pack(
         }
     }; 
 
+    let guard = manager.lock().await;
+    let node_id = guard.node_id.clone();
+    drop(guard);
     println!("Attmpting to build image for {}...", formfile.name);
     match monitor.build_image(
+        node_id.clone(),
+        formfile.name.clone(),
         formfile,
         artifacts_path,
     ).await {
@@ -570,6 +595,8 @@ impl FormPackMonitor {
 
     pub async fn build_image(
         &mut self,
+        node_id: String,
+        vm_name: String,
         formfile: Formfile,
         artifacts: PathBuf,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -588,8 +615,8 @@ impl FormPackMonitor {
         println!("Starting build server for {}", formfile.name);
         self.start_build_server(&container_id).await?;
         println!("Requesting image build for {}", formfile.name);
-        self.execute_build(&formfile).await?;
-        self.extract_disk_image(&container_id, formfile.name.clone()).await?;
+        self.execute_build(node_id.clone(), vm_name.clone(), &formfile).await?;
+        self.extract_disk_image(&container_id, vm_name.clone()).await?;
         println!("Image build completed for {} successfully, cleaning up {container_id}...", formfile.name);
         self.cleanup().await?;
 
@@ -621,12 +648,14 @@ impl FormPackMonitor {
             ..Default::default()
         };
 
+        let host_ip_var = format!("HOST_BRIDGE_IP={}", get_host_bridge_ip()?);
         println!("Build HostConfig: {host_config:?}");
         let config = Config {
             image: Some("form-build-server:latest"),
             cmd: None, 
             tty: Some(true),
             host_config: Some(host_config),
+            env: Some(vec![&host_ip_var]),
             ..Default::default()
         };
 
@@ -695,7 +724,7 @@ impl FormPackMonitor {
 
     pub async fn start_build_server(&mut self, container_id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let exec_opts = CreateExecOptions {
-            cmd: Some(vec!["form-build-server", "-p", "8080"]),
+            cmd: Some(vec!["sh", "-c", "form-build-server -p 8080 > /var/log/form-build-server.log 2>&1"]),
             attach_stdout: Some(true),
             attach_stderr: Some(true),
             env: Some(vec!["RUST_LOG=info"]),
@@ -751,11 +780,15 @@ impl FormPackMonitor {
 
     pub async fn execute_build(
         &self,
+        node_id: String,
+        vm_name: String,
         formfile: &Formfile,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!("Sending Formfile {formfile:?} for {} to build_server: {}", formfile.name, self.build_server_uri);
+        let instance_id = build_instance_id(node_id, vm_name.clone())?; 
+
         let resp = self.build_server_client
-            .post(format!("{}/formfile", self.build_server_uri))
+            .post(format!("{}/{}/{}/formfile", self.build_server_uri, vm_name, instance_id))
             .json(formfile)
             .send()
             .await?;
@@ -839,4 +872,42 @@ impl FormPackMonitor {
 
 fn is_gzip(data: &[u8]) -> bool {
     data.starts_with(&[0x1F, 0x8B]) // Gzip magic number
+}
+
+fn get_host_bridge_ip() -> Result<String, Box<dyn std::error::Error + Send + Sync +'static>> {
+    let addrs = get_if_addrs::get_if_addrs()?;
+    let pub_addr: Vec<_> = addrs.iter().filter_map(|iface| {
+        if iface.name == "br0" {
+            match &iface.addr {
+                get_if_addrs::IfAddr::V4(ifv4) => {
+                    Some(ifv4.ip.to_string())
+                }
+                _ => None
+            }
+        } else {
+            None
+        }
+    }).collect::<Vec<_>>();
+
+    let first = pub_addr.first()
+        .ok_or(
+            Box::new(
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Unable to find IP for br0, host is not set up to host instances"
+                )
+            )
+        )?; 
+
+    Ok(first.to_string())
+}
+
+pub fn build_instance_id(node_id: String, build_id: String) -> Result<String, Box<dyn std::error::Error + Send + Sync + 'static>> {
+    println!("Deriving instance id from node_id: {node_id} and build_id: {build_id}");
+    let node_id_vec = &hex::decode(node_id)?[..20];
+    let vm_name_bytes = &hex::decode(build_id.clone())?[..20];
+
+    let instance_id = hex::encode(&vm_name_bytes.iter().zip(node_id_vec.iter()).map(|(&x, &y)| x ^ y).collect::<Vec<u8>>());
+
+    Ok(instance_id)
 }

@@ -19,7 +19,7 @@ pub fn default_context() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| ".".into())
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum PackCommand {
     Build(BuildCommand),
     Validate(ValidateCommand),

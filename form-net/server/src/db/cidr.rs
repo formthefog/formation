@@ -71,6 +71,7 @@ impl<T: Display + Clone + PartialEq> DerefMut for DatabaseCidr<T, CrdtMap> {
 
 impl DatabaseCidr<String, CrdtMap> {
     pub async fn create(contents: CidrContents<String>) -> Result<Cidr<String>, ServerError> {
+        log::info!("Attempting to create CIDR: {contents:?}");
 
         let client = reqwest::Client::new();
 
@@ -93,6 +94,7 @@ impl DatabaseCidr<String, CrdtMap> {
             }
 
             let cidrs = Self::list().await?;
+            log::info!("current CIDRs: {cidrs:?}");
             let closest_parent = cidrs.iter()
                 .filter(|current| current.cidr.contains(&contents.cidr))
                 .max_by_key(|current| current.cidr.prefix_len());
@@ -104,6 +106,7 @@ impl DatabaseCidr<String, CrdtMap> {
                 }
             } else {
                 log::warn!("tried to add a CIDR outside of the root network range.");
+                log::warn!("contents: {contents:?}");
                 return Err(ServerError::InvalidQuery);
             }
         }
@@ -124,9 +127,11 @@ impl DatabaseCidr<String, CrdtMap> {
             return Err(ServerError::InvalidQuery);
         }
 
+        log::info!("Building cidr queue request...");
         let request = Self::build_cidr_queue_request(CidrRequest::Create(contents.clone()))
             .map_err(|_| ServerError::InvalidQuery)?;
 
+        log::info!("Build cidr queue request: {request:?}");
         let resp = client 
             .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
             .json(&request)
@@ -135,6 +140,7 @@ impl DatabaseCidr<String, CrdtMap> {
             .json::<QueueResponse>()
             .await.map_err(|_| ServerError::NotFound)?;
 
+        log::info!("Sent queue request - response: {resp:?}");
         let db_cidr = DatabaseCidr {
             inner: Cidr {
                 id: contents.name.clone(),

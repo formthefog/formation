@@ -53,7 +53,7 @@ hostsfile = { path = "../hostsfile" }
 publicip = { path = "../publicip" }
 form-state = { path = "../../form-state/"}
 url = "2"
-crdts = "7" 
+crdts = { path = "../../../external/rust-crdt/" }
 hyper = { version = "0.14", default-features = false, features = [
   "http1",
   "server",
