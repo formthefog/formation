@@ -32,7 +32,7 @@ hex = "0.4.3"
 base64 = "0.22.1"
 sha3 = "0.10.8"
 url = "2"
-crdts = { path = "../../external/rust-crdt/" }
+crdts = { git = "http://github.com/Cryptonomikhan/rust-crdt", rev = "0647065" }
 bincode = "1"
 tiny-keccak = { version = "2.0.2", features = ["sha3"] }
 reqwest = { version = "0.12", features = ["json"] }
