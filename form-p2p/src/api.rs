@@ -79,7 +79,7 @@ pub async fn get_topic_all(
     topic.hash(&mut hasher); 
     let mut topic_hash = [0u8; 32];
     hasher.finalize(&mut topic_hash);
-    let messages = queue.read(topic_hash);
+    let messages = queue.read(hex::encode(topic_hash));
     if let Some(contents) = messages {
         return Json(QueueResponse::List(contents.iter().map(|m| m.content.clone()).collect()));
     }
@@ -97,7 +97,7 @@ pub async fn get_topic_n(
     topic.hash(&mut hasher); 
     let mut topic_hash = [0u8; 32];
     hasher.finalize(&mut topic_hash);
-    let messages = queue.read(topic_hash);
+    let messages = queue.read(hex::encode(topic_hash));
     if let Some(contents) = messages {
         let list = if contents.len() - 1 >= n {
             contents[..n].iter().map(|m| m.content.clone()).collect()
@@ -118,7 +118,7 @@ pub async fn get_topic_after(
     topic.hash(&mut hasher); 
     let mut topic_hash = [0u8; 32];
     hasher.finalize(&mut topic_hash);
-    let messages = queue.read(topic_hash);
+    let messages = queue.read(hex::encode(topic_hash));
     if let Some(contents) = messages {
         let list = if (contents.len() - 1) >= idx {
             contents[idx..].iter().map(|m| m.content.clone()).collect()
@@ -143,7 +143,7 @@ pub async fn get_topic_n_after(
     topic.hash(&mut hasher); 
     let mut topic_hash = [0u8; 32];
     hasher.finalize(&mut topic_hash);
-    let messages = queue.read(topic_hash);
+    let messages = queue.read(hex::encode(topic_hash));
     if let Some(contents) = messages {
         let list = if (contents.len() - 1) >= idx {
             let contents_after = &contents[idx..];
@@ -169,7 +169,7 @@ pub async fn get_all(
 
     return Json(QueueResponse::Full(full.topics.iter().map(|ctx| {
         let (topic, queue) = ctx.val; 
-        (*topic, queue.messages.iter().map(|(_, v)| {
+        (topic.clone(), queue.messages.iter().map(|(_, v)| {
             v.content.clone()
         }).collect())
     }).collect()))

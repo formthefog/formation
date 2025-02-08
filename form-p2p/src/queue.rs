@@ -7,14 +7,14 @@ use serde::{Deserialize, Serialize};
 use reqwest::Client;
 
 pub const QUEUE_PORT: u16 = 53333;
-pub type QueueOp<T> = Op<[u8; 32], BFTQueue<T>, String>; 
+pub type QueueOp<T> = Op<String, BFTQueue<T>, String>; 
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum QueueRequest {
     Op(QueueOp<Vec<u8>>),
     Write {
         content: Vec<u8>,
-        topic: [u8; 32],
+        topic: String,
     }
 }
 
@@ -25,7 +25,7 @@ pub enum QueueResponse {
     Some(Vec<u8>),
     List(Vec<Vec<u8>>),
     Failure { reason: Option<String> },
-    Full(BTreeMap<[u8; 32], Vec<Vec<u8>>>)
+    Full(BTreeMap<String, Vec<Vec<u8>>>)
 }
 
 #[allow(unused)]
@@ -52,7 +52,7 @@ impl FormMQ<Vec<u8>> {
         &self.queue
     }
 
-    pub fn read(&self, topic: [u8; 32]) -> Option<Vec<Message<Vec<u8>>>> {
+    pub fn read(&self, topic: String) -> Option<Vec<Message<Vec<u8>>>> {
         if let Some(ref queue) = &self.queue.read_topic(&topic) {
             return Some(queue.read().iter().map(|m| m.to_owned().clone()).collect())
         }     
@@ -60,7 +60,7 @@ impl FormMQ<Vec<u8>> {
         None
     }
 
-    pub fn read_n(&self, topic: [u8; 32], after: &VClock<String>, n: usize) -> Option<Vec<Message<Vec<u8>>>> {
+    pub fn read_n(&self, topic: String, after: &VClock<String>, n: usize) -> Option<Vec<Message<Vec<u8>>>> {
         if let Some(ref list) = &self.read_after(topic, after) {
             if list.len() > n {
                 return Some(list[..n].to_vec())
@@ -71,7 +71,7 @@ impl FormMQ<Vec<u8>> {
         None
     }
 
-    pub fn read_after(&self, topic: [u8; 32], after: &VClock<String>)-> Option<Vec<Message<Vec<u8>>>> {
+    pub fn read_after(&self, topic: String, after: &VClock<String>)-> Option<Vec<Message<Vec<u8>>>> {
         if let Some(ref queue) = &self.queue.read_topic(&topic) {
             return Some(queue.read_after(after).iter().map(|m| m.to_owned().clone()).collect())
         }
@@ -81,7 +81,7 @@ impl FormMQ<Vec<u8>> {
 
     pub fn write_local(
         &mut self,
-        topic: [u8; 32],
+        topic: String,
         content: Vec<u8>,
     ) -> Result<QueueOp<Vec<u8>>, Box<dyn std::error::Error>> {
         log::info!("Received write_local request");
@@ -155,5 +155,82 @@ impl FormMQ<Vec<u8>> {
             Response::Success(Success::Relationships(_)) => return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Returned Success::Relationship((cidr1, cidr2)) instead of Success::List"))),
             Response::Failure { reason } => return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Returned Failure: {reason:?}"))))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::{primitives::Address, signers::k256::ecdsa::SigningKey};
+    use rand::thread_rng;
+    use tiny_keccak::{Hasher, Sha3};
+
+    // Test message type that implements necessary traits
+    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    struct TestMessage {
+        id: String,
+        data: Vec<u8>,
+    }
+
+    impl AsRef<[u8]> for TestMessage {
+        fn as_ref(&self) -> &[u8] {
+            &self.data
+        }
+    }
+
+    impl Default for TestMessage {
+        fn default() -> Self {
+            Self {
+                id: String::new(),
+                data: Vec::new(),
+            }
+        }
+    }
+
+    // Helper function to create a test message
+    fn create_test_message(id: &str, data: &[u8]) -> TestMessage {
+        TestMessage {
+            id: id.to_string(),
+            data: data.to_vec(),
+        }
+    }
+
+    // Helper function to create a topic hash
+    fn create_topic_hash(name: &str) -> [u8; 32] {
+        let mut hasher = Sha3::v256();
+        hasher.update(name.as_bytes());
+        let mut hash = [0u8; 32];
+        hasher.finalize(&mut hash);
+        hash
+    }
+
+    #[tokio::test]
+    async fn test_topic_queue_serialization() -> Result<(), Box<dyn std::error::Error>> {
+        let topics = ["something", "or", "another", "howso"];
+        let test_messages = (0..100).into_iter().map(|n| {
+            let mut msgs = vec![];
+            for topic in &topics {
+                let id = format!("test-{n}");
+                let data = format!("This is test data {n}");
+                let topic_hash = create_topic_hash(topic);
+                let tm = create_test_message(&id, &data.as_bytes());
+                msgs.push((topic_hash, tm))
+            };
+            msgs
+        }).flatten().collect::<Vec<([u8; 32], TestMessage)>>();
+
+        let mut queue = TopicQueue::new();
+        let sk = SigningKey::random(&mut thread_rng());
+        let actor = hex::encode(Address::from_private_key(&sk));
+
+        for (topic, msg) in test_messages {
+            let op = queue.enqueue(hex::encode(topic), msg, actor.clone(), sk.clone())?;
+            queue.apply(op);
+        }
+
+        serde_json::to_vec(&queue).unwrap();
+
+        Ok(())
+
     }
 }

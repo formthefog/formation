@@ -22,19 +22,16 @@ use form_types::{BootCompleteRequest, CreateVmRequest, DeleteVmRequest, GetVmReq
 pub struct VmmApiChannel {
     event_sender: mpsc::Sender<VmmEvent>,
     response_receiver: mpsc::Receiver<String>,
-    node_id: String,
 }
 
 impl VmmApiChannel {
     pub fn new(
         tx: mpsc::Sender<VmmEvent>,
         rx: mpsc::Receiver<String>,
-        node_id: String,
     ) -> Self {
         Self{
             event_sender: tx,
             response_receiver: rx,
-            node_id,
         }
     }
 
@@ -288,7 +285,7 @@ impl VmmApi {
         message_code.extend(serde_json::to_vec(&message)?);
         let request = QueueRequest::Write { 
             content: message_code, 
-            topic: topic_hash 
+            topic: hex::encode(topic_hash) 
         };
 
         match Client::new()

@@ -172,7 +172,7 @@ impl ShipCommand {
 
         let queue_request = QueueRequest::Write {
             content: message_code,
-            topic: topic_hash
+            topic: hex::encode(topic_hash)
         };
 
         Ok(queue_request)

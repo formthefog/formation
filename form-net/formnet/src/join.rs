@@ -106,7 +106,7 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
 
     while let Some(dial) = bootstrap.iter().next() {
         match Client::new()
-        .post(&format!("http://{dial}/join"))
+        .post(&format!("http://{dial}:3001/join"))
         .json(&request)
         .send()
         .await {

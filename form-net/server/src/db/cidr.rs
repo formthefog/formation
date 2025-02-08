@@ -164,7 +164,7 @@ impl DatabaseCidr<String, CrdtMap> {
         let mut topic_hash = [0u8; 32];
         hasher.update(topic);
         hasher.finalize(&mut topic_hash);
-        let queue_request = QueueRequest::Write { content: message_code, topic: topic_hash };
+        let queue_request = QueueRequest::Write { content: message_code, topic: hex::encode(topic_hash) };
         Ok(queue_request)
     }
 

@@ -12,7 +12,7 @@ use form_pack::{
     manager::{PackBuildRequest, PackRequest, PackResponse}
 };
 use form_pack::pack::Pack;
-use crate::{decrypt_file, default_context, default_formfile, Keystore};
+use crate::{default_context, default_formfile, Keystore};
 
 
 /// Create a new instance
@@ -108,7 +108,7 @@ impl BuildCommand {
 
         let queue_request = QueueRequest::Write {
             content: message_code,
-            topic: topic_hash
+            topic: hex::encode(topic_hash)
         };
 
         Ok(queue_request)

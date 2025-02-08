@@ -89,7 +89,7 @@ pub async fn build_peer(
 
     let available_ip = available_ip.expect("No IPs in this CIDR are avavilable");
 
-    let mut name = peer_id.to_string();
+    let name = peer_id.to_string();
 
     log::info!("Checking valid host name for {name}");
     valid_hostname(&Hostname::from_str(&name)?, &peer_type)?;

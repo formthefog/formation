@@ -70,7 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             log::info!("Building shared queue");
             let queue = Arc::new(RwLock::new(FormMQ::new(address, signing_key, String::new())));
-            let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1024);
+            let (shutdown_tx, _) = tokio::sync::broadcast::channel(1024);
             let inner_queue = queue.clone();
             let handle = tokio::spawn(async move {
                 log::info!("Serving queue api on 0.0.0.0:{QUEUE_PORT}");

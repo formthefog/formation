@@ -41,11 +41,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Writing to Queue1 for topic {topic}: hash {topic_hash:?}");
 
     let contents = b"This is a Test Queue1".to_vec();
-    let op = queue_1_writer.write_local(topic_hash, contents)?;
+    let op = queue_1_writer.write_local(hex::encode(topic_hash), contents)?;
     queue_1_writer.apply(op.clone());
     if queue_1_writer.op_success(op.clone()) {
         println!("OP applied succesfully sending to Queue2");
-        queue_1_writer.send_op(op, "127.0.0.1".parse()?, 3007).await?;
+        FormMQ::<Vec<u8>>::send_op(op, "127.0.0.1".parse()?, 3007).await?;
     }
 
     drop(queue_1_writer);
@@ -60,16 +60,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Writing to Queue2 for topic {topic}: hash {topic_hash:?}");
 
     let contents = b"This is a Test Queue2".to_vec();
-    let op = queue_2_writer.write_local(topic_hash, contents)?;
+    let op = queue_2_writer.write_local(hex::encode(topic_hash), contents)?;
     queue_2_writer.apply(op.clone());
     if queue_2_writer.op_success(op.clone()) {
         println!("OP applied succesfully sending to Queue1");
-        queue_2_writer.send_op(op, "127.0.0.1".parse()?, 3006).await?;
+        FormMQ::<Vec<u8>>::send_op(op, "127.0.0.1".parse()?, 3006).await?;
     }
     drop(queue_2_writer);
 
     let queue_1_reader = queue1.read().await;
-    let messages = queue_1_reader.read(topic_hash).expect("Queue 1 read returned none");
+    let messages = queue_1_reader.read(hex::encode(topic_hash)).expect("Queue 1 read returned none");
 
     assert!(messages.len() > 0);
 
@@ -80,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 
     let queue_2_reader = queue2.read().await;
-    let messages = queue_2_reader.read(topic_hash).expect("Queue 2 read returned none");
+    let messages = queue_2_reader.read(hex::encode(topic_hash)).expect("Queue 2 read returned none");
 
     assert!(messages.len() > 0);
 

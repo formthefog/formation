@@ -525,7 +525,7 @@ impl DataStore {
         message_code.extend(serde_json::to_vec(&message)?);
         let request = QueueRequest::Write { 
             content: message_code, 
-            topic: topic_hash 
+            topic: hex::encode(topic_hash) 
         };
 
         match Client::new()

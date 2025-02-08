@@ -38,7 +38,7 @@ random_word = { version = "0.4.3", features = ["en"] }
 tiny-keccak = { version = "2.0.2", features = ["sha3"] }
 form-p2p = { path = "../form-p2p/" }
 form-state = { path = "../form-state" }
-crdts = { git = "http://github.com/Cryptonomikhan/rust-crdt", rev = "0647065" }
+crdts = { git = "http://github.com/Cryptonomikhan/rust-crdt", rev = "7ed0965" }
 hex = "0.4" 
 alloy-primitives = { version = "0.8", features = ["k256"] } 
 k256 = { version = "0.13", features = ["ecdsa", "ecdsa-core"]}

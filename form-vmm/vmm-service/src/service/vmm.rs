@@ -400,12 +400,11 @@ impl VmManager {
             &hex::decode(&signing_key)?
         )?;
 
-        let node_id = hex::encode(Address::from_private_key(&pk));
+        let _node_id = hex::encode(Address::from_private_key(&pk));
         let (resp_tx, resp_rx) = tokio::sync::mpsc::channel(1024);
         let api_channel = Arc::new(Mutex::new(VmmApiChannel::new(
             event_sender,
             resp_rx,
-            node_id,
         )));
         let api_channel_server = api_channel.clone();
         let server = tokio::task::spawn(async move {
@@ -794,7 +793,7 @@ Formpack for {name} doesn't exist:
                     ))
                 }
             }
-            VmmEvent::BootComplete { id, formnet_ip, build_id } => {
+            VmmEvent::BootComplete { id, formnet_ip, .. } => {
                 //TODO: Write this information into State so that 
                 //users/developers can "get" the IP address
                 log::info!("Received boot complete event, getting self");

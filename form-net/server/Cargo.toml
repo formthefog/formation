@@ -22,6 +22,7 @@ v6-test = []
 
 [dependencies]
 anyhow = "1"
+hex = "0.4"
 bytes = "1.6"
 clap = { version = "4.3", features = ["derive", "wrap_help"] }
 clap_complete = "4.3"
@@ -57,7 +58,7 @@ wireguard-control = { path = "../wireguard-control" }
 form-state = { path = "../../form-state" }
 form-types = { path = "../../form-types" }
 form-p2p = { path = "../../form-p2p/" }
-crdts = { git = "http://github.com/Cryptonomikhan/rust-crdt", rev = "0647065" }
+crdts = { git = "http://github.com/Cryptonomikhan/rust-crdt", rev = "7ed0965" }
 reqwest = { version = "0.12", features = ["json"] }
 async-trait = "0.1"
 

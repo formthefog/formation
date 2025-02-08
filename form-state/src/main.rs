@@ -58,6 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut iter = parser.to_dial.iter();
             let mut state = None;
             while let Some(dial) = iter.next() {
+                log::info!("Attempting to dial {dial}");
                 match request_full_state(dial).await {
                     Ok(s) => {
                         state = Some(s);
@@ -76,6 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut iter = unwrapped_config.bootstrap_nodes.iter();
             let mut state = None;
             while let Some(dial) = iter.next() {
+                log::info!("Attempting to dial {dial}");
                 match request_full_state(dial).await {
                     Ok(s) => {
                         state = Some(s);
