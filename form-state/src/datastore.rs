@@ -129,14 +129,16 @@ impl DataStore {
     pub fn new_from_state(
         node_id: String,
         pk: String,
-        other: DataStore,
+        other: MergeableState,
     ) -> Self {
         log::info!("Building new datastore from state...");
         let mut local = Self::new(node_id, pk); 
-        local.network_state.peers.merge(other.network_state.peers);
-        local.network_state.cidrs.merge(other.network_state.cidrs);
-        local.network_state.associations.merge(other.network_state.associations);
-        local.network_state.dns_state.zones.merge(other.network_state.dns_state.zones);
+        local.network_state.peers.merge(other.peers);
+        local.network_state.cidrs.merge(other.cidrs);
+        local.network_state.associations.merge(other.assocs);
+        local.network_state.dns_state.zones.merge(other.dns);
+        local.instance_state.map.merge(other.instances);
+        local.node_state.map.merge(other.nodes);
         log::info!("Built new datastore from state... Returning...");
         local
     }

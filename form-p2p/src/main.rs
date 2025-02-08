@@ -1,4 +1,5 @@
 use alloy_primitives::Address; 
+use futures::{stream::FuturesUnordered, StreamExt};
 use k256::ecdsa::SigningKey;
 use clap::{Parser, Subcommand};
 use crdts::bft_topic_queue::TopicQueue;
@@ -74,20 +75,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             log::info!("Building shared queue");
             let queue = Arc::new(RwLock::new(FormMQ::new(address, signing_key, String::new())));
             if let Some(config) = config {
+                let mut fut = FuturesUnordered::new();
                 for bootstrap in config.bootstrap_nodes {
-                    let to_merge = match Client::new()
-                        .get(format!("http://{bootstrap}:{QUEUE_PORT}/queue/get"))
-                        .send().await {
-                            Ok(resp) => match resp.json::<TopicQueue<Vec<u8>>>().await {
-                                Ok(queue) => Some(queue),
-                                Err(_) => None,
-                            }
-                            Err(_) => None,
-                        };
-                    if let Some(q) = to_merge {
-                        let mut guard = queue.write().await;
-                        guard.merge(q);
-                        drop(guard);
+                    fut.push(bootstrap_topic_queue(bootstrap, queue.clone()));
+                }
+
+                while let Some(complete) = fut.next().await {
+                    match complete {
+                        Ok(()) => log::info!("Completed bootstrap successfully"),
+                        Err(e) => log::error!("Was unable to acquire Queue from one bootstrap node: {e}")
                     }
                 }
             }
@@ -108,4 +104,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+pub async fn bootstrap_topic_queue(dial: String, queue: Arc<RwLock<FormMQ<Vec<u8>>>>) -> Result<(), Box<dyn std::error::Error>> {
+    let client = Client::new();
+    let url = format!("http://{dial}:{QUEUE_PORT}/queue/get");
+    let resp = client.get(url).send().await?;
+
+    if resp.status().is_success() {
+        return Err(format!("Request failed with status:{}", resp.status()).into());
+    }
+
+    let mut bytes = vec![];
+    let mut stream = resp.bytes_stream();
+
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(b) => bytes.extend_from_slice(&b),
+            Err(e) => eprintln!("Error receiving chunk: {}", e)
+        }
+    }
+
+    if !bytes.is_empty() {
+        let received = serde_json::from_slice::<TopicQueue<Vec<u8>>>(&bytes)?;
+        let mut guard = queue.write().await;
+        guard.merge(received);
+        drop(guard);
+        return Ok(())
+    }
+
+    return Err(format!("Bytes were empty after stream").into());
+
 }
