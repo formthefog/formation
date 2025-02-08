@@ -1638,14 +1638,16 @@ async fn list_dns_records(
 
 }
 
-pub async fn request_full_state(to_dial: &str) -> Result<DataStore, Box<dyn std::error::Error>> {
+pub async fn request_full_state(to_dial: &str) -> Result<MergeableState, Box<dyn std::error::Error>> {
     let resp = Client::new()
         .get(format!("http://{to_dial}:3004/bootstrap/full_state"))
         .send().await?.json().await?;
+
+    println!("{:?}", resp);
     Ok(resp)
 }
 
-pub async fn request_netwok_state(to_dial: String) -> Result<NetworkState, Box<dyn std::error::Error>> {
+pub async fn request_netwok_state(to_dial: String) -> Result<MergeableNetworkState, Box<dyn std::error::Error>> {
     let resp = Client::new()
         .get(format!("http://{to_dial}:3004/bootstrap/network_state"))
         .send().await?.json().await?;
