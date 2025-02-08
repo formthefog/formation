@@ -8,15 +8,15 @@ pub type NodeOp = Op<String, BFTReg<Node, Actor>, Actor>;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Node {
-    node_id: String,
-    node_owner: String,
-    created_at: i64,
-    updated_at: i64,
-    last_heartbeat: i64,
-    host_region: String,
-    capacity: NodeCapacity,
-    availability: NodeAvailability,
-    metadata: NodeMetadata,
+    pub(crate) node_id: String,
+    pub(crate) node_owner: String,
+    pub(crate) created_at: i64,
+    pub(crate) updated_at: i64,
+    pub(crate) last_heartbeat: i64,
+    pub(crate) host_region: String,
+    pub(crate) capacity: NodeCapacity,
+    pub(crate) availability: NodeAvailability,
+    pub(crate) metadata: NodeMetadata,
 }
 
 impl Sha3Hash for Node {
@@ -68,10 +68,10 @@ impl Node {
 /// Describes the resource capacity of the node.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeCapacity {
-    vcpus: u8,
-    memory_mb: u32,
-    bandwidth_mbps: u32,
-    gpu: Option<NodeGpu>,
+    pub(crate) vcpus: u8,
+    pub(crate) memory_mb: u32,
+    pub(crate) bandwidth_mbps: u32,
+    pub(crate) gpu: Option<NodeGpu>,
 }
 
 impl NodeCapacity {
@@ -95,9 +95,9 @@ impl NodeCapacity {
 /// Describes available GPU capacity on the node.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeGpu {
-    count: u8,
-    model: String,
-    vram_mb: u32,
+    pub(crate) count: u8,
+    pub(crate) model: String,
+    pub(crate) vram_mb: u32,
 }
 
 impl NodeGpu {
@@ -117,9 +117,9 @@ impl NodeGpu {
 /// Contains real-time availability information of the node.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeAvailability {
-    uptime_seconds: u64,
-    load_average: u32,
-    status: String, // e.g. "online", "offline", "maintenance"
+    pub(crate) uptime_seconds: u64,
+    pub(crate) load_average: u32,
+    pub(crate) status: String, // e.g. "online", "offline", "maintenance"
 }
 
 impl NodeAvailability {
@@ -139,10 +139,10 @@ impl NodeAvailability {
 /// Additional metadata for operational context.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeMetadata {
-    tags: Vec<String>,
-    description: String,
-    annotations: NodeAnnotations,
-    monitoring: NodeMonitoring,
+    pub(crate) tags: Vec<String>,
+    pub(crate) description: String,
+    pub(crate) annotations: NodeAnnotations,
+    pub(crate) monitoring: NodeMonitoring,
 }
 
 impl NodeMetadata {
@@ -166,8 +166,8 @@ impl NodeMetadata {
 /// Additional annotations, such as roles and datacenter info.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeAnnotations {
-    roles: Vec<String>,     // e.g. ["compute", "storage"]
-    datacenter: String,     // Which datacenter the node belongs to.
+    pub(crate) roles: Vec<String>,     // e.g. ["compute", "storage"]
+    pub(crate) datacenter: String,     // Which datacenter the node belongs to.
 }
 
 impl NodeAnnotations {
@@ -183,8 +183,8 @@ impl NodeAnnotations {
 /// Monitoring settings specific to the node.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeMonitoring {
-    logging_enabled: bool,
-    metrics_endpoint: String,
+    pub(crate) logging_enabled: bool,
+    pub(crate) metrics_endpoint: String,
 }
 
 impl NodeMonitoring {
@@ -203,7 +203,7 @@ impl NodeMonitoring {
 pub struct NodeState {
     node_id: String,
     pk: String,
-    map: Map<String, BFTReg<Node, Actor>, Actor>,
+    pub map: Map<String, BFTReg<Node, Actor>, Actor>,
 }
 
 impl NodeState {

@@ -588,7 +588,7 @@ impl InstanceEncryption {
 pub struct InstanceState {
     node_id: String,
     pk: String,
-    map: Map<String, BFTReg<Instance, Actor>, Actor> 
+    pub map: Map<String, BFTReg<Instance, Actor>, Actor> 
 }
 
 

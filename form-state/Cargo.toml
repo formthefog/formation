@@ -9,7 +9,7 @@ tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 shared = { path = "../form-net/shared/" }
 serde_json = "1"
-crdts = { git = "http://github.com/Cryptonomikhan/rust-crdt", rev = "7ed0965" }
+crdts = { git = "http://github.com/Cryptonomikhan/rust-crdt", rev = "1fe4992" }
 ipnet = { version = "2.4", features = ["serde"] }
 axum = "0.7"
 reqwest = { version = "0.12", features = ["json"]}

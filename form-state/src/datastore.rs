@@ -15,7 +15,52 @@ use form_types::state::{Response, Success};
 
 pub type PeerMap = Map<String, BFTReg<CrdtPeer<String>, String>, String>;
 pub type CidrMap = Map<String, BFTReg<CrdtCidr<String>, String>, String>;
-pub type AssocMap = Map<(String, String), BFTReg<CrdtAssociation<String>, String>, String>;
+pub type AssocMap = Map<String, BFTReg<CrdtAssociation<String>, String>, String>;
+pub type DnsMap = Map<String, BFTReg<CrdtDnsRecord, String>, String>;
+pub type InstanceMap = Map<String, BFTReg<Instance, String>, String>;
+pub type NodeMap = Map<String, BFTReg<Node, String>, String>;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MergeableNetworkState {
+    peers: PeerMap,
+    cidrs: CidrMap,
+    assocs: AssocMap,
+    dns: DnsMap,
+}
+
+impl From<NetworkState> for MergeableNetworkState {
+    fn from(value: NetworkState) -> Self {
+        MergeableNetworkState {
+            peers: value.peers.clone(),
+            cidrs: value.cidrs.clone(),
+            assocs: value.associations.clone(),
+            dns: value.dns_state.zones.clone()
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MergeableState {
+    peers: PeerMap,
+    cidrs: CidrMap,
+    assocs: AssocMap,
+    dns: DnsMap,
+    instances: InstanceMap,
+    nodes: NodeMap
+}
+
+impl From<DataStore> for MergeableState {
+    fn from(value: DataStore) -> Self {
+        MergeableState {
+            peers: value.network_state.peers.clone(),
+            cidrs: value.network_state.cidrs.clone(),
+            assocs: value.network_state.associations.clone(),
+            dns: value.network_state.dns_state.zones.clone(),
+            instances: value.instance_state.map.clone(),
+            nodes: value.node_state.map.clone(),
+        }
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DataStore {
@@ -117,11 +162,13 @@ impl DataStore {
         }).collect()
     }
 
-    pub fn get_all_assocs(&self) -> HashMap<(String, String), CrdtAssociation<String>> {
+    pub fn get_all_assocs(&self) -> HashMap<String, CrdtAssociation<String>> {
         log::info!("Getting all associations from datastore network state...");
         self.network_state.associations.iter().filter_map(|item| {
             match item.val.1.val() {
-                Some(v) => Some((item.val.0.clone(), v.value().clone())),
+                Some(v) => {
+                    Some((item.val.0.clone(), v.value().clone()))
+                },
                 None => None
             }
         }).collect()
@@ -130,11 +177,14 @@ impl DataStore {
     pub fn get_relationships(&self, cidr_id: String) -> Vec<(Cidr<String>, Cidr<String>)> {
         log::info!("Getting relationships for {cidr_id} from datastore network state...");
         let mut assoc_ids = self.get_all_assocs();
-        assoc_ids.retain(|k, _| k.0 == cidr_id || k.1 == cidr_id);
-        let ids: HashSet<(String, String)> = assoc_ids.iter().map(|(k, _)| k.clone()).collect();
-        ids.iter().filter_map(|(cidr1, cidr2)| {
-            let cidr_1 = self.network_state.cidrs.get(cidr1).val;
-            let cidr_2 = self.network_state.cidrs.get(cidr2).val;
+        assoc_ids.retain(|k, _| *k == cidr_id);
+        let ids: HashSet<String> = assoc_ids.iter().map(|(k, _)| k.clone()).collect();
+        ids.iter().filter_map(|id| {
+            let split: Vec<&str> = id.split("-").collect();
+            let cidr_id_1 = split[0];
+            let cidr_id_2 = split[1];
+            let cidr_1 = self.network_state.cidrs.get(&cidr_id_1.to_string()).val;
+            let cidr_2 = self.network_state.cidrs.get(&cidr_id_2.to_string()).val;
             match (cidr_1, cidr_2) {
                 (Some(reg_1), Some(reg_2)) => {
                     let val1 = reg_1.val();
@@ -749,18 +799,18 @@ async fn pong() -> Json<Value> {
 
 async fn full_state(
     State(state): State<Arc<Mutex<DataStore>>>,
-) -> Json<DataStore> {
+) -> Json<MergeableState> {
     log::info!("Received full state request, returning...");
     let datastore = state.lock().await.clone();
-    Json(datastore)
+    Json(datastore.into())
 }
 
 async fn network_state(
     State(state): State<Arc<Mutex<DataStore>>>,
-) -> Json<NetworkState> {
+) -> Json<MergeableNetworkState> {
     log::info!("Received network state request, returning...");
     let network_state = state.lock().await.network_state.clone();
-    Json(network_state)
+    Json(network_state.into())
 }
 
 async fn peer_state(
@@ -2285,3 +2335,223 @@ async fn list_nodes(
 
     return Json(Response::Success(Success::List(list)))
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::instances::{InstanceAnnotations, InstanceCluster, InstanceEncryption, InstanceMetadata, InstanceMonitoring, InstanceResources, InstanceSecurity, InstanceStatus};
+    use crate::nodes::{NodeAnnotations, NodeAvailability, NodeCapacity, NodeMetadata, NodeMonitoring};
+
+    use super::*;
+    use k256::ecdsa::SigningKey;
+    use crdts::{CmRDT, Map};
+    use ipnet::IpNet;
+    use rand::thread_rng;
+    use std::collections::BTreeMap;
+    use std::str::FromStr;
+    use trust_dns_proto::rr::RecordType;
+
+    // This test builds a MergableState (your datastore state without private keys or node ids)
+    // with one entry in each of the maps and then serializes and deserializes it.
+    #[test]
+    fn test_mergeable_state_serialization() -> Result<(), Box<dyn std::error::Error>> {
+        // Define an actor string and create a dummy signing key.
+        let actor = "test_actor".to_string();
+        let sk = SigningKey::random(&mut thread_rng());
+        // We need a hex-encoded private key string (this is just for signing our CRDT updates)
+        let pk_str = hex::encode(sk.to_bytes());
+        let signing_key = SigningKey::from_slice(&hex::decode(pk_str.clone())?)?;
+        
+        // Create empty maps for each of the types
+        let mut peers: PeerMap = Map::new();
+        let mut cidrs: CidrMap = Map::new();
+        let mut assocs: AssocMap = Map::new();
+        let mut dns: DnsMap = Map::new();
+        let mut instances: InstanceMap = Map::new();
+        let mut nodes: NodeMap = Map::new();
+
+        // --- Insert a fake peer ---
+        let fake_peer = CrdtPeer {
+            id: "peer1".to_string(),
+            name: "Peer One".to_string(),
+            ip: "127.0.0.1".parse()?,
+            cidr_id: "cidr1".to_string(),
+            public_key: "fake_public_key".to_string(),
+            endpoint: None,
+            keepalive: Some(30),
+            is_admin: false,
+            is_disabled: false,
+            is_redeemed: false,
+            invite_expires: None,
+            candidates: vec![],
+        };
+        let peer_ctx = peers.read_ctx().derive_add_ctx(actor.clone());
+        let peer_op = peers.update("peer1".to_string(), peer_ctx, |reg, _| {
+            // update returns a signed op (or an error)
+            reg.update(fake_peer, actor.clone(), signing_key.clone()).expect("Unable to sign update, Panicking")
+        });
+        peers.apply(peer_op);
+
+        // --- Insert a fake cidr ---
+        let fake_cidr = CrdtCidr {
+            id: "cidr1".to_string(),
+            name: "CIDR One".to_string(),
+            cidr: IpNet::from_str("192.168.0.0/24")?,
+            parent: None,
+        };
+        let cidr_ctx = cidrs.read_ctx().derive_add_ctx(actor.clone());
+        let cidr_op = cidrs.update("cidr1".to_string(), cidr_ctx, |reg, _| {
+            reg.update(fake_cidr, actor.clone(), signing_key.clone()).expect("Unable to sign update, Panicking")
+
+        });
+        cidrs.apply(cidr_op);
+
+        // --- Insert a fake association ---
+        let fake_assoc = CrdtAssociation {
+            id: ("cidr1".to_string(), "cidr2".to_string()),
+            cidr_1: "cidr1".to_string(),
+            cidr_2: "cidr2".to_string(),
+        };
+        let assoc_ctx = assocs.read_ctx().derive_add_ctx(actor.clone());
+        let assoc_op = assocs.update("assoc1".to_string(), assoc_ctx, |reg, _| {
+            reg.update(fake_assoc, actor.clone(), signing_key.clone()).expect("Unable to sign update, Panicking")
+
+        });
+        assocs.apply(assoc_op);
+
+        // --- Insert a fake DNS record ---
+        let fake_dns = CrdtDnsRecord {
+            domain: "example.com".to_string(),
+            record_type: RecordType::A,
+            formnet_ip: vec!["127.0.0.1:80".parse()?],
+            public_ip: vec!["192.0.2.1:80".parse()?],
+            cname_target: None,
+            ttl: 300,
+            ssl_cert: false,
+        };
+        let dns_ctx = dns.read_ctx().derive_add_ctx(actor.clone());
+        let dns_op = dns.update("example.com".to_string(), dns_ctx, |reg, _| {
+            reg.update(fake_dns, actor.clone(), signing_key.clone()).expect("Unable to sign update, Panicking")
+
+        });
+        dns.apply(dns_op);
+
+        // --- Insert a fake instance ---
+        let fake_instance = Instance {
+            instance_id: "instance1".to_string(),
+            node_id: "node1".to_string(),
+            build_id: "build1".to_string(),
+            instance_owner: "owner1".to_string(),
+            created_at: 0,
+            updated_at: 0,
+            last_snapshot: 0,
+            status: InstanceStatus::Created,
+            host_region: "us-east".to_string(),
+            resources: InstanceResources {
+                vcpus: 2,
+                memory_mb: 2048,
+                bandwidth_mbps: 100,
+                gpu: None,
+            },
+            cluster: InstanceCluster {
+                members: BTreeMap::new(),
+            },
+            formfile: "".to_string(),
+            snapshots: None,
+            metadata: InstanceMetadata {
+                tags: vec!["tag1".to_string()],
+                description: "Fake instance".to_string(),
+                annotations: InstanceAnnotations {
+                    deployed_by: "test".to_string(),
+                    network_id: 1,
+                    build_commit: None,
+                },
+                security: InstanceSecurity {
+                    encryption: InstanceEncryption {
+                        is_encrypted: false,
+                        scheme: None,
+                    },
+                    tee: false,
+                    hsm: false,
+                },
+                monitoring: InstanceMonitoring {
+                    logging_enabled: false,
+                    metrics_endpoint: "http://localhost".to_string(),
+                },
+            },
+        };
+        let inst_ctx = instances.read_ctx().derive_add_ctx(actor.clone());
+        let inst_op = instances.update("instance1".to_string(), inst_ctx, |reg, _| {
+            reg.update(fake_instance, actor.clone(), signing_key.clone()).expect("Unable to sign update, Panicking")
+
+        });
+        instances.apply(inst_op);
+
+        // --- Insert a fake node ---
+        let fake_node = Node {
+            node_id: "node1".to_string(),
+            node_owner: "owner_node".to_string(),
+            created_at: 0,
+            updated_at: 0,
+            last_heartbeat: 0,
+            host_region: "us-west".to_string(),
+            capacity: NodeCapacity {
+                vcpus: 4,
+                memory_mb: 8192,
+                bandwidth_mbps: 1000,
+                gpu: None,
+            },
+            availability: NodeAvailability {
+                uptime_seconds: 3600,
+                load_average: 10,
+                status: "online".to_string(),
+            },
+            metadata: NodeMetadata {
+                tags: vec!["node_tag".to_string()],
+                description: "Fake node".to_string(),
+                annotations: NodeAnnotations {
+                    roles: vec!["compute".to_string()],
+                    datacenter: "dc1".to_string(),
+                },
+                monitoring: NodeMonitoring {
+                    logging_enabled: true,
+                    metrics_endpoint: "http://node.metrics".to_string(),
+                },
+            },
+        };
+        let node_ctx = nodes.read_ctx().derive_add_ctx(actor.clone());
+        let node_op = nodes.update("node1".to_string(), node_ctx, |reg, _| {
+            reg.update(fake_node, actor.clone(), signing_key.clone()).expect("Unable to sign update, Panicking")
+
+        });
+        nodes.apply(node_op);
+
+        // --- Build the mergeable state ---
+        let mergeable_state = MergeableState {
+            peers,
+            cidrs,
+            assocs,
+            dns,
+            instances,
+            nodes,
+        };
+
+        assert!(serde_json::to_string(&mergeable_state.peers).is_ok());
+        assert!(serde_json::to_string(&mergeable_state.cidrs).is_ok());
+        assert!(serde_json::to_string(&mergeable_state.assocs).is_ok());
+        assert!(serde_json::to_string(&mergeable_state.dns).is_ok());
+        assert!(serde_json::to_string(&mergeable_state.instances).is_ok());
+        assert!(serde_json::to_string(&mergeable_state.nodes).is_ok());
+
+        // --- Serialization ---
+        let serialized = serde_json::to_string_pretty(&mergeable_state)?;
+        println!("Serialized mergeable state:\n{}", serialized);
+
+        // --- Deserialization ---
+        let _deserialized: MergeableState = serde_json::from_str(&serialized)?;
+        // (You can compare mergeable_state and deserialized here if your types implement PartialEq.)
+        println!("Deserialization succeeded.");
+
+        Ok(())
+    }
+}
+
