@@ -1,6 +1,9 @@
-use alloy::{primitives::Address, signers::k256::ecdsa::SigningKey};
+use alloy_primitives::Address; 
+use k256::ecdsa::SigningKey;
 use clap::{Parser, Subcommand};
+use crdts::bft_topic_queue::TopicQueue;
 use form_p2p::queue::{FormMQ, QUEUE_PORT};
+use reqwest::Client;
 use tokio::sync::RwLock;
 use std::{path::PathBuf, sync::Arc};
 use form_config::OperatorConfig;
@@ -55,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         CliCommand::Run { signing_key, sub_addr: _, pub_addr: _ } => {
             log::info!("Acquiring signing key");
             let signing_key = if signing_key.is_none() {
-                let config = config.unwrap();
+                let config = config.clone().unwrap();
                 config.secret_key.unwrap()
             } else {
                 signing_key.unwrap()
@@ -70,6 +73,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             log::info!("Building shared queue");
             let queue = Arc::new(RwLock::new(FormMQ::new(address, signing_key, String::new())));
+            if let Some(config) = config {
+                for bootstrap in config.bootstrap_nodes {
+                    let to_merge = match Client::new()
+                        .get(format!("http://{bootstrap}:{QUEUE_PORT}/queue/get"))
+                        .send().await {
+                            Ok(resp) => match resp.json::<TopicQueue<Vec<u8>>>().await {
+                                Ok(queue) => Some(queue),
+                                Err(_) => None,
+                            }
+                            Err(_) => None,
+                        };
+                    if let Some(q) = to_merge {
+                        let mut guard = queue.write().await;
+                        guard.merge(q);
+                        drop(guard);
+                    }
+                }
+            }
             let (shutdown_tx, _) = tokio::sync::broadcast::channel(1024);
             let inner_queue = queue.clone();
             let handle = tokio::spawn(async move {

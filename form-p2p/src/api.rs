@@ -1,8 +1,13 @@
 use std::sync::Arc;
-use axum::{extract::{Path, State}, routing::{get, post}, Json, Router};
-use crdts::merkle_reg::Sha3Hash;
+use axum::{body::Body, extract::{Path, State}, routing::{get, post}, Json, Router};
+use crdts::{bft_topic_queue::TopicQueue, merkle_reg::Sha3Hash};
 use tiny_keccak::{Hasher, Sha3};
 use tokio::{net::TcpListener, sync::RwLock};
+use axum::{
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
+use bytes::Bytes;
 use crate::queue::{FormMQ, QueueRequest, QueueResponse};
 
 pub fn build_routes(state: Arc<RwLock<FormMQ<Vec<u8>>>>) -> Router {
@@ -161,16 +166,30 @@ pub async fn get_topic_n_after(
 
     return Json(QueueResponse::Failure { reason: Some(format!("Unable to acquire message for {topic}")) })
 }
+/*
 pub async fn get_all(
     State(state): State<Arc<RwLock<FormMQ<Vec<u8>>>>>
 ) -> Json<QueueResponse> {
     let queue = state.read().await;
     let full = queue.queue();
 
-    return Json(QueueResponse::Full(full.topics.iter().map(|ctx| {
-        let (topic, queue) = ctx.val; 
-        (topic.clone(), queue.messages.iter().map(|(_, v)| {
-            v.content.clone()
-        }).collect())
-    }).collect()))
+    return Json(QueueResponse::Full(full.clone()))
+}
+*/
+
+/// Returns a streaming response where the full TopicQueue is written as a JSON array.
+/// In this example we assume that each topic in the TopicQueue will be sent as a tuple of (topic_name, bft_queue).
+pub async fn get_all(
+    State(state): State<Arc<RwLock<FormMQ<Vec<u8>>>>>
+) -> impl IntoResponse {
+    // Read the current queue (or clone what you need)
+    let queue = state.read().await;
+    let topic_queue: TopicQueue<Vec<u8>> = queue.queue().clone();
+    let body = Body::from(Bytes::copy_from_slice(&serde_json::to_vec(&topic_queue).unwrap()));
+    
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/json")
+        .body(body.into_data_stream())
+        .unwrap()
 }

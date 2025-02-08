@@ -1,6 +1,6 @@
-use std::{collections::BTreeMap, fmt::Debug, net::IpAddr};
-use alloy::signers::k256::ecdsa::SigningKey;
-use crdts::{bft_queue::Message, bft_topic_queue::TopicQueue, map::Op, merkle_reg::Sha3Hash, BFTQueue, CmRDT, VClock};
+use std::{fmt::Debug, net::IpAddr};
+use k256::ecdsa::SigningKey;
+use crdts::{bft_queue::Message, bft_topic_queue::TopicQueue, map::Op, merkle_reg::Sha3Hash, BFTQueue, CmRDT, CvRDT, VClock};
 use form_types::state::{Response, Success};
 use shared::Peer;
 use serde::{Deserialize, Serialize};
@@ -25,7 +25,7 @@ pub enum QueueResponse {
     Some(Vec<u8>),
     List(Vec<Vec<u8>>),
     Failure { reason: Option<String> },
-    Full(BTreeMap<String, Vec<Vec<u8>>>)
+    Full(TopicQueue<Vec<u8>>)
 }
 
 #[allow(unused)]
@@ -46,6 +46,10 @@ impl FormMQ<Vec<u8>> {
             state_uri,
             client: Client::new()
         }
+    }
+
+    pub fn merge(&mut self, other: TopicQueue<Vec<u8>>) {
+        self.queue.merge(other);
     }
 
     pub fn queue(&self) -> &TopicQueue<Vec<u8>> {
