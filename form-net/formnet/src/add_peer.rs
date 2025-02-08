@@ -12,34 +12,44 @@ pub async fn add_peer(
     peer_type: &PeerType,
     peer_id: &str,
 ) -> Result<InterfaceConfig, Box<dyn std::error::Error>> {
+    log::warn!("ATTEMPTING TO ADD PEER {peer_id}...");
+    log::info!("Getting config from file...");
     let config = ConfigFile::from_file(PathBuf::from(CONFIG_DIR).join(NETWORK_NAME).with_extension("conf"))?;
+    log::info!("Getting interface name...");
     let interface = InterfaceName::from_str(NETWORK_NAME)?;
+    log::info!("Gathering peers...");
     let peers = DatabasePeer::<String, CrdtMap>::list().await?
         .into_iter()
         .map(|dp| dp.inner)
         .collect::<Vec<_>>();
+    log::info!("Gathering CIDRS...");
     let cidrs = DatabaseCidr::<String, CrdtMap>::list().await?;
+    log::info!("Building CIDR tree...");
     let cidr_tree = CidrTree::new(&cidrs[..]);
-    let server_id = {
+    log::info!("Finding server...");
+    let server = {
         match peers.iter().find(|p| p.is_admin) {
             Some(peer) => {
-                &peer.id
+                peer
             }
             None => {
                 return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "No admins, no servers, cannot add peer")));
             }
         }
     };
+    log::info!("Found server...");
 
+    log::info!("Building peer...");
     let (peer_request, keypair) = build_peer(
         &peers,
         &peer_type,
         peer_id
     ).await?; 
-    log::info!("Received results from prompts, attempting to create peer in database");
+    log::info!("Built peer, attempting to add peer to datastore");
     let peer = DatabasePeer::<String, CrdtMap>::create(peer_request).await?;
     if cfg!(not(test)) && Device::get(&interface, network.backend).is_ok() {
         // Update the current WireGuard interface with the new peers.
+        log::info!("Adding peer to device");
         DeviceUpdate::new()
             .add_peer(PeerConfigBuilder::from(&*peer))
             .apply(&interface, network.backend)
@@ -48,15 +58,17 @@ pub async fn add_peer(
         log::info!("adding to WireGuard interface: {}", &*peer);
     }
 
-    let server_peer = DatabasePeer::<String, CrdtMap>::get(server_id.clone()).await?;
+    log::info!("Got server peer");
+    log::info!("Building invitation");
     let invitation = build_peer_invitation(
         &interface,
         &peer,
-        &server_peer,
+        &server,
         &cidr_tree,
         keypair,
         &SocketAddr::new(config.address, config.listen_port),
     )?;
+    log::info!("Returning invitation");
     return Ok(invitation)
 }
 
@@ -65,7 +77,7 @@ pub async fn build_peer(
     peer_type: &PeerType,
     peer_id: &str,
 ) -> Result<(PeerContents<String>, KeyPair), Box<dyn std::error::Error>> {
-    let cidr = DatabaseCidr::<String, CrdtMap>::get("peer-1".to_string()).await?; 
+    let cidr = DatabaseCidr::<String, CrdtMap>::get("peers-1".to_string()).await?; 
     let mut available_ip = None;
     let candidate_ips = cidr.hosts().filter(|ip| cidr.is_assignable(ip));
     for ip in candidate_ips {
@@ -77,8 +89,9 @@ pub async fn build_peer(
 
     let available_ip = available_ip.expect("No IPs in this CIDR are avavilable");
 
-    let name = peer_id.to_string(); 
+    let name = peer_id.to_string();
 
+    log::info!("Checking valid host name for {name}");
     valid_hostname(&Hostname::from_str(&name)?, &peer_type)?;
     let is_admin = match peer_type {
         PeerType::Operator => true,

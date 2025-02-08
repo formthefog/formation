@@ -35,6 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         config.clone().unwrap().secret_key.ok_or(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Secret Key required")))?
     };
+
     log::info!("Acquired private key...");
 
     let address = hex::encode(Address::from_private_key(&SigningKey::from_slice(&hex::decode(&private_key)?)?)); 
@@ -57,6 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut iter = parser.to_dial.iter();
             let mut state = None;
             while let Some(dial) = iter.next() {
+                log::info!("Attempting to dial {dial}");
                 match request_full_state(dial).await {
                     Ok(s) => {
                         state = Some(s);
@@ -75,6 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut iter = unwrapped_config.bootstrap_nodes.iter();
             let mut state = None;
             while let Some(dial) = iter.next() {
+                log::info!("Attempting to dial {dial}");
                 match request_full_state(dial).await {
                     Ok(s) => {
                         state = Some(s);
@@ -94,7 +97,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     log::info!("Built data store, running...");
+    
+    let (tx, rx) = tokio::sync::broadcast::channel(1024); 
 
-    let _ = datastore.unwrap().run().await;
+    let handle = tokio::spawn(async move {
+        if let Err(e) = datastore.unwrap().run(rx).await {
+            eprintln!("Error running datastore: {e}");
+        }
+    });
+
+    tokio::signal::ctrl_c().await?;
+    tx.send(())?;
+
+    handle.await?;
+
     Ok(())
 }

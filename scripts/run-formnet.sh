@@ -1,6 +1,5 @@
 #!/bin/bash
 
-rm /var/lib/formnet/formnet.db
 rm /etc/formnet/formnet.conf
-/usr/local/bin/formnet-server uninstall formnet --yes
-/usr/local/bin/formnet node -C $SECRET_PATH -p $PASSWORD 
+/usr/local/bin/formnet operator leave --yes
+/usr/local/bin/formnet operator join -C $SECRET_PATH -p $PASSWORD 

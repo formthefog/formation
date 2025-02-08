@@ -43,6 +43,7 @@ pub struct OperatorConfig {
 
 impl OperatorConfig {
     pub fn from_file(path: impl AsRef<Path>, encrypted: bool, password: Option<&str>) -> Result<Self> {
+        println!("Attempting to read config from {}", path.as_ref().display());
         let mut plain_config: OperatorConfig = serde_json::from_slice(&std::fs::read(path)?)?;
         if let (None, None) = (&plain_config.mnemonic, &plain_config.secret_key) {
             return Err(anyhow!("Either a mnemonic or secret key is required"));

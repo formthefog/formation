@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use axum::extract::Path as AxumPath;
 use axum::{routing::post, Json, Router};
 use serde_json::Value;
 use std::io::Write;
@@ -146,7 +147,7 @@ pub enum FormfileResponse {
 pub fn routes() -> Router {
     Router::new()
         .route("/ping", post(handle_ping))
-        .route("/formfile", post(handle_formfile))
+        .route("/:build_id/:instance_id/formfile", post(handle_formfile))
 }
 
 pub async fn serve_socket(_socket_path: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -173,6 +174,7 @@ async fn handle_ping() -> Json<Value> {
 }
 
 async fn handle_formfile(
+    AxumPath((build_id, instance_id)): AxumPath<(String, String)>,
     Json(formfile): Json<Formfile>,
 ) -> Json<FormfileResponse> {
     let formfile = formfile;
@@ -189,7 +191,8 @@ async fn handle_formfile(
         // Create the workdir in the root directory of the disk 
         .mkdir(&workdir)
         // Update & Upgrade package manager
-        .write("/etc/vm_name", &formfile.name)
+        .write("/etc/vm_name", &instance_id)
+        .write("/etc/build_id", &build_id)
         .copy_in("/var/lib/formnet/formnet", "/usr/bin")
         .write("/etc/systemd/system/formnet-join.service", &write_formnet_join()) 
         .write("/etc/netplan/01-custom-netplan.yaml", &write_netplan())
@@ -300,10 +303,14 @@ async fn handle_formfile(
         }
     }
 
+    println!("Attempting to run virt customize script");
+
     let output = Command::new("bash")
         .arg("/scripts/run-virt-customize.sh")
         .arg(&command)
         .output();
+
+    println!("ran virt-customize script getting output.");
 
     match output {
         Ok(op) => {
@@ -428,19 +435,24 @@ r#"network:
 }
 
 fn write_formnet_join() -> String {
-r#"[Unit]
+    format!(r#"[Unit]
 Description=Formnet Join 
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/formnet 
+Environment="HOST_BRIDGE_IP={}"
+ExecStart=/usr/bin/formnet instance 
 StandardOutput=append:/var/log/formnet.log
 StandardError=append:/var/log/formnet.log
 
 
 [Install]
 WantedBy=multi-user.target
-"#.to_string()
+"#, get_host_ip())
+}
+
+fn get_host_ip() -> String {
+    std::env::var("HOST_BRIDGE_IP").unwrap()
 }

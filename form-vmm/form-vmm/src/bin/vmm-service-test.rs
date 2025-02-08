@@ -47,6 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
         (None, None)
     };
 
+    let manager_shutdown = shutdown_tx.subscribe();
     let vm_manager = VmManager::new(
         event_tx,
         api_addr,
@@ -54,6 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
         "test-signing-key".to_string(),
         subscriber_uri,
         publisher_uri,
+        manager_shutdown,
     ).await?;
 
     log::info!("Built VM Manager, sleeping for 5 seconds...");
@@ -88,7 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
     let create_vm_request = CreateVmRequest {
         name: format!("test-vm-{}", parser.test_run),
         recovery_id: 0,
-        formfile,
+        formfile: serde_json::to_string(&formfile)?,
         signature: Some("test-signature".to_string())
     };
 

@@ -1,5 +1,6 @@
 //! A service to create and run formnet, a wireguard based p2p VPN tunnel, behind the scenes
 use std::path::PathBuf;
+use std::time::Duration;
 use alloy_core::primitives::Address;
 use formnet_server::db::CrdtMap;
 use formnet_server::DatabasePeer;
@@ -113,6 +114,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ).await?;
                         ensure_crdt_datastore().await?;
                         redeem(invitation)?;
+                    } else if !operator_config.unwrap().bootstrap_nodes.is_empty() {
+                        let invitation = request_to_join(
+                            parser.bootstraps.clone(),
+                            address.clone(),
+                            PeerType::Operator
+                        ).await?;
+                        ensure_crdt_datastore().await?;
+                        redeem(invitation)?;
                     } else {
                         init(address.clone()).await?;
                     }
@@ -145,13 +154,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     });
 
+                    tokio::time::sleep(Duration::from_secs(5)).await;
                     log::info!("reverting existing resolver for formnet interface");
                     #[cfg(target_os = "linux")]
-                    revert_formnet_resolver().await?;
-                    let peer = DatabasePeer::<String, CrdtMap>::get(address).await?;
-                    #[cfg(target_os = "linux")]
-                    set_formnet_resolver(&peer.contents.ip.to_string(), "~fog").await?;
-                    log::info!("Setting up dns resolver");
+                    if let Ok(()) = revert_formnet_resolver().await {
+                        let peer = DatabasePeer::<String, CrdtMap>::get(address).await?;
+                        #[cfg(target_os = "linux")]
+                        set_formnet_resolver(&peer.contents.ip.to_string(), "~fog").await?;
+                        log::info!("Setting up dns resolver");
+                    }
 
                     tokio::signal::ctrl_c().await?;
                     shutdown.send(())?;

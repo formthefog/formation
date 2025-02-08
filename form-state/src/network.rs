@@ -11,23 +11,23 @@ use crate::Actor;
 
 pub type PeerOp<T> = Op<String, BFTReg<CrdtPeer<T>, Actor>, Actor>; 
 pub type CidrOp<T> = Op<String, BFTReg<CrdtCidr<T>, Actor>, Actor>;
-pub type AssocOp<T> = Op<(String, String), BFTReg<CrdtAssociation<T>, Actor>, Actor>;
+pub type AssocOp<T> = Op<String, BFTReg<CrdtAssociation<T>, Actor>, Actor>;
 pub type DnsOp = Op<String, BFTReg<CrdtDnsRecord, Actor>, Actor>;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CrdtPeer<T: Clone> {
-    id: String,
-    name: String,
-    ip: IpAddr,
-    cidr_id: T, 
-    public_key: String,
-    endpoint: Option<Endpoint>,
-    keepalive: Option<u16>,
-    is_admin: bool,
-    is_disabled: bool,
-    is_redeemed: bool,
-    invite_expires: Option<u64>,
-    candidates: Vec<Endpoint>,
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) ip: IpAddr,
+    pub(crate) cidr_id: T, 
+    pub(crate) public_key: String,
+    pub(crate) endpoint: Option<Endpoint>,
+    pub(crate) keepalive: Option<u16>,
+    pub(crate) is_admin: bool,
+    pub(crate) is_disabled: bool,
+    pub(crate) is_redeemed: bool,
+    pub(crate) invite_expires: Option<u64>,
+    pub(crate) candidates: Vec<Endpoint>,
 }
 
 impl Sha3Hash for CrdtPeer<String> {
@@ -137,10 +137,10 @@ impl<T: Clone> CrdtPeer<T> {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct CrdtCidr<T: Clone> {
-    id: String,
-    name: String,
-    cidr: IpNet,
-    parent: Option<T>
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) cidr: IpNet,
+    pub(crate) parent: Option<T>
 }
 
 impl Sha3Hash for CrdtCidr<String> {
@@ -182,9 +182,9 @@ impl From<CidrContents<String>> for CrdtCidr<String> {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct CrdtAssociation<T: Clone> {
-    id: (T, T),
-    cidr_1: T,
-    cidr_2: T 
+    pub(crate) id: (T, T),
+    pub(crate) cidr_1: T,
+    pub(crate) cidr_2: T 
 }
 
 impl Sha3Hash for CrdtAssociation<String> {
@@ -220,13 +220,13 @@ impl From<AssociationContents<String>> for CrdtAssociation<String> {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CrdtDnsRecord {
-    domain: String,
-    record_type: RecordType,
-    formnet_ip: Vec<SocketAddr>,
-    public_ip: Vec<SocketAddr>,
-    cname_target: Option<String>,
-    ttl: u32,
-    ssl_cert: bool,
+    pub(crate) domain: String,
+    pub(crate) record_type: RecordType,
+    pub(crate) formnet_ip: Vec<SocketAddr>,
+    pub(crate) public_ip: Vec<SocketAddr>,
+    pub(crate) cname_target: Option<String>,
+    pub(crate) ttl: u32,
+    pub(crate) ssl_cert: bool,
 }
 
 impl CrdtDnsRecord {
@@ -310,7 +310,7 @@ impl Sha3Hash for CrdtDnsRecord {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DnsState {
-    pub zones: Map<Actor, BFTReg<CrdtDnsRecord, Actor>, Actor>
+    pub zones: Map<String, BFTReg<CrdtDnsRecord, Actor>, Actor>
 }
 
 impl DnsState {
@@ -331,7 +331,7 @@ pub struct NetworkState {
     pub node_id: Actor,
     pub peers: Map<String, BFTReg<CrdtPeer<String>, Actor>, Actor>,
     pub cidrs: Map<String, BFTReg<CrdtCidr<String>, Actor>, Actor>,
-    pub associations: Map<(String, String), BFTReg<CrdtAssociation<String>, Actor>, Actor>,
+    pub associations: Map<String, BFTReg<CrdtAssociation<String>, Actor>, Actor>,
     pub dns_state: DnsState
 }
 
@@ -408,7 +408,7 @@ impl NetworkState {
                 .expect("PANIC: Invalid SigningKey Cannot Decode from Hex"))
                 .expect("PANIC: Invalid SigningKey cannot recover ffrom Bytes");
         log::info!("Creating op...");
-        let op = self.associations.update((association.cidr_id_1.to_string(), association.cidr_id_2.to_string()), add_ctx, |reg, ctx| {
+        let op = self.associations.update(format!("{}-{}",association.cidr_id_1.to_string(), association.cidr_id_2.to_string()), add_ctx, |reg, ctx| {
             let op = reg.update(association.into(), self.node_id.clone(), signing_key).expect("PANIC: Unable to sign updates");
             op
         });
@@ -418,6 +418,7 @@ impl NetworkState {
 
     pub fn remove_association_local(&mut self, id: (String, String)) -> AssocOp<String> { 
         let rm_ctx = self.associations.read_ctx().derive_rm_ctx();
+        let id = format!("{}-{}", id.0, id.1);
         self.associations.rm(id, rm_ctx)
     }
 
@@ -512,7 +513,7 @@ impl NetworkState {
         self.associations.apply(op);
     }
 
-    pub fn associations_op_success(&self, key: (String, String), update: Update<CrdtAssociation<String>, String>) -> (bool, CrdtAssociation<String>) {
+    pub fn associations_op_success(&self, key: String, update: Update<CrdtAssociation<String>, String>) -> (bool, CrdtAssociation<String>) {
         if let Some(reg) = self.associations.get(&key).val {
             if let Some(v) = reg.val() {
                 // If the in the updated register equals the value in the Op it

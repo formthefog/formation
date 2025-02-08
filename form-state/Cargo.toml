@@ -9,7 +9,7 @@ tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 shared = { path = "../form-net/shared/" }
 serde_json = "1"
-crdts = { git = "https://github.com/cryptonomikhan/rust-crdt.git" }
+crdts = { git = "http://github.com/Cryptonomikhan/rust-crdt", rev = "1fe4992" }
 ipnet = { version = "2.4", features = ["serde"] }
 axum = "0.7"
 reqwest = { version = "0.12", features = ["json"]}
@@ -23,4 +23,7 @@ rand = "0.8"
 form-config = { path = "../form-config" }
 trust-dns-proto = { version = "0.23", features = ["dnssec", "openssl", "ring", "serde-config"]}
 form-dns = { path = "../form-dns" }
+form-p2p = { path = "../form-p2p" }
+form-types = { path = "../form-types" }
 bincode = "1.3.3"
+futures = "0.3"

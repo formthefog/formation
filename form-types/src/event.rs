@@ -1,6 +1,5 @@
 use std::net::SocketAddr;
 use alloy_core::primitives::Address;
-use form_pack::formfile::Formfile;
 use serde::{Serialize, Deserialize};
 use uuid::Uuid;
 use form_traits::{Event as EventTrait, IntoEvent};
@@ -181,13 +180,10 @@ pub enum VmmEvent {
         name: String,
     },
     Create { 
-        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         owner: String,
         #[cfg(any(feature = "testnet", feature = "mainnet"))]
-        recovery_id: u32,
-        #[cfg(any(feature = "testnet", feature = "mainnet"))]
         requestor: String,
-        formfile: Formfile,
+        formfile: String,
         name: String,
         #[cfg(any(feature = "testnet", feature = "mainnet"))]
         custom_cmdline: Option<String>,
@@ -242,6 +238,7 @@ pub enum VmmEvent {
     },
     BootComplete {
         id: String,
+        build_id: String,
         formnet_ip: String,
         #[cfg(any(feature = "testnet", feature = "mainnet"))]
         signature: String,

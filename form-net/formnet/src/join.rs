@@ -106,7 +106,7 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
 
     while let Some(dial) = bootstrap.iter().next() {
         match Client::new()
-        .post(&format!("http://{dial}/join"))
+        .post(&format!("http://{dial}:3001/join"))
         .json(&request)
         .send()
         .await {
@@ -152,12 +152,10 @@ pub async fn user_join_formnet(address: String, provider: String, formnet_port: 
 }
 
 pub async fn vm_join_formnet() -> Result<(), Box<dyn std::error::Error>> {
-    simple_logger::SimpleLogger::new().init().unwrap();
-    let host_public_ip = reqwest::blocking::get(
-        "https://api.ipify.org"
-    )?.text()?;
-    // Get name
+    let host_ip = std::env::var("HOST_BRIDGE_IP").unwrap(); 
+    log::info!("HOST IP: {host_ip}");
     let name = std::fs::read_to_string("/etc/vm_name")?;
+    let build_id = std::fs::read_to_string("/etc/build_id")?;
     log::info!("Requesting formnet invite for vm {}", name);
     log::info!("Building VmJoinRequest");
     let join_request = VmJoinRequest { vm_id: name.clone() };
@@ -167,7 +165,7 @@ pub async fn vm_join_formnet() -> Result<(), Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
     log::info!("Posting request to endpoint using client, awaiting response...");
     // We should be able to access formnet, and the VMM over the bridge gateway
-    let resp = client.post(&format!("http://{host_public_ip}:3001/join"))
+    let resp = client.post(&format!("http://{host_ip}:3001/join"))
         .json(&join_request)
         .send().await.map_err(|e| {
             other_err(&e.to_string())
@@ -205,12 +203,13 @@ pub async fn vm_join_formnet() -> Result<(), Box<dyn std::error::Error>> {
 
             // Send message to VMM api.
             let request = BootCompleteRequest {
+                build_id: build_id,
                 name: name.clone(),
                 formnet_ip
             };
 
-            log::info!("Sending BootCompleteRequest {request:?} to http://{host_public_ip}:3002/{name}/boot_complete endpoint");
-            let resp = client.post(&format!("http://{host_public_ip}:3002/{}/boot_complete", name))
+            log::info!("Sending BootCompleteRequest {request:?} to http://{host_ip}:3002/vm/{name}/boot_complete endpoint");
+            let resp = client.post(&format!("http://{host_ip}:3002/vm/{}/boot_complete", name))
                 .json(&request)
                 .send()
                 .await?

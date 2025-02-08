@@ -1,18 +1,66 @@
-use std::{collections::{HashMap, HashSet}, sync::Arc, time::{SystemTime, UNIX_EPOCH}};
+use std::{collections::{HashMap, HashSet}, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
 use axum::{extract::{State, Path}, routing::{get, post}, Json, Router};
 use form_dns::{api::{DomainRequest, DomainResponse}, store::FormDnsRecord};
+use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
 use reqwest::Client;
 use serde_json::Value;
 use shared::{Association, AssociationContents, Cidr, CidrContents, Peer, PeerContents};
+use tiny_keccak::{Hasher, Sha3};
 use tokio::{net::TcpListener, sync::Mutex};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use crdts::{BFTReg, CvRDT, Map, bft_reg::Update};
+use crdts::{bft_reg::Update, map::Op, BFTReg, CvRDT, Map};
 use trust_dns_proto::rr::RecordType;
 use crate::{instances::{Instance, InstanceOp, InstanceState}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}};
+use form_types::state::{Response, Success};
 
 pub type PeerMap = Map<String, BFTReg<CrdtPeer<String>, String>, String>;
 pub type CidrMap = Map<String, BFTReg<CrdtCidr<String>, String>, String>;
-pub type AssocMap = Map<(String, String), BFTReg<CrdtAssociation<String>, String>, String>;
+pub type AssocMap = Map<String, BFTReg<CrdtAssociation<String>, String>, String>;
+pub type DnsMap = Map<String, BFTReg<CrdtDnsRecord, String>, String>;
+pub type InstanceMap = Map<String, BFTReg<Instance, String>, String>;
+pub type NodeMap = Map<String, BFTReg<Node, String>, String>;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MergeableNetworkState {
+    peers: PeerMap,
+    cidrs: CidrMap,
+    assocs: AssocMap,
+    dns: DnsMap,
+}
+
+impl From<NetworkState> for MergeableNetworkState {
+    fn from(value: NetworkState) -> Self {
+        MergeableNetworkState {
+            peers: value.peers.clone(),
+            cidrs: value.cidrs.clone(),
+            assocs: value.associations.clone(),
+            dns: value.dns_state.zones.clone()
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MergeableState {
+    peers: PeerMap,
+    cidrs: CidrMap,
+    assocs: AssocMap,
+    dns: DnsMap,
+    instances: InstanceMap,
+    nodes: NodeMap
+}
+
+impl From<DataStore> for MergeableState {
+    fn from(value: DataStore) -> Self {
+        MergeableState {
+            peers: value.network_state.peers.clone(),
+            cidrs: value.network_state.cidrs.clone(),
+            assocs: value.network_state.associations.clone(),
+            dns: value.network_state.dns_state.zones.clone(),
+            instances: value.instance_state.map.clone(),
+            nodes: value.node_state.map.clone(),
+        }
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DataStore {
@@ -27,20 +75,6 @@ pub enum PeerRequest {
     Join(PeerContents<String>),
     Update(PeerContents<String>),
     Delete(String),
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Success<T> {
-    Some(T),
-    List(Vec<T>),
-    Relationships(Vec<(Cidr<String>, Cidr<String>)>),
-    None,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Response<T> {
-    Success(Success<T>),
-    Failure { reason: Option<String> }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -64,7 +98,7 @@ pub enum DnsRequest {
     Op(DnsOp),
     Create(FormDnsRecord),
     Update(FormDnsRecord),
-    Delete
+    Delete(String)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -72,7 +106,7 @@ pub enum InstanceRequest {
     Op(InstanceOp),
     Create(Instance),
     Update(Instance),
-    Delete
+    Delete(String),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -80,7 +114,7 @@ pub enum NodeRequest {
     Op(NodeOp),
     Create(Node),
     Update(Node),
-    Delete
+    Delete(String),
 }
 
 impl DataStore {
@@ -119,6 +153,7 @@ impl DataStore {
 
     pub fn get_all_cidrs(&self) -> HashMap<String, CrdtCidr<String>> {
         log::info!("Getting all cidrs from datastore network state...");
+        log::info!("CIDRS: {:?}", self.network_state.cidrs);
         self.network_state.cidrs.iter().filter_map(|item| {
             match item.val.1.val() {
                 Some(v) => Some((item.val.0.clone(), v.value().clone())),
@@ -127,11 +162,13 @@ impl DataStore {
         }).collect()
     }
 
-    pub fn get_all_assocs(&self) -> HashMap<(String, String), CrdtAssociation<String>> {
+    pub fn get_all_assocs(&self) -> HashMap<String, CrdtAssociation<String>> {
         log::info!("Getting all associations from datastore network state...");
         self.network_state.associations.iter().filter_map(|item| {
             match item.val.1.val() {
-                Some(v) => Some((item.val.0.clone(), v.value().clone())),
+                Some(v) => {
+                    Some((item.val.0.clone(), v.value().clone()))
+                },
                 None => None
             }
         }).collect()
@@ -140,11 +177,14 @@ impl DataStore {
     pub fn get_relationships(&self, cidr_id: String) -> Vec<(Cidr<String>, Cidr<String>)> {
         log::info!("Getting relationships for {cidr_id} from datastore network state...");
         let mut assoc_ids = self.get_all_assocs();
-        assoc_ids.retain(|k, _| k.0 == cidr_id || k.1 == cidr_id);
-        let ids: HashSet<(String, String)> = assoc_ids.iter().map(|(k, _)| k.clone()).collect();
-        ids.iter().filter_map(|(cidr1, cidr2)| {
-            let cidr_1 = self.network_state.cidrs.get(cidr1).val;
-            let cidr_2 = self.network_state.cidrs.get(cidr2).val;
+        assoc_ids.retain(|k, _| *k == cidr_id);
+        let ids: HashSet<String> = assoc_ids.iter().map(|(k, _)| k.clone()).collect();
+        ids.iter().filter_map(|id| {
+            let split: Vec<&str> = id.split("-").collect();
+            let cidr_id_1 = split[0];
+            let cidr_id_2 = split[1];
+            let cidr_1 = self.network_state.cidrs.get(&cidr_id_1.to_string()).val;
+            let cidr_2 = self.network_state.cidrs.get(&cidr_id_2.to_string()).val;
             match (cidr_1, cidr_2) {
                 (Some(reg_1), Some(reg_2)) => {
                     let val1 = reg_1.val();
@@ -175,6 +215,414 @@ impl DataStore {
                 None => None,
             }
         }).collect()
+    }
+
+    async fn handle_peer_request(&mut self, peer_request: PeerRequest) -> Result<(), Box<dyn std::error::Error>> {
+        match peer_request {
+            PeerRequest::Op(op) => self.handle_peer_op(op).await?,
+            PeerRequest::Join(join) => self.handle_peer_join(join).await?,
+            PeerRequest::Update(up) => self.handle_peer_update(up).await?,
+            PeerRequest::Delete(del) => self.handle_peer_delete(del).await?,
+        }
+
+        Ok(())
+    }
+
+    async fn handle_peer_op(&mut self, peer_op: PeerOp<String>) -> Result<(), Box<dyn std::error::Error>> {
+        match &peer_op {
+            Op::Up { dot: _, key, op } => {
+                self.network_state.peer_op(peer_op.clone());
+                if let (true, _) = self.network_state.peer_op_success(key.clone(), op.clone()) {
+                    log::info!("Peer Op succesffully applied...");
+                    DataStore::write_to_queue(PeerRequest::Op(peer_op.clone()), 0).await?;
+                } else {
+                    log::info!("Peer Op rejected...");
+                    return Err(
+                        Box::new(
+                            std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                "update was rejected".to_string()
+                            )
+                        )
+                    )
+                }
+            }
+            Op::Rm { .. } => {
+                self.network_state.peer_op(peer_op.clone());
+                return Ok(());
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn handle_peer_join(&mut self, contents: PeerContents<String>) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.network_state.update_peer_local(contents);
+        self.handle_peer_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_peer_update(&mut self, contents: PeerContents<String>) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.network_state.update_peer_local(contents);
+        self.handle_peer_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_peer_delete(&mut self, id: String) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.network_state.remove_peer_local(id);
+        self.handle_peer_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_cidr_request(&mut self, cidr_request: CidrRequest) -> Result<(), Box<dyn std::error::Error>> {
+        match cidr_request {
+            CidrRequest::Op(op) => self.handle_cidr_op(op).await?,
+            CidrRequest::Create(create) => self.handle_cidr_create(create).await?,
+            CidrRequest::Update(update) => self.handle_cidr_update(update).await?,
+            CidrRequest::Delete(delete) => self.handle_cidr_delete(delete).await?,
+        }
+
+        Ok(())
+    }
+
+    async fn handle_cidr_op(&mut self, cidr_op: CidrOp<String>) -> Result<(), Box<dyn std::error::Error>> {
+        match &cidr_op {
+            Op::Up { dot: _, key, op } => {
+                self.network_state.cidr_op(cidr_op.clone());
+                if let (true, _) = self.network_state.cidr_op_success(key.clone(), op.clone()) {
+                    log::info!("CIDR Op succesffully applied...");
+                    DataStore::write_to_queue(CidrRequest::Op(cidr_op.clone()), 1).await?;
+                } else {
+                    log::info!("CIDR Op rejected...");
+                    return Err(
+                        Box::new(
+                            std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                "update was rejected".to_string()
+                            )
+                        )
+                    )
+                }
+            }
+            Op::Rm { .. } => {
+                self.network_state.cidr_op(cidr_op.clone());
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+
+    async fn handle_cidr_create(&mut self, create: CidrContents<String>) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.network_state.update_cidr_local(create);
+        self.handle_cidr_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_cidr_update(&mut self, update: CidrContents<String>) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.network_state.update_cidr_local(update);
+        self.handle_cidr_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_cidr_delete(&mut self, delete: String) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.network_state.remove_cidr_local(delete);
+        self.handle_cidr_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_assoc_request(&mut self, assoc_request: AssocRequest) -> Result<(), Box<dyn std::error::Error>> {
+        match assoc_request {
+            AssocRequest::Op(op) => self.handle_assoc_op(op).await?,
+            AssocRequest::Create(create) => self.handle_assoc_create(create).await?,
+            AssocRequest::Delete(delete) => self.handle_assoc_delete(delete).await?,
+        }
+        Ok(())
+    }
+
+    async fn handle_assoc_op(&mut self, assoc_op: AssocOp<String>) -> Result<(), Box<dyn std::error::Error>> {
+        match &assoc_op {
+            Op::Up { dot: _, key, op } => {
+                self.network_state.associations_op(assoc_op.clone());
+                if let (true, _) = self.network_state.associations_op_success(key.clone(), op.clone()) {
+                    log::info!("Assoc Op succesffully applied...");
+                    DataStore::write_to_queue(AssocRequest::Op(assoc_op.clone()), 2).await?;
+                } else {
+                    log::info!("Assoc Op rejected...");
+                    return Err(
+                        Box::new(
+                            std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                "update was rejected".to_string()
+                            )
+                        )
+                    )
+                }
+            }
+            Op::Rm { .. } => {
+                self.network_state.associations_op(assoc_op.clone());
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+
+    async fn handle_assoc_create(&mut self, create: AssociationContents<String>) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.network_state.update_association_local(create);
+        self.handle_assoc_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_assoc_delete(&mut self, delete: (String, String)) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.network_state.remove_association_local(delete);
+        self.handle_assoc_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_dns_request(&mut self, dns_request: DnsRequest) -> Result<(), Box<dyn std::error::Error>> {
+        match dns_request {
+            DnsRequest::Op(op) => self.handle_dns_op(op).await?,
+            DnsRequest::Create(create) => self.handle_dns_create(create).await?,
+            DnsRequest::Update(update) => self.handle_dns_update(update).await?,
+            DnsRequest::Delete(domain) => self.handle_dns_delete(domain).await? 
+        }
+
+        Ok(())
+    }
+
+    async fn handle_dns_op(&mut self, dns_op: DnsOp) -> Result<(), Box<dyn std::error::Error>> {
+        match &dns_op {
+            Op::Up { dot: _, key, op } => {
+                self.network_state.dns_op(dns_op.clone());
+                if let (true, _) = self.network_state.dns_op_success(key.clone(), op.clone()) {
+                    log::info!("DNS Op succesffully applied...");
+                    DataStore::write_to_queue(DnsRequest::Op(dns_op.clone()), 3).await?;
+                } else {
+                    log::info!("DNS Op rejected...");
+                    return Err(
+                        Box::new(
+                            std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                "update was rejected".to_string()
+                            )
+                        )
+                    )
+                }
+            }
+            Op::Rm { .. } => {
+                self.network_state.dns_op(dns_op.clone());
+                return Ok(());
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn handle_dns_create(&mut self, create: FormDnsRecord) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.network_state.update_dns_local(create);
+        self.handle_dns_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_dns_update(&mut self, update: FormDnsRecord) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.network_state.update_dns_local(update);
+        self.handle_dns_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_dns_delete(&mut self, delete: String) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.network_state.remove_dns_local(delete);
+        self.handle_dns_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_instance_request(&mut self, instance_request: InstanceRequest) -> Result<(), Box<dyn std::error::Error>> {
+        match instance_request {
+            InstanceRequest::Op(op) => self.handle_instance_op(op).await?,
+            InstanceRequest::Create(create) => self.handle_instance_create(create).await?,
+            InstanceRequest::Update(update) => self.handle_instance_update(update).await?,
+            InstanceRequest::Delete(id) => self.handle_instance_delete(id).await? 
+        }
+
+        Ok(())
+    }
+
+    async fn handle_instance_op(&mut self, instance_op: InstanceOp) -> Result<(), Box<dyn std::error::Error>> {
+        match &instance_op {
+            Op::Up { dot: _, key, op } => {
+                self.instance_state.instance_op(instance_op.clone());
+                if let (true, _) = self.instance_state.instance_op_success(key.clone(), op.clone()) {
+                    log::info!("Instance Op succesffully applied...");
+                    DataStore::write_to_queue(InstanceRequest::Op(instance_op.clone()), 4).await?;
+                } else {
+                    log::info!("Instance Op rejected...");
+                    return Err(
+                        Box::new(
+                            std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                "update was rejected".to_string()
+                            )
+                        )
+                    )
+                }
+            }
+            Op::Rm { .. } => {
+                self.instance_state.instance_op(instance_op.clone());
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+
+    async fn handle_instance_create(&mut self, create: Instance) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.instance_state.update_instance_local(create);
+        self.handle_instance_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_instance_update(&mut self, update: Instance) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.instance_state.update_instance_local(update);
+        self.handle_instance_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_instance_delete(&mut self, delete: String) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.instance_state.remove_instance_local(delete);
+        self.handle_instance_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_node_request(&mut self, node_request: NodeRequest) -> Result<(), Box<dyn std::error::Error>> {
+        match node_request {
+            NodeRequest::Op(op) => self.handle_node_op(op).await?,
+            NodeRequest::Create(create) => self.handle_node_create(create).await?,
+            NodeRequest::Update(update) => self.handle_node_update(update).await?,
+            NodeRequest::Delete(id) => self.handle_node_delete(id).await? 
+        }
+        Ok(())
+    }
+
+    async fn handle_node_op(&mut self, node_op: NodeOp) -> Result<(), Box<dyn std::error::Error>> {
+        match &node_op {
+            Op::Up { dot: _, key, op } => {
+                self.node_state.node_op(node_op.clone());
+                if let (true, _) = self.node_state.node_op_success(key.clone(), op.clone()) {
+                    log::info!("Peer Op succesffully applied...");
+                    DataStore::write_to_queue(NodeRequest::Op(node_op.clone()), 5).await?;
+                } else {
+                    log::info!("Peer Op rejected...");
+                    return Err(
+                        Box::new(
+                            std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                "update was rejected".to_string()
+                            )
+                        )
+                    )
+                }
+            }
+            Op::Rm { .. } => {
+                self.node_state.node_op(node_op.clone());
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+
+    async fn handle_node_create(&mut self, create: Node) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.node_state.update_node_local(create);
+        self.handle_node_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_node_update(&mut self, update: Node) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.node_state.update_node_local(update);
+        self.handle_node_op(op).await?;
+
+        Ok(())
+    }
+
+    async fn handle_node_delete(&mut self, delete: String) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.node_state.remove_node_local(delete);
+        self.handle_node_op(op).await?;
+
+        Ok(())
+    }
+
+    pub async fn write_to_queue(
+        message: impl Serialize + Clone,
+        sub_topic: u8,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut hasher = Sha3::v256();
+        let mut topic_hash = [0u8; 32];
+        hasher.update(b"state");
+        hasher.finalize(&mut topic_hash);
+        let mut message_code = vec![sub_topic];
+        message_code.extend(serde_json::to_vec(&message)?);
+        let request = QueueRequest::Write { 
+            content: message_code, 
+            topic: hex::encode(topic_hash) 
+        };
+
+        match Client::new()
+            .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
+            .json(&request)
+            .send().await?
+            .json::<QueueResponse>().await? {
+                QueueResponse::OpSuccess => return Ok(()),
+                QueueResponse::Failure { reason } => return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("{reason:?}")))),
+                _ => return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Invalid response variant for write_local endpoint")))
+        }
+    }
+
+    pub async fn read_from_queue(
+        last: Option<usize>,
+        n: Option<usize>,
+    ) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error>> {
+        let mut endpoint = format!("http://127.0.0.1:{}/queue/state", QUEUE_PORT);
+        if let Some(idx) = last {
+            let idx = idx;
+            endpoint.push_str(&format!("/{idx}"));
+            if let Some(n) = n {
+                endpoint.push_str(&format!("/{n}/get_n_after"));
+            } else {
+                endpoint.push_str("/get_after");
+            }
+        } else {
+            if let Some(n) = n {
+                endpoint.push_str(&format!("/{n}/get_n"))
+            } else {
+                endpoint.push_str("/get")
+            }
+        }
+
+        match Client::new()
+            .get(endpoint.clone())
+            .send().await?
+            .json::<QueueResponse>().await? {
+                QueueResponse::List(list) => {
+                    log::info!("read from queue...");
+                    Ok(list)
+                },
+                QueueResponse::Failure { reason } => {
+                    Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("{reason:?}"))))
+                },
+                _ => Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Invalid response variant for {endpoint}")))) 
+        }
     }
 
     pub async fn broadcast<R: DeserializeOwned>(
@@ -249,26 +697,99 @@ impl DataStore {
             .route("/dns/list", post(list_dns_records))
             .route("/instance/create", post(create_instance))
             .route("/instance/update", post(update_instance))
-            .route("/instance/:id/get", get(get_instance))
-            .route("/instance/:id/delete", post(delete_instance))
+            .route("/instance/:instance_id/get", get(get_instance))
+            .route("/instance/:instance_id/delete", post(delete_instance))
             .route("/instance/list", get(list_instances))
             .route("/node/create", post(create_node))
             .route("/node/update", post(update_node))
             .route("/node/:id/get", get(get_node))
             .route("/node/:id/delete", post(delete_node))
             .route("/node/list", get(list_nodes))
-
             .with_state(state)
     }
 
-    pub async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
-        let router = Self::app(Arc::new(Mutex::new(self)));
+    pub async fn run(self, mut shutdown: tokio::sync::broadcast::Receiver<()>) -> Result<(), Box<dyn std::error::Error>> {
+        let datastore = Arc::new(Mutex::new(self));
+        let router = Self::app(datastore.clone());
         let listener = TcpListener::bind("0.0.0.0:3004").await?;
         log::info!("Running datastore server...");
-        let _ = axum::serve(listener, router).await?;
+        tokio::spawn(async move {
+            if let Err(e) = axum::serve(listener, router).await {
+                eprintln!("Error serving State API Server: {e}");
+            }
+        });
+
+        let mut n = 0;
+        let polling_interval = 100;
+        loop {
+            tokio::select! {
+                Ok(messages) = DataStore::read_from_queue(Some(n), None) => {
+                    n += messages.len();
+                    for message in messages {
+                        log::info!("pulled message from queue");
+                        let ds = datastore.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = process_message(message, ds).await {
+                                eprintln!("Error processing message: {e}");
+                            }
+                        });
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_millis(polling_interval)) => {
+                }
+                _ = shutdown.recv() => {
+                    break;
+                }
+            }
+        }
 
         Ok(())
     }
+}
+
+pub async fn process_message(message: Vec<u8>, state: Arc<Mutex<DataStore>>) -> Result<(), Box<dyn std::error::Error>> {
+    if message.is_empty() {
+        return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Message was empty")));
+    }
+
+    let subtopic = message[0];
+    let payload = &message[1..];
+
+    let mut guard = state.lock().await;
+
+    match subtopic {
+        0 => {
+            log::info!("Pulled peer request from queue, processing...");
+            let peer_request: PeerRequest = serde_json::from_slice(payload)?;
+            guard.handle_peer_request(peer_request).await?;
+        },
+        1 => {
+            log::info!("Pulled cidr request from queue, processing...");
+            let cidr_request: CidrRequest = serde_json::from_slice(payload)?;
+            guard.handle_cidr_request(cidr_request).await?;
+        },
+        2 => {
+            let assoc_request: AssocRequest = serde_json::from_slice(payload)?;
+            guard.handle_assoc_request(assoc_request).await?;
+        },
+        3 => {
+            let dns_request: DnsRequest = serde_json::from_slice(payload)?;
+            guard.handle_dns_request(dns_request).await?;
+        },
+        4 => {
+            let instance_request: InstanceRequest = serde_json::from_slice(payload)?;
+            guard.handle_instance_request(instance_request).await?;
+        },
+        5 => {
+            let node_request: NodeRequest = serde_json::from_slice(payload)?;
+            guard.handle_node_request(node_request).await?;
+        },
+        _ => unreachable!()
+    }
+
+    drop(guard);
+
+    Ok(())
 }
 
 async fn pong() -> Json<Value> {
@@ -278,18 +799,18 @@ async fn pong() -> Json<Value> {
 
 async fn full_state(
     State(state): State<Arc<Mutex<DataStore>>>,
-) -> Json<DataStore> {
+) -> Json<MergeableState> {
     log::info!("Received full state request, returning...");
     let datastore = state.lock().await.clone();
-    Json(datastore)
+    Json(datastore.into())
 }
 
 async fn network_state(
     State(state): State<Arc<Mutex<DataStore>>>,
-) -> Json<NetworkState> {
+) -> Json<MergeableNetworkState> {
     log::info!("Received network state request, returning...");
     let network_state = state.lock().await.network_state.clone();
-    Json(network_state)
+    Json(network_state.into())
 }
 
 async fn peer_state(
@@ -832,7 +1353,11 @@ async fn get_cidr(
     State(state): State<Arc<Mutex<DataStore>>>,
     Path(id): Path<String>
 ) -> Json<Response<Cidr<String>>> {
-    if let Some(cidr) = state.lock().await.network_state.cidrs.get(&id).val {
+    let guard = state.lock().await;
+    log::info!("Request to get cidr: {id}");
+    let keys: Vec<String> = guard.network_state.cidrs.keys().map(|ctx| ctx.val.clone()).collect();
+    log::info!("Existing keys: {keys:?}");
+    if let Some(cidr) = guard.network_state.cidrs.get(&id).val {
         if let Some(val) = cidr.val() {
             return Json(Response::Success(Success::Some(val.value().into())))
         } else {
@@ -845,6 +1370,7 @@ async fn get_cidr(
 async fn list_cidr(
     State(state): State<Arc<Mutex<DataStore>>>,
 ) -> Json<Response<Cidr<String>>> {
+    log::info!("Received list cidr request");
     let cidrs = state.lock().await.get_all_cidrs().iter().map(|(_, v)| v.clone().into()).collect();
     Json(Response::Success(Success::List(cidrs)))
 } 
@@ -1051,7 +1577,7 @@ async fn delete_dns(
                 }
             }
         }
-        DnsRequest::Delete => {
+        DnsRequest::Delete(domain) => {
             log::info!("Delete DNS request was a direct request...");
             log::info!("Building Map Op...");
             let map_op = datastore.network_state.remove_dns_local(domain.clone());
@@ -1556,16 +2082,17 @@ async fn get_instance(
     Path(id): Path<String>,
 ) -> Json<Response<Instance>> {
     let datastore = state.lock().await;
+    log::info!("Attempting to get instance {id}");
     if let Some(instance) = datastore.instance_state.get_instance(id.clone()) {
         return Json(Response::Success(Success::Some(instance)))
     }
 
-    return Json(Response::Failure { reason: Some(format!("Unable to find instance with id: {id}"))})
+    return Json(Response::Failure { reason: Some(format!("Unable to find instance with instance_id, node_id: {}", id))})
 }
 
 async fn delete_instance(
     State(state): State<Arc<Mutex<DataStore>>>,
-    Path(id): Path<String>,
+    Path(_id): Path<(String, String)>,
     Json(request): Json<InstanceRequest>
 ) -> Json<Response<Instance>> {
     let mut datastore = state.lock().await;
@@ -1582,7 +2109,7 @@ async fn delete_instance(
                 }
             }
         }
-        InstanceRequest::Delete => {
+        InstanceRequest::Delete(id) => {
             log::info!("Delete Instance request was a direct request...");
             log::info!("Building Map Op...");
             let map_op = datastore.instance_state.remove_instance_local(id.clone());
@@ -1754,7 +2281,7 @@ async fn delete_node(
                 }
             }
         }
-        NodeRequest::Delete => {
+        NodeRequest::Delete(_id) => {
             log::info!("Delete Node request was a direct request...");
             log::info!("Building Map Op...");
             let map_op = datastore.node_state.remove_node_local(node_id.clone());
@@ -1808,3 +2335,223 @@ async fn list_nodes(
 
     return Json(Response::Success(Success::List(list)))
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::instances::{InstanceAnnotations, InstanceCluster, InstanceEncryption, InstanceMetadata, InstanceMonitoring, InstanceResources, InstanceSecurity, InstanceStatus};
+    use crate::nodes::{NodeAnnotations, NodeAvailability, NodeCapacity, NodeMetadata, NodeMonitoring};
+
+    use super::*;
+    use k256::ecdsa::SigningKey;
+    use crdts::{CmRDT, Map};
+    use ipnet::IpNet;
+    use rand::thread_rng;
+    use std::collections::BTreeMap;
+    use std::str::FromStr;
+    use trust_dns_proto::rr::RecordType;
+
+    // This test builds a MergableState (your datastore state without private keys or node ids)
+    // with one entry in each of the maps and then serializes and deserializes it.
+    #[test]
+    fn test_mergeable_state_serialization() -> Result<(), Box<dyn std::error::Error>> {
+        // Define an actor string and create a dummy signing key.
+        let actor = "test_actor".to_string();
+        let sk = SigningKey::random(&mut thread_rng());
+        // We need a hex-encoded private key string (this is just for signing our CRDT updates)
+        let pk_str = hex::encode(sk.to_bytes());
+        let signing_key = SigningKey::from_slice(&hex::decode(pk_str.clone())?)?;
+        
+        // Create empty maps for each of the types
+        let mut peers: PeerMap = Map::new();
+        let mut cidrs: CidrMap = Map::new();
+        let mut assocs: AssocMap = Map::new();
+        let mut dns: DnsMap = Map::new();
+        let mut instances: InstanceMap = Map::new();
+        let mut nodes: NodeMap = Map::new();
+
+        // --- Insert a fake peer ---
+        let fake_peer = CrdtPeer {
+            id: "peer1".to_string(),
+            name: "Peer One".to_string(),
+            ip: "127.0.0.1".parse()?,
+            cidr_id: "cidr1".to_string(),
+            public_key: "fake_public_key".to_string(),
+            endpoint: None,
+            keepalive: Some(30),
+            is_admin: false,
+            is_disabled: false,
+            is_redeemed: false,
+            invite_expires: None,
+            candidates: vec![],
+        };
+        let peer_ctx = peers.read_ctx().derive_add_ctx(actor.clone());
+        let peer_op = peers.update("peer1".to_string(), peer_ctx, |reg, _| {
+            // update returns a signed op (or an error)
+            reg.update(fake_peer, actor.clone(), signing_key.clone()).expect("Unable to sign update, Panicking")
+        });
+        peers.apply(peer_op);
+
+        // --- Insert a fake cidr ---
+        let fake_cidr = CrdtCidr {
+            id: "cidr1".to_string(),
+            name: "CIDR One".to_string(),
+            cidr: IpNet::from_str("192.168.0.0/24")?,
+            parent: None,
+        };
+        let cidr_ctx = cidrs.read_ctx().derive_add_ctx(actor.clone());
+        let cidr_op = cidrs.update("cidr1".to_string(), cidr_ctx, |reg, _| {
+            reg.update(fake_cidr, actor.clone(), signing_key.clone()).expect("Unable to sign update, Panicking")
+
+        });
+        cidrs.apply(cidr_op);
+
+        // --- Insert a fake association ---
+        let fake_assoc = CrdtAssociation {
+            id: ("cidr1".to_string(), "cidr2".to_string()),
+            cidr_1: "cidr1".to_string(),
+            cidr_2: "cidr2".to_string(),
+        };
+        let assoc_ctx = assocs.read_ctx().derive_add_ctx(actor.clone());
+        let assoc_op = assocs.update("assoc1".to_string(), assoc_ctx, |reg, _| {
+            reg.update(fake_assoc, actor.clone(), signing_key.clone()).expect("Unable to sign update, Panicking")
+
+        });
+        assocs.apply(assoc_op);
+
+        // --- Insert a fake DNS record ---
+        let fake_dns = CrdtDnsRecord {
+            domain: "example.com".to_string(),
+            record_type: RecordType::A,
+            formnet_ip: vec!["127.0.0.1:80".parse()?],
+            public_ip: vec!["192.0.2.1:80".parse()?],
+            cname_target: None,
+            ttl: 300,
+            ssl_cert: false,
+        };
+        let dns_ctx = dns.read_ctx().derive_add_ctx(actor.clone());
+        let dns_op = dns.update("example.com".to_string(), dns_ctx, |reg, _| {
+            reg.update(fake_dns, actor.clone(), signing_key.clone()).expect("Unable to sign update, Panicking")
+
+        });
+        dns.apply(dns_op);
+
+        // --- Insert a fake instance ---
+        let fake_instance = Instance {
+            instance_id: "instance1".to_string(),
+            node_id: "node1".to_string(),
+            build_id: "build1".to_string(),
+            instance_owner: "owner1".to_string(),
+            created_at: 0,
+            updated_at: 0,
+            last_snapshot: 0,
+            status: InstanceStatus::Created,
+            host_region: "us-east".to_string(),
+            resources: InstanceResources {
+                vcpus: 2,
+                memory_mb: 2048,
+                bandwidth_mbps: 100,
+                gpu: None,
+            },
+            cluster: InstanceCluster {
+                members: BTreeMap::new(),
+            },
+            formfile: "".to_string(),
+            snapshots: None,
+            metadata: InstanceMetadata {
+                tags: vec!["tag1".to_string()],
+                description: "Fake instance".to_string(),
+                annotations: InstanceAnnotations {
+                    deployed_by: "test".to_string(),
+                    network_id: 1,
+                    build_commit: None,
+                },
+                security: InstanceSecurity {
+                    encryption: InstanceEncryption {
+                        is_encrypted: false,
+                        scheme: None,
+                    },
+                    tee: false,
+                    hsm: false,
+                },
+                monitoring: InstanceMonitoring {
+                    logging_enabled: false,
+                    metrics_endpoint: "http://localhost".to_string(),
+                },
+            },
+        };
+        let inst_ctx = instances.read_ctx().derive_add_ctx(actor.clone());
+        let inst_op = instances.update("instance1".to_string(), inst_ctx, |reg, _| {
+            reg.update(fake_instance, actor.clone(), signing_key.clone()).expect("Unable to sign update, Panicking")
+
+        });
+        instances.apply(inst_op);
+
+        // --- Insert a fake node ---
+        let fake_node = Node {
+            node_id: "node1".to_string(),
+            node_owner: "owner_node".to_string(),
+            created_at: 0,
+            updated_at: 0,
+            last_heartbeat: 0,
+            host_region: "us-west".to_string(),
+            capacity: NodeCapacity {
+                vcpus: 4,
+                memory_mb: 8192,
+                bandwidth_mbps: 1000,
+                gpu: None,
+            },
+            availability: NodeAvailability {
+                uptime_seconds: 3600,
+                load_average: 10,
+                status: "online".to_string(),
+            },
+            metadata: NodeMetadata {
+                tags: vec!["node_tag".to_string()],
+                description: "Fake node".to_string(),
+                annotations: NodeAnnotations {
+                    roles: vec!["compute".to_string()],
+                    datacenter: "dc1".to_string(),
+                },
+                monitoring: NodeMonitoring {
+                    logging_enabled: true,
+                    metrics_endpoint: "http://node.metrics".to_string(),
+                },
+            },
+        };
+        let node_ctx = nodes.read_ctx().derive_add_ctx(actor.clone());
+        let node_op = nodes.update("node1".to_string(), node_ctx, |reg, _| {
+            reg.update(fake_node, actor.clone(), signing_key.clone()).expect("Unable to sign update, Panicking")
+
+        });
+        nodes.apply(node_op);
+
+        // --- Build the mergeable state ---
+        let mergeable_state = MergeableState {
+            peers,
+            cidrs,
+            assocs,
+            dns,
+            instances,
+            nodes,
+        };
+
+        assert!(serde_json::to_string(&mergeable_state.peers).is_ok());
+        assert!(serde_json::to_string(&mergeable_state.cidrs).is_ok());
+        assert!(serde_json::to_string(&mergeable_state.assocs).is_ok());
+        assert!(serde_json::to_string(&mergeable_state.dns).is_ok());
+        assert!(serde_json::to_string(&mergeable_state.instances).is_ok());
+        assert!(serde_json::to_string(&mergeable_state.nodes).is_ok());
+
+        // --- Serialization ---
+        let serialized = serde_json::to_string_pretty(&mergeable_state)?;
+        println!("Serialized mergeable state:\n{}", serialized);
+
+        // --- Deserialization ---
+        let _deserialized: MergeableState = serde_json::from_str(&serialized)?;
+        // (You can compare mergeable_state and deserialized here if your types implement PartialEq.)
+        println!("Deserialization succeeded.");
+
+        Ok(())
+    }
+}
+

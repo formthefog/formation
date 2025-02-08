@@ -839,7 +839,19 @@ static HOSTNAME_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^([a-z0-9]-?)*[a-
 
 impl Hostname {
     pub fn is_valid(name: &str) -> bool {
-        name.len() < 64 && HOSTNAME_REGEX.is_match(name)
+        if name.len() < 64 {
+            log::info!("Hostname length is ok");
+            if HOSTNAME_REGEX.is_match(name) {
+                log::info!("Hostname matches regex");
+                return true
+            } else {
+                log::error!("Hostname does not match regex");
+            }
+        } else {
+            log::error!("Hostname must be under 64 characters long: proposed name is {} characters", name.len())
+        }
+
+        false
     }
 }
 

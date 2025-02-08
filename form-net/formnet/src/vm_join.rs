@@ -11,6 +11,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?.text()?;
     // Get name
     let name = std::fs::read_to_string("/etc/vm_name")?;
+    let build_id = std::fs::read_to_string("/etc/build_id")?;
     log::info!("Requesting formnet invite for vm {}", name);
     log::info!("Building VmJoinRequest");
     let join_request = VmJoinRequest { vm_id: name.clone() };
@@ -59,6 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Send message to VMM api.
             let request = BootCompleteRequest {
                 name: name.clone(),
+                build_id,
                 formnet_ip
             };
             log::info!("Sending BootCompleteRequest {request:?} to http://{host_public_ip}:3002/{name}/boot_complete endpoint");
