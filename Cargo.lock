@@ -2475,7 +2475,7 @@ dependencies = [
 [[package]]
 name = "crdts"
 version = "7.3.2"
-source = "git+http://github.com/Cryptonomikhan/rust-crdt?rev=7ed0965#7ed096555b6477ceb36eef668bc074c81646c486"
+source = "git+http://github.com/Cryptonomikhan/rust-crdt?rev=1fe4992#1fe4992df2d5e2b3ea886911e2e79f94b73ff5df"
 dependencies = [
  "alloy-primitives 0.8.19",
  "hex",
