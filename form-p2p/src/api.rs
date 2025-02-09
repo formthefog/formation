@@ -12,6 +12,7 @@ use crate::queue::{FormMQ, QueueRequest, QueueResponse};
 
 pub fn build_routes(state: Arc<RwLock<FormMQ<Vec<u8>>>>) -> Router {
     Router::new()
+        .route("/queue/health", get(health_check))
         .route("/queue/write_op", post(write_op))
         .route("/queue/write_local", post(write_local))
         .route("/queue/:topic/get", get(get_topic_all))
@@ -29,6 +30,11 @@ pub async fn serve(state: Arc<RwLock<FormMQ<Vec<u8>>>>, bind: u16) -> Result<(),
     }
 
     Ok(())
+}
+
+pub async fn health_check(
+) -> String {
+    "OK".to_string()
 }
 
 pub async fn write_op(
@@ -166,27 +172,22 @@ pub async fn get_topic_n_after(
 
     return Json(QueueResponse::Failure { reason: Some(format!("Unable to acquire message for {topic}")) })
 }
-/*
-pub async fn get_all(
-    State(state): State<Arc<RwLock<FormMQ<Vec<u8>>>>>
-) -> Json<QueueResponse> {
-    let queue = state.read().await;
-    let full = queue.queue();
-
-    return Json(QueueResponse::Full(full.clone()))
-}
-*/
 
 /// Returns a streaming response where the full TopicQueue is written as a JSON array.
 /// In this example we assume that each topic in the TopicQueue will be sent as a tuple of (topic_name, bft_queue).
 pub async fn get_all(
     State(state): State<Arc<RwLock<FormMQ<Vec<u8>>>>>
 ) -> impl IntoResponse {
+    log::info!("Received request for full queue");
     // Read the current queue (or clone what you need)
+    log::info!("acquiring read only lock");
     let queue = state.read().await;
+    log::info!("cloning queue");
     let topic_queue: TopicQueue<Vec<u8>> = queue.queue().clone();
+    log::info!("converting queue into body");
     let body = Body::from(Bytes::copy_from_slice(&serde_json::to_vec(&topic_queue).unwrap()));
     
+    log::info!("Building response");
     Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "application/json")

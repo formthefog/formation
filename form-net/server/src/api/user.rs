@@ -195,6 +195,7 @@ pub mod crdt_routes {
                 handlers::state(session).await
             },
             (&Method::POST, Some("redeem")) => {
+                log::info!("found a redeem request, attempting to redeem user");
                 if !session.redeemable() {
                     return Err(ServerError::Unauthorized);
                 }
@@ -253,12 +254,16 @@ pub mod crdt_routes {
             form: RedeemContents,
             session: Session<CrdtContext, String, CrdtMap>,
         ) -> Result<Response<Body>, ServerError> {
+            log::info!("In redeem handler, attempting to get peer: {}", session.peer.id.clone());
             let mut selected_peer = DatabasePeer::<String, CrdtMap>::get(session.peer.id.clone()).await?;
 
+            log::info!("In redeem handler, attempting to replace old public key for user: {}", session.peer.id.clone());
             let old_public_key = wireguard_control::Key::from_base64(&selected_peer.public_key)
                 .map_err(|_| ServerError::WireGuard)?;
 
+            log::info!("Updated public key for user: {}", session.peer.id.clone());
             selected_peer.contents.public_key = form.public_key;
+            log::info!("Updated public key for user: {}", session.peer.id.clone());
             selected_peer.redeem().await?;
 
             if cfg!(not(test)) {
@@ -278,6 +283,7 @@ pub mod crdt_routes {
                 // web framework.
                 //
                 // Related: https://github.com/hyperium/hyper/issues/2181
+                log::info!("Attempting to redeem peer");
                 tokio::task::spawn(async move {
                     tokio::time::sleep(REDEEM_TRANSITION_WAIT).await;
                     log::info!(

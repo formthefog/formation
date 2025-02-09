@@ -85,7 +85,7 @@ struct UserOpts {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    simple_logger::SimpleLogger::new().init().unwrap();
+    simple_logger::init_with_level(log::Level::Info).unwrap();
 
     let cli = Cli::parse();
     log::info!("{cli:?}");
@@ -107,6 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     };
                     let address = hex::encode(Address::from_private_key(&SigningKey::from_slice(&hex::decode(&signing_key)?)?));
                     if !parser.bootstraps.is_empty() {
+                        log::info!("Found bootstrap in parser...");
                         let invitation = request_to_join(
                             parser.bootstraps.clone(),
                             address.clone(),
@@ -114,9 +115,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ).await?;
                         ensure_crdt_datastore().await?;
                         redeem(invitation)?;
-                    } else if !operator_config.unwrap().bootstrap_nodes.is_empty() {
+                    } else if !operator_config.clone().unwrap().bootstrap_nodes.is_empty() {
+                        log::info!("Found bootstrap in config...");
                         let invitation = request_to_join(
-                            parser.bootstraps.clone(),
+                            operator_config.unwrap().bootstrap_nodes.clone(),
                             address.clone(),
                             PeerType::Operator
                         ).await?;

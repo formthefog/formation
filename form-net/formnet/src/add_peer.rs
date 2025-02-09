@@ -45,8 +45,9 @@ pub async fn add_peer(
         &peer_type,
         peer_id
     ).await?; 
-    log::info!("Built peer, attempting to add peer to datastore");
+    log::info!("Built peer, attempting to add peer {peer_id} to datastore");
     let peer = DatabasePeer::<String, CrdtMap>::create(peer_request).await?;
+    log::info!("Added peer {peer_id} to datastore");
     if cfg!(not(test)) && Device::get(&interface, network.backend).is_ok() {
         // Update the current WireGuard interface with the new peers.
         log::info!("Adding peer to device");
@@ -66,7 +67,7 @@ pub async fn add_peer(
         &server,
         &cidr_tree,
         keypair,
-        &SocketAddr::new(config.address, config.listen_port),
+        &SocketAddr::new(config.address, config.listen_port.unwrap()),
     )?;
     log::info!("Returning invitation");
     return Ok(invitation)

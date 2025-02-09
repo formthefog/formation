@@ -1,4 +1,4 @@
-use std::{path::PathBuf, str::FromStr};
+use std::{path::PathBuf, str::FromStr, thread::sleep, time::Duration};
 
 use client::util::Api;
 use shared::{interface_config::InterfaceConfig, wg, NetworkOpts, RedeemContents, REDEEM_TRANSITION_WAIT};
@@ -36,6 +36,9 @@ pub fn redeem(mut invitation: InterfaceConfig) -> Result<(), Box<dyn std::error:
         "Registering keypair with server (at {}).",
         &invitation.server.internal_endpoint
     );
+
+    sleep(Duration::from_secs(5));
+    
     Api::new(&invitation.server).http_form::<_, ()>(
         "POST",
         "/user/redeem",

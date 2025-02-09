@@ -19,6 +19,8 @@ pub fn create_router() -> axum::Router {
 async fn handle_join_request(
     Json(join_request): Json<JoinRequest>,
 ) -> axum::Json<JoinResponse> {
+    log::warn!("Received join request");
+    log::warn!("Attempting to add peer...");
     match add_peer(
         &NetworkOpts::default(),
         &join_request.peer_type(),
@@ -86,6 +88,7 @@ pub enum JoinResponse {
 
 
 pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type: PeerType) -> Result<InterfaceConfig, Box<dyn std::error::Error>> {
+    log::info!("requesting to join, building request for peer type");
     let request = match peer_type { 
         PeerType::Operator => JoinRequest::OperatorJoinRequest(
             OperatorJoinRequest {
@@ -104,7 +107,10 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
         )
     };
 
+    log::info!("Built join request: {request:?}");
+
     while let Some(dial) = bootstrap.iter().next() {
+        log::info!("Attemptiing to dial {dial} to request to join the network");
         match Client::new()
         .post(&format!("http://{dial}:3001/join"))
         .json(&request)
@@ -117,6 +123,7 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
             _ => {}
         }
     }
+    log::info!("Didn't receive a valid response from any bootstraps: {bootstrap:?}");
     return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Did not receive a valid invitation")));
 }
 

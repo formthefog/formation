@@ -227,9 +227,11 @@ impl DatabasePeer<String, CrdtMap> {
             ..self.contents.clone()
         };
 
+        log::info!("Building peer queue request to update peer as redeemed");
         let request = Self::build_peer_queue_request(PeerRequest::Update(new_contents.clone()))
             .map_err(|_| ServerError::InvalidQuery)?;
 
+        log::info!("Sending queue request {:?} to queue", request);
         let resp = reqwest::Client::new()
             .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
             .json(&request)
@@ -240,9 +242,13 @@ impl DatabasePeer<String, CrdtMap> {
 
         match resp {
             QueueResponse::OpSuccess => {
+                log::info!("Response OpSuccess");
                 Ok(())
             },
-            _ => Err(ServerError::NotFound),
+            _ => {
+                log::error!("Response was error...");
+                return Err(ServerError::NotFound)
+            }
         }
     }
 

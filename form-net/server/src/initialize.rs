@@ -182,7 +182,7 @@ pub fn init_wizard(conf: &ServerConfig, opts: InitializeOpts) -> Result<(), Erro
 
     let config = ConfigFile {
         private_key: our_keypair.private.to_base64(),
-        listen_port,
+        listen_port: Some(listen_port),
         address: our_ip,
         network_cidr_prefix: root_cidr.prefix_len(),
         bootstrap: "none".to_string()

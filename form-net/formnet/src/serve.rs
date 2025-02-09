@@ -14,7 +14,6 @@ use wireguard_control::{Device, DeviceUpdate, InterfaceName, PeerConfigBuilder};
 use hyper::{http, server::conn::AddrStream, Body, Request};
 use crate::CONFIG_DIR;
 
-
 pub async fn serve(
     interface: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -36,7 +35,7 @@ pub async fn serve(
         &interface_name,
         &config.private_key,
         IpNet::new(config.address, config.network_cidr_prefix)?,
-        Some(config.listen_port),
+        config.listen_port,
         None,
         network_opts,
     )?;
@@ -48,7 +47,7 @@ pub async fn serve(
     log::info!("{} peers added to wireguard interface.", peers.len());
 
     let candidates: Vec<Endpoint> = get_local_addrs()?
-        .map(|addr| SocketAddr::from((addr, config.listen_port)).into())
+        .map(|addr| SocketAddr::from((addr, config.listen_port.unwrap())).into())
         .collect();
     let num_candidates = candidates.len();
     let myself = peers
@@ -80,7 +79,7 @@ pub async fn serve(
 
     log::info!("formnet-server {} starting.", VERSION);
 
-    let listener = get_listener((config.address, config.listen_port).into(), &interface_name)?;
+    let listener = get_listener((config.address, config.listen_port.unwrap()).into(), &interface_name)?;
 
     let make_svc = hyper::service::make_service_fn(move |socket: &AddrStream| {
         let remote_addr = socket.remote_addr();
@@ -154,3 +153,16 @@ async fn spawn_expired_invite_sweeper() {
         }
     });
 }
+
+/*
+pub fn create_router() -> axum::Router {
+    axum::Router::new()
+        .route("/user/redeem", axum::routing::post(handle_redeem))
+        .route("/admin/", axum::routing::post(handle_redeem))
+        //TODO: Add routes to request custom cidr, request custom assoc
+        //Add routes to delete peer, delete custom cidr, delete assoc
+}
+
+async fn handle_redeem(
+) {}
+*/

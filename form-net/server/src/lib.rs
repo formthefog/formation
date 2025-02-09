@@ -9,9 +9,7 @@ use parking_lot::{Mutex, RwLock};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use shared::{
-    get_local_addrs, AddCidrOpts, AddPeerOpts, DeleteCidrOpts, EnableDisablePeerOpts, Endpoint,
-    IoErrorContext, NetworkOpts, PeerContents, RenameCidrOpts, RenamePeerOpts,
-    INNERNET_PUBKEY_HEADER,
+    get_local_addrs, interface_config::InterfaceConfig, AddCidrOpts, AddPeerOpts, DeleteCidrOpts, EnableDisablePeerOpts, Endpoint, IoErrorContext, NetworkOpts, PeerContents, RenameCidrOpts, RenamePeerOpts, INNERNET_PUBKEY_HEADER
 };
 use std::{
     collections::{HashMap, VecDeque}, convert::TryInto, env, fmt::Display, fs::File, io::prelude::*, net::{IpAddr, SocketAddr, TcpListener}, ops::Deref, path::{Path, PathBuf}, sync::Arc, time::Duration
@@ -143,7 +141,7 @@ pub struct ConfigFile {
     pub private_key: String,
 
     /// The listen port of the server
-    pub listen_port: u16,
+    pub listen_port: Option<u16>,
 
     /// The internal WireGuard IP address assigned to this node 
     pub address: IpAddr,
@@ -153,6 +151,18 @@ pub struct ConfigFile {
 
     /// The ID of the bootstrap node/server
     pub bootstrap: String 
+}
+
+impl From<InterfaceConfig> for ConfigFile {
+    fn from(value: InterfaceConfig) -> Self {
+        ConfigFile {
+            private_key: value.interface.private_key.clone(),
+            listen_port: value.interface.listen_port,
+            address: value.interface.address.addr(),
+            network_cidr_prefix: value.interface.address.prefix_len(), 
+            bootstrap: value.server.public_key,
+        }
+    }
 }
 
 impl ConfigFile {
@@ -181,12 +191,34 @@ impl ConfigFile {
         let raw_str = std::fs::read_to_string(path).with_path(path)?;
         log::info!("File contents: {raw_str}");
 
-        let toml = toml::from_str(&raw_str)?;
+        let toml: ConfigFile;
+        let toml_res = toml::from_str::<ConfigFile>(&raw_str);
+        if let Err(_) = toml_res {
+            let mut ifc_toml: InterfaceConfig = toml::from_str(&raw_str)?;
+            if let Some(port) = ifc_toml.interface.listen_port {
+                ifc_toml.interface.listen_port = Some(port)
+            } else {
+                let mut port: u16 = 0;
+                for p in 51820..64000 {
+                    if let Ok(listener) = TcpListener::bind(("0.0.0.0", port)) {
+                        drop(listener);
+                        port = p;
+                        break;
+                    }
+                }
+                if port == 0 {
+                    panic!("Unable to find a valid listening port in the formnet range");
+                }
+                ifc_toml.interface.listen_port = Some(port);
+            };
+            toml = ifc_toml.into();
+        } else {
+            toml = toml_res?;
+        }
 
         log::info!("File toml: {toml:?}");
 
         Ok(toml)
-
     }
 }
 
@@ -360,7 +392,7 @@ impl FormnetNode for CrdtMap {
                 &server_peer,
                 &cidr_tree,
                 keypair,
-                &SocketAddr::new(config.address, config.listen_port),
+                &SocketAddr::new(config.address, config.listen_port.unwrap()),
             )?;
         } else {
             log::info!("exited without creating peer.");
@@ -597,12 +629,29 @@ impl FormnetNode for CrdtMap {
             .map(|peer| peer.deref().into())
             .collect::<Vec<PeerConfigBuilder>>();
 
+        let listen_port = if let Some(port) = config.listen_port {
+            port
+        } else {
+            let mut port: u16 = 0;
+            for p in 51820..64000 {
+                if let Ok(listener) = TcpListener::bind(("0.0.0.0", port)) {
+                    drop(listener);
+                    port = p;
+                    break;
+                }
+            }
+            if port == 0 {
+                panic!("Unable to find a valid listening port in the formnet range");
+            }
+            port
+        };
+
         log::info!("bringing up interface.");
         wg::up(
             &interface,
             &config.private_key,
             IpNet::new(config.address, config.network_cidr_prefix)?,
-            Some(config.listen_port),
+            Some(listen_port),
             None,
             network,
         )?;
@@ -614,7 +663,7 @@ impl FormnetNode for CrdtMap {
         log::info!("{} peers added to wireguard interface.", peers.len());
 
         let candidates: Vec<Endpoint> = get_local_addrs()?
-            .map(|addr| SocketAddr::from((addr, config.listen_port)).into())
+            .map(|addr| SocketAddr::from((addr, config.listen_port.unwrap())).into())
             .collect();
         let num_candidates = candidates.len();
         let myself = peers
@@ -646,7 +695,7 @@ impl FormnetNode for CrdtMap {
 
         log::info!("formnet-server {} starting.", VERSION);
 
-        let listener = get_listener((config.address, config.listen_port).into(), &interface)?;
+        let listener = get_listener((config.address, config.listen_port.unwrap()).into(), &interface)?;
 
         let make_svc = hyper::service::make_service_fn(move |socket: &AddrStream| {
             let remote_addr = socket.remote_addr();
@@ -732,7 +781,7 @@ impl FormnetNode for Sqlite {
                 &server_peer,
                 &cidr_tree,
                 keypair,
-                &SocketAddr::new(config.address, config.listen_port),
+                &SocketAddr::new(config.address, config.listen_port.unwrap()),
             )?;
         } else {
             log::info!("exited without creating peer.");
@@ -983,7 +1032,7 @@ impl FormnetNode for Sqlite {
             &interface,
             &config.private_key,
             IpNet::new(config.address, config.network_cidr_prefix)?,
-            Some(config.listen_port),
+            Some(config.listen_port.unwrap()),
             None,
             network,
         )?;
@@ -995,7 +1044,7 @@ impl FormnetNode for Sqlite {
         log::info!("{} peers added to wireguard interface.", peers.len());
 
         let candidates: Vec<Endpoint> = get_local_addrs()?
-            .map(|addr| SocketAddr::from((addr, config.listen_port)).into())
+            .map(|addr| SocketAddr::from((addr, config.listen_port.unwrap())).into())
             .collect();
         let num_candidates = candidates.len();
         let myself = peers
@@ -1030,7 +1079,7 @@ impl FormnetNode for Sqlite {
 
         log::info!("formnet-server {} starting.", VERSION);
 
-        let listener = get_listener((config.address, config.listen_port).into(), &interface)?;
+        let listener = get_listener((config.address, config.listen_port.unwrap()).into(), &interface)?;
 
         let make_svc = hyper::service::make_service_fn(move |socket: &AddrStream| {
             let remote_addr = socket.remote_addr();
@@ -1181,14 +1230,19 @@ pub mod crdt_service {
     ) -> Result<Response<Body>, ServerError> {
         // Must be "/v1/[something]"
         if components.pop_front().as_deref() != Some("v1") {
+            log::error!("first component of route was not v1! returning not found");
             Err(ServerError::NotFound)
         } else {
             let session = get_crdt_session(&req, context, remote_addr.ip()).await?;
             let component = components.pop_front();
+            log::info!("Matching next component: {component:?}");
             match component.as_deref() {
                 Some("user") => api::user::crdt_routes::routes(req, components, session).await,
                 Some("admin") => api::admin::crdt_routes::routes(req, components, session).await,
-                _ => Err(ServerError::NotFound),
+                _ => {
+                    log::error!("No matching component");
+                    return Err(ServerError::NotFound)
+                }
             }
         }
     }
@@ -1209,7 +1263,9 @@ pub mod crdt_service {
             .ct_eq(context.public_key.as_bytes())
             .into()
         {
+            log::error!("Building session");
             let peer = DatabasePeer::<String, CrdtMap>::get_from_ip(addr).await?;
+            log::error!("Found peer by IP address");
 
             if !peer.is_disabled {
                 return Ok(Session { context, peer });

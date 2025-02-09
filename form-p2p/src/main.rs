@@ -111,7 +111,7 @@ pub async fn bootstrap_topic_queue(dial: String, queue: Arc<RwLock<FormMQ<Vec<u8
     let url = format!("http://{dial}:{QUEUE_PORT}/queue/get");
     let resp = client.get(url).send().await?;
 
-    if resp.status().is_success() {
+    if !resp.status().is_success() {
         return Err(format!("Request failed with status:{}", resp.status()).into());
     }
 
