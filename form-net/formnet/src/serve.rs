@@ -20,7 +20,13 @@ pub async fn serve(
     id: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let interface_name = InterfaceName::from_str(interface)?;
+    #[cfg(target_os = "linux")]
     let interface_up = match Device::list(Backend::Kernel) {
+        Ok(interfaces) => interfaces.iter().any(|name| name == &interface_name),
+        _ => false,
+    };
+    #[cfg(not(target_os = "linux"))]
+    let interface_up = match Device::list(Backend::Userspace) {
         Ok(interfaces) => interfaces.iter().any(|name| name == &interface_name),
         _ => false,
     };
