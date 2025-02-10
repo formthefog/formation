@@ -57,7 +57,7 @@ pub async fn init(address: String) -> Result<(), Box<dyn std::error::Error>> {
     let db_init_data = DbInitData {
         network_name: name.to_string(),
         network_cidr: root_cidr,
-        server_cidr: IpNet::new(our_ip, 8)?,
+        server_cidr: IpNet::new(our_ip, root_cidr.max_prefix_len())?,
         our_ip,
         public_key_base64: our_keypair.public.to_base64(),
         endpoint,
@@ -137,6 +137,7 @@ async fn populate_crdt_datastore(
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
+    /*
     log::info!("Creating server cidr");
     let server_cidr = DatabaseCidr::<String, CrdtMap>::create(
         CidrContents {
@@ -146,6 +147,8 @@ async fn populate_crdt_datastore(
         },
     ).await?;
 
+*/
+
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     log::info!("Creating local peer");
@@ -154,7 +157,7 @@ async fn populate_crdt_datastore(
         PeerContents {
             name: server_name.into(),
             ip: db_init_data.our_ip,
-            cidr_id: server_cidr.id,
+            cidr_id: root_cidr.id,
             public_key: db_init_data.public_key_base64,
             endpoint: Some(db_init_data.endpoint),
             is_admin: true,

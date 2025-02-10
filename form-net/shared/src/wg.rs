@@ -75,9 +75,12 @@ pub fn up(
     peer: Option<(&str, IpAddr, SocketAddr)>,
     network: NetworkOpts,
 ) -> Result<(), io::Error> {
+    log::info!("Creating new DeviceUpdate");
     let mut device = DeviceUpdate::new();
     if let Some((public_key, address, endpoint)) = peer {
+        log::info!("Peer was provided");
         let prefix = if address.is_ipv4() { 32 } else { 128 };
+        log::info!("Building Peer config");
         let peer_config = PeerConfigBuilder::new(
             &wireguard_control::Key::from_base64(public_key).map_err(|_| {
                 io::Error::new(
@@ -91,13 +94,18 @@ pub fn up(
         .set_endpoint(endpoint);
         device = device.add_peer(peer_config);
     }
+    log::info!("Built Device update");
     if let Some(listen_port) = listen_port {
         device = device.set_listen_port(listen_port);
     }
+    log::info!("Setting private key");
     device
         .set_private_key(wireguard_control::Key::from_base64(private_key).unwrap())
         .apply(interface, network.backend)?;
+
+    log::info!("Setting address for interface");
     set_addr(interface, address)?;
+    log::info!("Bringing interface up");
     set_up(interface, network.mtu.unwrap_or(1280))?;
     if !network.no_routing {
         add_route(interface, address)?;

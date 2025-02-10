@@ -40,6 +40,7 @@ pub async fn serve(
         network_opts,
     )?;
 
+    log::info!("Adding peers {peer_configs:?} to wireguard interface"); 
     DeviceUpdate::new()
         .add_peers(&peer_configs)
         .apply(&interface_name, network_opts.backend)?;
@@ -119,14 +120,18 @@ fn get_listener(addr: SocketAddr, _interface: &InterfaceName) -> Result<TcpListe
 async fn spawn_endpoint_refresher(interface: InterfaceName, network: NetworkOpts) -> Endpoints {
     let endpoints = Arc::new(RwLock::new(HashMap::new()));
     tokio::task::spawn({
+        log::info!("Spawning endpoint refresher");
         let endpoints = endpoints.clone();
         async move {
             let mut interval = tokio::time::interval(Duration::from_secs(10));
             loop {
                 interval.tick().await;
                 if let Ok(info) = Device::get(&interface, network.backend) {
+                    log::info!("Acquired device info");
                     for peer in info.peers {
+                        log::info!("Acquired device info for peer {peer:?}");
                         if let Some(endpoint) = peer.config.endpoint {
+                            log::info!("Acquired endpoint {endpoint:?} for peer... Updating...");
                             endpoints
                                 .write()
                                 .insert(peer.config.public_key.to_base64(), endpoint);

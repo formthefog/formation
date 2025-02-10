@@ -78,7 +78,7 @@ pub async fn build_peer(
     peer_type: &PeerType,
     peer_id: &str,
 ) -> Result<(PeerContents<String>, KeyPair), Box<dyn std::error::Error>> {
-    let cidr = DatabaseCidr::<String, CrdtMap>::get("peers-1".to_string()).await?; 
+    let cidr = DatabaseCidr::<String, CrdtMap>::get("formnet".to_string()).await?; 
     let mut available_ip = None;
     let candidate_ips = cidr.hosts().filter(|ip| cidr.is_assignable(ip));
     for ip in candidate_ips {
@@ -133,7 +133,7 @@ pub fn build_peer_invitation(
         interface: InterfaceInfo {
             network_name: network_name.to_string(),
             private_key: keypair.private.to_base64(),
-            address: IpNet::new(peer.ip, root_cidr.prefix_len())?,
+            address: IpNet::new(peer.ip, root_cidr.max_prefix_len())?,
             listen_port: None,
         },
         server: ServerInfo {
