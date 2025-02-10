@@ -3,22 +3,29 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
+use form_types::PeerType;
 use parking_lot::RwLock;
 use std::time::Duration;
 use std::{net::SocketAddr, ops::Deref};
-use formnet_server::{crdt_service, ConfigFile, Endpoints, VERSION};
-use formnet_server::{db::CrdtMap, CrdtContext, DatabasePeer};
+use formnet_server::{ConfigFile, Endpoints, VERSION};
+use formnet_server::{db::CrdtMap, DatabasePeer};
 use ipnet::IpNet;
 use shared::{get_local_addrs, wg, Endpoint, NetworkOpts, PeerContents};
-use wireguard_control::{Device, DeviceUpdate, InterfaceName, PeerConfigBuilder};
-use hyper::{http, server::conn::AddrStream, Body, Request};
+use wireguard_control::{Backend, Device, DeviceUpdate, InterfaceName, PeerConfigBuilder};
+use crate::api::{server, BootstrapInfo};
 use crate::CONFIG_DIR;
 
 pub async fn serve(
     interface: &str,
+    id: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let interface_name = InterfaceName::from_str(interface)?;
+    let interface_up = match Device::list(Backend::Kernel) {
+        Ok(interfaces) => interfaces.iter().any(|name| name == &interface_name),
+        _ => false,
+    };
     let config_dir = PathBuf::from(CONFIG_DIR);
-    log::debug!("opening database connection...");
+    log::debug!("Getting peers...");
 
     let mut peers = DatabasePeer::<String, CrdtMap>::list().await?;
     log::debug!("peers listed...");
@@ -27,18 +34,36 @@ pub async fn serve(
         .map(|peer| peer.deref().into())
         .collect::<Vec<PeerConfigBuilder>>();
 
-    let interface_name = InterfaceName::from_str(interface)?;
     let network_opts = NetworkOpts::default();
     let config = ConfigFile::from_file(config_dir.join(interface).with_extension("conf"))?;
-    log::info!("bringing up interface.");
-    wg::up(
-        &interface_name,
-        &config.private_key,
-        IpNet::new(config.address, config.network_cidr_prefix)?,
-        config.listen_port,
-        None,
-        network_opts,
-    )?;
+    if !interface_up {
+        log::info!("bringing up interface.");
+        if let Some(info) = config.bootstrap {
+            let decoded = hex::decode(&info)?;
+            let info: BootstrapInfo = serde_json::from_slice(&decoded)?;
+            wg::up(
+                &interface_name,
+                &config.private_key,
+                IpNet::new(config.address, config.network_cidr_prefix)?,
+                config.listen_port,
+                Some((
+                    &info.pubkey,
+                    info.internal_endpoint.unwrap(),
+                    info.external_endpoint.unwrap(),
+                )),
+                network_opts,
+            )?;
+        } else {
+            wg::up(
+                &interface_name,
+                &config.private_key,
+                IpNet::new(config.address, config.network_cidr_prefix)?,
+                config.listen_port,
+                None,
+                network_opts,
+            )?;
+        }
+    }
 
     log::info!("Adding peers {peer_configs:?} to wireguard interface"); 
     DeviceUpdate::new()
@@ -68,38 +93,33 @@ pub async fn serve(
     );
 
     let public_key = wireguard_control::Key::from_base64(&config.private_key)?.get_public();
-    let endpoints = spawn_endpoint_refresher(interface_name, network_opts).await;
+    let _endpoints = spawn_endpoint_refresher(interface_name, network_opts).await;
     spawn_expired_invite_sweeper().await;
+    log::info!("formnet-server {} starting.", VERSION);
+    let publicip = publicip::get_any(publicip::Preference::Ipv4).ok_or(
+        Box::new(
+            std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Unable to acquire public ip, required for operator".to_string()
+            )
+        )
+    )?;
 
-    let context = CrdtContext {
-        endpoints,
-        interface: interface_name,
-        public_key,
-        backend: network_opts.backend,
+    let my_info = BootstrapInfo {
+        id,
+        peer_type: PeerType::Operator,
+        cidr_id: "formnet".to_string(),
+        pubkey: public_key.to_base64(),
+        internal_endpoint: Some(config.address),
+        external_endpoint: Some(SocketAddr::new(publicip, 51820))
     };
 
-    log::info!("formnet-server {} starting.", VERSION);
-
-    let listener = get_listener((config.address, config.listen_port.unwrap()).into(), &interface_name)?;
-
-    let make_svc = hyper::service::make_service_fn(move |socket: &AddrStream| {
-        let remote_addr = socket.remote_addr();
-        let context = context.clone();
-        async move {
-            Ok::<_, http::Error>(hyper::service::service_fn(move |req: Request<Body>| {
-                log::debug!("{} - {} {}", &remote_addr, req.method(), req.uri());
-                crdt_service::hyper_service(req, context.clone(), remote_addr)
-            }))
-        }
-    });
-
-    let server = hyper::Server::from_tcp(listener)?.serve(make_svc);
-
-    server.await?;
+    server(my_info).await?;
 
     Ok(())
 }
 
+#[allow(unused)]
 #[cfg(target_os = "linux")]
 fn get_listener(addr: SocketAddr, interface: &InterfaceName) -> Result<TcpListener, Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(addr)?;

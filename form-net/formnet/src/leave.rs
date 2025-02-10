@@ -56,7 +56,7 @@ pub async fn leave(bootstraps: Vec<String>, key: String) -> Result<(), Box<dyn s
     let request = LeaveRequest::Operator(OperatorLeaveRequest { operator_id: address });
     let client = Client::new();
     while let Some(dial) = bootstrap_iter.next() {
-        match client.post(&format!("http://{dial}/3001/leave"))
+        match client.post(&format!("http://{dial}/51820/leave"))
             .json(&request)
             .send()
             .await {

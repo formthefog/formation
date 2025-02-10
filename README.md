@@ -36,7 +36,7 @@ Different routers and ISPs handle port forwarding differently, so we suggest you
 
 The default ports that the system's service APIs run on are:
 
-`3001` for `formnet` join requests API
+`51820` for `formnet` join requests API
 
 `3002` for `form-vmm` API
 

@@ -52,7 +52,7 @@ async fn run_vm_manager(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     let (event_sender, event_receiver) = tokio::sync::mpsc::channel(1024);
     let api_addr = "0.0.0.0:3002".parse()?;
-    let formnet_endpoint = "127.0.0.1:3001".to_string();
+    let formnet_endpoint = "127.0.0.1:51820".to_string();
     let vm_manager = VmManager::new(
         event_sender,
         api_addr,

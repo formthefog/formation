@@ -1,4 +1,4 @@
-use std::{net::{IpAddr, SocketAddr}, str::FromStr, sync::Arc};
+use std::{net::{IpAddr, SocketAddr}, str::FromStr, sync::Arc, time::Duration};
 
 use axum::{extract::State, routing::{put, get}, Json, Router};
 use clap::Parser;
@@ -6,7 +6,7 @@ use ipnet::IpNet;
 use reqwest::Client;
 use shared::{wg, NetworkOpts};
 use tokio::{net::TcpListener, sync::RwLock};
-use wireguard_control::{Backend, DeviceUpdate, InterfaceName, Key, KeyPair, PeerConfigBuilder};
+use wireguard_control::{Backend, Device, DeviceUpdate, InterfaceName, Key, KeyPair, PeerConfigBuilder};
 use serde::{Serialize, Deserialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -64,6 +64,22 @@ async fn bootstrap_wg_up() -> Result<(), Box<dyn std::error::Error>> {
         None, 
         NetworkOpts::default(),
     )?;
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(10));
+        loop {
+            interval.tick().await;
+            if let Ok(info) = Device::get(&InterfaceName::from_str("formnet").unwrap(), Backend::Kernel) {
+                log::info!("Acquired device info");
+                for peer in info.peers {
+                    log::info!("Acquired device info for peer {peer:?}");
+                    if let Some(endpoint) = peer.config.endpoint {
+                        log::info!("Acquired endpoint {endpoint:?} for peer... Updating...");
+                    }
+                }
+            }
+        }
+    });
 
     server("0.0.0.0", 51820, info).await?;
 

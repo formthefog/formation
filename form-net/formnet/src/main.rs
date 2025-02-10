@@ -9,7 +9,7 @@ use clap::{Parser, Subcommand, Args};
 use form_config::OperatorConfig;
 use form_types::PeerType;
 use formnet::{init::init, serve::serve};
-use formnet::{create_router, ensure_crdt_datastore, leave, redeem, request_to_join, revert_formnet_resolver, set_formnet_resolver, uninstall, user_join_formnet, vm_join_formnet, NETWORK_NAME};
+use formnet::{ensure_crdt_datastore, leave, request_to_join, revert_formnet_resolver, set_formnet_resolver, uninstall, user_join_formnet, vm_join_formnet, NETWORK_NAME};
 
 #[derive(Clone, Debug, Parser)]
 struct Cli {
@@ -106,33 +106,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         parser.signing_key.unwrap()
                     };
                     let address = hex::encode(Address::from_private_key(&SigningKey::from_slice(&hex::decode(&signing_key)?)?));
-                    if !parser.bootstraps.is_empty() {
+                    let my_ip = if !parser.bootstraps.is_empty() {
                         log::info!("Found bootstrap in parser...");
-                        let invitation = request_to_join(
+                        let my_ip = request_to_join(
                             parser.bootstraps.clone(),
                             address.clone(),
                             PeerType::Operator
                         ).await?;
                         ensure_crdt_datastore().await?;
-                        redeem(invitation)?;
+                        my_ip
                     } else if !operator_config.clone().unwrap().bootstrap_nodes.is_empty() {
                         log::info!("Found bootstrap in config...");
-                        let invitation = request_to_join(
+                        let my_ip = request_to_join(
                             operator_config.unwrap().bootstrap_nodes.clone(),
                             address.clone(),
                             PeerType::Operator
                         ).await?;
                         ensure_crdt_datastore().await?;
-                        redeem(invitation)?;
+                        my_ip
                     } else {
-                        init(address.clone()).await?;
-                    }
+                        init(address.clone()).await?
+                    };
 
-                    let (shutdown, mut receiver) = tokio::sync::broadcast::channel::<()>(2);
+                    let (shutdown, _) = tokio::sync::broadcast::channel::<()>(2);
                     let mut formnet_receiver = shutdown.subscribe();
+                    let inner_address = address.clone();
                     let formnet_server_handle = tokio::spawn(async move {
                         tokio::select! {
-                            res = serve(NETWORK_NAME) => {
+                            res = serve(NETWORK_NAME, inner_address) => {
                                 if let Err(e) = res {
                                     eprintln!("Error trying to serve formnet server: {e}");
                                 }
@@ -143,33 +144,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     });
 
-                    let join_server_handle = tokio::spawn(async move {
-                        tokio::select! {
-                            res = start_join_server() => {
-                                if let Err(e) = res {
-                                    eprintln!("Error trying to serve join server: {e}");
-                                }
-                            }
-                            _ = receiver.recv() => {
-                                eprintln!("Join Server: Received shutdown signal");
-                            }
-                        }
-                    });
-
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     log::info!("reverting existing resolver for formnet interface");
                     #[cfg(target_os = "linux")]
                     if let Ok(()) = revert_formnet_resolver().await {
-                        let peer = DatabasePeer::<String, CrdtMap>::get(address).await?;
                         #[cfg(target_os = "linux")]
-                        set_formnet_resolver(&peer.contents.ip.to_string(), "~fog").await?;
+                        set_formnet_resolver(&my_ip.to_string(), "~fog").await?;
                         log::info!("Setting up dns resolver");
                     }
 
                     tokio::signal::ctrl_c().await?;
                     shutdown.send(())?;
-
-                    join_server_handle.await?;
                     formnet_server_handle.await?;
                 }
                 OperatorOpts::Leave(parser) => {
@@ -199,15 +184,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
-}
-
-pub async fn start_join_server() -> Result<(), Box<dyn std::error::Error>> {
-    let router = create_router();
-    let listener = tokio::net::TcpListener::bind(
-        "0.0.0.0:3001"
-    ).await?;
-
-    axum::serve(listener, router).await?;
-
-    return Ok(())
 }

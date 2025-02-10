@@ -81,7 +81,6 @@ RUN chmod +x /entrypoint.sh
 # provisioned a CIDR within formnet
 COPY ./target/release/formnet /var/lib/formation/formnet/formnet
 
-EXPOSE 3001
 EXPOSE 3002
 EXPOSE 3003
 EXPOSE 3004

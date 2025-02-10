@@ -50,6 +50,7 @@ pub fn redeem(mut invitation: InterfaceConfig) -> Result<(), Box<dyn std::error:
     sleep(Duration::from_secs(5));
     log::info!("Finished sleeping...");
     
+    log::info!("Using invitation server info to redeem contents: {:?}", invitation.server); 
     log::info!("Making API call to redeem contents...");
     Api::new(&invitation.server).http_form::<_, ()>(
         "POST",

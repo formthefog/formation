@@ -185,7 +185,7 @@ pub fn init_wizard(conf: &ServerConfig, opts: InitializeOpts) -> Result<(), Erro
         listen_port: Some(listen_port),
         address: our_ip,
         network_cidr_prefix: root_cidr.prefix_len(),
-        bootstrap: "none".to_string()
+        bootstrap: None, 
     };
     config.write_to_path(config_path)?;
 

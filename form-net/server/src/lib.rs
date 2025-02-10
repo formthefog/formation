@@ -9,7 +9,7 @@ use parking_lot::{Mutex, RwLock};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use shared::{
-    get_local_addrs, interface_config::InterfaceConfig, AddCidrOpts, AddPeerOpts, DeleteCidrOpts, EnableDisablePeerOpts, Endpoint, IoErrorContext, NetworkOpts, PeerContents, RenameCidrOpts, RenamePeerOpts, INNERNET_PUBKEY_HEADER
+    ensure_dirs_exist, get_local_addrs, interface_config::InterfaceConfig, AddCidrOpts, AddPeerOpts, DeleteCidrOpts, EnableDisablePeerOpts, Endpoint, IoErrorContext, NetworkOpts, PeerContents, RenameCidrOpts, RenamePeerOpts, INNERNET_PUBKEY_HEADER
 };
 use std::{
     collections::{HashMap, VecDeque}, convert::TryInto, env, fmt::Display, fs::File, io::prelude::*, net::{IpAddr, SocketAddr, TcpListener}, ops::Deref, path::{Path, PathBuf}, sync::Arc, time::Duration
@@ -150,7 +150,7 @@ pub struct ConfigFile {
     pub network_cidr_prefix: u8,
 
     /// The ID of the bootstrap node/server
-    pub bootstrap: String 
+    pub bootstrap: Option<String> 
 }
 
 impl From<InterfaceConfig> for ConfigFile {
@@ -160,7 +160,7 @@ impl From<InterfaceConfig> for ConfigFile {
             listen_port: value.interface.listen_port,
             address: value.interface.address.addr(),
             network_cidr_prefix: value.interface.address.prefix_len(), 
-            bootstrap: value.server.public_key,
+            bootstrap: None,
         }
     }
 }

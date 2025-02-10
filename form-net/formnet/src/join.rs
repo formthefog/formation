@@ -1,41 +1,15 @@
-use std::time::Duration;
+use std::{net::{IpAddr, SocketAddr}, path::PathBuf, str::FromStr, time::Duration};
 use colored::*;
-use axum::Json;
 use daemonize::Daemonize;
 use form_types::{BootCompleteRequest, PeerType, VmmResponse};
+use formnet_server::ConfigFile;
+use ipnet::IpNet;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use shared::{interface_config::InterfaceConfig, NetworkOpts};
-use crate::{add_peer::add_peer, handle_leave_request, redeem, up};
+use shared::{ensure_dirs_exist, interface_config::InterfaceConfig, wg, NetworkOpts};
+use wireguard_control::{InterfaceName, KeyPair};
+use crate::{api::{BootstrapInfo, JoinResponse as BootstrapResponse, Response}, up, CONFIG_DIR, NETWORK_NAME};
 
-pub fn create_router() -> axum::Router {
-    axum::Router::new()
-        .route("/join", axum::routing::post(handle_join_request))
-        .route("/leave", axum::routing::post(handle_leave_request))
-        //TODO: Add routes to request custom cidr, request custom assoc
-        //Add routes to delete peer, delete custom cidr, delete assoc
-}
-
-async fn handle_join_request(
-    Json(join_request): Json<JoinRequest>,
-) -> axum::Json<JoinResponse> {
-    log::warn!("Received join request");
-    log::warn!("Attempting to add peer...");
-    match add_peer(
-        &NetworkOpts::default(),
-        &join_request.peer_type(),
-        &join_request.id()
-    ).await {
-        Ok(invitation) => {
-            let resp = JoinResponse::Success { invitation };
-            log::info!("SUCCESS! Sending Response: {resp:?}");
-            return Json(resp)
-        },
-        Err(e) => {
-            Json(JoinResponse::Error(e.to_string()))
-        }
-    }
-}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum JoinRequest {
@@ -87,52 +61,150 @@ pub enum JoinResponse {
 }
 
 
-pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type: PeerType) -> Result<InterfaceConfig, Box<dyn std::error::Error>> {
-    log::info!("requesting to join, building request for peer type");
-    let request = match peer_type { 
-        PeerType::Operator => JoinRequest::OperatorJoinRequest(
-            OperatorJoinRequest {
-                operator_id: address,
+pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type: PeerType) -> Result<IpAddr, Box<dyn std::error::Error>> {
+    let client = Client::new();
+    let mut iter = bootstrap.iter();
+    let mut bootstrap_info: Option<BootstrapInfo> = None;
+    while let Some(dial) = iter.next() {
+        match client.get(format!("http://{dial}:51820/bootstrap"))
+            .send().await {
+                Ok(resp) => match resp.json::<Response>().await {
+                    Ok(Response::Bootstrap(info)) => {
+                        bootstrap_info = Some(info.clone());
+                        break;
+                    }
+                    Err(e) => {
+                        log::error!("Error deserializing response from {dial}: {e}");
+                        continue;
+                    }
+                    _ => {
+                        log::error!("Recieved invalid variant for join request");
+                        continue;
+                    }
+                }
+                Err(e) => {
+                    log::error!("Error dialing {dial}: {e}");
+                }
             }
-        ),
-        PeerType::User => JoinRequest::UserJoinRequest(
-            UserJoinRequest {
-                user_id: address
-            }
-        ),
-        PeerType::Instance => JoinRequest::InstanceJoinRequest(
-            VmJoinRequest {
-                vm_id: address
-            }
+    }
+
+    if bootstrap_info.is_none() {
+        return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Was unable to acquire bootstrap information from any bootstrap nodes provided")));
+    }
+
+    let bootstrap_info = bootstrap_info.unwrap(); 
+
+    let keypair = KeyPair::generate();
+    let publicip = publicip::get_any(
+        publicip::Preference::Ipv4
+    ).ok_or(
+        Box::new(
+            std::io::Error::new(
+                std::io::ErrorKind::Other,
+                    "unable to acquire public ip"
+            )
         )
+    )?;
+
+    let request = match peer_type { 
+        PeerType::Operator => {
+            BootstrapInfo {
+                id: address.to_string(),
+                peer_type: PeerType::Operator,
+                cidr_id: "formnet".to_string(),
+                pubkey: keypair.public.to_base64(),
+                internal_endpoint: None,
+                external_endpoint: Some(
+                    SocketAddr::new(publicip, 51820)
+                ),
+            }
+        },
+        PeerType::User => {
+            BootstrapInfo {
+                id: address.to_string(),
+                peer_type: PeerType::User,
+                cidr_id: "formnet".to_string(),
+                pubkey: keypair.public.to_base64(),
+                internal_endpoint: None,
+                external_endpoint: Some(
+                    SocketAddr::new(publicip, 51820)
+                ),
+            }
+        },
+        PeerType::Instance => {
+            BootstrapInfo {
+                id: address.to_string(),
+                peer_type: PeerType::Instance,
+                cidr_id: "formnet".to_string(),
+                pubkey: keypair.public.to_base64(),
+                internal_endpoint: None,
+                external_endpoint: Some(
+                    SocketAddr::new(publicip, 51820)
+                ),
+            }
+        }
     };
 
     log::info!("Built join request: {request:?}");
 
-    while let Some(dial) = bootstrap.iter().next() {
+    let mut iter = bootstrap.iter();
+    while let Some(dial) = iter.next() {
         log::info!("Attemptiing to dial {dial} to request to join the network");
-        match Client::new()
-        .post(&format!("http://{dial}:3001/join"))
+        match Client::new().post(&format!("http://{dial}:51820/join"))
         .json(&request)
         .send()
         .await {
-            Ok(response) => match response.json::<JoinResponse>().await {
-                Ok(JoinResponse::Success { invitation }) => return Ok(invitation),
-                _ => {}
+            Ok(response) => match response.json::<Response>().await {
+                Ok(Response::Join(BootstrapResponse::Success(ip))) => {
+                    match wg::up(
+                        &InterfaceName::from_str("formnet")?,
+                        &keypair.private.to_base64(), 
+                        IpNet::new(ip.clone(), 8)?,
+                        None,
+                        Some((
+                            &bootstrap_info.pubkey,
+                            bootstrap_info.internal_endpoint.unwrap(),
+                            bootstrap_info.external_endpoint.unwrap(),
+                        )), 
+                        NetworkOpts::default(),
+                    ) {
+                        Ok(()) => {
+                            let config_file = ConfigFile {
+                                private_key: keypair.private.to_base64(),
+                                address: ip.clone(),
+                                listen_port: Some(51820),
+                                network_cidr_prefix: 8,
+                                bootstrap: Some(hex::encode(&serde_json::to_vec(&bootstrap_info)?)) 
+                            };
+                            std::fs::create_dir_all(PathBuf::from(CONFIG_DIR))?;
+                            config_file.write_to_path(
+                                PathBuf::from(CONFIG_DIR).join(NETWORK_NAME).with_extension("conf")
+                            )?;
+                            return Ok(ip.clone());
+                        }
+                        Err(e) => {
+                            return Err(Box::new(e))
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!("Error attempting to join network: {e}");
+                }
+                _ => {
+                    log::error!("Received invalid response type when trying to join network");
+                }
             }
-            _ => {}
+            Err(e) => {
+                log::error!("Didn't receive a response: {e}")
+            }
         }
     }
-    log::info!("Didn't receive a valid response from any bootstraps: {bootstrap:?}");
+    log::info!("Didn't receive a valid response from any bootstraps, unable to join formnet: {bootstrap:?}");
     return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Did not receive a valid invitation")));
 }
 
 pub async fn user_join_formnet(address: String, provider: String, formnet_port: u16) -> Result<(), Box<dyn std::error::Error>> {
-    let invitation = request_to_join(vec![format!("{}:{}", provider, formnet_port)], address, PeerType::User).await?;
-    println!("{}", "Attempting to redeem formnet invite".yellow());
-    if let Err(e) = redeem(invitation) {
-        println!("{}: {}", "Error trying to redeem invite".yellow(), e.to_string().red());
-    } 
+    request_to_join(vec![format!("{}:{}", provider, formnet_port)], address, PeerType::User).await?;
 
     let daemon = Daemonize::new()
         .pid_file("/run/formnet.pid")
@@ -159,43 +231,17 @@ pub async fn user_join_formnet(address: String, provider: String, formnet_port: 
 }
 
 pub async fn vm_join_formnet() -> Result<(), Box<dyn std::error::Error>> {
-    let host_ip = std::env::var("HOST_BRIDGE_IP").unwrap(); 
-    log::info!("HOST IP: {host_ip}");
+    let host_public_ip = std::env::var("HOST_BRIDGE_IP").unwrap(); 
+    log::info!("HOST IP: {host_public_ip}");
+
     let name = std::fs::read_to_string("/etc/vm_name")?;
     let build_id = std::fs::read_to_string("/etc/build_id")?;
-    log::info!("Requesting formnet invite for vm {}", name);
-    log::info!("Building VmJoinRequest");
-    let join_request = VmJoinRequest { vm_id: name.clone() };
-    log::info!("Wrapping VmJoinRequest in a JoinRequest");
-    let join_request = JoinRequest::InstanceJoinRequest(join_request);
-    log::info!("Getting a new client");
-    let client = reqwest::Client::new();
-    log::info!("Posting request to endpoint using client, awaiting response...");
-    // We should be able to access formnet, and the VMM over the bridge gateway
-    let resp = client.post(&format!("http://{host_ip}:3001/join"))
-        .json(&join_request)
-        .send().await.map_err(|e| {
-            other_err(&e.to_string())
-        })?.json::<JoinResponse>().await.map_err(|e| {
-            other_err(&e.to_string())
-        })?;
-
-    log::info!("Response text: {resp:?}");
-
-    match resp {
-        JoinResponse::Success { invitation } => {
+    match request_to_join(vec![host_public_ip.clone()], name.clone(), form_types::PeerType::Instance).await {
+        Ok(ip)=> {
             log::info!("Received invitation");
-            let invite = invitation;
-            let formnet_ip = invite.interface.address.addr().to_string();
-            log::info!("extracted formnet IP for {name}");
+            let formnet_ip = ip; 
+            log::info!("extracted formnet IP for {name}: {formnet_ip}");
             log::info!("Attempting to redeem invite");
-            if let Err(e) = redeem(invite).map_err(|e| {
-                other_err(&e.to_string())
-            }) {
-                log::error!("Error attempting to redeem invite: {e}");
-            }
-
-            log::info!("Successfully redeemed invite");
             log::info!("Spawning thread to bring formnet up");
             let handle = tokio::spawn(async move {
                 if let Err(e) = up(
@@ -207,16 +253,16 @@ pub async fn vm_join_formnet() -> Result<(), Box<dyn std::error::Error>> {
             });
 
             log::info!("Building request to inform VMM service that the boot process has completed for {name}");
-
             // Send message to VMM api.
             let request = BootCompleteRequest {
-                build_id: build_id,
                 name: name.clone(),
-                formnet_ip
+                build_id,
+                formnet_ip: formnet_ip.to_string()
             };
 
-            log::info!("Sending BootCompleteRequest {request:?} to http://{host_ip}:3002/vm/{name}/boot_complete endpoint");
-            let resp = client.post(&format!("http://{host_ip}:3002/vm/{}/boot_complete", name))
+            log::info!("Sending BootCompleteRequest {request:?} to http://{host_public_ip}:3002/{name}/boot_complete endpoint");
+
+            let resp = Client::new().post(&format!("http://{host_public_ip}:3002/{}/boot_complete", name))
                 .json(&request)
                 .send()
                 .await?
@@ -229,7 +275,10 @@ pub async fn vm_join_formnet() -> Result<(), Box<dyn std::error::Error>> {
 
             Ok(())
         },
-        JoinResponse::Error(reason) => return Err(other_err(&reason.to_string()))
+        Err(reason) => {
+            log::info!("Error trying to join formnet: {reason}");
+            return Err(other_err(&reason.to_string()))
+        }
     }
 }
 
@@ -241,3 +290,4 @@ pub fn other_err(msg: &str) -> Box<dyn std::error::Error> {
         )
     )
 }
+

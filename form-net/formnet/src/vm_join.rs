@@ -1,7 +1,8 @@
 use std::time::Duration;
 
 use form_types::{BootCompleteRequest, VmmResponse};
-use formnet::{redeem, up, JoinRequest, JoinResponse, VmJoinRequest};
+use formnet::{request_to_join, up};
+use reqwest::Client;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -12,40 +13,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Get name
     let name = std::fs::read_to_string("/etc/vm_name")?;
     let build_id = std::fs::read_to_string("/etc/build_id")?;
-    log::info!("Requesting formnet invite for vm {}", name);
-    log::info!("Building VmJoinRequest");
-    let join_request = VmJoinRequest { vm_id: name.clone() };
-    log::info!("Wrapping VmJoinRequest in a JoinRequest");
-    let join_request = JoinRequest::InstanceJoinRequest(join_request);
-    log::info!("Getting a new client");
-    let client = reqwest::Client::new();
-    log::info!("Posting request to endpoint using client, awaiting response...");
-    // We should be able to access formnet, and the VMM over the bridge gateway
-    let resp = client.post(&format!("http://{host_public_ip}:3001/join"))
-        .json(&join_request)
-        .send().await.map_err(|e| {
-            other_err(&e.to_string())
-        })?.json::<JoinResponse>().await.map_err(|e| {
-            other_err(&e.to_string())
-        })?;
-
-    log::info!("Response text: {resp:?}");
-
-    match resp {
-        JoinResponse::Success { invitation } => {
+    match request_to_join(vec![host_public_ip.clone()], name.clone(), form_types::PeerType::Instance).await {
+        Ok(ip)=> {
             log::info!("Received invitation");
-            let invite = invitation;
-            let formnet_ip = invite.interface.address.addr().to_string();
-            log::info!("extracted formnet IP for {name}");
+            let formnet_ip = ip; 
+            log::info!("extracted formnet IP for {name}: {formnet_ip}");
             log::info!("Attempting to redeem invite");
-            if let Err(e) = redeem(invite).map_err(|e| {
-                other_err(&e.to_string())
-            }) {
-                log::error!("Error attempting to redeem invite: {e}");
-            }
-
-            log::info!("Successfully redeemed invite");
-
             log::info!("Spawning thread to bring formnet up");
             let handle = tokio::spawn(async move {
                 if let Err(e) = up(
@@ -61,10 +34,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let request = BootCompleteRequest {
                 name: name.clone(),
                 build_id,
-                formnet_ip
+                formnet_ip: formnet_ip.to_string()
             };
+
             log::info!("Sending BootCompleteRequest {request:?} to http://{host_public_ip}:3002/{name}/boot_complete endpoint");
-            let resp = client.post(&format!("http://{host_public_ip}:3002/{}/boot_complete", name))
+
+            let resp = Client::new().post(&format!("http://{host_public_ip}:3002/{}/boot_complete", name))
                 .json(&request)
                 .send()
                 .await?
@@ -77,7 +52,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             Ok(())
         },
-        JoinResponse::Error(reason) => return Err(other_err(&reason.to_string()))
+        Err(reason) => {
+            log::info!("Error trying to join formnet: {reason}");
+            return Err(other_err(&reason.to_string()))
+        }
     }
 }
 

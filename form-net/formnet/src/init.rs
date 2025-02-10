@@ -11,7 +11,7 @@ use wireguard_control::{InterfaceName, KeyPair};
 use crate::{CONFIG_DIR, DATA_DIR};
 
 
-pub async fn init(address: String) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn init(address: String) -> Result<IpAddr, Box<dyn std::error::Error>> {
     let config_dir = PathBuf::from(CONFIG_DIR);
     let data_dir = PathBuf::from(DATA_DIR);
     shared::ensure_dirs_exist(&[&config_dir, &data_dir]).map_err(|e| {
@@ -48,16 +48,16 @@ pub async fn init(address: String) -> Result<(), Box<dyn std::error::Error>> {
     let config = ConfigFile {
         private_key: our_keypair.private.to_base64(),
         listen_port: Some(listen_port),
-        address: our_ip,
+        address: our_ip.clone(),
         network_cidr_prefix: root_cidr.prefix_len(),
-        bootstrap: "none".to_string()
+        bootstrap: None, 
     };
     config.write_to_path(config_path)?;
 
     let db_init_data = DbInitData {
         network_name: name.to_string(),
         network_cidr: root_cidr,
-        server_cidr: IpNet::new(our_ip, root_cidr.max_prefix_len())?,
+        server_cidr: IpNet::new(our_ip.clone(), root_cidr.max_prefix_len())?,
         our_ip,
         public_key_base64: our_keypair.public.to_base64(),
         endpoint,
@@ -105,7 +105,7 @@ pub async fn init(address: String) -> Result<(), Box<dyn std::error::Error>> {
         systemctl_enable = "systemctl enable --now innernet-server@",
     );
 
-    Ok(())
+    Ok(our_ip)
 }
 
 pub async fn ensure_crdt_datastore() -> Result<(), Box<dyn std::error::Error>> {

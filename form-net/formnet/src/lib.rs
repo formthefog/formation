@@ -9,6 +9,7 @@ pub mod redeem;
 pub mod add_assoc;
 pub mod leave;
 pub mod resolve;
+pub mod api;
 
 pub use init::*;
 pub use add_peer::*;

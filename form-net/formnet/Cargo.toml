@@ -24,6 +24,9 @@ path = "src/main.rs"
 name = "formnet-vm-join"
 path = "src/vm_join.rs"
 
+[[example]]
+name = "formnet-p2p"
+path = "examples/formnet-p2p.rs"
 
 [dependencies]
 formnet-server = { path = "../server" }
