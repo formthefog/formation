@@ -9,7 +9,7 @@ use parking_lot::{Mutex, RwLock};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use shared::{
-    ensure_dirs_exist, get_local_addrs, interface_config::InterfaceConfig, AddCidrOpts, AddPeerOpts, DeleteCidrOpts, EnableDisablePeerOpts, Endpoint, IoErrorContext, NetworkOpts, PeerContents, RenameCidrOpts, RenamePeerOpts, INNERNET_PUBKEY_HEADER
+    get_local_addrs, interface_config::InterfaceConfig, AddCidrOpts, AddPeerOpts, DeleteCidrOpts, EnableDisablePeerOpts, Endpoint, IoErrorContext, NetworkOpts, PeerContents, RenameCidrOpts, RenamePeerOpts, INNERNET_PUBKEY_HEADER
 };
 use std::{
     collections::{HashMap, VecDeque}, convert::TryInto, env, fmt::Display, fs::File, io::prelude::*, net::{IpAddr, SocketAddr, TcpListener}, ops::Deref, path::{Path, PathBuf}, sync::Arc, time::Duration

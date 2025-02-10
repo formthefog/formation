@@ -6,7 +6,7 @@ use formnet_server::ConfigFile;
 use ipnet::IpNet;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use shared::{ensure_dirs_exist, interface_config::InterfaceConfig, wg, NetworkOpts};
+use shared::{interface_config::InterfaceConfig, wg, NetworkOpts};
 use wireguard_control::{InterfaceName, KeyPair};
 use crate::{api::{BootstrapInfo, JoinResponse as BootstrapResponse, Response}, up, CONFIG_DIR, NETWORK_NAME};
 

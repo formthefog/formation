@@ -2,8 +2,6 @@
 use std::path::PathBuf;
 use std::time::Duration;
 use alloy_core::primitives::Address;
-use formnet_server::db::CrdtMap;
-use formnet_server::DatabasePeer;
 use k256::ecdsa::SigningKey;
 use clap::{Parser, Subcommand, Args};
 use form_config::OperatorConfig;
