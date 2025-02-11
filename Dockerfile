@@ -10,7 +10,7 @@ RUN apt-get install -y protobuf-compiler libprotobuf-dev build-essential \
     libnetfilter-queue-dev libnl-3-dev libnl-route-3-dev \
     zlib1g-dev libbpf-dev liburing-dev libssl-dev \
     iproute2 bridge-utils ssh socat libguestfs-tools \
-    qemu-utils
+    qemu-utils 
 
 RUN mkdir -p /usr/local/bin
 RUN mkdir -p /var/lib/formation/formnet

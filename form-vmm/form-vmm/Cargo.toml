@@ -29,6 +29,10 @@ name = "vmm-service"
 path = "src/bin/vmm-service.rs"
 
 [[bin]]
+name = "form-network-setup"
+path = "src/bin/form-network-setup.rs"
+
+[[bin]]
 name = "vmm-service-test"
 path = "src/bin/vmm-service-test.rs"
 
