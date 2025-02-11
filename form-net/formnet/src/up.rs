@@ -12,11 +12,7 @@ pub fn up(
         let interfaces = all_installed(&PathBuf::from(CONFIG_DIR))?;
         log::info!("acquired interfaces: {interfaces:?}");
 
-        for iface in interfaces {
-            log::info!("calling fetch for interface: {iface}");
-            fetch(hosts_path.clone())?;
-            log::info!("called fetch for interface: {iface}");
-        }
+        fetch(hosts_path.clone())?;
 
         match loop_interval {
             Some(interval) => std::thread::sleep(interval),

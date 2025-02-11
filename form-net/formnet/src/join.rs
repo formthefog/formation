@@ -139,7 +139,7 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
                 pubkey: keypair.public.to_base64(),
                 internal_endpoint: None,
                 external_endpoint: Some(
-                    SocketAddr::new(publicip, 51820)
+                    SocketAddr::new(publicip, 52820)
                 ),
             }
         }
@@ -256,13 +256,13 @@ pub async fn vm_join_formnet() -> Result<(), Box<dyn std::error::Error>> {
             // Send message to VMM api.
             let request = BootCompleteRequest {
                 name: name.clone(),
-                build_id,
+                build_id: build_id.clone(),
                 formnet_ip: formnet_ip.to_string()
             };
 
             log::info!("Sending BootCompleteRequest {request:?} to http://{host_public_ip}:3002/{name}/boot_complete endpoint");
 
-            let resp = Client::new().post(&format!("http://{host_public_ip}:3002/{}/boot_complete", name))
+            let resp = Client::new().post(&format!("http://{host_public_ip}:3002/{}/boot_complete", build_id))
                 .json(&request)
                 .send()
                 .await?

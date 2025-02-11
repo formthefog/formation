@@ -1,9 +1,6 @@
 use alloy_primitives::Address;
 use axum::{
-    routing::{get, post},
-    Router,
-    Json,
-    extract::State,
+    extract::{Path, State}, routing::{get, post}, Json, Router
 };
 use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
 use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
@@ -477,6 +474,7 @@ async fn create(
 
 async fn boot_complete(
     State(channel): State<Arc<Mutex<VmmApiChannel>>>,
+    Path(id): Path<String>,
     Json(request): Json<BootCompleteRequest>,
 ) -> Json<VmmResponse> {
 
