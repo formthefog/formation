@@ -37,13 +37,14 @@ function find_available_range() {
 function setup_bridge() {
     local range="$1"
     local iface="$2"
+    local bridge_ip=$(echo "$range" | sed 's|0/24|1/24|')
 
     if ! brctl show br0 2>/dev/null; then
         brctl addbr br0
     fi
 
     if ! check_bridge_ip br0; then
-        ip addr add "$range" dev br0
+        ip addr add "$bridge_ip" dev br0
     fi
 
     ip link set br0 up
@@ -78,6 +79,8 @@ EOF
 function validate_setup() {
     local range="$1"
     local test_ip=$(echo "$range" | sed 's|0/24|5|')
+    local bridge_ip=$(echo "range" | sed 's|0/24|1/24|')
+    local gateway=$(echo "$bridge_ip" | sed 's|/24||')
 
     ip netns add testns
     ip link add veth-host type veth peer name veth-ns
