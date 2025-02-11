@@ -5,7 +5,7 @@ use shared::{interface_config::InterfaceConfig, wg, NetworkOpts, RedeemContents,
 use wireguard_control::{DeviceUpdate, InterfaceName};
 use crate::{fetch, CONFIG_DIR};
 
-pub fn redeem(mut invitation: InterfaceConfig) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn redeem(mut invitation: InterfaceConfig) -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Deriving interface name");
     let iface = InterfaceName::from_str(&invitation.interface.network_name)?;
     log::info!("Interface name: {iface}");
@@ -77,7 +77,7 @@ pub fn redeem(mut invitation: InterfaceConfig) -> Result<(), Box<dyn std::error:
         .apply(&iface, NetworkOpts::default().backend)?;
     std::thread::sleep(REDEEM_TRANSITION_WAIT);
 
-    fetch(None)?;
+    fetch(None).await?;
 
     Ok(())
 }

@@ -2,9 +2,9 @@ use std::{net::{IpAddr, SocketAddr}, sync::Arc};
 use form_types::PeerType;
 use formnet_server::{db::CrdtMap, DatabasePeer};
 use serde::{Serialize, Deserialize};
-use shared::{NetworkOpts, Peer};
+use shared::{Endpoint, NetworkOpts, Peer, PeerContents};
 use tokio::{net::TcpListener, sync::RwLock};
-use axum::{extract::State, routing::{get, post}, Json, Router};
+use axum::{extract::{Path, State}, routing::{get, post}, Json, Router};
 
 use crate::add_peer;
 
@@ -44,6 +44,7 @@ pub async fn server(
         .route("/leave", post(leave))
         .route("/fetch", get(members))
         .route("/bootstrap", get(bootstrap))
+        .route("/:ip/candidates", post(candidates))
         .with_state(bootstrap_info);
 
     let listener = TcpListener::bind("0.0.0.0:51820").await?;
@@ -87,4 +88,28 @@ async fn bootstrap(
 ) -> Json<Response> {
     let info_clone = info.read().await.clone();
     Json(Response::Bootstrap(info_clone))
+}
+
+async fn candidates(
+    Path(ip): Path<String>,
+    Json(contents): Json<Vec<Endpoint>> 
+) {
+    if let Ok(ip) = ip.parse::<IpAddr>() {
+        if let Ok(mut selected_peer) = DatabasePeer::<String, CrdtMap>::get_from_ip(ip.clone()).await {
+            if let Ok(_) = selected_peer.update(
+                PeerContents {
+                    candidates: contents,
+                    ..selected_peer.contents.clone()
+                },
+            ).await {
+                log::info!("Succesfully updated peer with candidates...");
+            } else {
+                log::info!("Unable to update peer with candidates...");
+            }
+        } else {
+            log::info!("unable to acquiire peer with ip: {ip}");
+        }
+    } else {
+        log::error!("Unable to parse provided ip");
+    }
 }

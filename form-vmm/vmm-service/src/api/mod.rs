@@ -474,7 +474,7 @@ async fn create(
 
 async fn boot_complete(
     State(channel): State<Arc<Mutex<VmmApiChannel>>>,
-    Path(id): Path<String>,
+    Path(_id): Path<String>,
     Json(request): Json<BootCompleteRequest>,
 ) -> Json<VmmResponse> {
 

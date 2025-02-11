@@ -24,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Err(e) = up(
                     Some(Duration::from_secs(60)),
                     None,
-                ) {
+                ).await {
                     log::error!("Error bringing formnet up: {e}");
                 }
             });

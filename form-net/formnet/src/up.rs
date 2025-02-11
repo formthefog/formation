@@ -3,7 +3,7 @@ use client::util::all_installed;
 use crate::{fetch, CONFIG_DIR};
 
 
-pub fn up(
+pub async fn up(
     loop_interval: Option<Duration>,
     hosts_path: Option<PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -12,7 +12,7 @@ pub fn up(
         let interfaces = all_installed(&PathBuf::from(CONFIG_DIR))?;
         log::info!("acquired interfaces: {interfaces:?}");
 
-        fetch(hosts_path.clone())?;
+        fetch(hosts_path.clone()).await?;
 
         match loop_interval {
             Some(interval) => std::thread::sleep(interval),

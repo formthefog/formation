@@ -1,14 +1,12 @@
-use std::{io::Write, path::PathBuf, str::FromStr, time::Duration};
+use std::{io::Write, path::PathBuf, str::FromStr};
 use k256::elliptic_curve::PublicKey;
 use alloy_signer_local::coins_bip39::{English, Mnemonic};
 use alloy_core::primitives::Address;
 use colored::*;
 use clap::Args;
-use daemonize::Daemonize;
-use formnet::{redeem, up, JoinRequest, JoinResponse, UserJoinRequest};
+use formnet::user_join_formnet;
 use k256::{ecdsa::SigningKey, elliptic_curve::SecretKey};
 use rand::thread_rng;
-use reqwest::Client;
 use serde::{Serialize, Deserialize};
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select, Password};
 use crate::{encrypt_file, save_config, Config};
@@ -334,59 +332,6 @@ impl Init {
 }
 
 pub async fn join_formnet(address: String, provider: String, formnet_port: u16) -> Result<(), Box<dyn std::error::Error>> {
-    let join_request = JoinRequest::UserJoinRequest(UserJoinRequest {
-        user_id: address.to_string()
-    });
-
-    let resp = Client::new()
-        .post(&format!("http://{provider}:{formnet_port}/join"))
-        .json(&join_request)
-        .send()
-        .await?
-        .json::<JoinResponse>()
-        .await?;
-
-    match resp {
-        JoinResponse::Success { invitation } => {
-            println!("{}", "Attempting to redeem formnet invite".yellow());
-            if let Err(e) = redeem(invitation) {
-                println!("{}: {}", "Error trying to redeem invite".yellow(), e.to_string().red());
-            } 
-
-            let daemon = Daemonize::new()
-                .pid_file("/run/formnet.pid")
-                .chown_pid_file(true)
-                .working_directory("/")
-                .umask(0o027)
-                .stdout(std::fs::File::create("/var/log/formnet.log").unwrap())
-                .stderr(std::fs::File::create("/var/log/formnet.log").unwrap());
-
-            match daemon.start() {
-                Ok(_) => {
-                    if let Err(e) = up(
-                        Some(Duration::from_secs(60)),
-                        None,
-                    ) {
-                        println!("{}: {}", "Error trying to bring formnet up".yellow(), e.to_string().red());
-                    }
-                }
-                Err(e) => {
-                    println!("{}: {}", "Error trying to daemonize formnet".yellow(), e.to_string().red());
-                }
-            }
-        }
-        JoinResponse::Error(e) => {
-            println!("{}: {}", "Error requesting invite".yellow(), e.to_string().red());
-            return Err(
-                Box::new(
-                    std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        "Error requesting formnet invite, unable to join formnet: {e}"
-                    )
-                )
-            )
-        }
-    }
-
+    user_join_formnet(address, provider, formnet_port).await?;
     Ok(())
 }

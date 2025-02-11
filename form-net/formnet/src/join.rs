@@ -172,7 +172,10 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
                             let config_file = ConfigFile {
                                 private_key: keypair.private.to_base64(),
                                 address: ip.clone(),
-                                listen_port: Some(51820),
+                                listen_port: match peer_type {
+                                    PeerType::Instance => Some(51820),
+                                    _ => Some(51820)
+                                },
                                 network_cidr_prefix: 8,
                                 bootstrap: Some(hex::encode(&serde_json::to_vec(&bootstrap_info)?)) 
                             };
@@ -219,7 +222,7 @@ pub async fn user_join_formnet(address: String, provider: String, formnet_port: 
             if let Err(e) = up(
                 Some(Duration::from_secs(60)),
                 None,
-            ) {
+            ).await {
                 println!("{}: {}", "Error trying to bring formnet up".yellow(), e.to_string().red());
             }
         }
@@ -247,7 +250,7 @@ pub async fn vm_join_formnet() -> Result<(), Box<dyn std::error::Error>> {
                 if let Err(e) = up(
                     Some(Duration::from_secs(60)),
                     None,
-                ) {
+                ).await {
                     log::error!("Error bringing formnet up: {e}");
                 }
             });
