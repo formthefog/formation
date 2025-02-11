@@ -76,7 +76,7 @@ EOF
 function validate_setup() {
     local range="$1"
     local test_ip=$(echo "$range" | sed 's|0/24|5|')
-    local bridge_ip=$(echo "range" | sed 's|0/24|1/24|')
+    local bridge_ip=$(echo "$range" | sed 's|0/24|1/24|')
     local gateway=$(echo "$bridge_ip" | sed 's|/24||')
 
     ip netns add testns
