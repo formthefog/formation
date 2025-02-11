@@ -55,10 +55,7 @@ function setup_nat() {
     local iface="$2"
 
     sysctl -w net.ipv4.ip_forward=1 >/dev/null
-
-    if ! iptables -C nat POSTROUTING -s "$range" -o "$iface" -j MASQUERADE 2>/dev/null; then
-        iptables -t nat -A POSTROUTING -s "$range" -o "$iface" -j MASQUERADE
-    fi
+    iptables -t nat -A POSTROUTING -s "$range" -o "$iface" -j MASQUERADE
 }
 
 function setup_dnsmasq() {
@@ -90,6 +87,7 @@ function validate_setup() {
     ip netns exec testns ip addr add "${test_ip}/24" dev veth-ns
     ip netns exec testns ip link set veth-ns up
     ip netns exec testns ip link set lo up
+    ip netns exec testns ip route add default via "$gateway" dev veth-ns
     ip netns exec testns ping -c 3 -W 5 8.8.8.8
     ip netns del testns
 }
