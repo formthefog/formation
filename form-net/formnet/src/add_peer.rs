@@ -2,7 +2,7 @@ use std::{net::{IpAddr, SocketAddr}, str::FromStr, time::{Duration, SystemTime}}
 use form_types::PeerType;
 use formnet_server::{db::CrdtMap, DatabaseCidr, DatabasePeer, ServerError};
 use ipnet::IpNet;
-use shared::{interface_config::{InterfaceConfig, InterfaceInfo, ServerInfo}, Cidr, Hostname, IpNetExt, NetworkOpts, Peer, PeerContents, Timestring, PERSISTENT_KEEPALIVE_INTERVAL_SECS};
+use shared::{interface_config::{InterfaceConfig, InterfaceInfo, ServerInfo}, Cidr, Endpoint, Hostname, IpNetExt, NetworkOpts, Peer, PeerContents, Timestring, PERSISTENT_KEEPALIVE_INTERVAL_SECS, REDEEM_TRANSITION_WAIT};
 use wireguard_control::{Device, DeviceUpdate, InterfaceName, KeyPair, PeerConfigBuilder};
 
 use crate::NETWORK_NAME;
@@ -11,7 +11,8 @@ pub async fn add_peer(
     network: &NetworkOpts,
     peer_type: &PeerType,
     peer_id: &str,
-    pubkey: String
+    pubkey: String,
+    endpoint: Option<SocketAddr>,
 ) -> Result<IpAddr, Box<dyn std::error::Error>> {
     log::warn!("ATTEMPTING TO ADD PEER {peer_id}...");
     log::info!("Getting config from file...");
@@ -29,7 +30,8 @@ pub async fn add_peer(
         &peers,
         &peer_type,
         peer_id,
-        pubkey
+        pubkey,
+        endpoint
     ).await?; 
 
     let ip = peer_request.ip;
@@ -41,6 +43,7 @@ pub async fn add_peer(
     if Device::get(&interface, network.backend).is_ok() {
         // Update the current WireGuard interface with the new peers.
         log::info!("Adding peer to device");
+        tokio::time::sleep(REDEEM_TRANSITION_WAIT).await;
         DeviceUpdate::new()
             .add_peer(PeerConfigBuilder::from(&*peer))
             .apply(&interface, network.backend)
@@ -59,6 +62,7 @@ pub async fn build_peer(
     peer_type: &PeerType,
     peer_id: &str,
     pubkey: String,
+    endpoint: Option<SocketAddr>
 ) -> Result<PeerContents<String>, Box<dyn std::error::Error>> {
     let cidr = DatabaseCidr::<String, CrdtMap>::get("formnet".to_string()).await?; 
     let mut available_ip = None;
@@ -69,6 +73,12 @@ pub async fn build_peer(
             break;
         }
     }
+
+    let endpoint: Option<Endpoint> = if let Some(endpoint) = endpoint {
+        Some(endpoint.into())
+    } else {
+        return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Endpoint is required, otherwise handshake cannot complete")));
+    };
 
     let available_ip = available_ip.expect("No IPs in this CIDR are avavilable");
 
@@ -89,7 +99,7 @@ pub async fn build_peer(
         ip: available_ip,
         cidr_id: cidr.id.clone(),
         public_key: pubkey,
-        endpoint: None,
+        endpoint,
         is_admin,
         is_disabled: false,
         is_redeemed: true,

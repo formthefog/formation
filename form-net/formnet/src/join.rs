@@ -1,4 +1,4 @@
-use std::{net::{IpAddr, SocketAddr}, path::PathBuf, str::FromStr, time::Duration};
+use std::{net::{IpAddr, SocketAddr, TcpListener}, path::PathBuf, str::FromStr, time::Duration};
 use colored::*;
 use daemonize::Daemonize;
 use form_types::{BootCompleteRequest, PeerType, VmmResponse};
@@ -7,7 +7,7 @@ use ipnet::IpNet;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use shared::{interface_config::InterfaceConfig, wg, NetworkOpts};
-use wireguard_control::{InterfaceName, KeyPair};
+use wireguard_control::{Device, InterfaceName, KeyPair};
 use crate::{api::{BootstrapInfo, JoinResponse as BootstrapResponse, Response}, up, CONFIG_DIR, NETWORK_NAME};
 
 
@@ -59,7 +59,6 @@ pub enum JoinResponse {
     },
     Error(String) 
 }
-
 
 pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type: PeerType) -> Result<IpAddr, Box<dyn std::error::Error>> {
     let client = Client::new();
@@ -126,9 +125,22 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
                 cidr_id: "formnet".to_string(),
                 pubkey: keypair.public.to_base64(),
                 internal_endpoint: None,
-                external_endpoint: Some(
-                    SocketAddr::new(publicip, 51820)
-                ),
+                external_endpoint: { 
+                    let mut port: u16 = 0;
+                    for p in 51821..64000 {
+                        if let Ok(listener) = TcpListener::bind(("0.0.0.0", port)) {
+                            drop(listener);
+                            port = p;
+                            break;
+                        }
+                    }
+                    if port == 0 {
+                        panic!("Unable to find a valid listening port in the formnet range");
+                    }
+                    Some(
+                        SocketAddr::new(publicip, port)
+                    )
+                },
             }
         },
         PeerType::Instance => {
@@ -138,9 +150,22 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
                 cidr_id: "formnet".to_string(),
                 pubkey: keypair.public.to_base64(),
                 internal_endpoint: None,
-                external_endpoint: Some(
-                    SocketAddr::new(publicip, 52820)
-                ),
+                external_endpoint: {
+                    let mut port: u16 = 0;
+                    for p in 51821..64000 {
+                        if let Ok(listener) = TcpListener::bind(("0.0.0.0", port)) {
+                            drop(listener);
+                            port = p;
+                            break;
+                        }
+                    }
+                    if port == 0 {
+                        panic!("Unable to find a valid listening port in the formnet range");
+                    }
+                    Some(
+                        SocketAddr::new(publicip, port)
+                    )
+                },
             }
         }
     };
@@ -156,11 +181,12 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
         .await {
             Ok(response) => match response.json::<Response>().await {
                 Ok(Response::Join(BootstrapResponse::Success(ip))) => {
+                    log::info!("Bringing Wireguard interface up...");
                     match wg::up(
                         &InterfaceName::from_str("formnet")?,
                         &keypair.private.to_base64(), 
                         IpNet::new(ip.clone(), 8)?,
-                        None,
+                        Some(request.external_endpoint.unwrap().port()),
                         Some((
                             &bootstrap_info.pubkey,
                             bootstrap_info.internal_endpoint.unwrap(),
@@ -173,7 +199,7 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
                                 private_key: keypair.private.to_base64(),
                                 address: ip.clone(),
                                 listen_port: match peer_type {
-                                    PeerType::Instance => Some(51820),
+                                    PeerType::Instance => Some(52820),
                                     _ => Some(51820)
                                 },
                                 network_cidr_prefix: 8,
@@ -183,6 +209,17 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
                             config_file.write_to_path(
                                 PathBuf::from(CONFIG_DIR).join(NETWORK_NAME).with_extension("conf")
                             )?;
+                            log::info!("Wireguard interface is up, saved config file");
+                            #[cfg(target_os = "linux")]
+                            if let Ok(info) = Device::get(&InterfaceName::from_str("formnet").unwrap(), wireguard_control::Backend::Kernel) {
+                                log::info!("Current device info: {info:?}");
+                                for peer in info.peers {
+                                    log::info!("Acquired device info for peer {peer:?}");
+                                    if let Some(endpoint) = peer.config.endpoint {
+                                        log::info!("Acquired endpoint {endpoint:?} for peer..."); 
+                                    }
+                                }
+                            }
                             return Ok(ip.clone());
                         }
                         Err(e) => {

@@ -104,7 +104,6 @@ pub async fn fetch(
                         update_hosts_file(&interface, path, &peers)?;
                     }
 
-                    println!();
                     log::info!("updated interface {}\n", interface.as_str_lossy());
                 } else {
                     log::info!("{}", "peers are already up to date");
