@@ -18,18 +18,25 @@ pub async fn fetch(
     let network = NetworkOpts::default();
     let nat_opts = NatOpts::default();
     let config = ConfigFile::from_file(config_dir.join(NETWORK_NAME).with_extension("conf"))?; 
-    #[cfg(target_os = "linux")]
-    let interface_up = match Device::list(wireguard_control::Backend::Kernel) {
-        Ok(interfaces) => interfaces.iter().any(|name| *name == interface),
-        _ => false,
-    };
-
-    log::info!("Interface up?: {interface_up}");
-
-    #[cfg(not(target_os = "linux"))]
-    let interface_up = match Device::list(wireguard_control::Backend::Userspace) {
-        Ok(interfaces) => interfaces.iter().any(|name| *name == interface),
-        _ => false,
+    let interface_up = {
+        #[cfg(target_os = "linux")]
+        {
+            let up = match Device::list(wireguard_control::Backend::Kernel) {
+                Ok(interfaces) => interfaces.iter().any(|name| *name == interface),
+                _ => false,
+            };
+            log::info!("Interface up?: {up}");
+            up
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let up = match Device::list(wireguard_control::Backend::Userspace) {
+                Ok(interfaces) => interfaces.iter().any(|name| *name == interface),
+                _ => false,
+            };
+            log::info!("Interface up?: {up}");
+            up
+        }
     };
 
     let (pubkey, internal, external) = {
@@ -191,4 +198,3 @@ fn update_hosts_file(
 
     Ok(())
 }
-
