@@ -56,6 +56,7 @@ pub async fn fetch(
         }
     };
 
+    let host_port = external.port();
 
     if !interface_up {
         log::info!(
@@ -81,7 +82,7 @@ pub async fn fetch(
         interface.as_str_lossy()
     );
 
-    let resp = Client::new().get(format!("http://{internal}:51820/fetch")).send().await;
+    let resp = Client::new().get(format!("http://{internal}:{host_port}/fetch")).send().await;
     match resp {
         Ok(r) => match r.json::<Response>().await {
             Ok(Response::Fetch(peers)) => {
@@ -123,7 +124,7 @@ pub async fn fetch(
                 for candidate in &candidates {
                     log::debug!("  candidate: {}", candidate);
                 }
-                match Client::new().post(format!("http://{internal}/{}/candidates", config.address))
+                match Client::new().post(format!("http://{internal}:{host_port}/{}/candidates", config.address))
                     .json(&candidates)
                     .send().await {
                         Ok(_) => log::info!("Successfully sent candidates"),

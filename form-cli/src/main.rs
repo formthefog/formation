@@ -108,6 +108,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!("Response: {resp:?}");
                     }
                 }
+                PackCommand::Status(status_command) => {
+                    let (config, _) = load_config_and_keystore(&parser).await?;
+                    let provider = config.hosts[0].clone();
+                    let port = config.pack_manager_port;
+                    status_command.handle_status(provider, port).await?;
+                }
             }
         }
         FormCommand::Kit(ref mut kit_command) => {

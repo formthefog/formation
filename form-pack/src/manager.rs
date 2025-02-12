@@ -370,30 +370,13 @@ async fn build_routes(manager: Arc<Mutex<FormPackManager>>) -> Router {
     Router::new()
         .route("/ping", post(handle_ping))
         .route("/build", post(handle_pack))
-        .route("/:id/:name/get_status", get(get_status))
+        .route("/:build_id/get_status", get(get_status))
         .with_state(manager)
 }
 
 async fn get_status(
-    Path(id): Path<String>,
-    Path(name): Path<String>,
+    Path(build_id): Path<String>,
 ) -> Json<PackResponse> {
-    let instance_id = {
-        let mut hasher = Sha3::v256();
-        let mut hash = [0u8; 32];
-        let decoded_address = match hex::decode(id.clone()) {
-            Ok(bytes) => bytes,
-            Err(_) => return Json(PackResponse::Failure)
-        };
-
-        let address = Address::from_slice(&decoded_address);
-
-        hasher.update(address.as_ref());
-        hasher.update(name.as_bytes());
-        hasher.finalize(&mut hash);
-        hex::encode(hash)
-    };
-
     let messages: Vec<PackBuildStatus> = if let Ok(messages) = FormPackManager::read_from_queue(None, None).await {
         let msgs = messages.iter().filter_map(|bytes| {
             let subtopic = bytes[0];
@@ -406,17 +389,17 @@ async fn get_status(
                     };
 
                     match msg {
-                        PackBuildStatus::Started(ref id) => if id == &instance_id {
+                        PackBuildStatus::Started(ref id) => if *id == build_id {
                             Some(msg)
                         } else {
                             None
                         },
-                        PackBuildStatus::Failed { ref build_id, .. } => if build_id == &instance_id {
+                        PackBuildStatus::Failed { ref build_id, .. } => if build_id == build_id {
                             Some(msg)
                         } else {
                             None
                         },
-                        PackBuildStatus::Completed(ref instance) => if instance.instance_id() == instance_id {
+                        PackBuildStatus::Completed(ref instance) => if instance.build_id == build_id {
                             Some(msg)
                         } else {
                             None
