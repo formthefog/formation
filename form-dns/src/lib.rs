@@ -41,8 +41,7 @@ pub fn resolvectl_dns(ips: Vec<Ipv4Addr>) -> Result<(), Box<dyn std::error::Erro
 }
 
 pub fn resolvectl_revert() -> Result<(), Box<dyn std::error::Error>> {
-    let output = std::process::Command::new("sudo")
-        .arg("resolvectl")
+    let output = std::process::Command::new("resolvectl")
         .arg("revert")
         .arg("formnet")
         .output()?;
@@ -59,8 +58,7 @@ pub fn resolvectl_revert() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 pub fn resolvectl_flush_cache() -> Result<(), Box<dyn std::error::Error>> {
-    let output = std::process::Command::new("sudo")
-        .arg("resolvectl")
+    let output = std::process::Command::new("resolvectl")
         .arg("--flush-caches")
         .output()?;
 

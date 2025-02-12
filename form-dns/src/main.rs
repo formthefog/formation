@@ -27,11 +27,17 @@ async fn main() -> anyhow::Result<()> {
     log::info!("Set up shared DNS store");
 
     let inner_store = store.clone();
+    log::info!("Cloned DNS store for TLS Manager store");
     let tls_manager = TlsManager::new(vec![("hello.fog".to_string(), false)]).await.map_err(|e| {
         Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
     })?;
+
+    log::info!("Built TlsManager...");
+    log::info!("Building ProxyConfig...");
     let proxy_config = ProxyConfig::default();
+    log::info!("Building IntegratedProxy...");
     let mut reverse_proxy = IntegratedProxy::new(store.clone(), tls_manager, proxy_config).await.map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    log::info!("Launching IntegratedProxy...");
     let reverse_proxy_handle = tokio::spawn(async move {
         if let Err(e) = reverse_proxy.bind().await {
             eprintln!("Error attempting to bind http and/or https listener: {e}");
@@ -41,11 +47,13 @@ async fn main() -> anyhow::Result<()> {
         }
     });
     
+    log::info!("Launching DNS Store API Server...");
     let dns_store_api_handle = tokio::spawn(async move {
         let _ = serve_api(inner_store).await;
     });
 
     {
+        log::info!("Adding DNS server to DNS Store...");
         let mut guard = store.write().await;
         guard.add_server("10.0.0.1".parse()?).map_err(|e| anyhow::anyhow!(e.to_string()))?;
     }

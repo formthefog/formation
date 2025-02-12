@@ -10,7 +10,7 @@ RUN apt-get install -y protobuf-compiler libprotobuf-dev build-essential \
     libnetfilter-queue-dev libnl-3-dev libnl-route-3-dev \
     zlib1g-dev libbpf-dev liburing-dev libssl-dev \
     iproute2 bridge-utils ssh socat libguestfs-tools \
-    qemu-utils 
+    qemu-utils libnss3-tools mkcert 
 
 RUN mkdir -p /usr/local/bin
 RUN mkdir -p /var/lib/formation/formnet
@@ -47,7 +47,7 @@ COPY ./target/release/form-p2p /usr/local/bin/form-p2p
 COPY ./scripts/run-form-state.sh /usr/local/bin/run-form-state.sh
 
 # Copy the form-dns run script into /usr/local/bin
-COPY ./scripts/run-form-state.sh /usr/local/bin/run-form-dns.sh
+COPY ./scripts/run-form-dns.sh /usr/local/bin/run-form-dns.sh
 
 # Copy the VMM service run script to /usr/local/bin
 COPY ./scripts/run-vmm-service.sh /usr/local/bin/run-vmm-service.sh

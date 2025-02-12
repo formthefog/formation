@@ -56,48 +56,64 @@ impl Debug for TlsManager {
 
 impl TlsManager {
     pub async fn new(domains: Vec<(String, bool)>) -> Result<Self, Box<dyn std::error::Error>> {
+        log::info!("Building TLS Manager");
         let mut states: BTreeMap<String, Arc<TokioMutex<AcmeState<std::io::Error>>>> = BTreeMap::new(); 
         let mut acme_resolvers: BTreeMap<String, Arc<ResolvesServerCertAcme>> = BTreeMap::new();
         let vanity_resolvers: Arc<FormSniResolver> = Arc::new(FormSniResolver::new());
         let mut domains_emails: BTreeMap<String, String> = BTreeMap::new();
+        log::info!("Built states, acme resolvers and vanity resolvers...");
         for (domain, prod) in domains {
+            log::info!("Adding provided domain {domain}...");
             if !domain.ends_with(".fog") {
+                log::info!("Domain is not '.fog'");
                 let split: Vec<String> = domain.clone().split(".").into_iter().map(|s| s.to_string()).collect();
+                log::info!("Splitting domain...");
                 let email: String = format!("mailto:admin@{}", split[(split.len() - 2)..].join(".")); 
+                log::info!("Constructing email for acme server...");
 
                 domains_emails.insert(domain.clone(), email.clone());
+                log::info!("Inserting emails into domains_emails...");
 
+                log::info!("Building ACME config");
                 let config = AcmeConfig::new(vec![domain.clone()])
                     .contact_push(email)
                     .cache(DirCache::new("./rustls_acme_cache"))
                     .directory_lets_encrypt(prod);
 
+                log::info!("Built acme config");
                 let state = config.state();
                 let resolver = state.resolver();
                 states.insert(domain.clone(), Arc::new(TokioMutex::new(state)));
                 acme_resolvers.insert(domain.clone(), resolver.clone());
+                log::info!("Added state and resolver to TLS manager");
             } else {
+                log::info!("Domain is '.fog', adding to vanity resolver domain map");
                 vanity_resolvers.domain_map.lock().unwrap().insert(domain.clone(), mkcert(&domain.clone())?);
             }
         }
 
+        log::info!("Building Resolver Manager for both acme and vanity resolvers...");
         let resolver_manager = Arc::new(ResolverManager {
             acme_resolvers: Mutex::new(acme_resolvers),
             vanity_resolvers,
         });
 
+        log::info!("Building ServerConfig...");
         let config = ServerConfig::builder()
             .with_no_client_auth()
             .with_cert_resolver(resolver_manager.clone());
 
+        log::info!("Building AcmeAcceptor from server config...");
         let acceptor = Arc::new(AcmeAcceptor::from_config(config.clone()));
 
+        log::info!("Starting state event handler...");
         let state_handles = if let Ok(handles) = Self::start_state_event_handler(states).await {
             handles
         } else {
             vec![]
         };
 
+        log::info!("Returning TlsManager...");
         Ok(Self {
             state_handles,
             resolvers: resolver_manager,

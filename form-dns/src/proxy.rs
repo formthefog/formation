@@ -33,6 +33,7 @@ impl IntegratedProxy {
         tls_manager: TlsManager,
         config: ProxyConfig,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        log::info!("Building ReverseProxy from ProxyConfig");
         let reverse_proxy = Arc::new(ReverseProxy::new(config));
         Ok(Self {
             store,

@@ -140,7 +140,9 @@ pub fn load_certs(path: impl AsRef<Path>) -> std::io::Result<Vec<CertificateDer<
 pub fn mkcert(domain: &str) -> std::io::Result<FormDomainCert> {
     let home = std::env::var("HOME").unwrap_or(".".to_string());
     let cert_output = PathBuf::from(home).join(CERT_OUTPUT_DIR);
+    log::info!("Attempting to create cert output dir: {}", cert_output.display());
     std::fs::create_dir_all(&cert_output)?;
+    log::info!("created cert output dir: {}", cert_output.display());
     let output = std::process::Command::new("mkcert")
         .arg("-cert-file")
         .arg(cert_output.join(domain).with_extension("pem"))
