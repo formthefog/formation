@@ -245,6 +245,8 @@ impl FormPackManager {
             node_id,
             build_id: hex::encode(build_id),
             instance_owner: hex::encode(signer_address),
+            dns_record: None,
+            formnet_ip: None,
             created_at: 0,
             updated_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
             last_snapshot: 0,

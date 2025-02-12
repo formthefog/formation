@@ -572,6 +572,8 @@ impl VmManager {
             instance_id, 
             node_id: self.derive_address().await?,
             build_id: config.name.clone(),
+            dns_record: None,
+            formnet_ip: None,
             instance_owner: config.owner.clone(),
             created_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
             updated_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
@@ -793,7 +795,7 @@ Formpack for {name} doesn't exist:
                     ))
                 }
             }
-            VmmEvent::BootComplete { id, formnet_ip, .. } => {
+            VmmEvent::BootComplete { id, formnet_ip, build_id, .. } => {
                 //TODO: Write this information into State so that 
                 //users/developers can "get" the IP address
                 log::info!("Received boot complete event, getting self");
@@ -803,7 +805,8 @@ Formpack for {name} doesn't exist:
                 let mut instance = Instance::get(id).await.ok_or(
                     Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Instance doesn't exist")))?;
                 log::info!("Adding cluster member to instance...");
-                instance.cluster.insert(ClusterMember {
+
+                let cluster_member = ClusterMember {
                     instance_id: instance.instance_id.clone(),
                     node_id: self.derive_address().await?,
                     node_public_ip: publicip::get_any(Preference::Ipv4).ok_or(
@@ -814,10 +817,20 @@ Formpack for {name} doesn't exist:
                     status: "Started".to_string(),
                     last_heartbeat: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
                     heartbeats_skipped: 0,
-                });
+                };
+
+                log::info!("Built AddClusterMember InstanceRequest");
+                let request = InstanceRequest::AddClusterMember { build_id: build_id.to_string(), cluster_member }; 
+                log::info!("Writing AddClusterMember InstanceRequest to queue...");
+                VmmApi::write_to_queue(request, 4, "state").await?;
+                
+                log::info!("Adding formnet_ip to instance");
+                instance.formnet_ip = Some(formnet_ip.parse()?);
 
                 log::info!("Updating instance...");
                 let request = InstanceRequest::Update(instance);
+
+                log::info!("Writing Update request with formnet IP to queue...");
                 VmmApi::write_to_queue(request, 4, "state").await?; 
                 log::info!("Boot Complete for {id}: formnet id: {formnet_ip}");
             }

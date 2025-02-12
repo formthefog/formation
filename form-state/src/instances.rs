@@ -1,5 +1,6 @@
 use std::{collections::{btree_map::{Iter, IterMut}, BTreeMap}, net::IpAddr};
 use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, CmRDT, Map, bft_reg::Update};
+use form_dns::store::FormDnsRecord;
 use form_types::state::{Response, Success};
 use k256::ecdsa::SigningKey;
 use reqwest::Client;
@@ -25,6 +26,8 @@ pub struct Instance {
     pub node_id: String,
     pub build_id: String,
     pub instance_owner: String,
+    pub formnet_ip: Option<IpAddr>,
+    pub dns_record: Option<FormDnsRecord>,
     pub created_at: i64,
     pub updated_at: i64,
     pub last_snapshot: i64,
@@ -675,5 +678,44 @@ impl InstanceState {
         }
 
         return None
+    }
+
+    pub fn get_instances_by_build_id(&self, build_id: String) -> Vec<Instance> {
+        let mut instances = vec![];
+        for ctx in self.map.iter() {
+            let (_, reg) = ctx.val;
+            if let Some(val) = reg.val() {
+                let instance = val.value();
+                if instance.build_id == build_id {
+                    instances.push(instance)
+                }
+            }
+        }
+
+        instances
+    }
+
+    pub fn get_instance_by_ip(&self, ip: IpAddr) -> Result<Instance, Box<dyn std::error::Error>> {
+        let mut instance_opt: Option<Instance> = None; 
+        for ctx in self.map.iter() {
+            let (_, reg) = ctx.val;
+            if let Some(val) = reg.val() {
+                let instance = val.value();
+                if let Some(formnet_ip) = instance.formnet_ip {
+                    if ip == formnet_ip { 
+                        instance_opt = Some(instance);
+                    }
+                }
+            }
+        }
+
+        Ok(instance_opt.ok_or(
+            Box::new(
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Unable to find instance with ip {ip}")
+                )
+            )
+        )?)
     }
 }
