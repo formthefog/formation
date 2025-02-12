@@ -2,6 +2,7 @@ use std::{collections::{HashMap, HashSet}, sync::Arc, time::{Duration, SystemTim
 use axum::{extract::{State, Path}, routing::{get, post}, Json, Router};
 use form_dns::{api::{DomainRequest, DomainResponse}, store::FormDnsRecord};
 use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
+use rand::{seq::SliceRandom, thread_rng};
 use reqwest::Client;
 use serde_json::Value;
 use shared::{Association, AssociationContents, Cidr, CidrContents, Peer, PeerContents};
@@ -666,6 +667,7 @@ impl DataStore {
     pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         Router::new()
             .route("/ping", get(pong))
+            .route("/bootstrap/joined_formnet", post(complete_bootstrap))
             .route("/bootstrap/full_state", get(full_state))
             .route("/bootstrap/network_state", get(network_state))
             .route("/bootstrap/peer_state", get(peer_state))
@@ -747,6 +749,66 @@ impl DataStore {
 
         Ok(())
     }
+}
+
+pub async fn complete_bootstrap(State(state): State<Arc<Mutex<DataStore>>>) {
+    let mut guard = state.lock().await;
+    let operators = guard.get_all_active_admin();
+    drop(guard);
+
+    let size = operators.len();
+
+    if size == 0 {
+        return;
+    }
+
+    let sample_size = if size < 10 {
+        size
+    } else {
+        ((size as f64)* 0.33).ceil() as usize
+    };
+
+    let mut keys: Vec<&String> = operators.keys().collect();
+    let mut rng = thread_rng();
+    keys.shuffle(&mut rng);
+
+    let mut sample = HashMap::new();
+
+    for key in keys.into_iter().take(sample_size) {
+        if let Some(value) = operators.get(key) {
+            sample.insert(key.clone(), value.clone());
+        }
+    }
+
+    let client = Client::new();
+
+    tokio::spawn(async move {
+        let mut sample_iter = sample.iter();
+        while let Some((id, peer)) = sample_iter.next() {
+            match client.get(
+                format!("http://{}:3004/bootstrap/full_state", peer.ip())
+            ).send().await {
+                Ok(r) => match r.json::<MergeableState>().await {
+                    Ok(mergeable_state) => {
+                        let mut guard = state.lock().await; 
+                        guard.network_state.peers.merge(mergeable_state.peers);
+                        guard.network_state.cidrs.merge(mergeable_state.cidrs);
+                        guard.network_state.associations.merge(mergeable_state.assocs);
+                        guard.network_state.dns_state.zones.merge(mergeable_state.dns);
+                        guard.instance_state.map.merge(mergeable_state.instances);
+                        guard.node_state.map.merge(mergeable_state.nodes);
+                        drop(guard);
+                    }
+                    Err(e) => {
+                        log::error!("Error attempting to deserialize mergeable state from {id} at {}: {e}", peer.ip());
+                    }
+                }
+                Err(e) => {
+                    log::error!("Error attempting to get mergeable state from {id} at {}: {e}", peer.ip());
+                }
+            }
+        }
+    });
 }
 
 pub async fn process_message(message: Vec<u8>, state: Arc<Mutex<DataStore>>) -> Result<(), Box<dyn std::error::Error>> {

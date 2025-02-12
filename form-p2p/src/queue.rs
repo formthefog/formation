@@ -165,7 +165,8 @@ impl FormMQ<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::{primitives::Address, signers::k256::ecdsa::SigningKey};
+    use alloy_primitives::Address; 
+    use k256::ecdsa::SigningKey;
     use rand::thread_rng;
     use tiny_keccak::{Hasher, Sha3};
 

@@ -1,6 +1,9 @@
 use std::sync::Arc;
 use axum::{body::Body, extract::{Path, State}, routing::{get, post}, Json, Router};
 use crdts::{bft_topic_queue::TopicQueue, merkle_reg::Sha3Hash};
+use form_types::state::{Response as StateResponse, Success};
+use reqwest::Client;
+use shared::Peer;
 use tiny_keccak::{Hasher, Sha3};
 use tokio::{net::TcpListener, sync::RwLock};
 use axum::{
@@ -8,7 +11,39 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use bytes::Bytes;
-use crate::queue::{FormMQ, QueueRequest, QueueResponse};
+use futures::StreamExt;
+use crate::queue::{FormMQ, QueueRequest, QueueResponse, QUEUE_PORT};
+
+pub async fn bootstrap_topic_queue(dial: String, queue: Arc<RwLock<FormMQ<Vec<u8>>>>) -> Result<(), Box<dyn std::error::Error>> {
+    let client = Client::new();
+    let url = format!("http://{dial}:{QUEUE_PORT}/queue/get");
+    let resp = client.get(url).send().await?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Request failed with status:{}", resp.status()).into());
+    }
+
+    let mut bytes = vec![];
+    let mut stream = resp.bytes_stream();
+
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(b) => bytes.extend_from_slice(&b),
+            Err(e) => eprintln!("Error receiving chunk: {}", e)
+        }
+    }
+
+    if !bytes.is_empty() {
+        let received = serde_json::from_slice::<TopicQueue<Vec<u8>>>(&bytes)?;
+        let mut guard = queue.write().await;
+        guard.merge(received);
+        drop(guard);
+        return Ok(())
+    }
+
+    return Err(format!("Bytes were empty after stream").into());
+
+}
 
 pub fn build_routes(state: Arc<RwLock<FormMQ<Vec<u8>>>>) -> Router {
     Router::new()
@@ -20,6 +55,7 @@ pub fn build_routes(state: Arc<RwLock<FormMQ<Vec<u8>>>>) -> Router {
         .route("/queue/:topic/:idx/get_after", get(get_topic_after))
         .route("/queue/:topic/:idx/:n/get_n_after", get(get_topic_n_after))
         .route("/queue/get", get(get_all))
+        .route("/queue/joined_formnet", post(complete_bootstrap))
         .with_state(state)
 }
 
@@ -35,6 +71,38 @@ pub async fn serve(state: Arc<RwLock<FormMQ<Vec<u8>>>>, bind: u16) -> Result<(),
 pub async fn health_check(
 ) -> String {
     "OK".to_string()
+}
+
+pub async fn complete_bootstrap(
+    State(state): State<Arc<RwLock<FormMQ<Vec<u8>>>>>
+) {
+    let client = Client::new(); 
+    match client.get("http://127.0.0.1:3004/user/list_admin")
+        .send().await {
+            Ok(resp) => match resp.json::<StateResponse<Peer<String>>>().await {
+                Ok(r) => {
+                    match r {
+                        StateResponse::Success(Success::List(peers)) => {
+                            let mut operator_iter = peers.iter();
+                            while let Some(operator) = operator_iter.next() {
+                                if let Ok(_) = bootstrap_topic_queue(operator.ip.to_string(), state.clone()).await {
+                                    return;
+                                }
+                            }
+                        }
+                        _ => {
+                            log::error!("Received response {r:?}. Invalid response for /user/list_admin response");
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!("Error trying to deserialize response from localhost:3004/user/list_admin: {e}");
+                }
+            }
+            Err(e) => {
+                log::error!("Error attempting to acquire peers from datastore {e}");
+            }
+        }
 }
 
 pub async fn write_op(

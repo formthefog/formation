@@ -5,6 +5,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use form_types::PeerType;
 use parking_lot::RwLock;
+use reqwest::Client;
 use std::time::Duration;
 use std::{net::SocketAddr, ops::Deref};
 use formnet_server::{ConfigFile, Endpoints, VERSION};
@@ -119,6 +120,20 @@ pub async fn serve(
         internal_endpoint: Some(config.address),
         external_endpoint: Some(SocketAddr::new(publicip, 51820))
     };
+
+    tokio::spawn(async move {
+        let _ = Client::new()
+            .post("http://127.0.0.1:53333/queue/joined_formnet")
+            .send()
+            .await;
+    });
+
+    tokio::spawn(async move {
+        let _ = Client::new()
+            .post("http://127.0.0.1:3004/bootstrap/joined_formnet")
+            .send()
+            .await;
+    });
 
     server(my_info).await?;
 
