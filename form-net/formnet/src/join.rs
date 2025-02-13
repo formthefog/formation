@@ -266,12 +266,14 @@ pub async fn user_join_formnet(address: String, provider: String) -> Result<(), 
 
     match daemon.start() {
         Ok(_) => {
-            if let Err(e) = up(
-                Some(Duration::from_secs(60)),
-                None,
-            ).await {
-                println!("{}: {}", "Error trying to bring formnet up".yellow(), e.to_string().red());
-            }
+            tokio::spawn(async move {
+                if let Err(e) = up(
+                    Some(Duration::from_secs(60)),
+                    None,
+                ).await {
+                    println!("{}: {}", "Error trying to bring formnet up".yellow(), e.to_string().red());
+                }
+            });
         }
         Err(e) => {
             println!("{}: {}", "Error trying to daemonize formnet".yellow(), e.to_string().red());
