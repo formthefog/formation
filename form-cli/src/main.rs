@@ -165,12 +165,6 @@ pub async fn load_config_and_keystore(parser: &Form) -> Result<(Config, Keystore
     println!("loading keystore");
     let keystore = load_keystore(&parser, &config).await?;
 
-    /*
-    if config.join_formnet && !formnet_up() {
-        join_formnet(keystore.address.clone(), host).await?;
-    }
-    */
-
     Ok((config, keystore))
 }
 
