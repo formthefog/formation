@@ -252,39 +252,6 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
 
 pub async fn user_join_formnet(address: String, provider: String) -> Result<(), Box<dyn std::error::Error>> {
     request_to_join(vec![provider], address, PeerType::User).await?;
-
-    #[cfg(target_os = "linux")]
-    let daemon = Daemonize::new()
-        .pid_file("/run/formnet.pid")
-        .chown_pid_file(true)
-        .working_directory("/")
-        .umask(0o027)
-        .stdout(std::fs::File::create("/var/log/formnet.log").unwrap())
-        .stderr(std::fs::File::create("/var/log/formnet.log").unwrap());
-
-    #[cfg(target_os = "linux")]
-    match daemon.start() {
-        Ok(_) => {
-            if let Err(e) = up(
-                Some(Duration::from_secs(60)),
-                None,
-            ).await {
-                println!("{}: {}", "Error trying to bring formnet up".yellow(), e.to_string().red());
-            }
-        }
-        Err(e) => {
-            println!("{}: {}", "Error trying to daemonize formnet".yellow(), e.to_string().red());
-        }
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    if let Err(e) = up(
-        Some(Duration::from_secs(60)),
-        None,
-    ).await {
-        println!("{}: {}", "Error trying to bring formnet up".yellow(), e.to_string().red());
-    }
-
     Ok(())
 }
 

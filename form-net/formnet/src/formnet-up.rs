@@ -35,10 +35,14 @@ fn main() {
     }
 
     #[cfg(not(target_os = "linux"))]
-    if let Err(e) = up(
-        Some(Duration::from_secs(60)),
-        None,
-    ).await {
-        println!("{}: {}", "Error trying to bring formnet up".yellow(), e.to_string().red());
-    }
+    let rt = Runtime::new().expect("Unable to create tokio runtime");
+    #[cfg(not(target_os = "linux"))]
+    rt.block_on(async {
+        if let Err(e) = up(
+            Some(Duration::from_secs(60)),
+            None,
+        ).await {
+            println!("{}: {}", "Error trying to bring formnet up".yellow(), e.to_string().red());
+        }
+    });
 }
