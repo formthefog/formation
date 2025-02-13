@@ -1,40 +1,77 @@
-# Formation 
+# Formation
 
-#### A public verfiable and self-replicating protocol for trustless confidential virtual private servers (VPS), coordinating as a Fog Compute network to power the Age of Autonomy.
+A public verifiable and self-replicating protocol for trustless, confidential virtual private servers (VPS) coordinating as a Fog Compute network to power the Age of Autonomy.
 
-<hr>
+---
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Special Thanks](#special-thanks)
+- [Contributing](#contributing)
+- [Pre-release Notice](#pre-release-notice)
+- [Prerequisites & Setup](#prerequisites--setup)
+  - [System Requirements](#system-requirements)
+  - [System Dependencies](#system-dependencies)
+  - [Rust Toolchain & Docker](#rust-toolchain--docker)
+- [Network Configuration](#network-configuration)
+  - [Configuring Your Local Network](#configuring-your-local-network)
+  - [Setting Up a Bridge Interface](#setting-up-a-bridge-interface)
+- [Running a Node](#running-a-node)
+  - [Single Node Local Test (Docker)](#single-node-local-test-docker)
+  - [Multinode Local Test (Docker)](#multinode-local-test-docker)
+- [Joining the Official Developer Network](#joining-the-official-developer-network)
+- [Initializing a Developer Kit](#initializing-a-developer-kit)
+- [Deploying an App](#deploying-an-app)
+  - [Building a Formfile](#building-a-formfile)
+  - [Building and Shipping a Formpack](#building-and-shipping-a-formpack)
+- [Accessing Your Instance](#accessing-your-instance)
+- [Committing Changes](#committing-changes)
+- [Glossary & Terminology](#glossary--terminology)
+- [Troubleshooting & FAQ](#troubleshooting--faq)
+- [Roadmap](#roadmap)
+
+---
+
+## Overview
+
+Formation enables developers to deploy and manage confidential VPS instances on an untrusted network of nodes. This README serves as a quick start guide—especially for users new to terminal commands or networking—by outlining essential steps, configurations, and troubleshooting tips.
+
+---
 
 ## Special Thanks
 
->"If I have seen further, it is by standing on the shoulders of giants" - Sir Isaac Newton 
+> "If I have seen further, it is by standing on the shoulders of giants." – Sir Isaac Newton
 
-This project leans heavily on the great work from [Rust-VMM](https://github.com/rust-vmm), [Cloud-Hypervisor](https://github.com/cloud-hypervisor/cloud-hypervisor), [Innernet](https://github.com/tonarino/innernet) and [DStack-VM](https://github.com/amiller/dstack-vm) without which the timeline for this project would have extended many more years.
+This project builds upon the impressive work of [Rust-VMM](https://github.com/rust-vmm), [Cloud-Hypervisor](https://github.com/cloud-hypervisor/cloud-hypervisor), [Innernet](https://github.com/tonarino/innernet), and [DStack-VM](https://github.com/amiller/dstack-vm).
 
-## Contributing to Formation
+---
 
-As an Open Source project, we not only encourage, but rely on you to contribute to the project. Before you begin contributing please be sure to read, in full, the CONTRIBUTING file in this repository.
+## Contributing
 
-### WARNING! 
-<hr>
+As an open source project, we welcome your contributions. Before submitting changes, please review the [CONTRIBUTING](./CONTRIBUTING.md) file in its entirety.
 
-<p> This project is still very early in its development. While it is inching closer to being production ready, there are no guarantees made. Please report issues here in the primary repository.
-</p>
+---
+## Pre-release Notice
 
-## Running a Node
+> **WARNING:**  
+> Formation is in early development. Although it is nearing production readiness, no guarantees are provided. Please report any issues in this repository.
 
-## Prerequisites
+---
 
-Before proceeding, ensure your system meets the following requirements:
+## Prerequisites & Setup
 
-1. **Operating System**: Ubuntu 22.04
+### System Requirements
 
-2. **System Resources**: Minimum 32 physical cores, 64 GB of RAM, and at least 8TB of storage for full devnet participation.
+- **Operating System:** Ubuntu 22.04
+- **Resources:** Minimum of 32 physical cores, 64 GB of RAM, and at least 8TB of storage (full devnet participation).
 
-3. **Dependencies**: The following system dependencies must be installed:
+### System Dependencies
 
-   ```bash
-   sudo apt update
-   sudo apt install -y build-essential bridge-utils kmod pkg-config libssl-dev libudev-dev protobuf-compiler libsqlite3-dev
+Install required packages:
+```bash
+sudo apt update
+sudo apt install -y build-essential bridge-utils kmod pkg-config libssl-dev libudev-dev protobuf-compiler libsqlite3-dev
    ```
 
    - `build-essential`: Required for compiling code.
@@ -46,77 +83,75 @@ Before proceeding, ensure your system meets the following requirements:
    - `protobuf-compiler`: Protocol Buffers compiler.
    - `libsqlite3-dev`: Required for SQLite support.
 
-4. **Verify Rust Toolchain**: Install and update Rust using:
+### Rust Toolchain & Docker
 
-   ```bash
-   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-   rustup update
-   ```
+Ensure Rust is installed and updated:
+```bash
+# install
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-5. **Ensure Proper Linker**: Verify that `cc` is installed:
+# source env
+. "$HOME/.cargo/env"
 
-   ```bash
-   which cc
-   ```
+# update
+rustup update
+```
+Verify `cc` is installed:
+```bash
+which cc
+```
+If missing, install via `build-essential`.
 
-   If not found, install it via `build-essential`.
+Install Docker and ensure it is running. Refer to [Docker's Ubuntu installation guide.](https://docs.docker.com/engine/install/ubuntu/).
 
-6. Install Docker: Ensure Docker is installed and running. If not, install Docker using this [guide](https://docs.docker.com/engine/install/ubuntu/).
+---
+## Network Configuration
+### Configuring Your Local Network
+Before launching Formation, ensure that the necessary ports are open/forwarded:
 
-Currently Formation is only known to work out of the box on Ubuntu 22.04, and the documentation provided herein assumes you are running Ubuntu 22.04. 
+**3001:** `formnet` join requests API
 
-<hr>
+**3002:** `form-vmm` API
 
-#### Setting up local network configuration
+**3003:** `form-pack-manager` API
 
-Before launching Formation, you will want to ensure that your network and machine's network interface configuration is set up properly to run the protocol.
+**51820:** `formnet` interface
 
-First and foremost, you will want to have the ports related to the various systems service APIs exposes/forwarded to your machine. 
+Search for router/ISP-specific instructions on port forwarding if needed.
 
-Different routers and ISPs handle port forwarding differently, so we suggest you search the web for router and ISP specific instructions.
+### Setting Up a Bridge Interface
 
-The default ports that the system's service APIs run on are:
+Formation requires a primary bridge interface named `br0`. If not already set up, follow these steps:
 
-`3001` for `formnet` join requests API
 
-`3002` for `form-vmm` API
+#### 1. Install Bridge Tools:
 
-`3003` for `form-pack-manager` API
-
-and 
-
-`51820` for `formnet` interface.
-
-##### Setting up a bridge interface
-You will also need a primary bridge network, currently, it must be called `br0` 
-though in a future release this will become configurable, however, having
-the primary bridge interface called `br0` is best practice. 
+Update your system and install the necessary package:
 
 ```bash
 sudo apt update
 sudo apt install bridge-utils
+```
 
+#### 2. Create and Configure `br0`:
+Set up the bridge interface with the following commands:
+
+```bash
 sudo brctl addbr br0
 sudo ip addr add 192.168.1.1/24 dev br0
 ```
 
-Ensure that you have a `br0` primary bridge interface set up on you machine, and 
-ensure that your bridge is the master to your primary physical interface 
-(eth0, enp3s0, or similar)
-
-Once you have ensured your bridge interface exists and is `up` you can add
-the physical interface to the bridge with the `brctl` command below
+#### 3. Add Your Physical Interface to the Bridge:
+Identify your interface (e.g., eth0, enp3s0):
 
 ```bash
-sudo brctl addif br0 <inet>
+ip link show
 ```
-
-replace `<inet>` with the correct name of your physical interface.
-
-
-In order to make this process easy for you, we have provided a script in this repo
-
-`./scripts/validate_network_config.sh`
+Then add it:
+```bash
+sudo brctl addif br0 <your-interface-name>
+```
+A script is provided in `./scripts/validate_network_config.sh` to help verify your configuration.
 
 
 By running this script, assuming you do not have significant amounts of customized networking on the 
