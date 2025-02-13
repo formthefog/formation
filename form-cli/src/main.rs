@@ -139,6 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         FormCommand::Manage(ref manage_command) => {
             match manage_command {
                 ManageCommand::Join(join_command) => {
+                    simple_logger::SimpleLogger::new().init().unwrap();
                     let (config, keystore) = load_config_and_keystore(&parser).await?;
                     if !config.join_formnet {
                         let provider = config.hosts[0].clone();

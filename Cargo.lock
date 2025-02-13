@@ -2678,6 +2678,7 @@ dependencies = [
  "sha2",
  "sha3",
  "shared",
+ "simple_logger 5.0.0",
  "tiny-keccak",
  "tokio",
  "tokio-util",
