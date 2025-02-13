@@ -188,21 +188,6 @@ docker tag cryptonomikhan/form-build-server:v0.1.0 form-build-server
 Then you can run it, ensure you use the `--privileged` flag `--network=host` and
 provide it with the necessary devices and volumes (`/lib/modules` & `/var/run/docker.sock`)
 
-
-```bash
-docker run --rm --privileged --network=host \
-    --device=/dev/kvm \
-    --device=/dev/vhost-net \
-    --device=/dev/null \
-    --device=/dev/zero \
-    --device=/dev/random \
-    --device=/dev/urandom \
-    -v /lib/modules:/lib/modules:ro \
-    -v /var/run/docker.sock:/var/run/docker.sock \
-    --mount type=tmpfs,destination=/dev/hugepages,tmpfs-mode=1770 \
-    -dit formation
-```
-
 The **Formation** docker image requires that it be run in *privileged* mode, and while privileged mode is outside the scope of this particular document, we highly suggest you take the time to understand the implications of such. 
 
 It also requires that you provide the `kvm` device and other devices, as it 
