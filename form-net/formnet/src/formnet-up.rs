@@ -5,6 +5,7 @@ use formnet::up;
 use tokio::runtime::Runtime;
 
 fn main() {
+    std::fs::create_dir_all("/run").expect("Unable to create /run dir");
     let daemon = Daemonize::new()
         .pid_file("/run/formnet.pid")
         .chown_pid_file(true)
