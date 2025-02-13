@@ -1,4 +1,4 @@
-use std::{net::{IpAddr, SocketAddr, TcpListener}, path::PathBuf, str::FromStr, time::Duration};
+use std::{net::{IpAddr, SocketAddr, TcpListener}, path::PathBuf, process::Command, str::FromStr, time::Duration};
 use colored::*;
 use daemonize::Daemonize;
 use form_types::{BootCompleteRequest, PeerType, VmmResponse};
@@ -252,6 +252,12 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
 
 pub async fn user_join_formnet(address: String, provider: String) -> Result<(), Box<dyn std::error::Error>> {
     request_to_join(vec![provider], address, PeerType::User).await?;
+    let _child = Command::new("nohup")
+        .arg("formnet-up")
+        .stdout(std::fs::File::create(".formnet.log")?)
+        .stdout(std::fs::File::create(".formnet-errors.log")?)
+        .spawn()?;
+
     Ok(())
 }
 
