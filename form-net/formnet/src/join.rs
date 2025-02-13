@@ -1,13 +1,10 @@
-use std::{net::{IpAddr, SocketAddr, TcpListener}, path::PathBuf, str::FromStr, time::Duration};
-use colored::*;
-use daemonize::Daemonize;
+use std::{net::{IpAddr, SocketAddr, TcpListener}, path::PathBuf, process::Command, str::FromStr, time::Duration};
 use form_types::{BootCompleteRequest, PeerType, VmmResponse};
 use formnet_server::ConfigFile;
 use ipnet::IpNet;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use shared::{interface_config::InterfaceConfig, wg, NetworkOpts};
-use tokio::runtime::Runtime;
 use wireguard_control::{Device, InterfaceName, KeyPair};
 use crate::{api::{BootstrapInfo, JoinResponse as BootstrapResponse, Response}, up, CONFIG_DIR, NETWORK_NAME};
 
@@ -257,30 +254,9 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
 pub async fn user_join_formnet(address: String, provider: String) -> Result<(), Box<dyn std::error::Error>> {
     request_to_join(vec![provider], address, PeerType::User).await?;
 
-    let daemon = Daemonize::new()
-        .pid_file("/run/formnet.pid")
-        .chown_pid_file(true)
-        .working_directory("/")
-        .umask(0o027)
-        .stdout(std::fs::File::create("/var/log/formnet.log").unwrap())
-        .stderr(std::fs::File::create("/var/log/formnet.log").unwrap());
+    Command::new("formnet-up")
+        .output()?;
 
-    match daemon.start() {
-        Ok(_) => {
-            let rt = Runtime::new().expect("unable to create tokio runtime");
-            rt.block_on(async {
-                if let Err(e) = up(
-                    Some(Duration::from_secs(60)),
-                    None,
-                ).await {
-                    println!("{}: {}", "Error trying to bring formnet up".yellow(), e.to_string().red());
-                }
-            });
-        }
-        Err(e) => {
-            println!("{}: {}", "Error trying to daemonize formnet".yellow(), e.to_string().red());
-        }
-    }
     Ok(())
 }
 

@@ -24,6 +24,10 @@ path = "src/main.rs"
 name = "formnet-vm-join"
 path = "src/vm_join.rs"
 
+[[bin]]
+name = "formnet-up"
+path = "src/formnet-up.rs"
+
 [[example]]
 name = "formnet-p2p"
 path = "examples/formnet-p2p.rs"
