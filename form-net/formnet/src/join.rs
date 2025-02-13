@@ -198,10 +198,7 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
                             let config_file = ConfigFile {
                                 private_key: keypair.private.to_base64(),
                                 address: ip.clone(),
-                                listen_port: match peer_type {
-                                    PeerType::Instance => Some(52820),
-                                    _ => Some(request.external_endpoint.unwrap().port())
-                                },
+                                listen_port: Some(request.external_endpoint.unwrap().port()),
                                 network_cidr_prefix: 8,
                                 bootstrap: Some(hex::encode(&serde_json::to_vec(&bootstrap_info)?)) 
                             };
