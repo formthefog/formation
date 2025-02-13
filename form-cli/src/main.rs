@@ -64,6 +64,8 @@ pub enum FormCommand {
     Pack(PackCommand),
     #[clap(subcommand)]
     Manage(ManageCommand),
+    #[clap(subcommand)]
+    Dns(DnsCommand),
 }
 
 #[tokio::main]
