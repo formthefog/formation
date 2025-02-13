@@ -200,7 +200,7 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
                                 address: ip.clone(),
                                 listen_port: match peer_type {
                                     PeerType::Instance => Some(52820),
-                                    _ => Some(51820)
+                                    _ => Some(request.external_endpoint.unwrap().port())
                                 },
                                 network_cidr_prefix: 8,
                                 bootstrap: Some(hex::encode(&serde_json::to_vec(&bootstrap_info)?)) 
@@ -240,8 +240,8 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
                 Err(e) => {
                     log::error!("Error attempting to join network: {e}");
                 }
-                _ => {
-                    log::error!("Received invalid response type when trying to join network");
+                Ok(r) => {
+                    log::error!("Received invalid response type when trying to join network: {r:?}");
                 }
             }
             Err(e) => {
