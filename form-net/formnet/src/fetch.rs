@@ -116,9 +116,12 @@ pub async fn fetch(
                 } else {
                     log::info!("{}", "peers are already up to date");
                 }
+                log::info!("Updated interface, updating datastore");
                 let interface_updated_time = std::time::Instant::now();
                 store.update_peers(&peers)?;
+                log::info!("Updated peers, writing to datastore");
                 store.write()?;
+                log::info!("Getting candidates...");
                 let candidates: Vec<Endpoint> = get_local_addrs()?
                     .filter(|ip| !nat_opts.is_excluded(*ip))
                     .map(|addr| SocketAddr::from((addr, device.listen_port.unwrap_or(51820))).into())
