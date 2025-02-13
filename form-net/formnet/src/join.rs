@@ -7,6 +7,7 @@ use ipnet::IpNet;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use shared::{interface_config::InterfaceConfig, wg, NetworkOpts};
+use tokio::runtime::Runtime;
 use wireguard_control::{Device, InterfaceName, KeyPair};
 use crate::{api::{BootstrapInfo, JoinResponse as BootstrapResponse, Response}, up, CONFIG_DIR, NETWORK_NAME};
 
@@ -266,7 +267,8 @@ pub async fn user_join_formnet(address: String, provider: String) -> Result<(), 
 
     match daemon.start() {
         Ok(_) => {
-            tokio::spawn(async move {
+            let rt = Runtime::new().expect("unable to create tokio runtime");
+            rt.block_on(async {
                 if let Err(e) = up(
                     Some(Duration::from_secs(60)),
                     None,
