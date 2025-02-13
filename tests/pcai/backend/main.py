@@ -1,7 +1,7 @@
 # backend/main.py
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 from typing import List, Optional, Literal
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
@@ -33,7 +33,7 @@ class Conversation(BaseModel):
 
 class LLMConfig(BaseModel):
     provider: Literal["openai", "anthropic"]
-    api_key: str
+    api_key: SecretStr 
     model_name: str = ""  # Optional, will use default if not provided
 
 def get_llm(config: LLMConfig):
@@ -42,12 +42,14 @@ def get_llm(config: LLMConfig):
         model = config.model_name or "gpt-4"
         return ChatOpenAI(
             model=model,
+            api_key=config.api_key,
             temperature=0.7
         )
     elif config.provider == "anthropic":
         model = config.model_name or "claude-3-opus-20240229"
         return ChatAnthropic(
             model_name=model,
+            api_key=config.api_key,
             timeout=600,
             stop=list(),
             temperature=0.7
@@ -197,3 +199,8 @@ async def get_status():
     if not conversation_state:
         raise HTTPException(status_code=400, detail="Conversation not started")
     return conversation_state
+
+# In your backend/main.py
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}

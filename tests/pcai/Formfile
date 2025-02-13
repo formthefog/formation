@@ -8,12 +8,14 @@ MEM 2048
 
 DISK 5
 
-COPY ./docker-compose.yml /app
+COPY ./run-curious.sh /app
 
 COPY ./nginx/nginx.conf /opt/curious-ai/nginx
 
 INSTALL docker.io docker-compose nginx curl git
 
+RUN chmod +x /app/run-curious.sh
+
 WORKDIR /app
 
-ENTRYPOINT ["docker-compose", "-f", "/app/docker-compose.yml", "up", "-d"]
+ENTRYPOINT ["/app/run-curious.sh"]
