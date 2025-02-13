@@ -172,7 +172,7 @@ First you will need to pull the official images:
 ```bash
 # Pull formation-minimal 
 
-First you will need to pull the 
+# First you will need to pull the 
 docker pull cryptonomikhan/formation-minimal:v0.1.0
 
 # Retag it
