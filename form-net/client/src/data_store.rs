@@ -97,6 +97,10 @@ impl<T: Display + Clone + PartialEq + Serialize + DeserializeOwned> DataStore<T>
         for new_peer in current_peers.iter() {
             if let Some(existing_peer) = peers.iter_mut().find(|p| p.ip == new_peer.ip) {
                 if existing_peer.public_key != new_peer.public_key {
+                    log::error!(
+                        "PEER IP: {}, existing peer public key: {} new peer public key: {}",
+                        existing_peer.ip, existing_peer.public_key, new_peer.public_key
+                    );
                     bail!("PINNING ERROR: New peer has same IP but different public key.");
                 } else {
                     *existing_peer = new_peer.clone();
