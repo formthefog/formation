@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 use clap::Args;
+use colored::Colorize;
+use form_dns::api::{DomainResponse, Success};
 use form_p2p::queue::QueueResponse;
 
 use crate::{default_context, default_formfile};
@@ -42,8 +44,55 @@ pub struct AddCommand {
     pub build_id: String
 }
 
-pub fn print_add_response(resp: QueueResponse) {
+pub fn print_add_response(
+    resp: QueueResponse,
+    dns_resp: DomainResponse,
+    domain_name: String,
+    build_id: String,
+    anycast_addr: String
+) {
+    match resp {
+        QueueResponse::OpSuccess => {
+            let (arecord, cname) = {
+                match dns_resp {
+                    DomainResponse::Success(Success::Some(record)) => {
+                        let arecord = record.public_ip.last().unwrap().clone();
+                        let cname = record.cname_target.clone();
+                        (arecord, cname)
+                    }
+                    _ => {
+                        return;
+                    }
+                }
+            };
+            println!(r#"
+We've got great news! Your request to point {} to your instances based on {} was successful!
 
+In order for this to fully take effect, there are a few things you will need to do that are
+outside of our control.
+
+First, and foremost, you need to point your domain name to one of our anycast addresses as
+the A Record. This will ensure that all of your instances can be reached from the same
+public IP address, and as a result of that, remain resilient, granting you the full benefits
+of the formation network.
+
+    A Record: {}
+    CNAME Record: {}
+
+After that it may take up to 24 hours for your domain name to propagate throughout
+public DNS servers and point to your instance, unfortunately that is out of our
+control at the moment.
+
+"#,
+domain_name.blue(),
+build_id.blue(),
+arecord.ip().to_string().blue(),
+if let Some(record) = cname { record.blue() } else { "".to_string().blue() },
+);
+        }
+        QueueResponse::Failure { reason } => {}
+        _ => {}
+    }
 }
 
 impl AddCommand {

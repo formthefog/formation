@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 use dialoguer::{theme::ColorfulTheme, Confirm};
 use colored::*;
 use form_cli::{
-    decrypt_file, default_config_dir, default_data_dir, default_keystore_dir, join_formnet, operator_config, Config, Init, Keystore, KitCommand, ManageCommand, Operator, PackCommand, WalletCommand
+    decrypt_file, default_config_dir, default_data_dir, default_keystore_dir, join_formnet, operator_config, Config, DnsCommand, Init, Keystore, KitCommand, ManageCommand, Operator, PackCommand, WalletCommand
 };
 use form_p2p::queue::QUEUE_PORT;
 
