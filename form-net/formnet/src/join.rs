@@ -243,8 +243,8 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
     return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Did not receive a valid invitation")));
 }
 
-pub async fn user_join_formnet(address: String, provider: String, formnet_port: u16) -> Result<(), Box<dyn std::error::Error>> {
-    request_to_join(vec![format!("{}:{}", provider, formnet_port)], address, PeerType::User).await?;
+pub async fn user_join_formnet(address: String, provider: String) -> Result<(), Box<dyn std::error::Error>> {
+    request_to_join(vec![provider], address, PeerType::User).await?;
 
     let daemon = Daemonize::new()
         .pid_file("/run/formnet.pid")

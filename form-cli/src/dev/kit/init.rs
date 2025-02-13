@@ -331,7 +331,7 @@ impl Init {
     }
 }
 
-pub async fn join_formnet(address: String, provider: String, formnet_port: u16) -> Result<(), Box<dyn std::error::Error>> {
-    user_join_formnet(address, provider, formnet_port).await?;
+pub async fn join_formnet(address: String, provider: String) -> Result<(), Box<dyn std::error::Error>> {
+    user_join_formnet(address, provider).await?;
     Ok(())
 }

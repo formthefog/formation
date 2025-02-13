@@ -124,7 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let (config, keystore) = init.handle().await?;
                     let host = config.hosts[0].clone();
                     if let true = config.join_formnet {
-                        join_formnet(keystore.address.to_string(), host, config.formnet_port).await?; 
+                        join_formnet(keystore.address.to_string(), host).await?; 
                     }
                 }
                 KitCommand::Operator(sub) => {
@@ -140,9 +140,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             match manage_command {
                 ManageCommand::Join(join_command) => {
                     let (config, keystore) = load_config_and_keystore(&parser).await?;
-                    let provider = config.hosts[0].clone();
-                    let formnet_port = config.formnet_port;
-                    join_command.handle_join_command(provider, formnet_port, keystore).await?;
+                    if !config.join_formnet {
+                        let provider = config.hosts[0].clone();
+                        join_command.handle_join_command(provider, keystore).await?;
+                    }
                 }
                 _ => {}
             }
@@ -161,7 +162,7 @@ pub async fn load_config_and_keystore(parser: &Form) -> Result<(Config, Keystore
     let keystore = load_keystore(&parser, &config).await?;
 
     if config.join_formnet {
-        join_formnet(keystore.address.clone(), host, config.formnet_port).await?;
+        join_formnet(keystore.address.clone(), host).await?;
     }
 
     Ok((config, keystore))
