@@ -44,3 +44,4 @@ alloy-primitives = { version = "0.8", features = ["k256"] }
 k256 = { version = "0.13", features = ["ecdsa", "ecdsa-core"]}
 get_if_addrs = "0.5"
 form-config = { path = "../form-config" }
+log = "0.4"

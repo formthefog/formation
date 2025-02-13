@@ -380,6 +380,7 @@ async fn get_status(
     Path(build_id): Path<String>,
 ) -> Json<PackResponse> {
     let messages: Vec<PackBuildStatus> = if let Ok(messages) = FormPackManager::read_from_queue(None, None).await {
+        log::info!("Received a get_status request");
         let msgs = messages.iter().filter_map(|bytes| {
             let subtopic = bytes[0];
             let msg = &bytes[1..];

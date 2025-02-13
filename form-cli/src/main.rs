@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 use dialoguer::{theme::ColorfulTheme, Confirm};
 use colored::*;
 use form_cli::{
-    decrypt_file, default_config_dir, default_data_dir, default_keystore_dir, join_formnet, operator_config, Config, DnsCommand, Init, Keystore, KitCommand, ManageCommand, Operator, PackCommand, WalletCommand
+    decrypt_file, default_config_dir, default_data_dir, default_keystore_dir, join_formnet, operator_config, Config, DnsCommand, Init, Keystore, KitCommand, manage::ManageCommand, Operator, PackCommand, WalletCommand
 };
 use form_p2p::queue::QUEUE_PORT;
 
@@ -134,6 +134,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
+            }
+        }
+        FormCommand::Manage(ref manage_command) => {
+            match manage_command {
+                ManageCommand::Join(join_command) => {
+                    let (config, keystore) = load_config_and_keystore(&parser).await?;
+                    let provider = config.hosts[0].clone();
+                    let formnet_port = config.formnet_port;
+                    join_command.handle_join_command(provider, formnet_port, keystore).await?;
+                }
+                _ => {}
             }
         }
         _ => {}

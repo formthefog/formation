@@ -49,7 +49,7 @@ pub fn print_add_response(
     dns_resp: DomainResponse,
     domain_name: String,
     build_id: String,
-    anycast_addr: String
+    _anycast_addr: String
 ) {
     match resp {
         QueueResponse::OpSuccess => {
@@ -90,7 +90,7 @@ arecord.ip().to_string().blue(),
 if let Some(record) = cname { record.blue() } else { "".to_string().blue() },
 );
         }
-        QueueResponse::Failure { reason } => {}
+        QueueResponse::Failure { reason: _ } => {}
         _ => {}
     }
 }
@@ -98,8 +98,8 @@ if let Some(record) = cname { record.blue() } else { "".to_string().blue() },
 impl AddCommand {
     pub async fn handle_add_command(
         &self, 
-        provider: String, 
-        port: u16
+        _provider: String, 
+        _port: u16
     ) -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     }

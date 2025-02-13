@@ -2776,6 +2776,7 @@ dependencies = [
  "hyperlocal",
  "k256",
  "lazy_static",
+ "log",
  "rand",
  "random_word",
  "reqwest 0.12.12",
