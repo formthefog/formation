@@ -6,6 +6,7 @@ use tokio::runtime::Runtime;
 
 fn main() {
     std::fs::create_dir_all("/run").expect("Unable to create /run dir");
+    #[cfg(target_os = "linux")]
     let daemon = Daemonize::new()
         .pid_file("/run/formnet.pid")
         .chown_pid_file(true)
@@ -13,6 +14,16 @@ fn main() {
         .umask(0o027)
         .stdout(std::fs::File::create("/var/log/formnet.log").unwrap())
         .stderr(std::fs::File::create("/var/log/formnet.log").unwrap());
+
+    #[cfg(not(target_os = "linux"))]
+    let daemon = Daemonize::new()
+        .pid_file("/tmp/formnet.pid")
+        .chown_pid_file(true)
+        .working_directory("/")
+        .umask(0o027)
+        .stdout(std::fs::File::create("/var/log/formnet.log").unwrap())
+        .stderr(std::fs::File::create("/var/log/formnet.log").unwrap());
+
 
     match daemon.start() {
         Ok(_) => {
