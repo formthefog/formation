@@ -268,7 +268,7 @@ impl Init {
             mnemonic: mnemonic.cloned(),
             secret_key: hex::encode(SecretKey::from(secret_key).to_bytes()),
             public_key: hex::encode(PublicKey::from(public_key).to_sec1_bytes().as_ref()),
-            address: address.to_string()
+            address: hex::encode(address)
         };
 
         if Confirm::with_theme(&ColorfulTheme::default())
