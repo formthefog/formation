@@ -220,6 +220,16 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
                                     }
                                 }
                             }
+                            #[cfg(not(target_os = "linux"))]
+                            if let Ok(info) = Device::get(&InterfaceName::from_str("formnet").unwrap(), wireguard_control::Backend::Userspace) {
+                                log::info!("Current device info: {info:?}");
+                                for peer in info.peers {
+                                    log::info!("Acquired device info for peer {peer:?}");
+                                    if let Some(endpoint) = peer.config.endpoint {
+                                        log::info!("Acquired endpoint {endpoint:?} for peer..."); 
+                                    }
+                                }
+                            }
                             return Ok(ip.clone());
                         }
                         Err(e) => {

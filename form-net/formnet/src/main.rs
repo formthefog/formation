@@ -7,7 +7,9 @@ use clap::{Parser, Subcommand, Args};
 use form_config::OperatorConfig;
 use form_types::PeerType;
 use formnet::{init::init, serve::serve};
-use formnet::{ensure_crdt_datastore, leave, request_to_join, revert_formnet_resolver, set_formnet_resolver, uninstall, user_join_formnet, vm_join_formnet, NETWORK_NAME};
+use formnet::{ensure_crdt_datastore, leave, request_to_join, uninstall, user_join_formnet, vm_join_formnet, NETWORK_NAME};
+#[cfg(target_os = "linux")]
+use formnet::{revert_formnet_resolver, set_formnet_resolver}; 
 
 #[derive(Clone, Debug, Parser)]
 struct Cli {
