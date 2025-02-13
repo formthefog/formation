@@ -8,3 +8,28 @@
 /form-rplb/examples/rustls_acme_cache
 /logs
 /secrets
+.formnet.log
+.formnet-errors.log
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Node.js
+node_modules/
+.next/
+.turbo/
+dist/
+build/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# OS files
+.DS_Store
+Thumbs.db

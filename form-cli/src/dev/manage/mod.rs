@@ -16,7 +16,7 @@ pub use add::AddCommand;
 pub use rm::RemoveCommand;
 pub use commit::CommitCommand;
 pub use config::ConfigCommand;
-pub use join::JoinCommand;
+pub use join::{JoinCommand, FormnetUp};
 
 #[derive(Debug, Subcommand)]
 pub enum ManageCommand {
@@ -30,4 +30,5 @@ pub enum ManageCommand {
     Commit(CommitCommand),
     Config(ConfigCommand),
     Join(JoinCommand),
+    FormnetUp(FormnetUp)
 }

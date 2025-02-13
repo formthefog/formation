@@ -3,7 +3,7 @@ use alloy_signer_local::{coins_bip39::English, MnemonicBuilder};
 use clap::Args;
 use formnet::user_join_formnet;
 use k256::ecdsa::SigningKey;
-use std::path::PathBuf;
+use std::{path::PathBuf, process::Command};
 use crate::{default_context, default_formfile, Keystore};
 
 
@@ -39,7 +39,6 @@ pub struct JoinCommand {
     pub mnemonic: Option<String>,
 }
 
-
 impl JoinCommand {
     pub async fn handle_join_command(
         &self,
@@ -74,5 +73,20 @@ impl JoinCommand {
         } else {
             Err("A signing key is required, use either private_key, mnemonic or keyfile CLI arg to provide a valid signing key".to_string())
         }
+    }
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct FormnetUp;
+
+impl FormnetUp {
+    pub fn handle_formnet_up(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let _child = Command::new("nohup")
+            .arg("formnet-up")
+            .stdout(std::fs::File::create(".formnet.log")?)
+            .stdout(std::fs::File::create(".formnet-errors.log")?)
+            .spawn()?;
+
+        Ok(())
     }
 }

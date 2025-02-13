@@ -1,6 +1,4 @@
 use std::{net::{IpAddr, SocketAddr, TcpListener}, path::PathBuf, process::Command, str::FromStr, time::Duration};
-use colored::*;
-use daemonize::Daemonize;
 use form_types::{BootCompleteRequest, PeerType, VmmResponse};
 use formnet_server::ConfigFile;
 use ipnet::IpNet;
@@ -8,7 +6,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use shared::{interface_config::InterfaceConfig, wg, NetworkOpts};
 use wireguard_control::{Device, InterfaceName, KeyPair};
-use crate::{api::{BootstrapInfo, JoinResponse as BootstrapResponse, Response}, up, CONFIG_DIR, NETWORK_NAME};
+use crate::{api::{BootstrapInfo, JoinResponse as BootstrapResponse, Response}, up, CONFIG_DIR, DATA_DIR, NETWORK_NAME};
 
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -61,6 +59,9 @@ pub enum JoinResponse {
 }
 
 pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type: PeerType) -> Result<IpAddr, Box<dyn std::error::Error>> {
+    if let Err(e) = std::fs::remove_file(PathBuf::from(DATA_DIR).join("formnet").with_extension("json")) {
+        log::error!("Pre-existing datastore did not exist: {e}"); 
+    }
     let client = Client::new();
     let mut iter = bootstrap.iter();
     let mut bootstrap_info: Option<BootstrapInfo> = None;

@@ -223,6 +223,7 @@ impl BuildCommand {
                 _ => None
             }
         }).collect::<Vec<(PathBuf, PathBuf)>>();
+        println!("Copy Instructions: {copy_instructions:?}");
         println!("Preparing artifacts...");
         pack.prepare_artifacts(&copy_instructions).map_err(|e| e.to_string())
     } 

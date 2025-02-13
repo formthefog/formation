@@ -146,6 +146,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         join_command.handle_join_command(provider, keystore).await?;
                     }
                 }
+                ManageCommand::FormnetUp(formnet_up_command) => {
+                    formnet_up_command.handle_formnet_up()?;
+                }
                 _ => {}
             }
         }
@@ -158,13 +161,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 pub async fn load_config_and_keystore(parser: &Form) -> Result<(Config, Keystore), Box<dyn std::error::Error>> {
     println!("loading config");
     let config = load_config(parser).await?;
-    let host = config.hosts[0].clone();
+    let _host = config.hosts[0].clone();
     println!("loading keystore");
     let keystore = load_keystore(&parser, &config).await?;
 
-    if config.join_formnet {
+    /*
+    if config.join_formnet && !formnet_up() {
         join_formnet(keystore.address.clone(), host).await?;
     }
+    */
 
     Ok((config, keystore))
 }
