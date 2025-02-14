@@ -7,75 +7,96 @@ on:
       - 'v*'
 
 jobs:
-  build:
-    name: Build and Release
+  build-linux:
+    name: Build Linux Binaries
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Rust
+      - name: Set up Rust for Linux
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-unknown-linux-gnu, aarch64-apple-darwin
+          targets: x86_64-unknown-linux-gnu
 
-      - name: Install cross-compilation dependencies
+      - name: Install Linux Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools gcc-multilib
-          sudo apt-get install -y gcc-aarch64-linux-gnu gcc-x86-64-linux-gnu
+          sudo apt-get install -y musl-tools gcc-multilib gcc-x86-64-linux-gnu
 
-      - name: Set up cross-compilation for macOS
-        uses: actions/setup-python@v4
+      - name: Build Linux Binaries
+        run: |
+          cargo build --release --bin form --target x86_64-unknown-linux-gnu --features treehacks
+          cargo build --release --bin formnet-up --target x86_64-unknown-linux-gnu
+          mkdir -p artifacts
+          cp target/x86_64-unknown-linux-gnu/release/form artifacts/form-linux-x86_64
+          cp target/x86_64-unknown-linux-gnu/release/formnet-up artifacts/formnet-up-linux-x86_64
+
+      - name: Upload Linux Artifacts
+        uses: actions/upload-artifact@v3
         with:
-          python-version: '3.x'
-      - run: pip install setuptools
+          name: linux-artifacts
+          path: artifacts/
 
-      - name: Install OS X Cross
-        run: |
-          mkdir -p /tmp/osxcross
-          cd /tmp/osxcross
-          wget https://github.com/tpoechtrager/osxcross/archive/master.zip
-          unzip master.zip
-          cd osxcross-master
-          wget -nc https://github.com/joseluisq/macosx-sdks/releases/download/12.3/MacOSX12.3.sdk.tar.xz
-          mv MacOSX12.3.sdk.tar.xz tarballs/
-          UNATTENDED=1 ./build.sh
-          echo "/tmp/osxcross/osxcross-master/target/bin" >> $GITHUB_PATH
+  build-macos:
+    name: Build macOS Binaries
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Build Linux (x86_64)
-        run: |
-          cargo build --release --bin form --target x86_64-unknown-linux-gnu --features treehacks 
-          cargo build --release --bin formnet-up --target x86_64-unknown-linux-gnu 
-          cp target/x86_64-unknown-linux-gnu/release/form ./form-linux-x86_64
-          cp target/x86_64-unknown-linux-gnu/release/formnet-up ./formnet-up-linux-x86_64
+      - name: Set up Rust for macOS
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
 
-      - name: Build macOS (arm64)
-        env:
-          CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER: aarch64-apple-darwin14-clang
-          CC_aarch64_apple_darwin: aarch64-apple-darwin14-clang
-          CXX_aarch64_apple_darwin: aarch64-apple-darwin14-clang++
+      - name: Build macOS Binaries
         run: |
-          cargo build --release --bin form --target aarch64-apple-darwin --features treehacks 
+          cargo build --release --bin form --target aarch64-apple-darwin --features treehacks
           cargo build --release --bin formnet-up --target aarch64-apple-darwin
-          cp target/aarch64-apple-darwin/release/form ./form-darwin-arm64
-          cp target/aarch64-apple-darwin/release/formnet-up ./formnet-up-darwin-arm64
+          mkdir -p artifacts
+          cp target/aarch64-apple-darwin/release/form artifacts/form-darwin-arm64
+          cp target/aarch64-apple-darwin/release/formnet-up artifacts/formnet-up-darwin-arm64
 
-      - name: Copy binaries to docs
+      - name: Upload macOS Artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: macos-artifacts
+          path: artifacts/
+
+  release:
+    name: Release
+    needs:
+      - build-linux
+      - build-macos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Linux Artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: linux-artifacts
+          path: artifacts
+
+      - name: Download macOS Artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: macos-artifacts
+          path: artifacts
+
+      - name: Copy Binaries to Docs Directory
         run: |
           mkdir -p docs/install
           mkdir -p docs/install/form
-          cp form-* docs/install/
-          cp formnet-up-* docs/install/
+          cp artifacts/form-* docs/install/
+          cp artifacts/formnet-up-* docs/install/
           cp .github/install.sh docs/install/form/install.sh
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            form-*
-            formnet-up-*
+            docs/install/form-*
+            docs/install/formnet-up-*
           prerelease: false
           generate_release_notes: true
 
@@ -85,3 +106,4 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./docs
           force_orphan: true
+

@@ -151,7 +151,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let (config, keystore) = load_config_and_keystore(&parser).await?;
                     let signing_key = keystore.secret_key;
                     leave(config.hosts, signing_key).await?; 
+                    println!(r#"
+You have {}, you will {} nodes unless you rejoin."#,
+"officially left formnet".yellow(),
+"no longer be able to connect to other formnet".bold().bright_red(),
+);
                     uninstall().await?;
+                    println!(r#"
+The {} interface has officially been removed from your machine
+"#,
+"formnet".bold().yellow(),
+);
                 }
                 ManageCommand::GetIp(get_ip_command) => {
                     let (config, _) = load_config_and_keystore(&parser).await?;
@@ -168,9 +178,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Your build has {} instances, below are their formnet ip addresses:
 
 Instance IP Addrsses: {}
-                    "#, 
-                    format!("{}", ips.len()).yellow(), 
-                    ips_string.yellow(),
+"#, 
+format!("{}", ips.len()).yellow(), 
+ips_string.yellow(),
 );
                 }
                 ManageCommand::FormnetUp(formnet_up_command) => {

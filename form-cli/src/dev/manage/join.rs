@@ -1,6 +1,7 @@
 use alloy_core::primitives::Address;
 use alloy_signer_local::{coins_bip39::English, MnemonicBuilder};
 use clap::Args;
+use colored::Colorize;
 use formnet::user_join_formnet;
 use k256::ecdsa::SigningKey;
 use std::{path::PathBuf, process::Command};
@@ -86,6 +87,16 @@ impl FormnetUp {
             .stdout(std::fs::File::create(".formnet.log")?)
             .stdout(std::fs::File::create(".formnet-errors.log")?)
             .spawn()?;
+
+        println!(
+r#"
+{} has been brought up and is being refreshed every {} to find {} and update {} 
+"#,
+"formnet".bold().bright_yellow(),
+"60 seconds".bold().bright_blue(),
+"new peers".bold().bright_magenta(),
+"existing peers".bold().bright_magenta(),
+);
 
         Ok(())
     }
