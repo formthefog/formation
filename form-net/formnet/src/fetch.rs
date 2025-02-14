@@ -225,6 +225,15 @@ pub async fn fetch_server() -> Result<(), Box<dyn std::error::Error>> {
             log::info!("Interface up?: {up}");
             up
         }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let up = match Device::list(wireguard_control::Backend::Userspace) {
+                Ok(interfaces) => interfaces.iter().any(|name| *name == interface),
+                _ => false,
+            };
+            log::info!("Interface up?: {up}");
+            up
+        }
     };
 
     if !updates.is_empty() || !interface_up {
