@@ -150,6 +150,8 @@ impl ShipCommand {
             .await?;
 
         print_ship_queue_response(resp);
+
+        Ok(())
     }
 
     pub fn get_signing_key(&self, keystore: Option<Keystore>) -> Result<SigningKey, String> {
