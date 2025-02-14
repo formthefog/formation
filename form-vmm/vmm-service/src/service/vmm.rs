@@ -1,4 +1,6 @@
 use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 // src/service/vmm.rs
@@ -34,7 +36,7 @@ use seccompiler::SeccompAction;
 use tokio::task::JoinHandle;
 use form_types::{FormnetMessage, FormnetTopic, GenericPublisher, PeerType, VmmEvent, VmmSubscriber};
 use form_broker::{subscriber::SubStream, publisher::PubStream};
-use futures::future::{join_all, BoxFuture};
+use futures::future::join_all;
 use crate::api::VmmApiChannel;
 use crate::{api::VmmApi, util::ensure_directory};
 use crate::util::add_tap_to_bridge;
@@ -386,7 +388,7 @@ pub struct VmManager {
     subscriber: Option<VmmSubscriber>,
     signing_key: String,
     publisher_addr: Option<String>,
-    create_futures: FuturesUnordered<BoxFuture<'static, Result<VmmEvent, Box<dyn std::error::Error + Send + Sync + 'static>>>>
+    create_futures: Arc<Mutex<FuturesUnordered<Pin<Box<dyn Future<Output = Result<VmmEvent, Box<dyn std::error::Error + Send + Sync>>> + Send + 'static>>>>>
 }
 
 impl VmManager {
@@ -443,7 +445,7 @@ impl VmManager {
             subscriber,
             publisher_addr,
             queue_reader: queue_handle,
-            create_futures: FuturesUnordered::new(),
+            create_futures: Arc::new(Mutex::new(FuturesUnordered::new())),
         })
     }
 
@@ -697,6 +699,8 @@ impl VmManager {
         mut api_rx: mpsc::Receiver<VmmEvent>
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
         if let Some(mut subscriber) = self.subscriber.take() {
+            let futures_clone = self.create_futures.clone();
+            let mut interval = interval(Duration::from_secs(20));
             loop {
                 tokio::select! {
                     res = shutdown_rx.recv() => {
@@ -722,18 +726,20 @@ impl VmManager {
                             }
                         }
                     }
-                    complete = self.create_futures.next() => {
-                        match complete {
-                            Some(Ok(event)) => if let Err(e) = self.handle_vmm_event(&event).await {
+                    _ = interval.tick() => {
+                        let mut guard = futures_clone.lock().await;
+                        while let Some(Ok(event)) = guard.next().await {
+                            if let Err(e) = self.handle_vmm_event(&event).await {
                                 log::error!("Error while handling event: {event:?}: {e}");
                             }
-                            Some(Err(e)) => log::error!("Error while awaiting future event: {e}"),
-                            None => {}
                         }
+                        drop(guard);
                     }
                 }
             }
         } else {
+            let futures_clone = self.create_futures.clone();
+            let mut interval = interval(Duration::from_secs(20));
             loop {
                 tokio::select! {
                     res = shutdown_rx.recv() => {
@@ -752,14 +758,14 @@ impl VmManager {
                             log::error!("Error while handling event: {event:?}: {e}"); 
                         }
                     }
-                    complete = self.create_futures.next() => {
-                        match complete {
-                            Some(Ok(event)) => if let Err(e) = self.handle_vmm_event(&event).await {
+                    _ = interval.tick() => {
+                        let mut guard = futures_clone.lock().await;
+                        while let Some(Ok(event)) = guard.next().await {
+                            if let Err(e) = self.handle_vmm_event(&event).await {
                                 log::error!("Error while handling event: {event:?}: {e}");
                             }
-                            Some(Err(e)) => log::error!("Error while awaiting future event: {e}"),
-                            None => {}
                         }
+                        drop(guard);
                     }
                 }
             }
@@ -802,7 +808,7 @@ impl VmManager {
                         let future = async {
                             let mut interval = interval(Duration::from_secs(20));
                             loop {
-                                interval.tick();
+                                interval.tick().await;
                                 if let VmmEvent::Create { ref name, .. } = &await_event {
                                     if PathBuf::from(IMAGE_DIR).join(name).with_extension("raw").exists() {
                                         break;
@@ -817,7 +823,9 @@ impl VmManager {
                         ).await?;
                         Ok(complete)
                     });
-                    self.create_futures.push(await_res);
+                    let guard = self.create_futures.lock().await;
+                    guard.push(await_res);
+                    drop(guard);
                     log::error!("Unable to find Formpack");
                     log::error!(r#"
 Formpack for {name} doesn't exist:

@@ -1,4 +1,4 @@
-use std::{collections::{HashSet, VecDeque}, net::{IpAddr, SocketAddr, TcpListener}, path::PathBuf, process::Command, str::FromStr, time::Duration};
+use std::{collections::{HashSet, VecDeque}, net::{IpAddr, SocketAddr}, path::PathBuf, str::FromStr, time::Duration};
 use form_types::{BootCompleteRequest, PeerType, VmmResponse};
 use formnet_server::ConfigFile;
 use futures::{stream::FuturesUnordered, StreamExt};
@@ -71,6 +71,8 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
             .send().await {
                 Ok(resp) => match resp.json::<Response>().await {
                     Ok(Response::Bootstrap(info)) => {
+                        log::info!("Received bootstrap info from bootstrap node {dial}");
+                        log::info!("Bootstrap info: {info:?}");
                         bootstrap_info = Some(info.clone());
                         break;
                     }
@@ -246,6 +248,7 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
                         NetworkOpts::default(),
                     ) {
                         Ok(()) => {
+                            log::info!("Joined formnet, writing config file");
                             let config_file = ConfigFile {
                                 private_key: keypair.private.to_base64(),
                                 address: ip.clone(),
@@ -257,6 +260,7 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
                             config_file.write_to_path(
                                 PathBuf::from(CONFIG_DIR).join(NETWORK_NAME).with_extension("conf")
                             )?;
+                            log::info!("Wrote config file");
                             log::info!("Wireguard interface is up, saved config file");
                             #[cfg(target_os = "linux")]
                             if let Ok(info) = Device::get(&InterfaceName::from_str("formnet").unwrap(), wireguard_control::Backend::Kernel) {
