@@ -1,4 +1,3 @@
-use form_pack::formfile::Formfile;
 use serde::{Serialize, Deserialize};
 use clap::Args;
 
@@ -10,6 +9,7 @@ pub struct PingVmmRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BootCompleteRequest {
+    pub build_id: String,
     pub name: String,
     pub formnet_ip: String,
 }
@@ -18,7 +18,7 @@ pub struct BootCompleteRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateVmRequest {
     pub name: String,
-    pub formfile: Formfile,
+    pub formfile: String,
     pub signature: Option<String>,
     pub recovery_id: u32,
 }

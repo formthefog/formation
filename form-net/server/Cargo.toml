@@ -17,15 +17,12 @@ version = "1.6.1"
 [lib]
 path = "src/lib.rs"
 
-[[bin]]
-name = "formnet-server"
-path = "src/main.rs"
-
 [features]
 v6-test = []
 
 [dependencies]
 anyhow = "1"
+hex = "0.4"
 bytes = "1.6"
 clap = { version = "4.3", features = ["derive", "wrap_help"] }
 clap_complete = "4.3"
@@ -56,7 +53,14 @@ thiserror = "1"
 tokio = { version = "1.28.0", features = ["macros", "rt-multi-thread", "time"] }
 toml = "0.8.10"
 url = "2"
+tiny-keccak = { version = "2.0.2", features = ["sha3"] }
 wireguard-control = { path = "../wireguard-control" }
+form-state = { path = "../../form-state" }
+form-types = { path = "../../form-types" }
+form-p2p = { path = "../../form-p2p/" }
+crdts = { git = "http://github.com/Cryptonomikhan/rust-crdt", rev = "1fe4992" }
+reqwest = { version = "0.12", features = ["json"] }
+async-trait = "0.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 socket2 = { version = "0.5.2", features = ["all"] }

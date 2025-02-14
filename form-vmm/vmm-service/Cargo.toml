@@ -9,6 +9,8 @@ guest_debug = []
 dev = []
 
 [dependencies]
+anyhow = "1"
+itertools = "0.14"
 thiserror = "2.0.3"
 serde = { version = "1.0.215", features = [ "derive" ] }
 serde_json = "1.0.133"
@@ -36,6 +38,8 @@ axum = "0.7.9"
 rtnetlink = "0.13"
 netlink-packet-core = "0.7"
 netlink-packet-route = "0.17.1"
+ipnet = "2"
+iptables = "0.5"
 futures = "0.3"
 ipnetwork = "0.20.0"
 trust-dns-server = "0.22.0"
@@ -62,8 +66,17 @@ hyper = { version = "1.0", features = ["full"] }
 hyperlocal = "0.9.1"
 http-body-util = "0.1.2"
 hyper-util = "0.1.10"
+tiny-keccak = { version = "2.0.2", features = ["sha3"] }
 form-broker = { path = "../../form-broker" }
 form-pack = { path = "../../form-pack" }
+form-p2p = { path = "../../form-p2p" }
+form-state = { path = "../../form-state" }
+formnet-server = { path = "../../form-net/server" }
+crdts = { git = "http://github.com/Cryptonomikhan/rust-crdt", rev = "1fe4992" }
+alloy-primitives = { version = "0.8", features = ["k256"] } 
+k256 = { version = "0.13", features = ["ecdsa", "ecdsa-core"]}
+hex = "0.4"
+publicip = { path = "../../form-net/publicip" }
 
 [dev-dependencies]
 ipnet = "2.9"

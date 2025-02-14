@@ -1,355 +1,194 @@
-//! A service to create and run innernet behind the scenes
-use clap::Parser;
-use formnet_server::{serve, uninstall, ServerConfig, initialize::InitializeOpts};
-use ipnet::IpNet;
-use reqwest::Client;
-use std::net::SocketAddr;
+//! A service to create and run formnet, a wireguard based p2p VPN tunnel, behind the scenes
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::time::Duration;
-use shared::interface_config::InterfaceConfig;
-use shared::{Cidr, CidrTree, Endpoint, Interface, NatOpts, NetworkOpts, Peer};
-use tokio::{net::TcpListener, sync::broadcast::Receiver};
-use wireguard_control::{Backend, InterfaceName};
-use client::util::Api;
-use conductor::subscriber::SubStream;
-use form_types::{FormnetMessage, FormnetTopic};
-use alloy::signers::k256::ecdsa::{SigningKey, VerifyingKey};
-use rand_core::OsRng;
-use formnet::*;
+use alloy_core::primitives::Address;
+use k256::ecdsa::SigningKey;
+use clap::{Parser, Subcommand, Args};
+use form_config::OperatorConfig;
+use form_types::PeerType;
+use formnet::{init::init, serve::serve};
+use formnet::{ensure_crdt_datastore, leave, request_to_join, uninstall, user_join_formnet, vm_join_formnet, NETWORK_NAME};
+#[cfg(target_os = "linux")]
+use formnet::{revert_formnet_resolver, set_formnet_resolver}; 
 
-#[derive(Debug, Parser)]
-struct Opts {
+#[derive(Clone, Debug, Parser)]
+struct Cli {
+    #[clap(subcommand)]
+    opts: Membership,
+}
+
+#[derive(Clone, Debug, Subcommand)]
+enum Membership {
+    #[command(alias="node", subcommand)]
+    Operator(OperatorOpts),
+    #[command(alias="dev")]
+    User(UserOpts),
+    #[command(alias="vm")]
+    Instance
+}
+
+#[derive(Clone, Debug, Subcommand)]
+enum OperatorOpts {
+    #[command(alias="install")]
+    Join(OperatorJoinOpts),
+    #[command(alias="uninstall")]
+    Leave(OperatorLeaveOpts)
+}
+
+#[derive(Clone, Debug, Args)]
+struct OperatorJoinOpts {
+    /// The path to the operator config file 
+    #[arg(long="config-path", short='C', aliases=["config", "config-file"], default_value_os_t=PathBuf::from(".operator-config.json"))]
+    config_path: PathBuf,
+    /// 1 or more bootstrap nodes that are known
+    /// and already active in the Network
+    /// Will eventually be replaced with a discovery service
     #[arg(short, long, alias="bootstrap")]
-    to_dial: Option<String>,
+    bootstraps: Vec<String>,
+    /// A 20 byte hex string that represents an ethereum address
+    #[arg(short, long="signing-key", aliases=["private-key", "secret-key"])]
+    signing_key: Option<String>,
+    #[arg(short, long, default_value="true")]
+    encrypted: bool,
     #[arg(short, long)]
-    public_key: Option<String>,
-    #[arg(short, long, alias="port", default_value="51820")]
-    listen_port: u16,
-    #[arg(short, long, alias="addr")]
-    ip_addr: Option<String>,
-    #[arg(short, long, alias="url")]
-    domain: Option<String>
+    password: Option<String>,
+}
+
+#[derive(Clone, Debug, Args)]
+struct OperatorLeaveOpts {
+    /// The path to the operator config file 
+    #[arg(long="config-path", short='C', aliases=["config", "config-file"], default_value_os_t=PathBuf::from(".operator-config.json"))]
+    config_path: PathBuf,
+    /// 1 or more bootstrap nodes that are known
+    /// and already active in the Network
+    /// Will eventually be replaced with a discovery service
+    #[arg(short, long, alias="bootstrap")]
+    bootstraps: Vec<String>,
+    /// A 20 byte hex string that represents an ethereum address
+    #[arg(short, long="signing-key", aliases=["private-key", "secret-key"])]
+    signing_key: Option<String>,
+    #[arg(short, long, default_value="true")]
+    encrypted: bool,
+    #[arg(short, long)]
+    password: Option<String>,
+}
+
+#[derive(Clone, Debug, Args)]
+struct UserOpts {
+    #[arg(alias="endpoint")]
+    provider: String, 
+    #[arg(alias="endpoint-port")]
+    port: u16,
+    #[arg(long, short)]
+    secret_key: String,
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    simple_logger::init_with_level(log::Level::Info).unwrap();
 
-    simple_logger::SimpleLogger::new().init().unwrap();
-
-    let parser = Opts::parse();
-    log::info!("{parser:?}");
-
-    let interface_handle = if let Some(to_dial) = parser.to_dial {
-        // A bootstrap node was provided, request that the 
-        // new operator (local) be added to the network
-        // as a peer.
-        let client = Client::new();
-        //TODO: write keypair to file to save for later use
-        let public_key = if let Some(ref pk) = parser.public_key {
-            pk.clone()
-        } else {
-            let signing_key = SigningKey::random(&mut OsRng);
-            let verifying_key = VerifyingKey::from(signing_key);
-            hex::encode(&verifying_key.to_encoded_point(false).to_bytes())
-        };
-        
-        log::info!("PublicKey: {public_key}");
-        //TODO: issue challenge/response
-        let response = client.post(format!("http://{to_dial}:3001/join"))
-            .json(
-                &JoinRequest::OperatorJoinRequest(
-                    OperatorJoinRequest { 
-                        operator_id: public_key 
-                    }
-                )
-            ).send().await?;
-
-        log::info!("{:?}", response);
-
-        let status = response.status().clone();
-
-        // Let's print out the error response body if we get a non-success status
-        if !response.status().is_success() {
-            let error_body = response.text().await?.clone();
-            log::info!("Error response body: {}", error_body);
-            // Now fail the test
-            panic!("Request failed with status {} and error: {}", status, error_body);
-        }
-
-        assert!(response.status().is_success());
-        let join_response = response.json::<JoinResponse>().await?;
-        log::info!("{}", serde_json::to_string_pretty(&join_response)?);
-        let handle = tokio::spawn(async move {
-            match join_response {
-                JoinResponse::Success { invitation } => {
-                    let network_opts = NetworkOpts {
-                        backend: Backend::Kernel,
-                    mtu: None,
-                    no_routing: false,
-                    };
-                    let interface_name = InterfaceName::from_str("formnet")?;
-                    let config_dir = PathBuf::from("/etc/formnet");
-                    let target_conf = config_dir.join(interface_name.to_string()).with_extension("conf");
-                    redeem_invite(&interface_name, invitation, target_conf, network_opts)?;
-
-                    let data_dir = PathBuf::from("/var/lib/formnet");
-                    if let Err(e) = up(
-                        Some(interface_name.into()), 
-                        &config_dir, 
-                        &data_dir, 
-                        &NetworkOpts::default(), 
-                        Some(Duration::from_secs(60)), 
-                        None,
-                        &NatOpts::default()
-                    ) {
-                        log::error!("Error bringing formnet up: {e}")
-                    }
-
-                    return Ok(())
-                }
-                JoinResponse::Error(e) => {
-                    return Err(
-                        Box::new(
-                            std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                e
-                            )
-                        ) as Box<dyn std::error::Error + Send + Sync + 'static>
-                    )
-                }
-            }
-        });
-
-        handle
-    } else {
-        // No bootstrap was provided create and serve formnet as server
-        log::info!("Attempting to start formnet server, no bootstrap provided...");
-        
-        let handle = tokio::spawn(async move {
-            log::info!("Building server config...");
-            let conf = ServerConfig { config_dir: SERVER_CONFIG_DIR.into(), data_dir: SERVER_DATA_DIR.into() };
-            log::info!("Building init options...");
-            let mut init_opts = InitializeOpts::default(); 
-            if let Some(ip_addr) = parser.ip_addr {
-                let addr: SocketAddr = format!("{ip_addr}:{}", parser.listen_port).parse()?;
-                init_opts.external_endpoint = Some(Endpoint::from(addr));
-                init_opts.listen_port = Some(parser.listen_port);
-                init_opts.auto_external_endpoint = false;
-            } else if let Some(domain_name) = parser.domain {
-                init_opts.external_endpoint = 
-                    Some(
-                        Endpoint::from_str(&format!("{domain_name}:{}", parser.listen_port))?
-                    );
-                init_opts.listen_port = Some(parser.listen_port);
-                init_opts.auto_external_endpoint = false;
-            } else {
-                init_opts.auto_external_endpoint = true;
-            }
-            let network_cidr = Some(
-                IpNet::V4("10.0.0.0/8".parse()?)
-            );
-            init_opts.network_cidr = network_cidr;
-            log::info!("Acquiring interface name...");
-            let interface_name = InterfaceName::from_str("formnet")?;
-            init_opts.network_name = Some(Interface::from(interface_name)); 
-            log::info!("Building network opts...");
-            let network_opts = NetworkOpts {
-                backend: Backend::Kernel,
-                mtu: None,
-                no_routing: false,
-            };
-
-            log::info!("Initializing the server");
-            init(&conf, init_opts)?;
-            log::info!("Serving the server...");
-            serve(interface_name, &conf, network_opts).await?;
-            log::info!("Server shutdown, cleaning up...");
-            uninstall(&interface_name, &conf, network_opts, true)?;
-
-            Ok::<(), Box<dyn std::error::Error + Send + Sync + 'static>>(())
-        });
-
-        handle
-    };
-
-    let (tx, rx) = tokio::sync::broadcast::channel(3);
-    let _api_shutdown = tx.subscribe();
+    let cli = Cli::parse();
+    log::info!("{cli:?}");
     
-    log::info!("Spawning API Server for taking join requests...");
-    let api_handle = tokio::spawn(async move {
-        let api = create_router();
-        let listener = TcpListener::bind("0.0.0.0:3001").await?;
+    match cli.opts {
+        Membership::Operator(parser) => {
+            match parser {
+                OperatorOpts::Join(parser) => {
+                    let operator_config = OperatorConfig::from_file(
+                        parser.config_path,
+                        parser.encrypted,
+                        parser.password.as_deref(),
+                    ).ok();
+                    let signing_key = if parser.signing_key.is_none() {
+                        let config = operator_config.clone().expect("If signing key is not provided, a valid operator config file must be provided");
+                        config.secret_key.expect("Config is guaranteed to have a secret key at this point, if not something went terribly wrong")
+                    } else {
+                        parser.signing_key.unwrap()
+                    };
+                    let address = hex::encode(Address::from_private_key(&SigningKey::from_slice(&hex::decode(&signing_key)?)?));
+                    let my_ip = if !parser.bootstraps.is_empty() {
+                        log::info!("Found bootstrap in parser...");
+                        let my_ip = request_to_join(
+                            parser.bootstraps.clone(),
+                            address.clone(),
+                            PeerType::Operator
+                        ).await?;
+                        ensure_crdt_datastore().await?;
+                        my_ip
+                    } else if !operator_config.clone().unwrap().bootstrap_nodes.is_empty() {
+                        log::info!("Found bootstrap in config...");
+                        let my_ip = request_to_join(
+                            operator_config.clone().unwrap().bootstrap_nodes.clone(),
+                            address.clone(),
+                            PeerType::Operator
+                        ).await?;
+                        ensure_crdt_datastore().await?;
+                        my_ip
+                    } else {
+                        init(address.clone()).await?
+                    };
 
-        let _ = axum::serve(
-            listener,
-            api
-        ).await?;
+                    let (shutdown, _) = tokio::sync::broadcast::channel::<()>(2);
+                    let mut formnet_receiver = shutdown.subscribe();
+                    let inner_address = address.clone();
+                    let bootstraps = if !parser.bootstraps.is_empty() {
+                        parser.bootstraps.clone() 
+                    } else if let Some(config) = operator_config {
+                        config.bootstrap_nodes.clone()
+                    } else {
+                        vec![]
+                    };
+                    let formnet_server_handle = tokio::spawn(async move {
+                        tokio::select! {
+                            res = serve(NETWORK_NAME, inner_address, bootstraps) => {
+                                if let Err(e) = res {
+                                    eprintln!("Error trying to serve formnet server: {e}");
+                                }
+                            }
+                            _ = formnet_receiver.recv() => {
+                                eprintln!("Formnet Server: Received shutdown signal");
+                            }
+                        }
+                    });
 
-        Ok::<(), Box<dyn std::error::Error + Send + Sync + 'static>>(())
-    });
-
-    log::info!("Spawning subscriber to broker...");
-    let handle = tokio::spawn(async move {
-        let sub = FormnetSubscriber::new(
-            "127.0.0.1:5556",
-            vec![
-                FormnetTopic.to_string()
-            ]
-        ).await?;
-        log::info!("Created formnet subscriber...");
-        if let Err(e) = run(
-            sub,
-            rx
-        ).await {
-            log::error!("Error running formnet handler: {e}");
-        }
-
-        Ok::<(), Box<dyn std::error::Error + Send + Sync + 'static>>(())
-    });
-
-    tokio::signal::ctrl_c().await?;
-
-    if let Err(e) = tx.send(()) {
-        log::info!("Error sending shutdown signal: {e}");
-    }
-    let _ = handle.await?;
-    let _ = api_handle.await?;
-    let _ = interface_handle.await?;
-
-    Ok(())
-}
-
-async fn run(
-    mut subscriber: impl SubStream<Message = Vec<FormnetMessage>>,
-    mut shutdown: Receiver<()>
-) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-    log::info!("Starting main formnet handler loop");
-    loop {
-        tokio::select! {
-            Ok(msg) = subscriber.receive() => {
-                for m in msg {
-                    if let Err(e) = handle_message(&m).await {
-                        log::error!("Error handling message {m:?}: {e}");
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    log::info!("reverting existing resolver for formnet interface");
+                    #[cfg(target_os = "linux")]
+                    if let Ok(()) = revert_formnet_resolver().await {
+                        #[cfg(target_os = "linux")]
+                        set_formnet_resolver(&my_ip.to_string(), "~fog").await?;
+                        log::info!("Setting up dns resolver");
                     }
+
+                    tokio::signal::ctrl_c().await?;
+                    shutdown.send(())?;
+                    formnet_server_handle.await?;
+                }
+                OperatorOpts::Leave(parser) => {
+                    let operator_config = OperatorConfig::from_file(
+                        parser.config_path,
+                        parser.encrypted,
+                        parser.password.as_deref(),
+                    ).ok();
+                    let signing_key = if parser.signing_key.is_none() {
+                        let config = operator_config.clone().expect("If signing key is not provided, a valid operator config file must be provided");
+                        config.secret_key.expect("Config is guaranteed to have a secret key at this point, if not something went terribly wrong")
+                    } else {
+                        parser.signing_key.unwrap()
+                    };
+                    leave(parser.bootstraps.clone(), signing_key).await?; 
+                    uninstall().await?;
                 }
             }
-            _ = tokio::time::sleep(Duration::from_secs(30)) => {
-                log::info!("Heartbeat...");
-            }
-            _ = shutdown.recv() => {
-                log::error!("Received shutdown signal for Formnet");
-                break;
-            }
+        }
+        Membership::User(opts) => {
+            let address = hex::encode(Address::from_private_key(&SigningKey::from_slice(&hex::decode(&opts.secret_key)?)?));
+            user_join_formnet(address, opts.provider).await?;
+        } 
+        Membership::Instance => {
+            vm_join_formnet().await?;
         }
     }
 
     Ok(())
 }
-
-async fn handle_message(
-    message: &FormnetMessage
-) -> Result<(), Box<dyn std::error::Error>> {
-    use form_types::FormnetMessage::*;
-    log::info!("Received message: {message:?}");
-    match message {
-        AddPeer { peer_type, peer_id, callback } => {
-            if is_server() {
-                log::info!("Receiving node is Server, adding peer from server...");
-                let server_config = ServerConfig { 
-                    config_dir: PathBuf::from(SERVER_CONFIG_DIR), 
-                    data_dir: PathBuf::from(SERVER_DATA_DIR)
-                };
-                log::info!("Built Server Config...");
-                let inet = InterfaceName::from_str(FormnetMessage::INTERFACE_NAME)?;
-                log::info!("Acquired interface name...");
-                if let Ok(invitation) = server_add_peer(
-                    &inet,
-                    &server_config,
-                    &peer_type.into(),
-                    peer_id,
-                ).await {
-                    return server_respond_with_peer_invitation(
-                        invitation,
-                        *callback
-                    ).await;
-                }
-            }
-
-            let InterfaceConfig { server, ..} = InterfaceConfig::from_interface(
-                PathBuf::from(CONFIG_DIR).as_path(), 
-                &InterfaceName::from_str(
-                    FormnetMessage::INTERFACE_NAME
-                )?
-            )?;
-            let api = Api::new(&server);
-            log::info!("Fetching CIDRs...");
-            let cidrs: Vec<Cidr> = api.http("GET", "/admin/cidrs")?;
-            log::info!("Fetching Peers...");
-            let peers: Vec<Peer> = api.http("GET", "/admin/peers")?;
-            log::info!("Creating CIDR Tree...");
-            let cidr_tree = CidrTree::new(&cidrs[..]);
-
-            if let Ok((content, keypair)) = add_peer(
-                &peers, &cidr_tree, &peer_type.into(), peer_id
-            ).await {
-                log::info!("Creating peer...");
-                let peer: Peer = api.http_form("POST", "/admin/peers", content)?;
-                respond_with_peer_invitation(
-                    &peer,
-                    server.clone(), 
-                    &cidr_tree, 
-                    keypair, 
-                    *callback
-                ).await?;
-            }
-        },
-        DisablePeer => {},
-        EnablePeer => {},
-        SetListenPort => {},
-        OverrideEndpoint => {},
-    }
-    Ok(())
-}
-
-// Create formnet from CLI, Config or Wizard 
-// If done via wizard save to file
-// Listen for messages on topic "Network" from broker
-// Handle messages
-//
-// Formnet service can:
-//  1. Add peers
-//  2. Remove peers
-//  3. Add CIDRs
-//  4. Remove CIDRs
-//  5. Rename Peers
-//  6. Rename CIDRs
-//  7. Enable Peers
-//  8. Disable Peers
-//  9. Manage Associations
-//  10. Manage Endpoints
-//
-// When a new peer joins the network, a join token will be sent to them
-// which they will then "install" via their formnet network service.
-//
-// In the formnet there are 3 types of peers:
-//  1. Operators - All operators are admins and can add CIDRs, Peers, Associations, etc.
-//                 All operators run a "server" replica.
-//
-//  2. Users - Users run a simple client, they are added as a peer, and in future version
-//             will have more strictly managed associations to ensure they only have
-//             access to the resources they own. In the first version, they have access
-//             to the entire network, but instances and resources use internal auth mechanisms
-//             such as public/private key auth to provide security.
-//
-//  3. Instances - Instances are user owned resources, such as Virtual Machines, containers,
-//                 etc. Instances are only manageable by their owner. Once they are up and
-//                 running the rest of the network just knows they are there. Operators that
-//                 are responsible for a given instance can be financially penalized for not
-//                 maintaining the instance in the correct state/status.
-// 
-
-// So what do we need this to do
-// 1. Listen on `topic` for relevant messages from the MessageBroker
-// 2. When a message is received, match that message on an action
-// 3. Handle the action (by using the API).

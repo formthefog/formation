@@ -1,5 +1,5 @@
 // vmm-service/src/lib.rs
-
+pub mod net_setup;
 pub mod error;
 pub mod config;
 pub mod instance;

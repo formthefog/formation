@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use colored::*;
 use shared::{
     AddCidrOpts, AddPeerOpts, DeleteCidrOpts, EnableDisablePeerOpts, NetworkOpts, RenameCidrOpts,
@@ -7,11 +7,16 @@ use shared::{
 use std::{env, path::PathBuf};
 
 use formnet_server::{
-    add_cidr, add_peer, delete_cidr, enable_or_disable_peer,
-    initialize::{self, InitializeOpts},
-    rename_cidr, rename_peer, serve, uninstall, ServerConfig,
+    db::{CrdtMap, Sqlite}, initialize::{self, InitializeOpts}, FormnetNode, ServerConfig
 };
 use shared::Interface;
+
+#[derive(Clone, Debug, ValueEnum)]
+pub enum Datastore {
+    Sql,
+    Crdt
+}
+
 
 #[derive(Debug, Parser)]
 #[command(name = "innernet-server", author, version, about)]
@@ -27,6 +32,9 @@ struct Opts {
 
     #[clap(flatten)]
     network: NetworkOpts,
+
+    #[clap(value_enum, short, long, default_value_t = Datastore::Crdt)]
+    datastore: Datastore
 }
 
 #[derive(Debug, Subcommand)]
@@ -141,22 +149,63 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             }
         },
-        Command::Uninstall { interface, yes } => uninstall(&interface, &conf, opts.network, yes)?,
+        Command::Uninstall { interface, yes } => {
+            match opts.datastore {
+                Datastore::Crdt => <CrdtMap as FormnetNode>::uninstall(&CrdtMap, &interface, &conf, opts.network, yes).await?,
+                Datastore::Sql => <Sqlite as FormnetNode>::uninstall(&Sqlite, &interface, &conf, opts.network, yes).await?
+            }
+        }
         Command::Serve {
             interface,
             network: routing,
-        } => serve(*interface, &conf, routing).await?,
-        Command::AddPeer { interface, args } => add_peer(&interface, &conf, args, opts.network)?,
-        Command::RenamePeer { interface, args } => rename_peer(&interface, &conf, args)?,
+        } => {
+            match opts.datastore {
+                Datastore::Crdt => <CrdtMap as FormnetNode>::serve(*interface, &conf, routing).await?,
+                Datastore::Sql => <Sqlite as FormnetNode>::serve(*interface, &conf, routing).await?
+            }
+        }
+        Command::AddPeer { interface, args } => {
+            match opts.datastore {
+                Datastore::Crdt => <CrdtMap as FormnetNode>::add_peer(&CrdtMap, &interface, &conf, args, opts.network).await?,
+                Datastore::Sql => <Sqlite as FormnetNode>::add_peer(&Sqlite, &interface, &conf, args, opts.network).await?
+            }
+        },
+        Command::RenamePeer { interface, args } => {
+            match opts.datastore {
+                Datastore::Crdt => <CrdtMap as FormnetNode>::rename_peer(&CrdtMap, &interface, &conf, args).await?,
+                Datastore::Sql => <Sqlite as FormnetNode>::rename_peer(&Sqlite, &interface, &conf, args).await?
+            }
+        },
         Command::DisablePeer { interface, args } => {
-            enable_or_disable_peer(&interface, &conf, false, opts.network, args)?
+            match opts.datastore {
+                Datastore::Crdt => <CrdtMap as FormnetNode>::enable_or_disable_peer(&CrdtMap, &interface, &conf, false, opts.network, args).await?,
+                Datastore::Sql => <Sqlite as FormnetNode>::enable_or_disable_peer(&Sqlite, &interface, &conf, false, opts.network, args).await?
+            }
         },
         Command::EnablePeer { interface, args } => {
-            enable_or_disable_peer(&interface, &conf, true, opts.network, args)?
+            match opts.datastore {
+                Datastore::Crdt => <CrdtMap as FormnetNode>::enable_or_disable_peer(&CrdtMap, &interface, &conf, true, opts.network, args).await?,
+                Datastore::Sql => <Sqlite as FormnetNode>::enable_or_disable_peer(&Sqlite, &interface, &conf, true, opts.network, args).await?
+            }
         },
-        Command::AddCidr { interface, args } => add_cidr(&interface, &conf, args)?,
-        Command::RenameCidr { interface, args } => rename_cidr(&interface, &conf, args)?,
-        Command::DeleteCidr { interface, args } => delete_cidr(&interface, &conf, args)?,
+        Command::AddCidr { interface, args } => {
+            match opts.datastore {
+                Datastore::Crdt => <CrdtMap as FormnetNode>::add_cidr(&CrdtMap, &interface, &conf, args).await?,
+                Datastore::Sql => <Sqlite as FormnetNode>::add_cidr(&Sqlite, &interface, &conf, args).await?,
+            }
+        },
+        Command::RenameCidr { interface, args } => {
+            match opts.datastore {
+                Datastore::Crdt => <CrdtMap as FormnetNode>::rename_cidr(&CrdtMap, &interface, &conf, args).await?,
+                Datastore::Sql => <Sqlite as FormnetNode>::rename_cidr(&Sqlite, &interface, &conf, args).await?,
+            }
+        },
+        Command::DeleteCidr { interface, args } => {
+            match opts.datastore {
+                Datastore::Crdt => <CrdtMap as FormnetNode>::delete_cidr(&CrdtMap, &interface, &conf, args).await?,
+                Datastore::Sql => <Sqlite as FormnetNode>::delete_cidr(&Sqlite, &interface, &conf, args).await?,
+            }
+        }
         Command::Completions { shell } => {
             use clap::CommandFactory;
             let mut app = Opts::command();

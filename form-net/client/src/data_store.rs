@@ -1,28 +1,26 @@
 use shared::Error;
 use anyhow::bail;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use shared::{chmod, ensure_dirs_exist, Cidr, IoErrorContext, Peer, WrappedIoError};
 use std::{
-    fs::{File, OpenOptions},
-    io::{self, Read, Seek, Write},
-    path::{Path, PathBuf},
+    fmt::Display, fs::{File, OpenOptions}, io::{self, Read, Seek, Write}, path::{Path, PathBuf}
 };
 use wireguard_control::InterfaceName;
 
 #[derive(Debug)]
-pub struct DataStore {
+pub struct DataStore<T: Display + Clone + PartialEq + Serialize + DeserializeOwned> {
     file: File,
-    contents: Contents,
+    contents: Contents<T>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "version")]
-pub enum Contents {
+pub enum Contents<T: Display + Clone + PartialEq> {
     #[serde(rename = "1")]
-    V1 { peers: Vec<Peer>, cidrs: Vec<Cidr> },
+    V1 { peers: Vec<Peer<T>>, cidrs: Vec<Cidr<T>> },
 }
 
-impl DataStore {
+impl<T: Display + Clone + PartialEq + Serialize + DeserializeOwned> DataStore<T> {
     pub(self) fn open_with_path<P: AsRef<Path>>(
         path: P,
         create: bool,
@@ -77,7 +75,7 @@ impl DataStore {
         Self::_open(data_dir, interface, true)
     }
 
-    pub fn peers(&self) -> &[Peer] {
+    pub fn peers(&self) -> &[Peer<T>] {
         match &self.contents {
             Contents::V1 { peers, .. } => peers,
         }
@@ -91,7 +89,7 @@ impl DataStore {
     ///
     /// Note, however, that this does not prevent a compromised server from adding a new
     /// peer under its control, of course.
-    pub fn update_peers(&mut self, current_peers: &[Peer]) -> Result<(), Error> {
+    pub fn update_peers(&mut self, current_peers: &[Peer<T>]) -> Result<(), Error> {
         let peers = match &mut self.contents {
             Contents::V1 { ref mut peers, .. } => peers,
         };
@@ -99,6 +97,10 @@ impl DataStore {
         for new_peer in current_peers.iter() {
             if let Some(existing_peer) = peers.iter_mut().find(|p| p.ip == new_peer.ip) {
                 if existing_peer.public_key != new_peer.public_key {
+                    log::error!(
+                        "PEER IP: {}, existing peer public key: {} new peer public key: {}",
+                        existing_peer.ip, existing_peer.public_key, new_peer.public_key
+                    );
                     bail!("PINNING ERROR: New peer has same IP but different public key.");
                 } else {
                     *existing_peer = new_peer.clone();
@@ -120,13 +122,13 @@ impl DataStore {
         Ok(())
     }
 
-    pub fn cidrs(&self) -> &[Cidr] {
+    pub fn cidrs(&self) -> &[Cidr<T>] {
         match &self.contents {
             Contents::V1 { cidrs, .. } => cidrs,
         }
     }
 
-    pub fn set_cidrs(&mut self, new_cidrs: Vec<Cidr>) {
+    pub fn set_cidrs(&mut self, new_cidrs: Vec<Cidr<T>>) {
         match &mut self.contents {
             Contents::V1 { ref mut cidrs, .. } => *cidrs = new_cidrs,
         }
@@ -146,7 +148,7 @@ mod tests {
     use super::*;
     use once_cell::sync::Lazy;
     use shared::{Cidr, CidrContents, Peer, PeerContents};
-    static BASE_PEERS: Lazy<Vec<Peer>> = Lazy::new(|| {
+    static BASE_PEERS: Lazy<Vec<Peer<i64>>> = Lazy::new(|| {
         vec![Peer {
             id: 0,
             contents: PeerContents {
@@ -164,7 +166,7 @@ mod tests {
             },
         }]
     });
-    static BASE_CIDRS: Lazy<Vec<Cidr>> = Lazy::new(|| {
+    static BASE_CIDRS: Lazy<Vec<Cidr<i64>>> = Lazy::new(|| {
         vec![Cidr {
             id: 1,
             contents: CidrContents {

@@ -3,6 +3,10 @@ name = "form-pack"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+treehacks = []
+
 [[bin]]
 name = "form-build-server"
 path = "src/bin/build_server.rs"
@@ -35,3 +39,13 @@ tower = { version = "0.5", features = ["make"] }
 hyper-util = { version = "0.1", features = ["server"] }
 hyperlocal = "0.9"
 random_word = { version = "0.4.3", features = ["en"] }
+tiny-keccak = { version = "2.0.2", features = ["sha3"] }
+form-p2p = { path = "../form-p2p/" }
+form-state = { path = "../form-state" }
+crdts = { git = "http://github.com/Cryptonomikhan/rust-crdt", rev = "1fe4992" }
+hex = "0.4" 
+alloy-primitives = { version = "0.8", features = ["k256"] } 
+k256 = { version = "0.13", features = ["ecdsa", "ecdsa-core"]}
+get_if_addrs = "0.5"
+form-config = { path = "../form-config" }
+log = "0.4"

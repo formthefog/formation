@@ -2,10 +2,9 @@ use std::path::PathBuf;
 
 use clap::Args;
 use form_pack::formfile::FormfileParser;
-use vmm_service::util::default_formfile;
-use crate::default_context;
+use crate::{default_context, default_formfile};
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct ValidateCommand {
     #[clap(default_value_os_t=default_formfile(default_context()))]
     formfile: PathBuf

@@ -70,7 +70,7 @@ impl Display for Interface {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 /// An external endpoint that supports both IP and domain name hosts.
 pub struct Endpoint {
     host: Host,
@@ -185,22 +185,22 @@ impl From<Option<Endpoint>> for EndpointContents {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug)]
-pub struct AssociationContents {
-    pub cidr_id_1: i64,
-    pub cidr_id_2: i64,
+#[derive(Clone, Deserialize, Serialize, Debug)]
+pub struct AssociationContents<T> {
+    pub cidr_id_1: T,
+    pub cidr_id_2: T,
 }
 
-#[derive(Deserialize, Serialize, Debug)]
-pub struct Association {
-    pub id: i64,
+#[derive(Clone, Deserialize, Serialize, Debug)]
+pub struct Association<T: Display + Clone + PartialEq, K: Clone + PartialEq> {
+    pub id: K,
 
     #[serde(flatten)]
-    pub contents: AssociationContents,
+    pub contents: AssociationContents<T>,
 }
 
-impl Deref for Association {
-    type Target = AssociationContents;
+impl<T: Display + Clone + PartialEq, K: Display + Clone + PartialEq> Deref for Association<T, K> {
+    type Target = AssociationContents<T>;
 
     fn deref(&self) -> &Self::Target {
         &self.contents
@@ -208,13 +208,13 @@ impl Deref for Association {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, PartialOrd, Eq, Ord)]
-pub struct CidrContents {
+pub struct CidrContents<T: Display + Clone + PartialEq> {
     pub name: String,
     pub cidr: IpNet,
-    pub parent: Option<i64>,
+    pub parent: Option<T>,
 }
 
-impl Deref for CidrContents {
+impl<T: Display + Clone + PartialEq> Deref for CidrContents<T> {
     type Target = IpNet;
 
     fn deref(&self) -> &Self::Target {
@@ -223,21 +223,21 @@ impl Deref for CidrContents {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, PartialOrd, Eq, Ord)]
-pub struct Cidr {
-    pub id: i64,
+pub struct Cidr<T: Display + Clone + PartialEq> {
+    pub id: T,
 
     #[serde(flatten)]
-    pub contents: CidrContents,
+    pub contents: CidrContents<T>,
 }
 
-impl Display for Cidr {
+impl<T: Display + Clone + PartialEq> Display for Cidr<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{} ({})", self.name, self.cidr)
     }
 }
 
-impl Deref for Cidr {
-    type Target = CidrContents;
+impl<T: Display + Clone + PartialEq> Deref for Cidr<T> {
+    type Target = CidrContents<T>;
 
     fn deref(&self) -> &Self::Target {
         &self.contents
@@ -245,21 +245,21 @@ impl Deref for Cidr {
 }
 
 #[derive(Clone, PartialEq, PartialOrd, Eq, Ord)]
-pub struct CidrTree<'a> {
-    cidrs: &'a [Cidr],
-    contents: &'a Cidr,
+pub struct CidrTree<'a, T: Display + Clone + PartialEq> {
+    cidrs: &'a [Cidr<T>],
+    contents: &'a Cidr<T>,
 }
 
-impl<'a> std::ops::Deref for CidrTree<'a> {
-    type Target = Cidr;
+impl<'a, T: Display + Clone + PartialEq> std::ops::Deref for CidrTree<'a, T> {
+    type Target = Cidr<T>;
 
     fn deref(&self) -> &Self::Target {
         self.contents
     }
 }
 
-impl<'a> CidrTree<'a> {
-    pub fn new(cidrs: &'a [Cidr]) -> Self {
+impl<'a, T: Display + Clone + PartialEq> CidrTree<'a, T> {
+    pub fn new(cidrs: &'a [Cidr<T>]) -> Self {
         let root = cidrs
             .iter()
             .min_by_key(|c| c.cidr.prefix_len())
@@ -267,25 +267,25 @@ impl<'a> CidrTree<'a> {
         Self::with_root(cidrs, root)
     }
 
-    pub fn with_root(cidrs: &'a [Cidr], root: &'a Cidr) -> Self {
+    pub fn with_root(cidrs: &'a [Cidr<T>], root: &'a Cidr<T>) -> Self {
         Self {
             cidrs,
             contents: root,
         }
     }
 
-    pub fn children(&self) -> impl Iterator<Item = CidrTree<'_>> {
+    pub fn children(&self) -> impl Iterator<Item = CidrTree<'_, T>> {
         self.cidrs
             .iter()
-            .filter(move |c| c.parent == Some(self.contents.id))
+            .filter(move |c| c.parent == Some(self.contents.id.clone()))
             .map(move |c| CidrTree {
                 cidrs: self.cidrs,
                 contents: c,
             })
     }
 
-    pub fn leaves(&self) -> Vec<Cidr> {
-        if !self.cidrs.iter().any(|cidr| cidr.parent == Some(self.id)) {
+    pub fn leaves(&self) -> Vec<Cidr<T>> {
+        if !self.cidrs.iter().any(|cidr| cidr.parent == Some(self.id.clone())) {
             vec![self.contents.clone()]
         } else {
             self.children().flat_map(|child| child.leaves()).collect()
@@ -530,17 +530,20 @@ impl Default for NetworkOpts {
     fn default() -> Self {
         Self {
             no_routing: false,
+            #[cfg(target_os = "linux")]
             backend: Backend::Kernel,
+            #[cfg(not(target_os = "linux"))]
+            backend: Backend::Userspace,
             mtu: None 
         }
     }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub struct PeerContents {
+pub struct PeerContents<T: Display + Clone + PartialEq> {
     pub name: Hostname,
     pub ip: IpAddr,
-    pub cidr_id: i64,
+    pub cidr_id: T,
     pub public_key: String,
     pub endpoint: Option<Endpoint>,
     pub persistent_keepalive_interval: Option<u16>,
@@ -553,28 +556,28 @@ pub struct PeerContents {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub struct Peer {
-    pub id: i64,
+pub struct Peer<T: Display + Clone + PartialEq> {
+    pub id: T,
 
     #[serde(flatten)]
-    pub contents: PeerContents,
+    pub contents: PeerContents<T>,
 }
 
-impl Deref for Peer {
-    type Target = PeerContents;
+impl<T: Display + Clone + PartialEq> Deref for Peer<T> {
+    type Target = PeerContents<T>;
 
     fn deref(&self) -> &Self::Target {
         &self.contents
     }
 }
 
-impl DerefMut for Peer {
+impl<T: Display + Clone + PartialEq> DerefMut for Peer<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.contents
     }
 }
 
-impl Display for Peer {
+impl<T: Display + Clone + PartialEq> Display for Peer<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} ({})", &self.name, &self.public_key)
     }
@@ -636,17 +639,17 @@ impl<T: std::fmt::Debug> OptionExt for Option<T> {
 /// Encompasses the logic for comparing the peer configuration currently on the WireGuard interface
 /// to a (potentially) more current peer configuration from the innernet server.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PeerDiff<'a> {
+pub struct PeerDiff<'a, T: Display + Clone + PartialEq> {
     pub old: Option<&'a PeerConfig>,
-    pub new: Option<&'a Peer>,
+    pub new: Option<&'a Peer<T>>,
     builder: PeerConfigBuilder,
     changes: Vec<PeerChange>,
 }
 
-impl<'a> PeerDiff<'a> {
+impl<'a, T: Display + Clone + PartialEq> PeerDiff<'a, T> {
     pub fn new(
         old_info: Option<&'a PeerInfo>,
-        new: Option<&'a Peer>,
+        new: Option<&'a Peer<T>>,
     ) -> Result<Option<Self>, Error> {
         let old = old_info.map(|p| &p.config);
         match (old_info, new) {
@@ -675,7 +678,7 @@ impl<'a> PeerDiff<'a> {
 
     fn peer_config_builder(
         old_info: Option<&PeerInfo>,
-        new: Option<&Peer>,
+        new: Option<&Peer<T>>,
     ) -> Option<(PeerConfigBuilder, Vec<PeerChange>)> {
         let old = old_info.map(|p| &p.config);
         let public_key = match (old, new) {
@@ -750,8 +753,8 @@ impl<'a> PeerDiff<'a> {
     }
 }
 
-impl<'a> From<&'a Peer> for PeerConfigBuilder {
-    fn from(peer: &Peer) -> Self {
+impl<'a, T: Display + Clone + PartialEq> From<&'a Peer<T>> for PeerConfigBuilder {
+    fn from(peer: &Peer<T>) -> Self {
         PeerDiff::new(None, Some(peer))
             .expect("No Err on explicitly set peer data")
             .expect("None -> Some(peer) will always create a PeerDiff")
@@ -759,10 +762,10 @@ impl<'a> From<&'a Peer> for PeerConfigBuilder {
     }
 }
 
-impl<'a> From<PeerDiff<'a>> for PeerConfigBuilder {
+impl<'a, T: Display + Clone + PartialEq> From<PeerDiff<'a, T>> for PeerConfigBuilder {
     /// Turn a PeerDiff into a minimal set of instructions to update the WireGuard interface,
     /// hopefully minimizing dropped packets and other interruptions.
-    fn from(diff: PeerDiff) -> Self {
+    fn from(diff: PeerDiff<T>) -> Self {
         diff.builder
     }
 }
@@ -770,15 +773,15 @@ impl<'a> From<PeerDiff<'a>> for PeerConfigBuilder {
 /// This model is sent as a response to the /state endpoint, and is meant
 /// to include all the data a client needs to update its WireGuard interface.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct State {
+pub struct State<T: Display + Clone + PartialEq> {
     /// This list will be only the peers visible to the user requesting this
     /// information, not including disabled peers or peers from other CIDRs
     /// that the user's CIDR is not authorized to communicate with.
-    pub peers: Vec<Peer>,
+    pub peers: Vec<Peer<T>>,
 
     /// At the moment, this is all CIDRs, regardless of whether the peer is
     /// eligible to communicate with them or not.
-    pub cidrs: Vec<Cidr>,
+    pub cidrs: Vec<Cidr<T>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -836,7 +839,25 @@ static HOSTNAME_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^([a-z0-9]-?)*[a-
 
 impl Hostname {
     pub fn is_valid(name: &str) -> bool {
-        name.len() < 64 && HOSTNAME_REGEX.is_match(name)
+        if name.len() < 64 {
+            log::info!("Hostname length is ok");
+            if HOSTNAME_REGEX.is_match(name) {
+                log::info!("Hostname matches regex");
+                return true
+            } else {
+                log::error!("Hostname does not match regex");
+            }
+        } else {
+            log::error!("Hostname must be under 64 characters long: proposed name is {} characters", name.len())
+        }
+
+        false
+    }
+}
+
+impl From<String> for Hostname {
+    fn from(value: String) -> Self {
+        Self(value.clone())
     }
 }
 

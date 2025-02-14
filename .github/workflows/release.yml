@@ -1,0 +1,118 @@
+# .github/workflows/release.yml
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-linux:
+    name: Build Linux Binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Install cross-compilation dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools gcc-multilib gcc-x86-64-linux-gnu
+
+      - name: Build Linux (x86_64)
+        run: |
+          cargo build --release --bin form --target x86_64-unknown-linux-gnu --features treehacks 
+          cargo build --release --bin formnet-up --target x86_64-unknown-linux-gnu 
+          # Place built binaries in a dedicated directory
+          mkdir -p release_binaries
+          cp target/x86_64-unknown-linux-gnu/release/form release_binaries/form-linux-x86_64
+          cp target/x86_64-unknown-linux-gnu/release/formnet-up release_binaries/formnet-up-linux-x86_64
+
+      - name: Upload Linux Binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-binaries
+          path: release_binaries
+
+  build-macos:
+    name: Build macOS Binaries
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Build macOS (arm64)
+        run: |
+          cargo build --release --bin form --target aarch64-apple-darwin --features treehacks 
+          cargo build --release --bin formnet-up --target aarch64-apple-darwin
+          # Place built binaries in a dedicated directory
+          mkdir -p release_binaries
+          cp target/aarch64-apple-darwin/release/form release_binaries/form-darwin-arm64
+          cp target/aarch64-apple-darwin/release/formnet-up release_binaries/formnet-up-darwin-arm64
+
+      - name: Upload macOS Binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-binaries
+          path: release_binaries
+
+  release:
+    name: Release
+    needs:
+      - build-linux
+      - build-macos
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Linux Binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-binaries 
+          path: linux_binaries 
+
+      - name: Download macOS Binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-binaries 
+          path: macos_binaries 
+
+      - name: Copy binaries to docs
+        run: |
+          mkdir -p docs/install
+          mkdir -p docs/install/form
+          cp linux_binaries/* docs/install/
+          cp macos_binaries/* docs/install/
+
+          cp .github/install.sh docs/install/form/install.sh
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            docs/install/form-*
+            docs/install/formnet-up-*
+          prerelease: false
+          generate_release_notes: true
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./docs
+          force_orphan: true
+

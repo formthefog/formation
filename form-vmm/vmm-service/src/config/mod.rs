@@ -2,8 +2,6 @@ pub mod wizard;
 use net_util::MacAddr;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::io::{Read, Write};
-use crate::VmmError;
 
 use super::{VmInstanceConfig, ConsoleType}; 
 use vmm::vm_config::{
@@ -47,7 +45,7 @@ pub fn create_vm_config(config: &VmInstanceConfig) -> VmConfig {
                 file: None,
                 mode: ConsoleOutputMode::Socket,
                 iommu: false,
-                socket: Some(PathBuf::from(&format!("/run/form-vm/{}-console.sock", &config.name))), 
+                socket: Some(PathBuf::from(&format!("/run/form-vmm/{}-console.sock", &config.name))), 
             },
             ConsoleConfig {
                 file: None,
@@ -61,7 +59,7 @@ pub fn create_vm_config(config: &VmInstanceConfig) -> VmConfig {
                 file: None,
                 mode: ConsoleOutputMode::Socket,
                 iommu: false,
-                socket: Some(PathBuf::from(&format!("/run/form-vm/{}-console.sock", &config.name))), 
+                socket: Some(PathBuf::from(&format!("/run/form-vmm/{}-console.sock", &config.name))), 
             },
             ConsoleConfig {
                 file: None,

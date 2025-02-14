@@ -3,7 +3,7 @@
 //! Doesn't follow the specific ICE protocol, but takes great inspiration from RFC 8445
 //! and applies it to a protocol more specific to innernet.
 
-use std::time::{Duration, Instant};
+use std::{fmt::Display, time::{Duration, Instant}};
 
 use anyhow::Error;
 use shared::{
@@ -14,17 +14,17 @@ use wireguard_control::{Backend, Device, DeviceUpdate, InterfaceName, Key, PeerC
 
 pub const STEP_INTERVAL: Duration = Duration::from_secs(5);
 
-pub struct NatTraverse<'a> {
+pub struct NatTraverse<'a, T: Display + Clone + PartialEq> {
     interface: &'a InterfaceName,
     backend: Backend,
-    remaining: Vec<Peer>,
+    remaining: Vec<Peer<T>>,
 }
 
-impl<'a> NatTraverse<'a> {
+impl<'a, T: Display + Clone + PartialEq> NatTraverse<'a, T> {
     pub fn new(
         interface: &'a InterfaceName,
         backend: Backend,
-        diffs: &[PeerDiff],
+        diffs: &[PeerDiff<T>],
     ) -> Result<Self, Error> {
         // Filter out removed peers from diffs list.
         let mut remaining: Vec<_> = diffs.iter().filter_map(|diff| diff.new).cloned().collect();

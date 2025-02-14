@@ -1,19 +1,34 @@
+use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 // src/service/vmm.rs
 use std::{collections::HashMap, path::PathBuf};
 use std::net::SocketAddr;
+use alloy_primitives::Address;
+use form_pack::formfile::Formfile;
+use form_state::datastore::InstanceRequest;
+use form_state::instances::{ClusterMember, Instance, InstanceAnnotations, InstanceCluster, InstanceEncryption, InstanceMetadata, InstanceMonitoring, InstanceResources, InstanceSecurity, InstanceStatus};
 use formnet::{JoinRequest, JoinResponse, VmJoinRequest};
+use formnet_server::db::CrdtMap;
+use formnet_server::DatabasePeer;
+use futures::stream::{FuturesUnordered, StreamExt};
 use http_body_util::{BodyExt, Full};
 use hyper::StatusCode;
 use hyper::{body::{Bytes, Incoming},  Method, Request, Response};
 use hyper_util::client::legacy::Client;
 use hyperlocal::{UnixConnector, UnixClientExt, Uri};
+use k256::ecdsa::SigningKey;
+use publicip::Preference;
 use serde::{Serialize, Deserialize, de::DeserializeOwned};
 use shared::interface_config::InterfaceConfig;
 use tokio::net::TcpListener;
 use libc::EFD_NONBLOCK;
 use tokio::io::AsyncReadExt;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 use tokio::sync::broadcast;
+use tokio::time::interval;
 use vmm_sys_util::signal::block_signal;
 use vmm::{api::{VmAddDevice, VmAddUserDevice, VmCoredumpData, VmCounters, VmInfo, VmReceiveMigrationData, VmRemoveDevice, VmResize, VmResizeZone, VmSendMigrationData, VmSnapshotConfig, VmmPingResponse}, config::RestoreConfig, vm_config::{DiskConfig, FsConfig, NetConfig, PmemConfig, VdpaConfig, VsockConfig}, PciDeviceInfo, VmmThreadHandle};
 use vmm_sys_util::eventfd::EventFd;
@@ -22,6 +37,7 @@ use tokio::task::JoinHandle;
 use form_types::{FormnetMessage, FormnetTopic, GenericPublisher, PeerType, VmmEvent, VmmSubscriber};
 use form_broker::{subscriber::SubStream, publisher::PubStream};
 use futures::future::join_all;
+use crate::api::VmmApiChannel;
 use crate::{api::VmmApi, util::ensure_directory};
 use crate::util::add_tap_to_bridge;
 use crate::{ChError, IMAGE_DIR};
@@ -236,7 +252,7 @@ impl FormVmApi {
     }
 
     async fn build_uri(&self, endpoint: &str) -> hyper::http::Uri {
-        log::info!("Building URI...");
+        log::info!("Building URI for {}/{}...", self.socket_path, endpoint);
         Uri::new(
             self.socket_path.clone(), 
             &format!("{}/{}", Self::URI_BASE, endpoint)
@@ -249,6 +265,7 @@ impl FormVmApi {
     }
 
     async fn empty_body_request<T: DeserializeOwned>(&self, endpoint: &str) -> ApiResult<T> {
+        log::info!("Endpoint: {endpoint}");
         let request = Request::builder()
             .method(Method::PUT)
             .uri(self.build_uri(endpoint).await)
@@ -292,6 +309,7 @@ impl FormVmApi {
     }
 
     async fn body_request<T: DeserializeOwned>(&self, endpoint: &str, body: String) -> ApiResult<T> {
+        log::info!("Endpoint: {endpoint}");
         let request = Request::builder()
             .method(Method::PUT)
             .uri(self.build_uri(endpoint).await)
@@ -359,14 +377,18 @@ impl FormVmApi {
     }
 }
 
+#[allow(dead_code, unused)]
 pub struct VmManager {
     vm_monitors: HashMap<String, FormVmm>, 
     server: JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>>,
+    queue_reader: JoinHandle<()>,
     tap_counter: u32,
     formnet_endpoint: String,
     api_response_sender: tokio::sync::mpsc::Sender<String>,
     subscriber: Option<VmmSubscriber>,
+    signing_key: String,
     publisher_addr: Option<String>,
+    create_futures: Arc<Mutex<FuturesUnordered<Pin<Box<dyn Future<Output = Result<VmmEvent, Box<dyn std::error::Error + Send + Sync>>> + Send + 'static>>>>>
 }
 
 impl VmManager {
@@ -374,12 +396,24 @@ impl VmManager {
         event_sender: tokio::sync::mpsc::Sender<VmmEvent>,
         addr: SocketAddr,
         formnet_endpoint: String,
+        signing_key: String,
         subscriber_uri: Option<&str>,
         publisher_addr: Option<String>,
+        shutdown_rx: broadcast::Receiver<()>
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync + 'static>> {
+        let pk = SigningKey::from_slice(
+            &hex::decode(&signing_key)?
+        )?;
+
+        let _node_id = hex::encode(Address::from_private_key(&pk));
         let (resp_tx, resp_rx) = tokio::sync::mpsc::channel(1024);
+        let api_channel = Arc::new(Mutex::new(VmmApiChannel::new(
+            event_sender,
+            resp_rx,
+        )));
+        let api_channel_server = api_channel.clone();
         let server = tokio::task::spawn(async move {
-            let server = VmmApi::new(event_sender, resp_rx, addr);
+            let server = VmmApi::new(api_channel_server.clone(), addr);
             server.start().await?;
             Ok::<(), Box<dyn std::error::Error + Send + Sync + 'static>>(())
         });
@@ -395,15 +429,32 @@ impl VmManager {
             None
         };
 
+        let queue_handle = tokio::task::spawn(async move {
+            if let Err(e) = VmmApi::start_queue_reader(api_channel.clone(), shutdown_rx).await {
+                eprintln!("Error in queue_reader: {e}");
+            }
+        });
+
         Ok(Self {
             vm_monitors: HashMap::new(),
             server, 
             tap_counter: 0,
             formnet_endpoint,
+            signing_key,
             api_response_sender: resp_tx,
             subscriber,
             publisher_addr,
+            queue_reader: queue_handle,
+            create_futures: Arc::new(Mutex::new(FuturesUnordered::new())),
         })
+    }
+
+    pub async fn derive_address(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync + 'static>> {
+        let pk = SigningKey::from_slice(
+            &hex::decode(&self.signing_key)?
+        )?;
+
+        Ok(hex::encode(Address::from_private_key(&pk)))
     }
 
     pub async fn create(
@@ -423,7 +474,7 @@ impl VmManager {
                     )
                 )?
             )?;
-            (Some(format!("{path}/form-vm/{}.sock", config.name)), None)
+            (Some(format!("{path}/form-vmm/{}.sock", config.name)), None)
         } else {
             let sock_path = format!("/run/form-vmm/{}.sock", config.name);
             ensure_directory(
@@ -436,7 +487,7 @@ impl VmManager {
                     )
                 )?
             )?;
-            (Some(format!("/run/form-vm/{}.sock", config.name)), None) 
+            (Some(format!("/run/form-vmm/{}.sock", config.name)), None) 
         };
         log::info!("Established API Socket for vm instance {}: {:?}...", config.name, api_socket_path);
 
@@ -517,10 +568,67 @@ impl VmManager {
             )
         })?;
 
+        let formfile: Formfile = serde_json::from_str(&config.formfile)?;
+
+        let node_id = self.derive_address().await?;
+        let build_id = config.name.clone();
+        log::info!("Deriving instance id from node_id: {node_id} and build_id: {build_id}");
+        let instance_id = form_pack::manager::build_instance_id(node_id, build_id)?; 
+        let mut instance = Instance {
+            instance_id, 
+            node_id: self.derive_address().await?,
+            build_id: config.name.clone(),
+            dns_record: None,
+            formnet_ip: None,
+            instance_owner: config.owner.clone(),
+            created_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
+            updated_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
+            status: InstanceStatus::Created,
+            last_snapshot: 0,
+            host_region: String::new(),
+            formfile: config.formfile.clone(),
+            cluster: InstanceCluster {
+                members: BTreeMap::new()
+            },
+            snapshots: None,
+            metadata: InstanceMetadata {
+                annotations: InstanceAnnotations {
+                    deployed_by: config.owner.clone(),
+                    build_commit: None,
+                    network_id: 0,
+                },
+                description: String::new(),
+                monitoring: InstanceMonitoring {
+                    logging_enabled: false,
+                    metrics_endpoint: String::new()
+                },
+                security: InstanceSecurity {
+                    encryption: InstanceEncryption {
+                        is_encrypted: false,
+                        scheme: None,
+                    },
+                    hsm: false,
+                    tee: false
+                },
+                tags: vec![]
+            },
+            resources: InstanceResources {
+                vcpus: formfile.get_vcpus(),
+                memory_mb: formfile.get_memory() as u32,
+                bandwidth_mbps: 1024,
+                gpu: None
+            },
+        };
+
+        VmmApi::write_to_queue(InstanceRequest::Update(instance.clone()), 4, "state").await?;
+
         log::info!("Inserting Form VMM into vm_monitoris map");
         self.vm_monitors.insert(config.name.clone(), vmm);
         log::info!("Calling `boot` on FormVmm");
         self.boot(&config.name).await?;
+
+        instance.status = InstanceStatus::Started;
+        instance.updated_at = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
 
         if let Err(e) = add_tap_to_bridge("br0", &config.tap_device.clone()).await {
             log::error!("Error attempting to add tap device {} to bridge: {e}", &config.tap_device)
@@ -591,6 +699,8 @@ impl VmManager {
         mut api_rx: mpsc::Receiver<VmmEvent>
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
         if let Some(mut subscriber) = self.subscriber.take() {
+            let futures_clone = self.create_futures.clone();
+            let mut interval = interval(Duration::from_secs(20));
             loop {
                 tokio::select! {
                     res = shutdown_rx.recv() => {
@@ -616,9 +726,20 @@ impl VmManager {
                             }
                         }
                     }
+                    _ = interval.tick() => {
+                        let mut guard = futures_clone.lock().await;
+                        while let Some(Ok(event)) = guard.next().await {
+                            if let Err(e) = self.handle_vmm_event(&event).await {
+                                log::error!("Error while handling event: {event:?}: {e}");
+                            }
+                        }
+                        drop(guard);
+                    }
                 }
             }
         } else {
+            let futures_clone = self.create_futures.clone();
+            let mut interval = interval(Duration::from_secs(20));
             loop {
                 tokio::select! {
                     res = shutdown_rx.recv() => {
@@ -636,6 +757,15 @@ impl VmManager {
                         if let Err(e) = self.handle_vmm_event(&event).await {
                             log::error!("Error while handling event: {event:?}: {e}"); 
                         }
+                    }
+                    _ = interval.tick() => {
+                        let mut guard = futures_clone.lock().await;
+                        while let Some(Ok(event)) = guard.next().await {
+                            if let Err(e) = self.handle_vmm_event(&event).await {
+                                log::error!("Error while handling event: {event:?}: {e}");
+                            }
+                        }
+                        drop(guard);
                     }
                 }
             }
@@ -656,6 +786,7 @@ impl VmManager {
                 ref name, 
                 ..
             } => {
+                log::info!("Instance name: {name}");
                 if PathBuf::from(IMAGE_DIR).join(name).with_extension("raw").exists() {
                     let mut instance_config: VmInstanceConfig = event.try_into()
                         .map_err(|e: VmmError| {
@@ -664,7 +795,6 @@ impl VmManager {
 
                     log::info!("Built VmInstanceConfig... Adding TAP device name");
                     instance_config.tap_device = format!("vmnet{}", self.tap_counter);
-                    instance_config.ip_addr = format!("172.18.0.{}", self.tap_counter + 2);
                     log::info!("Added TAP device name... Incrementing TAP counter...");
                     self.tap_counter += 1;
                     log::info!("Incremented TAP counter... Attempting to create VM");
@@ -673,10 +803,31 @@ impl VmManager {
                     self.create(&mut instance_config).await?;
                     log::info!("Created VM");
                 } else {
+                    let await_event = event.clone();
+                    let await_res = Box::pin(async {
+                        let future = async {
+                            let mut interval = interval(Duration::from_secs(20));
+                            loop {
+                                interval.tick().await;
+                                if let VmmEvent::Create { ref name, .. } = &await_event {
+                                    if PathBuf::from(IMAGE_DIR).join(name).with_extension("raw").exists() {
+                                        break;
+                                    }
+                                } 
+                            }
+                            await_event
+                        };
+                        let complete = tokio::time::timeout(
+                            Duration::from_secs(1200),
+                            future
+                        ).await?;
+                        Ok(complete)
+                    });
+                    let guard = self.create_futures.lock().await;
+                    guard.push(await_res);
+                    drop(guard);
                     log::error!("Unable to find Formpack");
-                    return Err(Box::new(
-                        VmmError::Config(
-                            format!(r#"
+                    log::error!(r#"
 Formpack for {name} doesn't exist:
 
     Have you succesfully built your Formpack yet? 
@@ -688,23 +839,83 @@ Formpack for {name} doesn't exist:
     from inside your project root directory 
     and ensure the build is successful before
     calling `form pack ship`
-"#)
-                        )
-                    ))
+"#);
                 }
             }
-            VmmEvent::BootComplete { id, formnet_ip } => {
+            VmmEvent::BootComplete { id, formnet_ip, build_id, .. } => {
                 //TODO: Write this information into State so that 
                 //users/developers can "get" the IP address
+                log::info!("Received boot complete event, getting self");
+                let me = DatabasePeer::<String, CrdtMap>::get(self.derive_address().await?).await?.inner.ip;
+                log::info!("Getting instance: {id}");
+        
+                let mut instance = Instance::get(id).await.ok_or(
+                    Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Instance doesn't exist")))?;
+                log::info!("Adding cluster member to instance...");
+
+                let cluster_member = ClusterMember {
+                    instance_id: instance.instance_id.clone(),
+                    node_id: self.derive_address().await?,
+                    node_public_ip: publicip::get_any(Preference::Ipv4).ok_or(
+                        Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Unable to get node public ip"))
+                    )?,
+                    node_formnet_ip: me,
+                    instance_formnet_ip: formnet_ip.parse()?,
+                    status: "Started".to_string(),
+                    last_heartbeat: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
+                    heartbeats_skipped: 0,
+                };
+
+                log::info!("Built AddClusterMember InstanceRequest");
+                let request = InstanceRequest::AddClusterMember { build_id: build_id.to_string(), cluster_member }; 
+                log::info!("Writing AddClusterMember InstanceRequest to queue...");
+                VmmApi::write_to_queue(request, 4, "state").await?;
+                
+                log::info!("Adding formnet_ip to instance");
+                instance.formnet_ip = Some(formnet_ip.parse()?);
+
+                log::info!("Updating instance...");
+                let request = InstanceRequest::Update(instance);
+
+                log::info!("Writing Update request with formnet IP to queue...");
+                VmmApi::write_to_queue(request, 4, "state").await?; 
                 log::info!("Boot Complete for {id}: formnet id: {formnet_ip}");
             }
             VmmEvent::Stop { id, .. } => {
                 //TODO: verify ownership/authorization, etc.
                 self.pause(id).await?;
+                let instance_id = form_pack::manager::build_instance_id(self.derive_address().await?, id.to_string())?;
+                let mut instance = Instance::get(&instance_id).await.ok_or(
+                    Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Instance doesn't exist"))
+                )?;
+                instance.status = InstanceStatus::Stopped;
+                let node_id = self.derive_address().await?;
+                instance.cluster.members = instance.cluster.members.iter_mut().map(|(k, v)| {
+                    if v.node_id == node_id {
+                        v.status = "Stopped".to_string();
+                    }
+                    (k.clone(), v.clone())
+                }).collect();
+                let request = InstanceRequest::Update(instance);
+                VmmApi::write_to_queue(request, 4, "state").await?; 
             }
             VmmEvent::Start {  id, .. } => {
                 //TODO: verify ownership/authorization, etc.
                 self.boot(id).await?;
+                let instance_id = form_pack::manager::build_instance_id(self.derive_address().await?, id.to_string())?;
+                let mut instance = Instance::get(&instance_id).await.ok_or(
+                    Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Instance doesn't exist"))
+                )?;
+                instance.status = InstanceStatus::Started;
+                let node_id = self.derive_address().await?;
+                instance.cluster.members = instance.cluster.members.iter_mut().map(|(k, v)| {
+                    if v.node_id == node_id {
+                        v.status = "Started".to_string();
+                    }
+                    (k.clone(), v.clone())
+                }).collect();
+                let request = InstanceRequest::Update(instance);
+                VmmApi::write_to_queue(request, 4, "state").await?; 
             }
             VmmEvent::Delete { id, .. } => {
                 self.delete(id).await?;

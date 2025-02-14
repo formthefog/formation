@@ -1,5 +1,5 @@
 use crate::{
-    db::{self, DatabaseCidr, DatabasePeer},
+    db::{self, DatabaseCidr, DatabasePeer, Sqlite},
     ConfigFile, Interface, Path, ServerConfig,
 };
 use anyhow::{anyhow, Error};
@@ -51,6 +51,10 @@ pub struct InitializeOpts {
     /// Port to listen on (for the WireGuard interface)
     #[clap(long)]
     pub listen_port: Option<u16>,
+
+    /// 20 byte hex string that represents and Ethereum wallet 
+    #[clap(long, short='A')]
+    pub address: String
 }
 
 pub struct DbInitData {
@@ -62,10 +66,10 @@ pub struct DbInitData {
     pub endpoint: Endpoint,
 }
 
-pub fn populate_database(conn: &Connection, db_init_data: DbInitData) -> Result<(), Error> {
+pub fn populate_sql_database(conn: &Connection, db_init_data: DbInitData) -> Result<(), Error> {
     const SERVER_NAME: &str = "innernet-server";
 
-    let root_cidr = DatabaseCidr::create(
+    let root_cidr = DatabaseCidr::<i64, Sqlite>::create(
         conn,
         CidrContents {
             name: db_init_data.network_name.clone(),
@@ -75,7 +79,7 @@ pub fn populate_database(conn: &Connection, db_init_data: DbInitData) -> Result<
     )
     .map_err(|_| anyhow!("failed to create root CIDR"))?;
 
-    let server_cidr = DatabaseCidr::create(
+    let server_cidr = DatabaseCidr::<i64, Sqlite>::create(
         conn,
         CidrContents {
             name: SERVER_NAME.into(),
@@ -85,7 +89,7 @@ pub fn populate_database(conn: &Connection, db_init_data: DbInitData) -> Result<
     )
     .map_err(|_| anyhow!("failed to create innernet-server CIDR"))?;
 
-    let _me = DatabasePeer::create(
+    let _me = DatabasePeer::<i64, Sqlite>::create(
         conn,
         PeerContents {
             name: SERVER_NAME.parse().map_err(|e: &str| anyhow!(e))?,
@@ -178,9 +182,10 @@ pub fn init_wizard(conf: &ServerConfig, opts: InitializeOpts) -> Result<(), Erro
 
     let config = ConfigFile {
         private_key: our_keypair.private.to_base64(),
-        listen_port,
+        listen_port: Some(listen_port),
         address: our_ip,
         network_cidr_prefix: root_cidr.prefix_len(),
+        bootstrap: None, 
     };
     config.write_to_path(config_path)?;
 
@@ -203,7 +208,7 @@ pub fn init_wizard(conf: &ServerConfig, opts: InitializeOpts) -> Result<(), Erro
             "(are you not running as root?)".bold()
         )
     })?;
-    populate_database(&conn, db_init_data)?;
+    populate_sql_database(&conn, db_init_data)?;
 
     println!(
         "{} Created database at {}\n",

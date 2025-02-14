@@ -15,7 +15,7 @@ RUN mkdir /var/lib/formnet
 RUN mkdir /artifacts
 
 COPY ./target/release/form-build-server /bin/form-build-server
-COPY ./target/release/formnet-join /var/lib/formnet/formnet
+COPY ./target/release/formnet /var/lib/formnet/formnet
 COPY ./artifacts/modules /lib/modules
 COPY ./artifacts/vmlinuz* /boot/
 
