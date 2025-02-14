@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
+use std::{collections::{HashMap, HashSet}, net::IpAddr, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
 use axum::{extract::{State, Path}, routing::{get, post}, Json, Router};
 use form_dns::{api::{DomainRequest, DomainResponse}, store::FormDnsRecord};
 use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
@@ -854,6 +854,8 @@ impl DataStore {
             .route("/instance/create", post(create_instance))
             .route("/instance/update", post(update_instance))
             .route("/instance/:instance_id/get", get(get_instance))
+            .route("/instance/:build_id/get_by_build_id", get(get_instance_by_build_id))
+            .route("/instance/:build_id/get_instance_ips", get(get_instance_ips))
             .route("/instance/:instance_id/delete", post(delete_instance))
             .route("/instance/list", get(list_instances))
             .route("/node/create", post(create_node))
@@ -2308,6 +2310,58 @@ async fn get_instance(
     return Json(Response::Failure { reason: Some(format!("Unable to find instance with instance_id, node_id: {}", id))})
 }
 
+
+async fn get_instance_by_build_id(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path(id): Path<String>,
+) -> Json<Response<Instance>> {
+    let datastore = state.lock().await;
+    log::info!("Attempting to get instance {id}");
+    let instances: Vec<Instance> = datastore.instance_state.map.iter().filter_map(|ctx| {
+        let (id, reg) = ctx.val;
+        if let Some(val) = reg.val() {
+            let instance = val.value();
+            if instance.build_id == *id {
+                Some(instance)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }).collect();
+
+    return Json(Response::Success(Success::List(instances)));
+}
+
+async fn get_instance_ips(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path(id): Path<String>,
+) -> Json<Response<IpAddr>> {
+    let datastore = state.lock().await;
+    log::info!("Attempting to get instance {id}");
+    let instances: Vec<Instance> = datastore.instance_state.map.iter().filter_map(|ctx| {
+        let (id, reg) = ctx.val;
+        if let Some(val) = reg.val() {
+            let instance = val.value();
+            if instance.build_id == *id {
+                Some(instance)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }).collect();
+
+    let ips = instances.iter().filter_map(|inst| {
+        inst.formnet_ip
+    }).collect();
+
+    return Json(Response::Success(Success::List(ips)));
+}
+
+
 async fn delete_instance(
     State(state): State<Arc<Mutex<DataStore>>>,
     Path(_id): Path<(String, String)>,
@@ -2662,6 +2716,8 @@ mod tests {
             created_at: 0,
             updated_at: 0,
             last_snapshot: 0,
+            formnet_ip: None,
+            dns_record: None,
             status: InstanceStatus::Created,
             host_region: "us-east".to_string(),
             resources: InstanceResources {

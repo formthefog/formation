@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, path::PathBuf, str::FromStr};
 
 use client::{data_store::DataStore, nat::{self, NatTraverse}, util};
-use formnet_server::ConfigFile;
+use formnet_server::{db::CrdtMap, ConfigFile, DatabasePeer};
 use hostsfile::HostsBuilder;
 use reqwest::Client;
 use shared::{get_local_addrs, wg::{self, DeviceExt}, Endpoint, IoErrorContext, NatOpts, NetworkOpts, Peer};
@@ -199,6 +199,43 @@ fn update_hosts_file(
         Ok(_) => {},
         Err(e) => log::warn!("failed to update hosts ({})", e),
     };
+
+    Ok(())
+}
+
+pub async fn fetch_server() -> Result<(), Box<dyn std::error::Error>> {
+    let interface = InterfaceName::from_str("formnet")?;
+    let device = Device::get(&interface, NetworkOpts::default().backend)?;
+    let db_peers = DatabasePeer::<String, CrdtMap>::list().await?;
+    let peers = db_peers.iter().map(|p| p.inner.clone()).collect::<Vec<Peer<String>>>();
+    let modifications = device.diff(&peers);
+    let updates = modifications
+        .iter()
+        .cloned()
+        .map(PeerConfigBuilder::from)
+        .collect::<Vec<_>>();
+
+    let interface_up = {
+        #[cfg(target_os = "linux")]
+        {
+            let up = match Device::list(wireguard_control::Backend::Kernel) {
+                Ok(interfaces) => interfaces.iter().any(|name| *name == interface),
+                _ => false,
+            };
+            log::info!("Interface up?: {up}");
+            up
+        }
+    };
+
+    if !updates.is_empty() || !interface_up {
+        DeviceUpdate::new()
+            .add_peers(&updates)
+            .apply(&interface, NetworkOpts::default().backend)?;
+
+        log::info!("updated interface {}\n", interface.as_str_lossy());
+    } else {
+        log::info!("{}", "peers are already up to date");
+    }
 
     Ok(())
 }

@@ -6,6 +6,7 @@ use std::sync::Arc;
 use form_types::PeerType;
 use parking_lot::RwLock;
 use reqwest::Client;
+use tokio::time::interval;
 use std::time::Duration;
 use std::{net::SocketAddr, ops::Deref};
 use formnet_server::{ConfigFile, Endpoints, VERSION};
@@ -14,7 +15,7 @@ use ipnet::IpNet;
 use shared::{get_local_addrs, wg, Endpoint, NetworkOpts, PeerContents};
 use wireguard_control::{Backend, Device, DeviceUpdate, InterfaceName, PeerConfigBuilder};
 use crate::api::{server, BootstrapInfo, Response};
-use crate::CONFIG_DIR;
+use crate::{fetch_server, CONFIG_DIR};
 
 pub async fn serve(
     interface: &str,
@@ -160,6 +161,16 @@ pub async fn serve(
             .post("http://127.0.0.1:3004/bootstrap/joined_formnet")
             .send()
             .await;
+    });
+
+    tokio::spawn(async move {
+        let mut interval = interval(Duration::from_secs(20));
+        loop {
+            interval.tick().await;
+            if let Err(e) = fetch_server().await {
+                log::error!("Error fetching peers from self: {e}");
+            }
+        }
     });
 
     server(my_info).await?;

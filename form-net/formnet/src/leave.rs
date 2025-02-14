@@ -78,7 +78,7 @@ pub async fn leave(bootstraps: Vec<String>, key: String) -> Result<(), Box<dyn s
     Ok(())
 }
 
-pub fn uninstall() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn uninstall() -> Result<(), Box<dyn std::error::Error>> {
     let interface = InterfaceName::from_str("formnet")?;
     let config = InterfaceConfig::get_path(&PathBuf::from(CONFIG_DIR), &interface);
     let data = DataStore::<String>::get_path(&PathBuf::from(DATA_DIR), &interface);
@@ -108,6 +108,7 @@ pub fn uninstall() -> Result<(), Box<dyn std::error::Error>> {
             "network {} is uninstalled.",
             interface.as_str_lossy().yellow()
         );
+
     Ok(())
 }
 

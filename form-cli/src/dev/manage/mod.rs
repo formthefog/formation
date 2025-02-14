@@ -1,4 +1,4 @@
-use clap::Subcommand;
+use clap::{Subcommand, Args};
 
 pub mod start; 
 pub mod stop;
@@ -30,5 +30,17 @@ pub enum ManageCommand {
     Commit(CommitCommand),
     Config(ConfigCommand),
     Join(JoinCommand),
-    FormnetUp(FormnetUp)
+    FormnetUp(FormnetUp),
+    GetIp(GetIpCommand),
+    Leave(LeaveCommand),
 }
+
+
+#[derive(Clone, Debug, Args)]
+pub struct GetIpCommand {
+    #[clap(long, short)]
+    pub build_id: String
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct LeaveCommand;

@@ -176,8 +176,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         parser.signing_key.unwrap()
                     };
-                    leave(parser.bootstraps, signing_key).await?; 
-                    uninstall()?;
+                    leave(parser.bootstraps.clone(), signing_key).await?; 
+                    uninstall().await?;
                 }
             }
         }

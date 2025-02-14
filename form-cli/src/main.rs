@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{net::IpAddr, path::PathBuf};
 
 use clap::{Parser, Subcommand};
 use dialoguer::{theme::ColorfulTheme, Confirm};
@@ -7,6 +7,8 @@ use form_cli::{
     decrypt_file, default_config_dir, default_data_dir, default_keystore_dir, join_formnet, operator_config, Config, DnsCommand, Init, Keystore, KitCommand, manage::ManageCommand, Operator, PackCommand, WalletCommand
 };
 use form_p2p::queue::QUEUE_PORT;
+use formnet::{leave, uninstall};
+use reqwest::Client;
 
 /// The official developer CLI for building, deploying and managing 
 /// verifiable confidential VPS instances in the Formation network
@@ -142,10 +144,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ManageCommand::Join(join_command) => {
                     simple_logger::SimpleLogger::new().init().unwrap();
                     let (config, keystore) = load_config_and_keystore(&parser).await?;
-                    if !config.join_formnet {
-                        let provider = config.hosts[0].clone();
-                        join_command.handle_join_command(provider, keystore).await?;
-                    }
+                    let provider = config.hosts[0].clone();
+                    join_command.handle_join_command(provider, keystore).await?;
+                }
+                ManageCommand::Leave(_) => {
+                    let (config, keystore) = load_config_and_keystore(&parser).await?;
+                    let signing_key = keystore.secret_key;
+                    leave(config.hosts, signing_key).await?; 
+                    uninstall().await?;
+                }
+                ManageCommand::GetIp(get_ip_command) => {
+                    let (config, _) = load_config_and_keystore(&parser).await?;
+                    let build_id = get_ip_command.build_id.clone();
+                    let host = config.hosts[0].clone();
+                    let resp = Client::new()
+                        .post(format!("http://{host}:3004/instance/{build_id}/get_instance_ips"))
+                        .send()
+                        .await?.json::<Vec<IpAddr>>().await?;
+
+                    let ips: Vec<String> = resp.iter().map(|ip| ip.to_string()).collect();
+                    let ips_string = ips.join(", ");
+                    println!(r#"
+Your build has {} instances, below are their formnet ip addresses:
+
+Instance IP Addrsses: {}
+                    "#, 
+                    format!("{}", ips.len()).yellow(), 
+                    ips_string.yellow(),
+);
                 }
                 ManageCommand::FormnetUp(formnet_up_command) => {
                     formnet_up_command.handle_formnet_up()?;
