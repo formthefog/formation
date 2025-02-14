@@ -10,57 +10,68 @@ jobs:
   build-linux:
     name: Build Linux Binaries
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Rust for Linux
+      - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-gnu
 
-      - name: Install Linux Build Dependencies
+      - name: Install cross-compilation dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools gcc-multilib gcc-x86-64-linux-gnu
+          sudo apt-get install -y musl-tools gcc-multilib
+          sudo apt-get install -y gcc-x86-64-linux-gnu
 
-      - name: Build Linux Binaries
+      - name: Build Linux (x86_64)
         run: |
-          cargo build --release --bin form --target x86_64-unknown-linux-gnu --features treehacks
-          cargo build --release --bin formnet-up --target x86_64-unknown-linux-gnu
-          mkdir -p artifacts
-          cp target/x86_64-unknown-linux-gnu/release/form artifacts/form-linux-x86_64
-          cp target/x86_64-unknown-linux-gnu/release/formnet-up artifacts/formnet-up-linux-x86_64
+          cargo build --release --bin form --target x86_64-unknown-linux-gnu --features treehacks 
+          cargo build --release --bin formnet-up --target x86_64-unknown-linux-gnu 
+          cp target/x86_64-unknown-linux-gnu/release/form ./form-linux-x86_64
+          cp target/x86_64-unknown-linux-gnu/release/formnet-up ./formnet-up-linux-x86_64
 
-      - name: Upload Linux Artifacts
-        uses: actions/upload-artifact@v3
+      - name: Upload Linux Binaries
+        uses: actions/upload-artifact@v2
         with:
-          name: linux-artifacts
-          path: artifacts/
+          name: linux-binaries
+          path: |
+            form-linux-x86_64
+            formnet-up-linux-x86_64
 
   build-macos:
     name: Build macOS Binaries
     runs-on: macos-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Rust for macOS
+      - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
 
-      - name: Build macOS Binaries
+      - name: Build macOS (arm64)
+        env:
+          CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER: aarch64-apple-darwin14-clang
+          CC_aarch64_apple_darwin: aarch64-apple-darwin14-clang
+          CXX_aarch64_apple_darwin: aarch64-apple-darwin14-clang++
         run: |
-          cargo build --release --bin form --target aarch64-apple-darwin --features treehacks
+          cargo build --release --bin form --target aarch64-apple-darwin --features treehacks 
           cargo build --release --bin formnet-up --target aarch64-apple-darwin
-          mkdir -p artifacts
-          cp target/aarch64-apple-darwin/release/form artifacts/form-darwin-arm64
-          cp target/aarch64-apple-darwin/release/formnet-up artifacts/formnet-up-darwin-arm64
+          cp target/aarch64-apple-darwin/release/form ./form-darwin-arm64
+          cp target/aarch64-apple-darwin/release/formnet-up ./formnet-up-darwin-arm64
 
-      - name: Upload macOS Artifacts
-        uses: actions/upload-artifact@v3
+      - name: Upload macOS Binaries
+        uses: actions/upload-artifact@v2
         with:
-          name: macos-artifacts
-          path: artifacts/
+          name: macos-binaries
+          path: |
+            form-darwin-arm64
+            formnet-up-darwin-arm64
 
   release:
     name: Release
@@ -68,35 +79,37 @@ jobs:
       - build-linux
       - build-macos
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download Linux Artifacts
-        uses: actions/download-artifact@v3
+      - name: Download Linux Binaries
+        uses: actions/download-artifact@v2
         with:
-          name: linux-artifacts
-          path: artifacts
+          name: linux-binaries
+          path: .
 
-      - name: Download macOS Artifacts
-        uses: actions/download-artifact@v3
+      - name: Download macOS Binaries
+        uses: actions/download-artifact@v2
         with:
-          name: macos-artifacts
-          path: artifacts
+          name: macos-binaries
+          path: .
 
-      - name: Copy Binaries to Docs Directory
+      - name: Copy binaries to docs
         run: |
           mkdir -p docs/install
           mkdir -p docs/install/form
-          cp artifacts/form-* docs/install/
-          cp artifacts/formnet-up-* docs/install/
+          cp form-* docs/install/
+          cp formnet-up-* docs/install/
           cp .github/install.sh docs/install/form/install.sh
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            docs/install/form-*
-            docs/install/formnet-up-*
+            form-*
+            formnet-up-*
           prerelease: false
           generate_release_notes: true
 
@@ -106,4 +119,3 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./docs
           force_orphan: true
-
