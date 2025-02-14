@@ -13,6 +13,7 @@ pub async fn add_peer(
     peer_id: &str,
     pubkey: String,
     endpoint: Option<SocketAddr>,
+    addr: SocketAddr,
 ) -> Result<IpAddr, Box<dyn std::error::Error>> {
     log::warn!("ATTEMPTING TO ADD PEER {peer_id}...");
     log::info!("Getting config from file...");
@@ -24,6 +25,16 @@ pub async fn add_peer(
         .into_iter()
         .map(|dp| dp.inner)
         .collect::<Vec<_>>();
+
+    if let Some(peer) = peers.iter().find(|p| p.endpoint == Some(Endpoint::from(addr))) {
+        return Ok(peer.ip); 
+    }
+
+    if let Some(ep) = endpoint {
+        if let Some(peer) = peers.iter().find(|p| p.endpoint == Some(Endpoint::from(ep))) {
+            return Ok(peer.ip);
+        }
+    }
 
     log::info!("Building peer...");
     let peer_request = build_peer(

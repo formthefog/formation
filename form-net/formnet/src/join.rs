@@ -1,10 +1,13 @@
-use std::{net::{IpAddr, SocketAddr, TcpListener}, path::PathBuf, process::Command, str::FromStr, time::Duration};
+use std::{collections::{HashSet, VecDeque}, net::{IpAddr, SocketAddr, TcpListener}, path::PathBuf, process::Command, str::FromStr, time::Duration};
 use form_types::{BootCompleteRequest, PeerType, VmmResponse};
 use formnet_server::ConfigFile;
+use futures::{stream::FuturesUnordered, StreamExt};
 use ipnet::IpNet;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use shared::{interface_config::InterfaceConfig, wg, NetworkOpts};
+use shared::{interface_config::InterfaceConfig, wg, Endpoint, NetworkOpts};
+use socket2::Socket;
+use url::Host;
 use wireguard_control::{Device, InterfaceName, KeyPair};
 use crate::{api::{BootstrapInfo, JoinResponse as BootstrapResponse, Response}, up, CONFIG_DIR, DATA_DIR, NETWORK_NAME};
 
@@ -106,6 +109,81 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
         )
     )?;
 
+
+    let mut common_endpoints: FuturesUnordered<_> = bootstrap.iter().map(|dial| {
+        let inner_client = client.clone();
+        let inner_address = address.clone();
+        async move {
+            match inner_client.get(format!("http://{dial}:51820/fetch"))
+                .send().await {
+                    Ok(resp) => match resp.json::<Response>().await {
+                    Ok(Response::Fetch(peers)) => {
+                        let common_endpoint = peers.iter().filter_map(|p| {
+                            p.endpoint.clone() 
+                        }).collect::<Vec<Endpoint>>().iter().find_map(|ep| {
+                            match ep.resolve() {
+                                Ok(addr) => {
+                                    if addr.ip() == publicip {
+                                        Some(addr)
+                                    } else {
+                                        None
+                                    }
+                                }
+                                Err(_) => None 
+                            }
+                        });
+
+                        let common_id = peers.iter().find_map(|p| {
+                            if &p.id == &inner_address {
+                                match &p.endpoint {
+                                    Some(endpoint) => {
+                                        match endpoint.resolve() {
+                                            Ok(addr) => Some(addr),
+                                            Err(_) => None,
+                                        }
+                                    }
+                                    None => None,
+                                }
+                            } else {
+                                None
+                            }
+                        });
+                        (common_endpoint, common_id)
+                    }
+                    Err(_) => {
+                        (None, None)
+                    }
+                    _ => (None, None)
+            }
+            Err(_) => (None, None)
+        }
+    }}).collect();
+
+    let mut complete_common_endpoints = vec![];
+    while let Some(complete) = common_endpoints.next().await {
+        complete_common_endpoints.push(complete);
+    };
+
+    let ports_used = complete_common_endpoints.iter().filter_map(|ce| {
+        match ce {
+            (None, None) => None,
+            (Some(e1), None) => Some(vec![e1.clone()]),
+            (None, Some(e2)) => Some(vec![e2.clone()]),
+            (Some(e1), Some(e2)) => Some(vec![e1.clone(), e2.clone()])
+        }
+    }).collect::<Vec<Vec<SocketAddr>>>()
+    .iter().flatten().cloned().collect::<Vec<SocketAddr>>()
+    .iter().map(|addr| addr.port()).collect::<HashSet<u16>>();
+
+    let mut next_port = (51820..64000).collect::<VecDeque<u16>>();
+    next_port.retain(|n| !ports_used.contains(n));
+
+    if next_port.len() == 0 {
+        return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "There are no ports available on this device")));
+    }
+
+    let next_port = next_port.pop_front().unwrap();
+
     let request = match peer_type { 
         PeerType::Operator => {
             BootstrapInfo {
@@ -126,22 +204,7 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
                 cidr_id: "formnet".to_string(),
                 pubkey: keypair.public.to_base64(),
                 internal_endpoint: None,
-                external_endpoint: { 
-                    let mut port: u16 = 0;
-                    for p in 51821..64000 {
-                        if let Ok(listener) = TcpListener::bind(("0.0.0.0", port)) {
-                            drop(listener);
-                            port = p;
-                            break;
-                        }
-                    }
-                    if port == 0 {
-                        panic!("Unable to find a valid listening port in the formnet range");
-                    }
-                    Some(
-                        SocketAddr::new(publicip, port)
-                    )
-                },
+                external_endpoint: Some(SocketAddr::new(publicip, next_port))
             }
         },
         PeerType::Instance => {
@@ -151,22 +214,7 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
                 cidr_id: "formnet".to_string(),
                 pubkey: keypair.public.to_base64(),
                 internal_endpoint: None,
-                external_endpoint: {
-                    let mut port: u16 = 0;
-                    for p in 51821..64000 {
-                        if let Ok(listener) = TcpListener::bind(("0.0.0.0", port)) {
-                            drop(listener);
-                            port = p;
-                            break;
-                        }
-                    }
-                    if port == 0 {
-                        panic!("Unable to find a valid listening port in the formnet range");
-                    }
-                    Some(
-                        SocketAddr::new(publicip, port)
-                    )
-                },
+                external_endpoint: Some(SocketAddr::new(publicip, next_port))
             }
         }
     };

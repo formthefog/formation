@@ -4,7 +4,7 @@ use formnet_server::{db::CrdtMap, DatabasePeer};
 use serde::{Serialize, Deserialize};
 use shared::{Endpoint, NetworkOpts, Peer, PeerContents};
 use tokio::{net::TcpListener, sync::RwLock};
-use axum::{extract::{Path, State}, routing::{get, post}, Json, Router};
+use axum::{extract::{ConnectInfo, Path, State}, routing::{get, post}, Json, Router};
 
 use crate::add_peer;
 
@@ -49,16 +49,17 @@ pub async fn server(
 
     let listener = TcpListener::bind("0.0.0.0:51820").await?;
 
-    axum::serve(listener, router).await?;
+    axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await?;
 
     Ok(())
 }
 
 async fn join(
-    Json(request): Json<BootstrapInfo>
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(request): Json<BootstrapInfo>,
 ) -> Json<Response> {
     log::info!("Received join request");
-    match add_peer(&NetworkOpts::default(), &request.peer_type, &request.id, request.pubkey, request.external_endpoint).await {
+    match add_peer(&NetworkOpts::default(), &request.peer_type, &request.id, request.pubkey, request.external_endpoint, addr).await {
         Ok(ip) => {
             log::info!("Added peer, returning IP {ip}");
             Json(Response::Join(JoinResponse::Success(ip)))

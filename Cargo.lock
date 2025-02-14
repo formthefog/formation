@@ -2948,6 +2948,7 @@ dependencies = [
  "form-state",
  "form-types",
  "formnet-server",
+ "futures",
  "hex",
  "hostsfile",
  "hyper 0.14.32",
