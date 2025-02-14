@@ -118,7 +118,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else if !operator_config.clone().unwrap().bootstrap_nodes.is_empty() {
                         log::info!("Found bootstrap in config...");
                         let my_ip = request_to_join(
-                            operator_config.unwrap().bootstrap_nodes.clone(),
+                            operator_config.clone().unwrap().bootstrap_nodes.clone(),
                             address.clone(),
                             PeerType::Operator
                         ).await?;
@@ -131,9 +131,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let (shutdown, _) = tokio::sync::broadcast::channel::<()>(2);
                     let mut formnet_receiver = shutdown.subscribe();
                     let inner_address = address.clone();
+                    let bootstraps = if !parser.bootstraps.is_empty() {
+                        parser.bootstraps.clone() 
+                    } else if let Some(config) = operator_config {
+                        config.bootstrap_nodes.clone()
+                    } else {
+                        vec![]
+                    };
                     let formnet_server_handle = tokio::spawn(async move {
                         tokio::select! {
-                            res = serve(NETWORK_NAME, inner_address) => {
+                            res = serve(NETWORK_NAME, inner_address, bootstraps) => {
                                 if let Err(e) = res {
                                     eprintln!("Error trying to serve formnet server: {e}");
                                 }
