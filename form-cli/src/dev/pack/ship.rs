@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use alloy_core::primitives::Address;
 use alloy_signer_local::{coins_bip39::English, MnemonicBuilder};
 use clap::Args;
+use colored::Colorize;
 use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
 use form_pack::formfile::{Formfile, FormfileParser};
 use form_types::{CreateVmRequest, VmmResponse};
@@ -41,6 +42,78 @@ pub struct ShipCommand {
     pub mnemonic: Option<String>,
 }
 
+pub fn print_ship_queue_response(resp: QueueResponse) {
+    match resp {
+        QueueResponse::OpSuccess => {
+            println!(r#"
+Your {} is being processed, and was accepted successfully.
+
+To check the status of your deployment, you can run: 
+
+```
+{}
+```
+
+This process typically takes a couple of minutes. 
+
+Once your ip addresses return, you can `{}` into it ({}):
+
+"#,
+"deployment".bold().bright_cyan(),
+"form [OPTIONS] manage get-ips <build-id>".bright_yellow(),
+"ssh <username>@<formnet-ip>".bold().bright_green(),
+"assuming you provided your ssh public key".bold().bright_yellow(),
+);
+        }
+        QueueResponse::Failure { reason } => {
+            if let Some(reason) = reason {
+            println!(r#"
+Unforutnately your build request {} for the following reason:
+
+{}
+
+If the reason is missing, or unclear, please consider going to our project
+discord at {} and going to the {} channel, submitting an {} on our project github at {}, 
+or sending us a direct message on X at {}, and someone from our core team will gladly
+help you out.
+"#,
+"FAILED".white().on_bright_red(),
+reason.bright_red().on_black(),
+"discord.gg/formation".blue(),
+"chewing-glass".blue(),
+"issue".bright_yellow(),
+"http://github.com/formthefog/formation.git".blue(),
+"@formthefog".blue(),
+);
+            }
+        }
+        _ => {
+            println!(r#"
+Something went {} wrong. The response received was {:?} which is an invalid response 
+to the `{}` command.
+
+Please consider doing one of the following: 
+
+    1. Join our discord at {} and go to the {} channel and paste this response
+    2. Submitting an {} on our project github at {} 
+    3. Sending us a direct message on X at {}
+
+Someone from our core team will gladly help you out.
+"#,
+"terribly".bright_red().on_blue(),
+resp,
+"form [OPTIONS] pack ship".bright_yellow(),
+"discord.gg/formation".blue(),
+"chewing-glass".blue(),
+"issue".bright_yellow(),
+"http://github.com/formthefog/formation.git".blue(),
+"@formthefog".blue(),
+);
+        }
+    }
+}
+
+
 
 impl ShipCommand {
     pub async fn handle(&self, provider: &str, vmm_port: u16) -> Result<VmmResponse, Box<dyn std::error::Error>> {
@@ -68,14 +141,15 @@ impl ShipCommand {
     pub async fn handle_queue(&mut self, provider: &str, keystore: Option<Keystore>) -> Result<QueueResponse, Box<dyn std::error::Error>> {
         let queue_request = self.pack_ship_request_queue(keystore).await?; 
 
-        Ok(reqwest::Client::new() 
+        let resp = reqwest::Client::new() 
             .post(&format!("http://{provider}:{}/queue/write_local", QUEUE_PORT))
             .json(&queue_request)
             .send()
             .await?
             .json::<QueueResponse>()
-            .await?
-        )
+            .await?;
+
+        print_ship_queue_response(resp);
     }
 
     pub fn get_signing_key(&self, keystore: Option<Keystore>) -> Result<SigningKey, String> {

@@ -12,7 +12,7 @@ INSTALL_DIR="/usr/local/bin"
 VERSION_FILE="/usr/local/share/formation/.version"
 TEMP_DIR=$(mktemp -d)
 
-# Base URLs
+# Base URL for GitHub Pages deployment (ensure this is correct!)
 RELEASE_BASE="https://dev.formation.cloud/install"
 
 # Cleanup function
@@ -54,7 +54,7 @@ verify_checksum() {
     else
         error "No checksum utility found"
     fi
-    
+
     if [ "$actual_checksum" != "$expected_checksum" ]; then
         error "Checksum verification failed for $(basename "$file")"
     fi
@@ -63,7 +63,7 @@ verify_checksum() {
 get_platform() {
     local platform=$(uname -s)
     local arch=$(uname -m)
-    
+
     case "$platform" in
         Linux)
             if [ "$arch" != "x86_64" ]; then
@@ -85,7 +85,7 @@ get_platform() {
             esac
             ;;
         *)
-            error "Unsupported platform: $platform. This installer only supports Linux (x86_64) and macOS"
+            error "Unsupported platform: $platform. This installer only supports Linux (x86_64) and macOS."
             ;;
     esac
 }
@@ -111,20 +111,39 @@ check_dependencies
 PLATFORM=$(get_platform)
 log "Detected platform: $PLATFORM"
 
+# Determine correct binary names based on platform
+case "$PLATFORM" in
+    linux-x86_64)
+        FORM_BINARY="form-linux-x86_64"
+        FORMNET_UP_BINARY="formnet-up-linux-x86_64"
+        ;;
+    darwin-x86_64)
+        FORM_BINARY="form-darwin-x86_64"
+        FORMNET_UP_BINARY="formnet-up-darwin-x86_64"
+        ;;
+    darwin-arm64)
+        FORM_BINARY="form-darwin-arm64"
+        FORMNET_UP_BINARY="formnet-up-darwin-arm64"
+        ;;
+    *)
+        error "Unsupported platform: $PLATFORM"
+        ;;
+esac
+
 # Create directories
 log "Creating installation directories..."
 mkdir -p "$INSTALL_DIR"
 mkdir -p "$(dirname "$VERSION_FILE")"
 
 # Download and install form
-log "Downloading form..."
-curl -fsSL "$RELEASE_BASE/form" -o "$TEMP_DIR/form"
+log "Downloading $FORM_BINARY..."
+curl -fsSL "$RELEASE_BASE/$FORM_BINARY" -o "$TEMP_DIR/form" || error "Failed to download $FORM_BINARY"
 chmod +x "$TEMP_DIR/form"
 mv "$TEMP_DIR/form" "$INSTALL_DIR/form"
 
 # Download and install formnet-up
-log "Downloading formnet-up..."
-curl -fsSL "$RELEASE_BASE/formnet-up" -o "$TEMP_DIR/formnet-up"
+log "Downloading $FORMNET_UP_BINARY..."
+curl -fsSL "$RELEASE_BASE/$FORMNET_UP_BINARY" -o "$TEMP_DIR/formnet-up" || error "Failed to download $FORMNET_UP_BINARY"
 chmod +x "$TEMP_DIR/formnet-up"
 mv "$TEMP_DIR/formnet-up" "$INSTALL_DIR/formnet-up"
 
@@ -164,3 +183,4 @@ For more information, run:
   formnet-up --help
 
 EOF
+
