@@ -119,6 +119,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         FormCommand::Kit(ref mut kit_command) => {
+            simple_logger::SimpleLogger::new().init().unwrap();
             match kit_command {
                 KitCommand::Init(ref mut init) => {
                     let (config, keystore) = init.handle().await?;
@@ -137,6 +138,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         FormCommand::Manage(ref manage_command) => {
+            simple_logger::SimpleLogger::new().init().unwrap();
             match manage_command {
                 ManageCommand::Join(join_command) => {
                     simple_logger::SimpleLogger::new().init().unwrap();
