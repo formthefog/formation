@@ -37,7 +37,7 @@ jobs:
       - name: Upload Linux Binaries
         uses: actions/upload-artifact@v4
         with:
-          name: release-binaries
+          name: linux-binaries
           path: release_binaries
 
   build-macos:
@@ -65,7 +65,7 @@ jobs:
       - name: Upload macOS Binaries
         uses: actions/upload-artifact@v4
         with:
-          name: release-binaries
+          name: macos-binaries
           path: release_binaries
 
   release:
@@ -79,17 +79,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download Release Binaries
+      - name: Download Linux Binaries
         uses: actions/download-artifact@v4
         with:
-          name: release-binaries
-          path: .
+          name: linux-binaries 
+          path: linux_binaries 
+
+      - name: Download macOS Binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-binaries 
+          path: macos_binaries 
 
       - name: Copy binaries to docs
         run: |
           mkdir -p docs/install
           mkdir -p docs/install/form
-          cp release_binaries/* docs/install/
+          cp linux_binaries/* docs/install/
+          cp macos_binaries/* docs/install/
+
           cp .github/install.sh docs/install/form/install.sh
 
       - name: Create GitHub Release
