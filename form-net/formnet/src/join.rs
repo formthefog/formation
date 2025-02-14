@@ -135,15 +135,7 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
 
                         let common_id = peers.iter().find_map(|p| {
                             if &p.id == &inner_address {
-                                match &p.endpoint {
-                                    Some(endpoint) => {
-                                        match endpoint.resolve() {
-                                            Ok(addr) => Some(addr),
-                                            Err(_) => None,
-                                        }
-                                    }
-                                    None => None,
-                                }
+                                Some(p.ip)
                             } else {
                                 None
                             }
@@ -164,12 +156,18 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
         complete_common_endpoints.push(complete);
     };
 
+    let common_id = complete_common_endpoints.iter().find(|(_, ip)| ip.is_some()); 
+    
+    if let Some((_, commond_id)) = common_id {
+        return Ok(commond_id.unwrap()); 
+    }
+    
     let ports_used = complete_common_endpoints.iter().filter_map(|ce| {
         match ce {
             (None, None) => None,
             (Some(e1), None) => Some(vec![e1.clone()]),
-            (None, Some(e2)) => Some(vec![e2.clone()]),
-            (Some(e1), Some(e2)) => Some(vec![e1.clone(), e2.clone()])
+            (None, Some(_)) => None, 
+            (Some(_), Some(_)) => None        
         }
     }).collect::<Vec<Vec<SocketAddr>>>()
     .iter().flatten().cloned().collect::<Vec<SocketAddr>>()
