@@ -3,6 +3,10 @@ name = "form-pack"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+treehacks = []
+
 [[bin]]
 name = "form-build-server"
 path = "src/bin/build_server.rs"

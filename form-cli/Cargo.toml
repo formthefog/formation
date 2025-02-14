@@ -11,6 +11,8 @@ path = "src/main.rs"
 testnet = []
 devnet = []
 mainnet = []
+default = []
+treehacks = ["form-pack/treehacks"]
 
 [dependencies]
 clap = { "version" = "4", features=["derive"] }
@@ -32,7 +34,7 @@ uuid = { version = "1.4", features = ["v4"] }
 hex = "0.4"
 random_word = { version = "0.4", features = ["en"] }
 form-types = { path = "../form-types" }
-form-pack = { path = "../form-pack" }
+form-pack = { path = "../form-pack", default-features = false }
 shared = { path = "../form-net/shared" }
 formnet = { path = "../form-net/formnet" }
 form-config = { path = "../form-config" }

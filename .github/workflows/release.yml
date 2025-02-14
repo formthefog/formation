@@ -1,0 +1,98 @@
+# .github/workflows/release.yml
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build and Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu, x86_64-apple-darwin, aarch64-apple-darwin
+
+      - name: Install cross-compilation dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools gcc-multilib
+          sudo apt-get install -y gcc-aarch64-linux-gnu gcc-x86-64-linux-gnu
+
+      - name: Set up cross-compilation for macOS
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+      - run: pip install setuptools
+
+      - name: Install OS X Cross
+        run: |
+          mkdir -p /tmp/osxcross
+          cd /tmp/osxcross
+          wget https://github.com/tpoechtrager/osxcross/archive/master.zip
+          unzip master.zip
+          cd osxcross-master
+          wget -nc https://github.com/joseluisq/macosx-sdks/releases/download/12.3/MacOSX12.3.sdk.tar.xz
+          mv MacOSX12.3.sdk.tar.xz tarballs/
+          UNATTENDED=1 ./build.sh
+          echo "/tmp/osxcross/osxcross-master/target/bin" >> $GITHUB_PATH
+
+      - name: Build Linux (x86_64)
+        run: |
+          cargo build --release -p form --target x86_64-unknown-linux-gnu --features hackathon
+          cargo build --release -p formnet-up --target x86_64-unknown-linux-gnu --features hackathon
+          cp target/x86_64-unknown-linux-gnu/release/form ./form-linux-x86_64
+          cp target/x86_64-unknown-linux-gnu/release/formnet-up ./formnet-up-linux-x86_64
+
+      - name: Build macOS (x86_64)
+        env:
+          CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER: x86_64-apple-darwin14-clang
+          CC_x86_64_apple_darwin: x86_64-apple-darwin14-clang
+          CXX_x86_64_apple_darwin: x86_64-apple-darwin14-clang++
+        run: |
+          cargo build --release -p form --target x86_64-apple-darwin --features hackathon
+          cargo build --release -p formnet-up --target x86_64-apple-darwin --features hackathon
+          cp target/x86_64-apple-darwin/release/form ./form-darwin-x86_64
+          cp target/x86_64-apple-darwin/release/formnet-up ./formnet-up-darwin-x86_64
+
+      - name: Build macOS (arm64)
+        env:
+          CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER: aarch64-apple-darwin14-clang
+          CC_aarch64_apple_darwin: aarch64-apple-darwin14-clang
+          CXX_aarch64_apple_darwin: aarch64-apple-darwin14-clang++
+        run: |
+          cargo build --release -p form --target aarch64-apple-darwin --features hackathon
+          cargo build --release -p formnet-up --target aarch64-apple-darwin --features hackathon
+          cp target/aarch64-apple-darwin/release/form ./form-darwin-arm64
+          cp target/aarch64-apple-darwin/release/formnet-up ./formnet-up-darwin-arm64
+
+      - name: Copy binaries to docs
+        run: |
+          mkdir -p docs/install
+          mkdir -p docs/install/form
+          cp form-* docs/install/
+          cp formnet-up-* docs/install/
+          cp .github/install.sh docs/install/form/install.sh
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            form-*
+            formnet-up-*
+          prerelease: false
+          generate_release_notes: true
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./docs
+          force_orphan: true
