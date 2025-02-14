@@ -39,22 +39,26 @@ pub async fn serve(
     let _ = tokio::time::sleep(Duration::from_secs(5)).await;
 
     let mut peers: Vec<DatabasePeer<String, CrdtMap>> = vec![];
-    let mut iter = bootstrap.iter();
-    while let Some(bootstrap) = iter.next() {
-        match Client::new()
-            .get(format!("http://{bootstrap}:51820/fetch"))
-            .send()
-            .await {
-                Ok(resp) => match resp.json::<Response>().await {
-                    Ok(Response::Fetch(p)) => { 
-                        peers.extend(p.iter().map(|p| {
-                            DatabasePeer::<String, CrdtMap>::from(p.clone())
-                        }));
+    if !bootstrap.is_empty() {
+        let mut iter = bootstrap.iter();
+        while let Some(bootstrap) = iter.next() {
+            match Client::new()
+                .get(format!("http://{bootstrap}:51820/fetch"))
+                .send()
+                .await {
+                    Ok(resp) => match resp.json::<Response>().await {
+                        Ok(Response::Fetch(p)) => { 
+                            peers.extend(p.iter().map(|p| {
+                                DatabasePeer::<String, CrdtMap>::from(p.clone())
+                            }));
+                        }
+                        _ => {}
                     }
                     _ => {}
                 }
-                _ => {}
-            }
+        }
+    } else {
+        peers = DatabasePeer::<String, CrdtMap>::list().await?;
     }
 
     log::debug!("peers listed...");
