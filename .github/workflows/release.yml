@@ -23,23 +23,22 @@ jobs:
       - name: Install cross-compilation dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools gcc-multilib
-          sudo apt-get install -y gcc-x86-64-linux-gnu
+          sudo apt-get install -y musl-tools gcc-multilib gcc-x86-64-linux-gnu
 
       - name: Build Linux (x86_64)
         run: |
           cargo build --release --bin form --target x86_64-unknown-linux-gnu --features treehacks 
           cargo build --release --bin formnet-up --target x86_64-unknown-linux-gnu 
-          cp target/x86_64-unknown-linux-gnu/release/form ./form-linux-x86_64
-          cp target/x86_64-unknown-linux-gnu/release/formnet-up ./formnet-up-linux-x86_64
+          # Place built binaries in a dedicated directory
+          mkdir -p release_binaries
+          cp target/x86_64-unknown-linux-gnu/release/form release_binaries/form-linux-x86_64
+          cp target/x86_64-unknown-linux-gnu/release/formnet-up release_binaries/formnet-up-linux-x86_64
 
       - name: Upload Linux Binaries
         uses: actions/upload-artifact@v4
         with:
-          name: linux-binaries
-          path: |
-            form-linux-x86_64
-            formnet-up-linux-x86_64
+          name: release-binaries
+          path: release_binaries
 
   build-macos:
     name: Build macOS Binaries
@@ -58,16 +57,16 @@ jobs:
         run: |
           cargo build --release --bin form --target aarch64-apple-darwin --features treehacks 
           cargo build --release --bin formnet-up --target aarch64-apple-darwin
-          cp target/aarch64-apple-darwin/release/form ./form-darwin-arm64
-          cp target/aarch64-apple-darwin/release/formnet-up ./formnet-up-darwin-arm64
+          # Place built binaries in a dedicated directory
+          mkdir -p release_binaries
+          cp target/aarch64-apple-darwin/release/form release_binaries/form-darwin-arm64
+          cp target/aarch64-apple-darwin/release/formnet-up release_binaries/formnet-up-darwin-arm64
 
       - name: Upload macOS Binaries
         uses: actions/upload-artifact@v4
         with:
-          name: macos-binaries
-          path: |
-            form-darwin-arm64
-            formnet-up-darwin-arm64
+          name: release-binaries
+          path: release_binaries
 
   release:
     name: Release
@@ -80,32 +79,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download Linux Binaries
+      - name: Download Release Binaries
         uses: actions/download-artifact@v4
         with:
-          name: linux-binaries
-          path: .
-
-      - name: Download macOS Binaries
-        uses: actions/download-artifact@v4
-        with:
-          name: macos-binaries
+          name: release-binaries
           path: .
 
       - name: Copy binaries to docs
         run: |
           mkdir -p docs/install
           mkdir -p docs/install/form
-          cp form-* docs/install/
-          cp formnet-up-* docs/install/
+          cp release_binaries/* docs/install/
           cp .github/install.sh docs/install/form/install.sh
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            form-*
-            formnet-up-*
+            docs/install/form-*
+            docs/install/formnet-up-*
           prerelease: false
           generate_release_notes: true
 
