@@ -392,6 +392,13 @@ This launches an interactive wizard that will:
 
 The wizard saves your configuration in `~/.config/form/config.json` by default.
 
+#### Be sure to add one of the 2 hosts (or both):
+<hr>
+host 1: 3.214.9.18
+<br>
+host 2: 44.218.128.162
+<hr>
+
 ### Joining Formnet
 
 Formnet is Formation's peer-to-peer network that enables secure communication between instances. If you didn't join during initialization, you can join with:
