@@ -138,7 +138,7 @@ impl ShipCommand {
         )
     }
 
-    pub async fn handle_queue(&mut self, provider: &str, keystore: Option<Keystore>) -> Result<QueueResponse, Box<dyn std::error::Error>> {
+    pub async fn handle_queue(&mut self, provider: &str, keystore: Option<Keystore>) -> Result<(), Box<dyn std::error::Error>> {
         let queue_request = self.pack_ship_request_queue(keystore).await?; 
 
         let resp = reqwest::Client::new() 
