@@ -34,8 +34,8 @@ pub async fn serve(
     let config_dir = PathBuf::from(CONFIG_DIR);
     log::debug!("Getting peers...");
 
-    log::info!("Sleeping for 30 seconds to allow data to propagate...");
-    let _ = tokio::time::sleep(Duration::from_secs(30)).await;
+    log::info!("Sleeping for 5 seconds to allow data to propagate...");
+    let _ = tokio::time::sleep(Duration::from_secs(5)).await;
 
     let mut peers = DatabasePeer::<String, CrdtMap>::list().await?;
     log::debug!("peers listed...");
