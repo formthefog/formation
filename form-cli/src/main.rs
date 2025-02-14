@@ -181,7 +181,7 @@ pub async fn load_keystore(parser: &Form, config: &Config) -> Result<Keystore, B
                 .with_prompt("Provide your password for Keystore: ")
                 .interact()?;
 
-            let path = config.keystore_path.clone();
+            let path = config.keystore_path.clone().join("form_id");
             let data = std::fs::read(path)?;
             serde_json::from_slice(&decrypt_file(&data, &password)?)?
         }
