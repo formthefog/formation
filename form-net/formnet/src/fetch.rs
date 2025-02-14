@@ -163,6 +163,7 @@ pub async fn fetch(
             }
             Err(e) => {
                 log::error!("Error trying to fetch peers: {e}");
+
             }
             _ => {
                 log::error!("Received an invalid response from `fetch`"); 

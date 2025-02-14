@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 // src/service/vmm.rs
 use std::{collections::HashMap, path::PathBuf};
 use std::net::SocketAddr;
@@ -11,6 +11,7 @@ use form_state::instances::{ClusterMember, Instance, InstanceAnnotations, Instan
 use formnet::{JoinRequest, JoinResponse, VmJoinRequest};
 use formnet_server::db::CrdtMap;
 use formnet_server::DatabasePeer;
+use futures::stream::{FuturesUnordered, StreamExt};
 use http_body_util::{BodyExt, Full};
 use hyper::StatusCode;
 use hyper::{body::{Bytes, Incoming},  Method, Request, Response};
@@ -25,6 +26,7 @@ use libc::EFD_NONBLOCK;
 use tokio::io::AsyncReadExt;
 use tokio::sync::{mpsc, Mutex};
 use tokio::sync::broadcast;
+use tokio::time::interval;
 use vmm_sys_util::signal::block_signal;
 use vmm::{api::{VmAddDevice, VmAddUserDevice, VmCoredumpData, VmCounters, VmInfo, VmReceiveMigrationData, VmRemoveDevice, VmResize, VmResizeZone, VmSendMigrationData, VmSnapshotConfig, VmmPingResponse}, config::RestoreConfig, vm_config::{DiskConfig, FsConfig, NetConfig, PmemConfig, VdpaConfig, VsockConfig}, PciDeviceInfo, VmmThreadHandle};
 use vmm_sys_util::eventfd::EventFd;
@@ -32,7 +34,7 @@ use seccompiler::SeccompAction;
 use tokio::task::JoinHandle;
 use form_types::{FormnetMessage, FormnetTopic, GenericPublisher, PeerType, VmmEvent, VmmSubscriber};
 use form_broker::{subscriber::SubStream, publisher::PubStream};
-use futures::future::join_all;
+use futures::future::{join_all, BoxFuture};
 use crate::api::VmmApiChannel;
 use crate::{api::VmmApi, util::ensure_directory};
 use crate::util::add_tap_to_bridge;
@@ -384,6 +386,7 @@ pub struct VmManager {
     subscriber: Option<VmmSubscriber>,
     signing_key: String,
     publisher_addr: Option<String>,
+    create_futures: FuturesUnordered<BoxFuture<'static, Result<VmmEvent, Box<dyn std::error::Error + Send + Sync + 'static>>>>
 }
 
 impl VmManager {
@@ -439,7 +442,8 @@ impl VmManager {
             api_response_sender: resp_tx,
             subscriber,
             publisher_addr,
-            queue_reader: queue_handle
+            queue_reader: queue_handle,
+            create_futures: FuturesUnordered::new(),
         })
     }
 
@@ -718,6 +722,15 @@ impl VmManager {
                             }
                         }
                     }
+                    complete = self.create_futures.next() => {
+                        match complete {
+                            Some(Ok(event)) => if let Err(e) = self.handle_vmm_event(&event).await {
+                                log::error!("Error while handling event: {event:?}: {e}");
+                            }
+                            Some(Err(e)) => log::error!("Error while awaiting future event: {e}"),
+                            None => {}
+                        }
+                    }
                 }
             }
         } else {
@@ -737,6 +750,15 @@ impl VmManager {
                     Some(event) = api_rx.recv() => {
                         if let Err(e) = self.handle_vmm_event(&event).await {
                             log::error!("Error while handling event: {event:?}: {e}"); 
+                        }
+                    }
+                    complete = self.create_futures.next() => {
+                        match complete {
+                            Some(Ok(event)) => if let Err(e) = self.handle_vmm_event(&event).await {
+                                log::error!("Error while handling event: {event:?}: {e}");
+                            }
+                            Some(Err(e)) => log::error!("Error while awaiting future event: {e}"),
+                            None => {}
                         }
                     }
                 }
@@ -775,10 +797,29 @@ impl VmManager {
                     self.create(&mut instance_config).await?;
                     log::info!("Created VM");
                 } else {
+                    let await_event = event.clone();
+                    let await_res = Box::pin(async {
+                        let future = async {
+                            let mut interval = interval(Duration::from_secs(20));
+                            loop {
+                                interval.tick();
+                                if let VmmEvent::Create { ref name, .. } = &await_event {
+                                    if PathBuf::from(IMAGE_DIR).join(name).with_extension("raw").exists() {
+                                        break;
+                                    }
+                                } 
+                            }
+                            await_event
+                        };
+                        let complete = tokio::time::timeout(
+                            Duration::from_secs(1200),
+                            future
+                        ).await?;
+                        Ok(complete)
+                    });
+                    self.create_futures.push(await_res);
                     log::error!("Unable to find Formpack");
-                    return Err(Box::new(
-                        VmmError::Config(
-                            format!(r#"
+                    log::error!(r#"
 Formpack for {name} doesn't exist:
 
     Have you succesfully built your Formpack yet? 
@@ -790,9 +831,7 @@ Formpack for {name} doesn't exist:
     from inside your project root directory 
     and ensure the build is successful before
     calling `form pack ship`
-"#)
-                        )
-                    ))
+"#);
                 }
             }
             VmmEvent::BootComplete { id, formnet_ip, build_id, .. } => {

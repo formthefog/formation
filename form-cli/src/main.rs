@@ -138,7 +138,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         FormCommand::Manage(ref manage_command) => {
-            simple_logger::SimpleLogger::new().init().unwrap();
             match manage_command {
                 ManageCommand::Join(join_command) => {
                     simple_logger::SimpleLogger::new().init().unwrap();

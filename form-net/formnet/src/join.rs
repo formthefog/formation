@@ -319,6 +319,7 @@ pub async fn vm_join_formnet() -> Result<(), Box<dyn std::error::Error>> {
             log::info!("extracted formnet IP for {name}: {formnet_ip}");
             log::info!("Attempting to redeem invite");
             log::info!("Spawning thread to bring formnet up");
+            let _ = tokio::time::sleep(Duration::from_secs(5)).await;
             let handle = tokio::spawn(async move {
                 if let Err(e) = up(
                     Some(Duration::from_secs(60)),
