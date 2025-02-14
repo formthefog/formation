@@ -6,8 +6,6 @@ use ipnet::IpNet;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use shared::{interface_config::InterfaceConfig, wg, Endpoint, NetworkOpts};
-use socket2::Socket;
-use url::Host;
 use wireguard_control::{Device, InterfaceName, KeyPair};
 use crate::{api::{BootstrapInfo, JoinResponse as BootstrapResponse, Response}, up, CONFIG_DIR, DATA_DIR, NETWORK_NAME};
 
@@ -109,11 +107,12 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
         )
     )?;
 
-
+    log::info!("Checking for common endpoints...");
     let mut common_endpoints: FuturesUnordered<_> = bootstrap.iter().map(|dial| {
         let inner_client = client.clone();
         let inner_address = address.clone();
         async move {
+            log::info!("Dialing node {dial}");
             match inner_client.get(format!("http://{dial}:51820/fetch"))
                 .send().await {
                     Ok(resp) => match resp.json::<Response>().await {
@@ -124,6 +123,7 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
                             match ep.resolve() {
                                 Ok(addr) => {
                                     if addr.ip() == publicip {
+                                        log::warn!("found common endpoint {addr:?}");
                                         Some(addr)
                                     } else {
                                         None
@@ -135,6 +135,7 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
 
                         let common_id = peers.iter().find_map(|p| {
                             if &p.id == &inner_address {
+                                log::warn!("found common id {}", p.id);
                                 Some(p.ip)
                             } else {
                                 None
@@ -142,10 +143,14 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
                         });
                         (common_endpoint, common_id)
                     }
-                    Err(_) => {
+                    Err(e) => {
+                        log::error!("Received error trying to fetch peers... {e}");
                         (None, None)
                     }
-                    _ => (None, None)
+                    Ok(r) => {
+                        log::error!("Received invalid response: {r:?}");
+                        (None, None)
+                    }
             }
             Err(_) => (None, None)
         }
@@ -181,6 +186,7 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
     }
 
     let next_port = next_port.pop_front().unwrap();
+    log::warn!("using port {next_port:?}");
 
     let request = match peer_type { 
         PeerType::Operator => {
@@ -190,9 +196,7 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
                 cidr_id: "formnet".to_string(),
                 pubkey: keypair.public.to_base64(),
                 internal_endpoint: None,
-                external_endpoint: Some(
-                    SocketAddr::new(publicip, 51820)
-                ),
+                external_endpoint: Some(SocketAddr::new(publicip, 51820)),
             }
         },
         PeerType::User => {
