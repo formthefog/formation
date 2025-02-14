@@ -386,26 +386,38 @@ async fn get_status(
             let msg = &bytes[1..];
             match &subtopic {
                 1 => {
-                    let msg: PackBuildStatus = match serde_json::from_slice(msg) {
+                    let msg: PackBuildResponse = match serde_json::from_slice(msg) {
                         Ok(msg) => msg,
-                        Err(_) => return None,
+                        Err(e) => {
+                            log::error!("Error trying to acquire pack status: {e}");
+                            return None
+                        }
                     };
 
-                    match msg {
-                        PackBuildStatus::Started(ref id) => if *id == build_id {
-                            Some(msg)
-                        } else {
-                            None
+                    match msg.status { 
+                        PackBuildStatus::Started(ref id) => {
+                            if *id.clone() == build_id {
+                                log::info!("Found a Started status");
+                                Some(msg.status.clone())
+                            } else {
+                                None
+                            }
                         },
-                        PackBuildStatus::Failed { ref build_id, .. } => if build_id == build_id {
-                            Some(msg)
-                        } else {
-                            None
+                        PackBuildStatus::Failed { ref build_id, .. } => {
+                            if build_id == build_id {
+                                log::info!("Found a Failed status");
+                                Some(msg.status.clone())
+                            } else {
+                                None
+                            }
                         },
-                        PackBuildStatus::Completed(ref instance) => if instance.build_id == build_id {
-                            Some(msg)
-                        } else {
-                            None
+                        PackBuildStatus::Completed(ref instance) => {
+                            if instance.build_id == build_id {
+                                log::info!("Found a Completed status");
+                                Some(msg.status.clone())
+                            } else {
+                                None
+                            }
                         }
                     }
                 }

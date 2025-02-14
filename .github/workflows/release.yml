@@ -46,8 +46,8 @@ jobs:
 
       - name: Build Linux (x86_64)
         run: |
-          cargo build --release -p form --target x86_64-unknown-linux-gnu --features hackathon
-          cargo build --release -p formnet-up --target x86_64-unknown-linux-gnu --features hackathon
+          cargo build --release -p form --target x86_64-unknown-linux-gnu --features treehacks 
+          cargo build --release -p formnet-up --target x86_64-unknown-linux-gnu 
           cp target/x86_64-unknown-linux-gnu/release/form ./form-linux-x86_64
           cp target/x86_64-unknown-linux-gnu/release/formnet-up ./formnet-up-linux-x86_64
 
