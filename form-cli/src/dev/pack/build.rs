@@ -1,9 +1,10 @@
 use alloy_core::primitives::Address;
 use alloy_signer_local::{coins_bip39::English, MnemonicBuilder};
 use clap::Args;
+use colored::Colorize;
 use crdts::bft_reg::RecoverableSignature;
 use form_p2p::queue::{QueueRequest, QueueResponse};
-use k256::ecdsa::{RecoveryId, Signature, SigningKey, VerifyingKey};
+use k256::ecdsa::{RecoveryId, SigningKey};
 use tiny_keccak::{Hasher, Sha3};
 use std::path::PathBuf;
 use reqwest::{Client, multipart::Form};
@@ -47,9 +48,89 @@ pub struct BuildCommand {
     pub mnemonic: Option<String>,
 }
 
+pub fn print_queue_response(resp: QueueResponse, build_id: String) {
+    match resp {
+        QueueResponse::OpSuccess => {
+            println!(r#"
+Your build is being processed, and was accepted successfully.
+
+This is your unique build id: {}
+
+To check the status of your build, you can run: 
+
+```
+{}
+```
+
+This process typically takes a couple of minutes. 
+
+Once your build status returns Success, you can `{}` it to the network by running:
+
+```
+{}
+```
+
+No need to provide the build ID here, {} of your 
+project, or provide the correct options.
+"#,
+build_id.blue(),
+"form pack [OPTIONS] status <build-id>".bright_yellow(),
+"ship".blue(),
+"form pack [OPTIONS] ship".bright_yellow(),
+"however, ensure you are in the root directory".bright_purple(), 
+);
+        }
+        QueueResponse::Failure { reason } => {
+            if let Some(reason) = reason {
+            println!(r#"
+Unforutnately your build request {} for the following reason:
+
+{}
+
+If the reason is missing, or unclear, please consider going to our project
+discord at {} and going to the {} channel, submitting an {} on our project github at {}, 
+or sending us a direct message on X at {}, and someone from our core team will gladly
+help you out.
+"#,
+"FAILED".white().on_bright_red(),
+reason.bright_red().on_black(),
+"discord.gg/formation".blue(),
+"chewing-glass".blue(),
+"issue".bright_yellow(),
+"http://github.com/formthefog/formation.git".blue(),
+"@formthefog".blue(),
+);
+            }
+        }
+        _ => {
+            println!(r#"
+Something went {} wrong. The response received was {:?} which is an invalid response 
+to the `{}` command.
+
+Please consider doing one of the following: 
+
+    1. Join our discord at {} and go to the {} channel and paste this response
+    2. Submitting an {} on our project github at {} 
+    3. Sending us a direct message on X at {}
+
+Someone from our core team will gladly help you out.
+"#,
+"terribly".bright_red().on_blue(),
+resp,
+"form pack [OPTIONS] build".bright_yellow(),
+"discord.gg/formation".blue(),
+"chewing-glass".blue(),
+"issue".bright_yellow(),
+"http://github.com/formthefog/formation.git".blue(),
+"@formthefog".blue(),
+);
+        }
+    }
+}
+
 impl BuildCommand {
-    pub async fn handle_queue(mut self, provider: &str, queue_port: u16, keystore: Keystore) -> Result<QueueResponse, Box<dyn std::error::Error>> {
-        let request = self.pack_build_request_queue(Some(keystore)).await?;
+    pub async fn handle_queue(mut self, provider: &str, queue_port: u16, keystore: Keystore) -> Result<(), Box<dyn std::error::Error>> {
+        let (request, build_id) = self.pack_build_request_queue(Some(keystore)).await?;
         let resp: QueueResponse = Client::new()
             .post(format!("http://{provider}:{queue_port}/queue/write_local"))
             .json(&request)
@@ -57,12 +138,15 @@ impl BuildCommand {
             .await?
             .json()
             .await?;
-        return Ok(resp)
+
+        print_queue_response(resp, build_id);
+
+        return Ok(())
     }
-    pub async fn handle(mut self, provider: &str, formpack_port: u16) -> Result<PackResponse, Box<dyn std::error::Error>> {
+
+    pub async fn handle(mut self, provider: &str, formpack_port: u16) -> Result<(), Box<dyn std::error::Error>> {
         let form = self.pack_build_request().await?;
-        println!("Successfully built multipart Form, sending to server");
-        let resp: PackResponse = Client::new()
+        let _resp: PackResponse = Client::new()
             .post(format!("http://{provider}:{formpack_port}/build"))
             .multipart(form)
             .send()
@@ -70,10 +154,10 @@ impl BuildCommand {
             .json()
             .await?;
 
-        Ok(resp)
+        Ok(())
     }
 
-    pub async fn pack_build_request_queue(&mut self, keystore: Option<Keystore>) -> Result<QueueRequest, Box<dyn std::error::Error>> {
+    pub async fn pack_build_request_queue(&mut self, keystore: Option<Keystore>) -> Result<(QueueRequest, String), Box<dyn std::error::Error>> {
         let artifacts_path = self.build_pack()?;
         let artifact_bytes = std::fs::read(artifacts_path)?;
         let (signature, recovery_id, hash) = self.sign_payload(keystore.clone())?;
@@ -83,15 +167,7 @@ impl BuildCommand {
             artifacts: artifact_bytes, 
         };
 
-        let recovered_address = Address::from_public_key(
-            &VerifyingKey::recover_from_msg(
-                &hash, 
-                &Signature::from_slice(&hex::decode(&signature)?)?,
-                recovery_id
-            )?
-        );
-
-        println!("recovered address: {recovered_address:x}");
+        let build_id = pack_request.name.clone();
 
         let pack_build_request = PackBuildRequest {
             sig: RecoverableSignature { sig: signature, rec: recovery_id.to_byte() },
@@ -111,7 +187,7 @@ impl BuildCommand {
             topic: hex::encode(topic_hash)
         };
 
-        Ok(queue_request)
+        Ok((queue_request, build_id))
     }
 
     pub async fn pack_build_request(&mut self) -> Result<Form, String> {
@@ -147,6 +223,7 @@ impl BuildCommand {
                 _ => None
             }
         }).collect::<Vec<(PathBuf, PathBuf)>>();
+        println!("Copy Instructions: {copy_instructions:?}");
         println!("Preparing artifacts...");
         pack.prepare_artifacts(&copy_instructions).map_err(|e| e.to_string())
     } 

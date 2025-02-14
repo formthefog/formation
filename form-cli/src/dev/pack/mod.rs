@@ -5,11 +5,13 @@ pub mod build;
 pub mod validate;
 pub mod ship;
 pub mod dry_run;
+pub mod status;
 
 pub use build::*;
 pub use validate::*;
 pub use ship::*;
 pub use dry_run::*;
+pub use status::*;
 
 pub fn default_formfile(context: PathBuf) -> PathBuf {
     context.join("Formfile")
@@ -25,4 +27,6 @@ pub enum PackCommand {
     Validate(ValidateCommand),
     Ship(ShipCommand),
     DryRun(DryRunCommand),
+    Status(StatusCommand),
 }
+

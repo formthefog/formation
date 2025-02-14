@@ -37,9 +37,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 formnet_ip: formnet_ip.to_string()
             };
 
-            log::info!("Sending BootCompleteRequest {request:?} to http://{host_public_ip}:3002/{name}/boot_complete endpoint");
+            log::info!("Sending BootCompleteRequest {request:?} to http://{host_public_ip}:3002/boot_complete endpoint");
 
-            let resp = Client::new().post(&format!("http://{host_public_ip}:3002/{}/boot_complete", name))
+            let resp = Client::new().post(&format!("http://{host_public_ip}:3002/boot_complete"))
                 .json(&request)
                 .send()
                 .await?

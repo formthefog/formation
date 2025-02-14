@@ -245,6 +245,8 @@ impl FormPackManager {
             node_id,
             build_id: hex::encode(build_id),
             instance_owner: hex::encode(signer_address),
+            dns_record: None,
+            formnet_ip: None,
             created_at: 0,
             updated_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
             last_snapshot: 0,
@@ -370,56 +372,52 @@ async fn build_routes(manager: Arc<Mutex<FormPackManager>>) -> Router {
     Router::new()
         .route("/ping", post(handle_ping))
         .route("/build", post(handle_pack))
-        .route("/:id/:name/get_status", get(get_status))
+        .route("/:build_id/get_status", get(get_status))
         .with_state(manager)
 }
 
 async fn get_status(
-    Path(id): Path<String>,
-    Path(name): Path<String>,
+    Path(build_id): Path<String>,
 ) -> Json<PackResponse> {
-    let instance_id = {
-        let mut hasher = Sha3::v256();
-        let mut hash = [0u8; 32];
-        let decoded_address = match hex::decode(id.clone()) {
-            Ok(bytes) => bytes,
-            Err(_) => return Json(PackResponse::Failure)
-        };
-
-        let address = Address::from_slice(&decoded_address);
-
-        hasher.update(address.as_ref());
-        hasher.update(name.as_bytes());
-        hasher.finalize(&mut hash);
-        hex::encode(hash)
-    };
-
     let messages: Vec<PackBuildStatus> = if let Ok(messages) = FormPackManager::read_from_queue(None, None).await {
+        log::info!("Received a get_status request");
         let msgs = messages.iter().filter_map(|bytes| {
             let subtopic = bytes[0];
             let msg = &bytes[1..];
             match &subtopic {
                 1 => {
-                    let msg: PackBuildStatus = match serde_json::from_slice(msg) {
+                    let msg: PackBuildResponse = match serde_json::from_slice(msg) {
                         Ok(msg) => msg,
-                        Err(_) => return None,
+                        Err(e) => {
+                            log::error!("Error trying to acquire pack status: {e}");
+                            return None
+                        }
                     };
 
-                    match msg {
-                        PackBuildStatus::Started(ref id) => if id == &instance_id {
-                            Some(msg)
-                        } else {
-                            None
+                    match msg.status { 
+                        PackBuildStatus::Started(ref id) => {
+                            if *id.clone() == build_id {
+                                log::info!("Found a Started status");
+                                Some(msg.status.clone())
+                            } else {
+                                None
+                            }
                         },
-                        PackBuildStatus::Failed { ref build_id, .. } => if build_id == &instance_id {
-                            Some(msg)
-                        } else {
-                            None
+                        PackBuildStatus::Failed { ref build_id, .. } => {
+                            if build_id == build_id {
+                                log::info!("Found a Failed status");
+                                Some(msg.status.clone())
+                            } else {
+                                None
+                            }
                         },
-                        PackBuildStatus::Completed(ref instance) => if instance.instance_id() == instance_id {
-                            Some(msg)
-                        } else {
-                            None
+                        PackBuildStatus::Completed(ref instance) => {
+                            if instance.build_id == build_id {
+                                log::info!("Found a Completed status");
+                                Some(msg.status.clone())
+                            } else {
+                                None
+                            }
                         }
                     }
                 }

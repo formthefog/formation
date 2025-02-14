@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, path::PathBuf, str::FromStr};
 
 use client::{data_store::DataStore, nat::{self, NatTraverse}, util};
-use formnet_server::ConfigFile;
+use formnet_server::{db::CrdtMap, ConfigFile, DatabasePeer};
 use hostsfile::HostsBuilder;
 use reqwest::Client;
 use shared::{get_local_addrs, wg::{self, DeviceExt}, Endpoint, IoErrorContext, NatOpts, NetworkOpts, Peer};
@@ -18,18 +18,25 @@ pub async fn fetch(
     let network = NetworkOpts::default();
     let nat_opts = NatOpts::default();
     let config = ConfigFile::from_file(config_dir.join(NETWORK_NAME).with_extension("conf"))?; 
-    #[cfg(target_os = "linux")]
-    let interface_up = match Device::list(wireguard_control::Backend::Kernel) {
-        Ok(interfaces) => interfaces.iter().any(|name| *name == interface),
-        _ => false,
-    };
-
-    log::info!("Interface up?: {interface_up}");
-
-    #[cfg(not(target_os = "linux"))]
-    let interface_up = match Device::list(wireguard_control::Backend::Userspace) {
-        Ok(interfaces) => interfaces.iter().any(|name| *name == interface),
-        _ => false,
+    let interface_up = {
+        #[cfg(target_os = "linux")]
+        {
+            let up = match Device::list(wireguard_control::Backend::Kernel) {
+                Ok(interfaces) => interfaces.iter().any(|name| *name == interface),
+                _ => false,
+            };
+            log::info!("Interface up?: {up}");
+            up
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let up = match Device::list(wireguard_control::Backend::Userspace) {
+                Ok(interfaces) => interfaces.iter().any(|name| *name == interface),
+                _ => false,
+            };
+            log::info!("Interface up?: {up}");
+            up
+        }
     };
 
     let (pubkey, internal, external) = {
@@ -56,6 +63,7 @@ pub async fn fetch(
         }
     };
 
+    let host_port = external.port();
 
     if !interface_up {
         log::info!(
@@ -81,7 +89,7 @@ pub async fn fetch(
         interface.as_str_lossy()
     );
 
-    let resp = Client::new().get(format!("http://{internal}:51820/fetch")).send().await;
+    let resp = Client::new().get(format!("http://{internal}:{host_port}/fetch")).send().await;
     match resp {
         Ok(r) => match r.json::<Response>().await {
             Ok(Response::Fetch(peers)) => {
@@ -108,9 +116,12 @@ pub async fn fetch(
                 } else {
                     log::info!("{}", "peers are already up to date");
                 }
+                log::info!("Updated interface, updating datastore");
                 let interface_updated_time = std::time::Instant::now();
                 store.update_peers(&peers)?;
+                log::info!("Updated peers, writing to datastore");
                 store.write()?;
+                log::info!("Getting candidates...");
                 let candidates: Vec<Endpoint> = get_local_addrs()?
                     .filter(|ip| !nat_opts.is_excluded(*ip))
                     .map(|addr| SocketAddr::from((addr, device.listen_port.unwrap_or(51820))).into())
@@ -123,7 +134,7 @@ pub async fn fetch(
                 for candidate in &candidates {
                     log::debug!("  candidate: {}", candidate);
                 }
-                match Client::new().post(format!("http://{internal}/{}/candidates", config.address))
+                match Client::new().post(format!("http://{internal}:{host_port}/{}/candidates", config.address))
                     .json(&candidates)
                     .send().await {
                         Ok(_) => log::info!("Successfully sent candidates"),
@@ -152,6 +163,7 @@ pub async fn fetch(
             }
             Err(e) => {
                 log::error!("Error trying to fetch peers: {e}");
+
             }
             _ => {
                 log::error!("Received an invalid response from `fetch`"); 
@@ -191,3 +203,48 @@ fn update_hosts_file(
     Ok(())
 }
 
+pub async fn fetch_server() -> Result<(), Box<dyn std::error::Error>> {
+    let interface = InterfaceName::from_str("formnet")?;
+    let device = Device::get(&interface, NetworkOpts::default().backend)?;
+    let db_peers = DatabasePeer::<String, CrdtMap>::list().await?;
+    let peers = db_peers.iter().map(|p| p.inner.clone()).collect::<Vec<Peer<String>>>();
+    let modifications = device.diff(&peers);
+    let updates = modifications
+        .iter()
+        .cloned()
+        .map(PeerConfigBuilder::from)
+        .collect::<Vec<_>>();
+
+    let interface_up = {
+        #[cfg(target_os = "linux")]
+        {
+            let up = match Device::list(wireguard_control::Backend::Kernel) {
+                Ok(interfaces) => interfaces.iter().any(|name| *name == interface),
+                _ => false,
+            };
+            log::info!("Interface up?: {up}");
+            up
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let up = match Device::list(wireguard_control::Backend::Userspace) {
+                Ok(interfaces) => interfaces.iter().any(|name| *name == interface),
+                _ => false,
+            };
+            log::info!("Interface up?: {up}");
+            up
+        }
+    };
+
+    if !updates.is_empty() || !interface_up {
+        DeviceUpdate::new()
+            .add_peers(&updates)
+            .apply(&interface, NetworkOpts::default().backend)?;
+
+        log::info!("updated interface {}\n", interface.as_str_lossy());
+    } else {
+        log::info!("{}", "peers are already up to date");
+    }
+
+    Ok(())
+}

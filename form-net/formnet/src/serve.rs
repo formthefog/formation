@@ -5,6 +5,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 use form_types::PeerType;
 use parking_lot::RwLock;
+use reqwest::Client;
+use tokio::time::interval;
 use std::time::Duration;
 use std::{net::SocketAddr, ops::Deref};
 use formnet_server::{ConfigFile, Endpoints, VERSION};
@@ -12,12 +14,13 @@ use formnet_server::{db::CrdtMap, DatabasePeer};
 use ipnet::IpNet;
 use shared::{get_local_addrs, wg, Endpoint, NetworkOpts, PeerContents};
 use wireguard_control::{Backend, Device, DeviceUpdate, InterfaceName, PeerConfigBuilder};
-use crate::api::{server, BootstrapInfo};
-use crate::CONFIG_DIR;
+use crate::api::{server, BootstrapInfo, Response};
+use crate::{fetch_server, CONFIG_DIR};
 
 pub async fn serve(
     interface: &str,
     id: String,
+    bootstrap: Vec<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let interface_name = InterfaceName::from_str(interface)?;
     #[cfg(target_os = "linux")]
@@ -33,7 +36,32 @@ pub async fn serve(
     let config_dir = PathBuf::from(CONFIG_DIR);
     log::debug!("Getting peers...");
 
-    let mut peers = DatabasePeer::<String, CrdtMap>::list().await?;
+    log::info!("Sleeping for 5 seconds to allow data to propagate...");
+    let _ = tokio::time::sleep(Duration::from_secs(5)).await;
+
+    let mut peers: Vec<DatabasePeer<String, CrdtMap>> = vec![];
+    if !bootstrap.is_empty() {
+        let mut iter = bootstrap.iter();
+        while let Some(bootstrap) = iter.next() {
+            match Client::new()
+                .get(format!("http://{bootstrap}:51820/fetch"))
+                .send()
+                .await {
+                    Ok(resp) => match resp.json::<Response>().await {
+                        Ok(Response::Fetch(p)) => { 
+                            peers.extend(p.iter().map(|p| {
+                                DatabasePeer::<String, CrdtMap>::from(p.clone())
+                            }));
+                        }
+                        _ => {}
+                    }
+                    _ => {}
+                }
+        }
+    } else {
+        peers = DatabasePeer::<String, CrdtMap>::list().await?;
+    }
+
     log::debug!("peers listed...");
     let peer_configs = peers
         .iter()
@@ -84,8 +112,9 @@ pub async fn serve(
     let num_candidates = candidates.len();
     let myself = peers
         .iter_mut()
-        .find(|peer| peer.ip == config.address)
+        .find(|peer| peer.contents.ip == config.address)
         .expect("Couldn't find server peer in peer list.");
+
     myself.update(
         PeerContents {
             candidates,
@@ -119,6 +148,30 @@ pub async fn serve(
         internal_endpoint: Some(config.address),
         external_endpoint: Some(SocketAddr::new(publicip, 51820))
     };
+
+    tokio::spawn(async move {
+        let _ = Client::new()
+            .post("http://127.0.0.1:53333/queue/joined_formnet")
+            .send()
+            .await;
+    });
+
+    tokio::spawn(async move {
+        let _ = Client::new()
+            .post("http://127.0.0.1:3004/bootstrap/joined_formnet")
+            .send()
+            .await;
+    });
+
+    tokio::spawn(async move {
+        let mut interval = interval(Duration::from_secs(20));
+        loop {
+            interval.tick().await;
+            if let Err(e) = fetch_server().await {
+                log::error!("Error fetching peers from self: {e}");
+            }
+        }
+    });
 
     server(my_info).await?;
 

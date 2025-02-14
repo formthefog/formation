@@ -7,7 +7,9 @@ use clap::{Parser, Subcommand, Args};
 use form_config::OperatorConfig;
 use form_types::PeerType;
 use formnet::{init::init, serve::serve};
-use formnet::{ensure_crdt_datastore, leave, request_to_join, revert_formnet_resolver, set_formnet_resolver, uninstall, user_join_formnet, vm_join_formnet, NETWORK_NAME};
+use formnet::{ensure_crdt_datastore, leave, request_to_join, uninstall, user_join_formnet, vm_join_formnet, NETWORK_NAME};
+#[cfg(target_os = "linux")]
+use formnet::{revert_formnet_resolver, set_formnet_resolver}; 
 
 #[derive(Clone, Debug, Parser)]
 struct Cli {
@@ -116,7 +118,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else if !operator_config.clone().unwrap().bootstrap_nodes.is_empty() {
                         log::info!("Found bootstrap in config...");
                         let my_ip = request_to_join(
-                            operator_config.unwrap().bootstrap_nodes.clone(),
+                            operator_config.clone().unwrap().bootstrap_nodes.clone(),
                             address.clone(),
                             PeerType::Operator
                         ).await?;
@@ -129,9 +131,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let (shutdown, _) = tokio::sync::broadcast::channel::<()>(2);
                     let mut formnet_receiver = shutdown.subscribe();
                     let inner_address = address.clone();
+                    let bootstraps = if !parser.bootstraps.is_empty() {
+                        parser.bootstraps.clone() 
+                    } else if let Some(config) = operator_config {
+                        config.bootstrap_nodes.clone()
+                    } else {
+                        vec![]
+                    };
                     let formnet_server_handle = tokio::spawn(async move {
                         tokio::select! {
-                            res = serve(NETWORK_NAME, inner_address) => {
+                            res = serve(NETWORK_NAME, inner_address, bootstraps) => {
                                 if let Err(e) = res {
                                     eprintln!("Error trying to serve formnet server: {e}");
                                 }
@@ -167,14 +176,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         parser.signing_key.unwrap()
                     };
-                    leave(parser.bootstraps, signing_key).await?; 
-                    uninstall()?;
+                    leave(parser.bootstraps.clone(), signing_key).await?; 
+                    uninstall().await?;
                 }
             }
         }
         Membership::User(opts) => {
             let address = hex::encode(Address::from_private_key(&SigningKey::from_slice(&hex::decode(&opts.secret_key)?)?));
-            user_join_formnet(address, opts.provider, opts.port).await?;
+            user_join_formnet(address, opts.provider).await?;
         } 
         Membership::Instance => {
             vm_join_formnet().await?;

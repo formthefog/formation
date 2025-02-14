@@ -52,7 +52,7 @@ impl VirtCustomize {
     }
 
     pub fn install(mut self, packages: &[String]) -> Self {
-        let packages: String = packages.join(" ");
+        let packages: String = packages.join(",");
         self.commands.push(
             format!("--install {packages}")
         );

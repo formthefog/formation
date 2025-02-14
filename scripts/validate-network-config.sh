@@ -5,6 +5,9 @@ function check_root() {
     [[ $EUID -eq 0 ]] || { echo "Requires root" >&2; exit 1; }
 }
 
+apt-get update
+apt-get install dnsmasq
+
 function get_default_interface() {
     ip route show default | awk '{print $5}' | head -n1
 }
@@ -63,6 +66,7 @@ function setup_dnsmasq() {
     local start_ip=$(echo "$range" | sed 's|0/24|10|')
     local end_ip=$(echo "$range" | sed 's|0/24|200|')
 
+    mkdir -p /etc/dnsmasq.d
     cat > /etc/dnsmasq.d/br0.conf <<EOF
 interface=br0
 port=0

@@ -291,38 +291,51 @@ fn start_userspace_wireguard(iface: &InterfaceName) -> io::Result<Output> {
 
 pub fn apply(builder: &DeviceUpdate, iface: &InterfaceName) -> io::Result<()> {
     // If we can't open a configuration socket to an existing interface, try starting it.
+    log::info!("Opening socket for {iface:?}");
     let mut sock = match open_socket(iface) {
-        Err(_) => {
+        Err(e) => {
+            log::error!("Error opening socket: {e}");
             fs::create_dir_all(VAR_RUN_PATH)?;
+            log::info!("Unable to create directory {VAR_RUN_PATH}");
             // Clear out any old namefiles if they didn't lead to a connected socket.
+            log::info!("Clearing out old namefiles");
             let _ = fs::remove_file(get_namefile(iface)?);
+            log::info!("Starting userspace wireguard");
             start_userspace_wireguard(iface)?;
+            log::info!("Sleeping to allow wireguard to start");
             std::thread::sleep(Duration::from_millis(100));
+            log::info!("Opening socket");
             open_socket(iface)
                 .map_err(|e| io::Error::new(e.kind(), format!("failed to open socket ({e})")))?
         },
         Ok(sock) => sock,
     };
 
+    log::info!("Building request");
     let mut request = String::from("set=1\n");
 
+    log::info!("writing out private key");
     if let Some(ref k) = builder.private_key {
         writeln!(request, "private_key={}", hex::encode(k.as_bytes())).ok();
     }
 
+    log::info!("writing out fwmark");
     if let Some(f) = builder.fwmark {
         writeln!(request, "fwmark={f}").ok();
     }
 
+    log::info!("writing out listen_port");
     if let Some(f) = builder.listen_port {
         writeln!(request, "listen_port={f}").ok();
     }
 
+    log::info!("writing out replce_peers");
     if builder.replace_peers {
         writeln!(request, "replace_peers=true").ok();
     }
 
     for peer in &builder.peers {
+        log::info!("writing out peer {peer:?}");
         writeln!(
             request,
             "public_key={}",
@@ -330,22 +343,27 @@ pub fn apply(builder: &DeviceUpdate, iface: &InterfaceName) -> io::Result<()> {
         )
         .ok();
 
+        log::info!("writing out replace_allowed_ips");
         if peer.replace_allowed_ips {
             writeln!(request, "replace_allowed_ips=true").ok();
         }
 
+        log::info!("writing out remove_me");
         if peer.remove_me {
             writeln!(request, "remove=true").ok();
         }
 
+        log::info!("writing out preshared_key");
         if let Some(ref k) = peer.preshared_key {
             writeln!(request, "preshared_key={}", hex::encode(k.as_bytes())).ok();
         }
 
+        log::info!("writing out peer endpoint");
         if let Some(endpoint) = peer.endpoint {
             writeln!(request, "endpoint={endpoint}").ok();
         }
 
+        log::info!("writing out keep_alive_Interval");
         if let Some(keepalive_interval) = peer.persistent_keepalive_interval {
             writeln!(
                 request,
@@ -354,6 +372,7 @@ pub fn apply(builder: &DeviceUpdate, iface: &InterfaceName) -> io::Result<()> {
             .ok();
         }
 
+        log::info!("writing out allowed_ips");
         for allowed_ip in &peer.allowed_ips {
             writeln!(
                 request,
@@ -366,12 +385,15 @@ pub fn apply(builder: &DeviceUpdate, iface: &InterfaceName) -> io::Result<()> {
 
     request.push('\n');
 
+    log::info!("writing request to socket");
     sock.write_all(request.as_bytes())?;
 
     let mut reader = BufReader::new(sock);
     let mut line = String::new();
 
+    log::info!("reading from socket reader");
     reader.read_line(&mut line)?;
+    log::info!("reading from socket reader");
     let split: Vec<&str> = line.trim_end().splitn(2, '=').collect();
     match &split[..] {
         ["errno", "0"] => Ok(()),

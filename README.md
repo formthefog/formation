@@ -1,5 +1,30 @@
 # Formation 
 
+## Table of Contents
+
+- [Overview](#overview)
+- [Special Thanks](#special-thanks)
+- [Contributing](#contributing)
+- [Pre-release Notice](#pre-release-notice)
+- [Prerequisites & Setup](#prerequisites--setup)
+  - [System Requirements](#system-requirements)
+  - [System Dependencies](#system-dependencies)
+  - [Rust Toolchain & Docker](#rust-toolchain--docker)
+- [Network Configuration](#network-configuration)
+  - [Configuring Your Local Network](#configuring-your-local-network)
+  - [Setting Up a Bridge Interface](#setting-up-a-bridge-interface)
+- [Running a Node](#running-a-node)
+  - [Single Node Local Test (Docker)](#single-node-local-test-docker)
+  - [Multinode Local Test (Docker)](#multinode-local-test-docker)
+- [Joining the Official Developer Network](#joining-the-official-developer-network)
+- [Formation Development Getting Started](#formation-development-guide)
+  - [Getting Started](#getting-started)
+  - [Core Workflow](#core-workflow)
+  - [Writing Formfiles](#writing-formfiles)
+  - [Advanced Topics](#advanced-topics)
+  - [Troubleshooting](#troubleshooting)
+
+
 #### A public verfiable and self-replicating protocol for trustless confidential virtual private servers (VPS), coordinating as a Fog Compute network to power the Age of Autonomy.
 
 <hr>
@@ -42,33 +67,30 @@ The default ports that the system's service APIs run on are:
 
 `3003` for `form-pack-manager` API
 
+`3004` for `form-state` API (BFT-CRDT Globally Replicated Datastore)
 and 
 
-`51820` for `formnet` interface.
+`53333` for `form-p2p` BFT-CRDT Message queue.
 
 
 You will also need a primary bridge network, currently, it must be called `br0` 
 though in a future release this will become configurable, however, having
 the primary bridge interface called `br0` is best practice. 
 
-Ensure that you have a `br0` primary bridge interface set up on you machine, and 
-ensure that your bridge is the master to your primary physical interface 
-(eth0, enp3s0, or similar)
-
-Once you have ensured your bridge interface exists and is `up` you can add
-the physical interface to the bridge with the `brctl` command below
-
-```bash
-sudo brctl addif br0 <inet>
-```
-
-replace `<inet>` with the correct name of your physical interface.
-
+Ensure that you have a `br0` primary bridge interface set up on you machine with an IP address
+on a valid private IP range with a default route. You will also need to setup NAT.
 
 In order to make this process easy for you, we have provided a script in this repo
 
 `./scripts/validate_network_config.sh`
 
+Simply run this with sudo privileges:
+
+```bash
+cd /path/to/formation/repo
+
+sudo ./scripts/validate-network-config.sh
+```
 
 By running this script, assuming you do not have significant amounts of customized networking on the 
 machine you are running Formation on, you should get a properly configured network and be able to move forward.
@@ -77,22 +99,119 @@ If you do not follow these steps, it is very likely that VPS instances launched 
 will not have internet access, will not be able to join formnet, and will not be able to be accessed by 
 the developer that owns and manages the instances.
 
+If you do have significant amounts of custom networking set up on the machine you
+are running formation on, or simply would rather manually set up the bridge network
+here is how:
+
+1. Find an available IP range within the `192.168.x.x` range or the `172.16.x.x` range 
+(do not use the `10.x.x.x` range as formnet uses this range for the P2P Mesh Network).
+
+2. Install bridge-utils
+
+```bash
+sudo apt-get update 
+sudo apt-get upgrade
+
+sudo apt-get install bridge-utils
+```
+
+3. create the bridge network
+
+```bash
+sudo brctl addbr br0
+```
+
+4. give it an IP address within the range you selected assuming you selected `192.168.100.0/24` 
+
+```bash
+sudo ip addr add 192.168.100.1/24
+```
+
+5. set the bridge to `up`
+
+```bash
+sudo ip link set br0 up
+```
+
+running `ip addr show br0` may still show that br0 is `DOWN`, however, this is because
+bridges stay `DOWN` until something is attached to them. This is expected
+
+6. ensure ip forwarding iss enabled
+
+```bash
+sudo sysctl -w net.ipv4.ip_forward=1 >/dev/null
+```
+
+7. add a nat `POSTROUTING` rule to `iptables` 
+
+```bash
+sudo iptables -t nat -A POSTROUTING -s 192.168.100.1/24
+```
+
+8. install dnsmasq
+
+```bash
+sudo apt-get update
+sudo apt-get upgrade
+
+sudo apt-get install dnsmasq
+```
+
+Beware, this may throw an error, as you likely have a DNS resolver running already
+do not fret, this is expected, just move on.
+
+9. setup dnsmasq
+
+```bash
+sudo mkdir -p /etc/dnsmasq.d
+sudo cat > /etc/dnsmasq.d/br0.conf <<EOF
+interface=br0
+port=0
+dhcp-range=192.168.100.10,192.168.100.250,24h
+dhcp-option=6,8.8.8.8,8.8.4.4,1.1.1.1
+EOF
+```
+
+Replace the range with your selected range.
+
+10. restart dnsmasq
+
+```bash
+sudo systemctl restart dnsmasq
+```
+
+11. OPTIONAL test in a local network namespace
+
+```bash
+sudo ip netns add testns
+sudo ip link add veth-host type veth peer name veth-ns
+sudo ip link set veth-host master br0
+sudo ip link set veth-host up
+sudo ip link set veth-ns netns testns
+sudo ip netns exec testns ip addr add 192.168.100.5
+sudo ip netns exec testns ip link set veth-ns up
+sudo ip netns exec testns ip link set lo up
+sudo ip netns exec testns ip route add default via 192.168.100.0
+sudo ip netns exec testns ping -c 3 -W 8.8.8.8
+sudo ip netns del testns
+```
+
 <hr>
 
 There are a few different ways that you can run a Formation node and participate in the network. For full documentation see our [Official Docs](docs.formation.cloud), and navigate to the **Operators** section.
 
 The easiest way to get started is to simply run our Docker image in privileged mode with --network=host.
 
-First, you will need to build an Operator config file:
+First, you will need to build an Operator config file, from within the formation repo run:
 
 ```bash
-form kit operator config
+cargo build --release --bin form-config-wizard
+
+form-config-wizard 
 ```
 
 This will walk you through a wizard, which will ask a series of questions. If you a running a single node developer network
 or joining the official devnet using the official docker images, you will likely want to select all of the defaults.
-
-![form kit operator config demo](./assets/form-kit-operator-config.gif)
 
 Currently, ports related to service apis are hardcoded in many places throughout the system components, and as such,
 we as you for the time being to only use the default ports, unless you are actively contributing to the project
@@ -231,145 +350,413 @@ all in an effort to ensure the network is hardened and ready for a more public a
 
 <hr>
 
-## Initializing a Developer Kit
+# Formation Development Guide
 
-This is an optional, **but highly recommended**, step that will save you a lot of time and effort. The rest of the **Deploying an App** guide in here assumes you complete this step. If you choose not to complete this step, please see the [Official Docs](docs.formation.cloud) for CLI requirements, or use our [web-based deployments UI](dev.formation.cloud). 
+Formation is a platform for building, deploying, and managing verifiable confidential VPS instances in the Formation network. This guide will walk you through the core development workflow and key concepts.
 
-From anywhere in your terminal run the following command:
+## Table of Contents
+- [Getting Started](#getting-started)
+- [Core Workflow](#core-workflow)
+- [Writing Formfiles](#writing-formfiles)
+- [Advanced Topics](#advanced-topics)
+- [Troubleshooting](#troubleshooting)
+
+## Getting Started
+
+Formation uses a CLI tool called `form` to manage the entire development workflow. Before you begin development, you'll need to install and configure the Formation CLI.
+
+### Installing Form
+
+To install the official Formation CLI, run the following command:
 
 ```bash
-form kit init
+curl https://dev.formation.cloud/install/form/install.sh | sudo bash
 ```
 
-This will launch the init wizard. If you choose not to run the interactive wizard and simply answer each prompt to build your Formation dev kit, you can see our [Official Docs] for a list of CLI args or run `form kit --help` to see the optional and required arguments for the Formation dev kit.
+This script will download and install the latest version of the Formation CLI. The installation requires root privileges to ensure proper system integration.
 
-## Deploying an App
+### Initial Setup
+
+1. Install the Formation CLI (installation instructions coming soon)
+
+2. Initialize your development environment:
+```bash
+sudo form kit init
+```
+
+This launches an interactive wizard that will:
+- Create or import a wallet for signing requests
+- Set up your keystore location and configuration
+- Configure your provider settings
+- Set up your Formnet participation preferences
+
+The wizard saves your configuration in `~/.config/form/config.json` by default.
+
+#### Be sure to add one of the 2 hosts (or both):
+<hr>
+host 1: 3.214.9.18
+<br>
+host 2: 44.218.128.162
+<hr>
+
+### Joining Formnet
+
+Formnet is Formation's peer-to-peer network that enables secure communication between instances. If you didn't join during initialization, you can join with:
 
 ```bash
-cd /path/to/app/root
+sudo form manage join
+sudo form manage formnet-up
 ```
 
-##### Build a `Formfile`
-`Formfile` is the Formation networks equivalent to a `Dockerfile`, and they are intentionally very similar in syntax and purpose. 
+The `formnet-up` command starts a background process that maintains your peer connections. This must be running to access your instances.
 
-Where `Dockerfile` defines a manifest or recipe for deterministically building a container image, Formfile does the same thing for both building and configuring a Formation VPS instance. Given the differences between containers and Linux Virtual Machines, there are some differences in the options and commands that you have at your disposal.
+## Core Workflow
 
-Below is an example of a simple `Formfile` that defines a minimal VPS instance for hosting a simple `hello-world` http server built in `python`. For full documentation see [Formfile Docs](docs.formation.cloud/formfile)
+### 1. Create Your Formfile
 
-```Dockerfile
+Every Formation project needs a `Formfile` in its root directory. The Formfile defines your instance configuration and build process. See the [Writing Formfiles](#writing-formfiles) section for details.
+
+### 2. Build Your Instance
+
+From your project root directory:
+
+```bash
+sudo form pack build
+```
+
+This command:
+- Validates your Formfile
+- Creates a build context from your project
+- Generates a unique build ID
+- Initiates the build process
+
+You'll receive a build ID that you'll use to track your build status:
+
+```bash
+form pack status --build-id <your-build-id>
+```
+
+### 3. Deploy Your Instance
+
+Once your build succeeds, deploy it with:
+
+```bash
+form pack ship
+```
+
+This command must be run from the same directory as your original build.
+
+### 4. Access Your Instance
+
+Formation automatically creates redundant instances for reliability. Get their addresses with:
+
+```bash
+form manage get-ip --build-id <your-build-id>
+```
+
+Once you have an IP, access your instance via SSH:
+
+```bash
+ssh <username>@<formnet-ip>
+```
+
+Note: SSH access requires:
+- Active Formnet membership
+- Running `formnet-up` process
+- Valid SSH key configured in your Formfile
+
+## Writing Formfiles
+
+A Formfile defines your instance configuration and build process. Here's the anatomy of a Formfile:
+
+## Formfile Reference
+
+A Formfile consists of several types of instructions that define your instance configuration and build process. Let's examine each component in detail.
+
+### Build Instructions
+
+#### RUN Command
+The RUN instruction executes commands in the image as root during the build phase. Use this for any system-level configuration or setup tasks.
+
+```
+RUN apt-get update
+RUN echo "custom_setting=value" >> /etc/system.conf
+```
+
+Multiple commands can be chained using && to create a single layer:
+```
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+```
+
+#### COPY Command
+COPY transfers files from your build context to the instance. The build context is the directory containing your Formfile. The files will be placed in a temporary artifacts directory, archived, and then copied to your specified WORKDIR.
+
+```
+COPY ./app /app
+COPY ./config.json /etc/myapp/config.json
+```
+
+If no source is specified, all files from the current directory will be copied.
+
+#### INSTALL Command
+INSTALL provides a simplified way to install system packages using apt-get. While this could be done with RUN, INSTALL handles update, installation, and cleanup automatically.
+
+```
+INSTALL nginx python3 postgresql
+```
+
+#### ENV Command
+ENV sets environment variables with specific scopes. Unlike traditional Docker ENV instructions, Formation's ENV requires a scope specification.
+
+Scopes can be:
+- system: System-wide variables
+- user:<username>: User-specific variables
+- service:<service-name>: Service-specific variables
+
+```
+ENV --scope=system PATH=/usr/local/bin:$PATH
+ENV --scope=user:webdev DB_PASSWORD=secret
+ENV --scope=service:nginx NGINX_PORT=80
+```
+
+#### ENTRYPOINT Command
+ENTRYPOINT specifies the command that runs when your instance starts. It can be specified in two formats:
+
+JSON array format (recommended):
+```
+ENTRYPOINT ["nginx", "-g", "daemon off;"]
+```
+
+Shell format:
+```
+ENTRYPOINT nginx -g "daemon off;"
+```
+
+#### EXPOSE Command
+EXPOSE documents the ports your application uses. While it doesn't actually publish the ports, it serves as documentation and may be used by Formation's networking layer.
+
+```
+EXPOSE 80 443 8080
+```
+
+### User Configuration
+
+The USER instruction in a Formfile supports comprehensive user account configuration. Here are all available options:
+
+```
+USER username:myuser \
+     passwd:mypassword \
+     ssh_authorized_keys:"ssh-rsa AAAA... user@host" \
+     lock_passwd:false \
+     sudo:true \
+     shell:/bin/bash \
+     ssh_pwauth:true \
+     disable_root:true \
+     chpasswd_expire:true \
+     groups:docker,sudo
+```
+
+Configuration Options:
+
+username (Required)
+- Must start with a lowercase letter or underscore
+- Can contain lowercase letters, numbers, underscores, or hyphens
+- Maximum length of 32 characters
+
+passwd (Required)
+- Sets the user's password
+- Will be appropriately hashed during instance creation
+- Should meet your security requirements
+
+ssh_authorized_keys (Optional)
+- List of SSH public keys for remote access
+- Multiple keys can be provided as a comma-separated list
+- Required for SSH access to your instance
+
+lock_passwd (Optional, default: false)
+- When true, prevents password-based login
+- Useful when enforcing SSH-only access
+
+sudo (Optional, default: false)
+- Grants sudo privileges to the user
+- When true, adds user to sudo group
+
+shell (Optional, default: /bin/bash)
+- Specifies the user's login shell
+- Must be an absolute path
+
+ssh_pwauth (Optional, default: true)
+- Enables or disables SSH password authentication
+- Consider setting to false when using SSH keys exclusively
+
+disable_root (Optional, default: true)
+- Controls whether root login is disabled
+- Best practice is to leave enabled and use sudo
+
+chpasswd_expire (Optional, default: true)
+- When true, forces password change on first login
+- Useful for generating secure initial passwords
+
+groups (Optional)
+- Additional groups for the user
+- Provided as comma-separated list
+- Common groups: docker, sudo, users
+
+### Required Fields
+
+- `NAME`: Identifier for your instance (auto-generated if omitted)
+- `USER`: At least one user configuration
+- System Resources:
+  - `VCPU`: 1-128 cores (default: 1)
+  - `MEM`: 512-256000 MB (default: 512)
+  - `DISK`: 5-65535 GB
+
+### User Configuration
+
+The `USER` directive supports multiple options:
+
+```
+USER username:myuser \
+     passwd:mypassword \
+     sudo:true \
+     ssh_authorized_keys:"ssh-rsa ..." \
+     lock_passwd:false \
+     shell:/bin/bash \
+     ssh_pwauth:true \
+     disable_root:true \
+     groups:docker,users
+```
+
+### Example: Simple Web Server
+
+```
 NAME hello-server
 
-USER username:bigdog passwd:bigdog123 sudo:true
+USER username:webdev passwd:webpass123 sudo:true ssh_authorized_keys:"ssh-rsa ..."
 
-VCPU 1
-
-MEM 512
-
+VCPU 2
+MEM 2048
 DISK 5
 
-COPY ./hello.py /app
-
+COPY ./app /app
 INSTALL python3
 
 WORKDIR /app
-
-ENTRYPOINT ["python3", "/app/hello.py"]
+ENTRYPOINT ["python3", "server.py"]
 ```
 
-##### Build a Formpack
+## Advanced Topics
 
-After you have defined your `Formfile` in the project root, you can use the `form` CLI to validate your `Formfile` 
+### Resource Limits
 
-```bash
-form pack validate
+Development Network Limits:
+- VCPU: Max 2 cores
+- Memory: 512-4096 MB
+- Disk: Max 5 GB
+
+These limits will be higher on testnet and mainnet.
+
+### Nginx Configuration
+
+Formation instances come with a pre-installed nginx server. Your configuration needs will depend on your deployment architecture.
+
+#### Option 1: Using the System Nginx
+
+For simple deployments, you can replace the default nginx configuration:
+
 ```
- Once validated, you can use the same CLI to request your app be built into a `Formpack`
-
-```bash
-form pack build .
-```
-
-This will package together your application artifacts based on the `Formfile`. If the `Formfile` is absent of any `COPY` instructions, the `Formpack` builder assumes that you want the entire directory (excluding the `Formfile`) to be include in your instance. To avoid this (a scenario where you will be cloning your application repo from github for example), you must have a `NOCOPY` command on one of the lines before the `ENTRYPOINT` command in the `Formfile`
-
-Once your `Formpack` has successfully been built (i.e. you receive an API response with a `Formpack` ID from the CLI call), you can `ship` your `Formpack` to the network using the same CLI tool
-```bash
-form pack ship 
-```
-
-This process may take up to 5 minutes, you can `poll` the network for the status of your deployment with the `form manage` CLI tool. 
-
-```bash
-form manage get status <formpack-id>
+COPY ./my-nginx.conf /etc/nginx/nginx.conf
+RUN sudo systemctl restart nginx
 ```
 
-This will return the state of the deployment (`PENDING`, `SUCCESS`, `FAILURE { reason: <some error message }`)
+This approach works well when:
+- Your application doesn't use containerized nginx
+- You need a simple reverse proxy or static file server
+- You want to maintain the standard system service
 
-If your deployment is successful (which it should be, with very few exceptions).
+#### Option 2: Containerized Nginx with Docker Networking
 
-If you run into an issue, please report it via github issues or join our discord where you can engage the core team.
+When using docker-compose or container deployments that rely on Docker's internal networking (e.g., using `proxy_pass http://container-name`), you'll need to manage the system nginx service. There are two approaches:
 
-<hr>
+You can manage the system nginx service directly in your Formfile using the `RUN` command:
 
-## Accessing your Instance
+1. To stop nginx for the current session:
+   ```
+   RUN sudo systemctl stop nginx
+   ```
 
-After you have successfully deployed an instance to our network, if you either:
+2. To permanently disable nginx on boot:
+   ```
+   RUN sudo systemctl stop nginx && sudo systemctl disable nginx
+   ```
 
-- Provided a password as part of a Formfile `USER` command set `ssh_pwauth` to `true` 
+Including these commands in your Formfile automates the service management as part of your deployment.
 
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;OR
+Important Considerations:
+- If your nginx configuration uses Docker container names in `proxy_pass` directives, you must use a containerized nginx instance
+- The system nginx service must be stopped to avoid port conflicts
+- Even with `disable`, you may need to SSH into the instance after initial deployment
+- Future updates to Formation may provide more automated solutions for this workflow
 
-- provided an ssh key as part of a Formfile `USER` command under the `ssh_authorized_keys`
-
-you will be able to gain full, secure access your instance over `ssh`.
-
-
-There are 2 different ways to access your instance over `ssh`
-
-1. If you chose to permanently join the formnet mesh when initializing your form dev kit, you can simply user
-your favorite or any standard `ssh` tool, and provide one of the IP addresses
-of your instance replicas. You can also set up DNS within formnet and use the domain name {{name}}.dev.formation.cloud
-to access your instance via ssh
-```bash
-ssh <username>@10.128.0.54
-```
-OR
-
-```bash
-ssh <username>@<app-name>.dev.formation.cloud
-```
-
-2. Alternatively, if you did not choose to join the formnet mesh permanently, or at all, you can use the
-`form ssh` command.
-
-```bash
-form ssh <username>@10.128.0.54
-```
-
-OR
-
-```bash
-form ssh <username>@<app-name>.dev.formation.cloud
+Example docker-compose nginx configuration:
+```yaml
+services:
+  nginx:
+    image: nginx:latest
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+    depends_on:
+      - app
 ```
 
-Any of these options will allow you to gain secure ssh access to your instances.
-SSH Access to instances deployed to the Formation network always happens over a secure, end to end encrypted VPN tunnel via formnet
-not only do you gain the security of ssh, but another layer of security is provided via the VPN tunnel, given that these instances are hosted by untrusted, non-permissioned nodes in the network. This makes snooping on your ssh packets impossible, as the requesst does not get routed "through" the host, but rather through the VPN tunnel over the mesh network, which uses wireguard underneath the hood.
-
-<hr>
-
-## Committing Changes to an Instance or Application
-
-One of the great features of the Formation network is that the instances in the network offer auto-redundancy and self replication, however, changes made to an instance via ssh or other forms of console access do not automatically get mirrored to redundant copies (yet). In order to ensure all of your replicas are in sync, it is required that after making changes during an ssh or console session, you `commit` the changes using the `form commit` command.
-
-```bash
-form commit 10.128.0.54
+With corresponding nginx.conf:
+```nginx
+http {
+    upstream app {
+        server app:3000;  # Docker network allows using container name
+    }
+    server {
+        listen 80;
+        location / {
+            proxy_pass http://app;
+        }
+    }
+}
 ```
 
-This will make a call to a small agent running inside the instance that will then inform the host's VMM service that it has been altered, and the developer wishes to commit these changes to the replicas. 
+These container-based deployments require careful consideration of service orchestration and may need additional deployment steps.
 
-In the future, this will be phased out and replaced with an auto-replication process to enhance the developer experience, and the resiliency of the applications deployed to our network, however this feature is not included in the current release.
+### Build Context
 
-<hr>
+The build context is determined by the directory containing your Formfile. All `COPY` commands are relative to this directory.
+
+## Troubleshooting
+
+### Common Issues
+
+1. Cannot SSH into instance
+   - Verify `formnet-up` is running
+   - Confirm you've joined Formnet
+   - Check your SSH key configuration
+
+2. Build fails
+   - Verify your resource requests are within limits
+   - Check your Formfile syntax
+   - Ensure all copied files exist in your build context
+
+3. Deployment issues
+   - Confirm you're in the same directory as your build
+   - Verify your network connection
+   - Check your provider status
+
+### Getting Help
+
+Join our community:
+- GitHub: github.com/formthefog/formation
+- Twitter: @formthefog
+
 
 ## Roadmap
 

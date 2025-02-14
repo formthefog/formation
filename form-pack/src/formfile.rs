@@ -296,6 +296,18 @@ impl FormfileParser {
 
         let vcpu_count: u8 = vcpu_count.parse()?;
 
+        #[cfg(feature = "treehacks")]
+        if vcpu_count == 0 || vcpu_count > 2 {
+            return Err(
+                Box::new(
+                    std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "The limit for VCPU | CPU | CORES option during the Treehacks hackathon is 2"
+                    )
+                )
+            )
+        }
+
         if vcpu_count <= 0 || vcpu_count > 128 {
             return Err(
                 Box::new(
@@ -331,6 +343,18 @@ impl FormfileParser {
 
         let memory: usize = mem_alloc.parse()?;
 
+        #[cfg(feature = "treehacks")]
+        if memory < 512  || memory > 4096 {
+            return Err(
+                Box::new(
+                    std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "The limit for MEMORY | MEM | MBS option during the Treehacks hackathon is 4"
+                    )
+                )
+            )
+        }
+
         if memory < 512 || memory > 256000 {
             return Err(
                 Box::new(
@@ -365,6 +389,18 @@ impl FormfileParser {
         }
 
         let disk_size: u16 = storage_size.parse()?;
+
+        #[cfg(feature = "treehacks")]
+        if disk_size > 5 {
+            return Err(
+                Box::new(
+                    std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "The limit for DISK | STORAGE option during the Treehacks hackathon is 5"
+                    )
+                )
+            )
+        }
 
         if disk_size < 5 || disk_size > u16::MAX {
             return Err(

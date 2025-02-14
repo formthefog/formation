@@ -1,14 +1,13 @@
-use std::{net::{IpAddr, SocketAddr, TcpListener}, path::PathBuf, str::FromStr, time::Duration};
-use colored::*;
-use daemonize::Daemonize;
+use std::{collections::{HashSet, VecDeque}, net::{IpAddr, SocketAddr}, path::PathBuf, str::FromStr, time::Duration};
 use form_types::{BootCompleteRequest, PeerType, VmmResponse};
 use formnet_server::ConfigFile;
+use futures::{stream::FuturesUnordered, StreamExt};
 use ipnet::IpNet;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use shared::{interface_config::InterfaceConfig, wg, NetworkOpts};
+use shared::{interface_config::InterfaceConfig, wg, Endpoint, NetworkOpts};
 use wireguard_control::{Device, InterfaceName, KeyPair};
-use crate::{api::{BootstrapInfo, JoinResponse as BootstrapResponse, Response}, up, CONFIG_DIR, NETWORK_NAME};
+use crate::{api::{BootstrapInfo, JoinResponse as BootstrapResponse, Response}, up, CONFIG_DIR, DATA_DIR, NETWORK_NAME};
 
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -61,6 +60,9 @@ pub enum JoinResponse {
 }
 
 pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type: PeerType) -> Result<IpAddr, Box<dyn std::error::Error>> {
+    if let Err(e) = std::fs::remove_file(PathBuf::from(DATA_DIR).join("formnet").with_extension("json")) {
+        log::error!("Pre-existing datastore did not exist: {e}"); 
+    }
     let client = Client::new();
     let mut iter = bootstrap.iter();
     let mut bootstrap_info: Option<BootstrapInfo> = None;
@@ -69,6 +71,8 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
             .send().await {
                 Ok(resp) => match resp.json::<Response>().await {
                     Ok(Response::Bootstrap(info)) => {
+                        log::info!("Received bootstrap info from bootstrap node {dial}");
+                        log::info!("Bootstrap info: {info:?}");
                         bootstrap_info = Some(info.clone());
                         break;
                     }
@@ -105,6 +109,87 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
         )
     )?;
 
+    log::info!("Checking for common endpoints...");
+    let mut common_endpoints: FuturesUnordered<_> = bootstrap.iter().map(|dial| {
+        let inner_client = client.clone();
+        let inner_address = address.clone();
+        async move {
+            log::info!("Dialing node {dial}");
+            match inner_client.get(format!("http://{dial}:51820/fetch"))
+                .send().await {
+                    Ok(resp) => match resp.json::<Response>().await {
+                    Ok(Response::Fetch(peers)) => {
+                        let common_endpoint = peers.iter().filter_map(|p| {
+                            p.endpoint.clone() 
+                        }).collect::<Vec<Endpoint>>().iter().find_map(|ep| {
+                            match ep.resolve() {
+                                Ok(addr) => {
+                                    if addr.ip() == publicip {
+                                        log::warn!("found common endpoint {addr:?}");
+                                        Some(addr)
+                                    } else {
+                                        None
+                                    }
+                                }
+                                Err(_) => None 
+                            }
+                        });
+
+                        let common_id = peers.iter().find_map(|p| {
+                            if &p.id == &inner_address {
+                                log::warn!("found common id {}", p.id);
+                                Some(p.ip)
+                            } else {
+                                None
+                            }
+                        });
+                        (common_endpoint, common_id)
+                    }
+                    Err(e) => {
+                        log::error!("Received error trying to fetch peers... {e}");
+                        (None, None)
+                    }
+                    Ok(r) => {
+                        log::error!("Received invalid response: {r:?}");
+                        (None, None)
+                    }
+            }
+            Err(_) => (None, None)
+        }
+    }}).collect();
+
+    let mut complete_common_endpoints = vec![];
+    while let Some(complete) = common_endpoints.next().await {
+        complete_common_endpoints.push(complete);
+    };
+
+    let common_id = complete_common_endpoints.iter().find(|(_, ip)| ip.is_some()); 
+    
+    if let Some((_, commond_id)) = common_id {
+        return Ok(commond_id.unwrap()); 
+    }
+    
+    let ports_used = complete_common_endpoints.iter().filter_map(|ce| {
+        match ce {
+            (None, None) => None,
+            (Some(e1), None) => Some(vec![e1.clone()]),
+            (None, Some(_)) => None, 
+            (Some(_), Some(_)) => None        
+        }
+    }).collect::<Vec<Vec<SocketAddr>>>()
+    .iter().flatten().cloned().collect::<Vec<SocketAddr>>()
+    .iter().map(|addr| addr.port()).collect::<HashSet<u16>>();
+
+    let mut next_port = (51820..64000).collect::<VecDeque<u16>>();
+    next_port.retain(|n| !ports_used.contains(n));
+
+    if next_port.len() == 0 {
+        return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "There are no ports available on this device")));
+    }
+
+    let next_port = next_port.pop_front().unwrap();
+    log::warn!("using port {next_port:?}");
+
     let request = match peer_type { 
         PeerType::Operator => {
             BootstrapInfo {
@@ -113,9 +198,7 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
                 cidr_id: "formnet".to_string(),
                 pubkey: keypair.public.to_base64(),
                 internal_endpoint: None,
-                external_endpoint: Some(
-                    SocketAddr::new(publicip, 51820)
-                ),
+                external_endpoint: Some(SocketAddr::new(publicip, 51820)),
             }
         },
         PeerType::User => {
@@ -125,22 +208,7 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
                 cidr_id: "formnet".to_string(),
                 pubkey: keypair.public.to_base64(),
                 internal_endpoint: None,
-                external_endpoint: { 
-                    let mut port: u16 = 0;
-                    for p in 51821..64000 {
-                        if let Ok(listener) = TcpListener::bind(("0.0.0.0", port)) {
-                            drop(listener);
-                            port = p;
-                            break;
-                        }
-                    }
-                    if port == 0 {
-                        panic!("Unable to find a valid listening port in the formnet range");
-                    }
-                    Some(
-                        SocketAddr::new(publicip, port)
-                    )
-                },
+                external_endpoint: Some(SocketAddr::new(publicip, next_port))
             }
         },
         PeerType::Instance => {
@@ -150,22 +218,7 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
                 cidr_id: "formnet".to_string(),
                 pubkey: keypair.public.to_base64(),
                 internal_endpoint: None,
-                external_endpoint: {
-                    let mut port: u16 = 0;
-                    for p in 51821..64000 {
-                        if let Ok(listener) = TcpListener::bind(("0.0.0.0", port)) {
-                            drop(listener);
-                            port = p;
-                            break;
-                        }
-                    }
-                    if port == 0 {
-                        panic!("Unable to find a valid listening port in the formnet range");
-                    }
-                    Some(
-                        SocketAddr::new(publicip, port)
-                    )
-                },
+                external_endpoint: Some(SocketAddr::new(publicip, next_port))
             }
         }
     };
@@ -195,13 +248,11 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
                         NetworkOpts::default(),
                     ) {
                         Ok(()) => {
+                            log::info!("Joined formnet, writing config file");
                             let config_file = ConfigFile {
                                 private_key: keypair.private.to_base64(),
                                 address: ip.clone(),
-                                listen_port: match peer_type {
-                                    PeerType::Instance => Some(52820),
-                                    _ => Some(51820)
-                                },
+                                listen_port: Some(request.external_endpoint.unwrap().port()),
                                 network_cidr_prefix: 8,
                                 bootstrap: Some(hex::encode(&serde_json::to_vec(&bootstrap_info)?)) 
                             };
@@ -209,9 +260,20 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
                             config_file.write_to_path(
                                 PathBuf::from(CONFIG_DIR).join(NETWORK_NAME).with_extension("conf")
                             )?;
+                            log::info!("Wrote config file");
                             log::info!("Wireguard interface is up, saved config file");
                             #[cfg(target_os = "linux")]
                             if let Ok(info) = Device::get(&InterfaceName::from_str("formnet").unwrap(), wireguard_control::Backend::Kernel) {
+                                log::info!("Current device info: {info:?}");
+                                for peer in info.peers {
+                                    log::info!("Acquired device info for peer {peer:?}");
+                                    if let Some(endpoint) = peer.config.endpoint {
+                                        log::info!("Acquired endpoint {endpoint:?} for peer..."); 
+                                    }
+                                }
+                            }
+                            #[cfg(not(target_os = "linux"))]
+                            if let Ok(info) = Device::get(&InterfaceName::from_str("formnet").unwrap(), wireguard_control::Backend::Userspace) {
                                 log::info!("Current device info: {info:?}");
                                 for peer in info.peers {
                                     log::info!("Acquired device info for peer {peer:?}");
@@ -230,8 +292,8 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
                 Err(e) => {
                     log::error!("Error attempting to join network: {e}");
                 }
-                _ => {
-                    log::error!("Received invalid response type when trying to join network");
+                Ok(r) => {
+                    log::error!("Received invalid response type when trying to join network: {r:?}");
                 }
             }
             Err(e) => {
@@ -243,30 +305,8 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
     return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Did not receive a valid invitation")));
 }
 
-pub async fn user_join_formnet(address: String, provider: String, formnet_port: u16) -> Result<(), Box<dyn std::error::Error>> {
-    request_to_join(vec![format!("{}:{}", provider, formnet_port)], address, PeerType::User).await?;
-
-    let daemon = Daemonize::new()
-        .pid_file("/run/formnet.pid")
-        .chown_pid_file(true)
-        .working_directory("/")
-        .umask(0o027)
-        .stdout(std::fs::File::create("/var/log/formnet.log").unwrap())
-        .stderr(std::fs::File::create("/var/log/formnet.log").unwrap());
-
-    match daemon.start() {
-        Ok(_) => {
-            if let Err(e) = up(
-                Some(Duration::from_secs(60)),
-                None,
-            ).await {
-                println!("{}: {}", "Error trying to bring formnet up".yellow(), e.to_string().red());
-            }
-        }
-        Err(e) => {
-            println!("{}: {}", "Error trying to daemonize formnet".yellow(), e.to_string().red());
-        }
-    }
+pub async fn user_join_formnet(address: String, provider: String) -> Result<(), Box<dyn std::error::Error>> {
+    request_to_join(vec![provider], address, PeerType::User).await?;
     Ok(())
 }
 
@@ -283,6 +323,7 @@ pub async fn vm_join_formnet() -> Result<(), Box<dyn std::error::Error>> {
             log::info!("extracted formnet IP for {name}: {formnet_ip}");
             log::info!("Attempting to redeem invite");
             log::info!("Spawning thread to bring formnet up");
+            let _ = tokio::time::sleep(Duration::from_secs(5)).await;
             let handle = tokio::spawn(async move {
                 if let Err(e) = up(
                     Some(Duration::from_secs(60)),
@@ -300,15 +341,24 @@ pub async fn vm_join_formnet() -> Result<(), Box<dyn std::error::Error>> {
                 formnet_ip: formnet_ip.to_string()
             };
 
-            log::info!("Sending BootCompleteRequest {request:?} to http://{host_public_ip}:3002/{name}/boot_complete endpoint");
+            log::info!("Sending BootCompleteRequest {request:?} to http://{host_public_ip}:3002/vm/boot_complete endpoint");
 
-            let resp = Client::new().post(&format!("http://{host_public_ip}:3002/{}/boot_complete", build_id))
+            match Client::new().post(&format!("http://{host_public_ip}:3002/vm/boot_complete"))
                 .json(&request)
                 .send()
-                .await?
-                .json::<VmmResponse>().await;
+                .await {
 
-            log::info!("BootCompleteRequest Response: {resp:?}");
+                Ok(r) => {
+                    log::info!("recevied response from {host_public_ip}:3002");
+                    log::info!("Response: {r:?}");
+                    log::info!("Response status: {:?}", r.status());
+                    log::info!("Response contents: {:?}", r.json::<VmmResponse>().await?);
+                }
+                Err(e) => {
+                    log::info!("Error sending BootCompleteRequest to {host_public_ip}:3002: {e}");
+                }
+            }
+
 
             log::info!("Formnet up, awaiting kill signal");
             handle.await?;
@@ -330,4 +380,3 @@ pub fn other_err(msg: &str) -> Box<dyn std::error::Error> {
         )
     )
 }
-

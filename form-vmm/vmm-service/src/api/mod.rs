@@ -1,6 +1,6 @@
 use alloy_primitives::Address;
 use axum::{
-    extract::{Path, State}, routing::{get, post}, Json, Router
+    extract::State, routing::{get, post}, Json, Router
 };
 use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
 use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
@@ -160,38 +160,51 @@ impl VmmApi {
     }
 
     pub async fn handle_create_vm_message(msg: &[u8], channel: Arc<Mutex<VmmApiChannel>>) -> Result<(), VmmError> {
+        log::info!("Received create request from queue..");
         let request: CreateVmRequest = serde_json::from_slice(msg).map_err(|e| {
             VmmError::Config(e.to_string())
         })?;
+        log::info!("Deserialized create request..");
         let owner = Self::extract_owner_from_create_request(request.clone())?;
+        log::info!("built create event...");
         let event = VmmEvent::Create { 
             formfile: request.formfile, 
             name: request.name, 
             owner,
         };
 
+        log::info!("Acquiring lock on API channel...");
         let guard = channel.lock().await; 
+        log::info!("Sending event...");
         guard.send(event).await.map_err(|e| {
             VmmError::SystemError(e.to_string())
         })?;
 
+        log::info!("dropping guard");
         drop(guard);
+        log::info!("guard dropped, returning...");
 
         Ok(())
     }
 
     pub async fn handle_boot_vm_message(msg: &[u8], channel: Arc<Mutex<VmmApiChannel>>) -> Result<(), VmmError> {
+        log::info!("Recevied boot request from queue...");
         let request: StartVmRequest = serde_json::from_slice(msg).map_err(|e| {
             VmmError::Config(e.to_string())
         })?;
 
+        log::info!("Building start event..");
         let event = VmmEvent::Start { id: request.id };
+        log::info!("Acquiring lock on API channel..");
         let guard = channel.lock().await; 
+        log::info!("Sending event...");
         guard.send(event).await.map_err(|e| {
             VmmError::SystemError(e.to_string())
         })?;
 
+        log::info!("dropping guard...");
         drop(guard);
+        log::info!("guard dropped, returning...");
         Ok(())
     }
 
@@ -217,7 +230,6 @@ impl VmmApi {
         })?;
 
         let event = VmmEvent::Stop { id: request.id };
-
         let guard = channel.lock().await; 
         guard.send(event).await.map_err(|e| {
             VmmError::SystemError(e.to_string())
@@ -241,7 +253,6 @@ impl VmmApi {
         })?;
 
         let event = VmmEvent::Start { id: request.id };
-        
         let guard = channel.lock().await; 
         guard.send(event).await.map_err(|e| {
             VmmError::SystemError(e.to_string())
@@ -258,7 +269,6 @@ impl VmmApi {
         })?;
 
         let event = VmmEvent::Start { id: request.id };
-
         let guard = channel.lock().await; 
         guard.send(event).await.map_err(|e| {
             VmmError::SystemError(e.to_string())
@@ -334,7 +344,7 @@ impl VmmApi {
         let app = Router::new()
             .route("/health", get(health_check))
             .route("/vm/create", post(create))
-            .route("/vm/:id/boot_complete", post(boot_complete))
+            .route("/vm/boot_complete", post(boot_complete))
             .route("/vm/:id/boot", post(start))
             .route("/vm/:id/delete", post(delete))
             .route("/vm/:id/pause", post(stop))
@@ -474,12 +484,10 @@ async fn create(
 
 async fn boot_complete(
     State(channel): State<Arc<Mutex<VmmApiChannel>>>,
-    Path(_id): Path<String>,
     Json(request): Json<BootCompleteRequest>,
 ) -> Json<VmmResponse> {
 
     let guard = channel.lock().await;
-
     log::info!("Received BootCompleteRequest for VM {}", request.name);
     let event = VmmEvent::BootComplete {
         id: request.name.clone(),

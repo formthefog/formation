@@ -1,7 +1,8 @@
-use std::{collections::{HashMap, HashSet}, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
+use std::{collections::{HashMap, HashSet}, net::IpAddr, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
 use axum::{extract::{State, Path}, routing::{get, post}, Json, Router};
 use form_dns::{api::{DomainRequest, DomainResponse}, store::FormDnsRecord};
 use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
+use rand::{seq::SliceRandom, thread_rng};
 use reqwest::Client;
 use serde_json::Value;
 use shared::{Association, AssociationContents, Cidr, CidrContents, Peer, PeerContents};
@@ -10,7 +11,7 @@ use tokio::{net::TcpListener, sync::Mutex};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use crdts::{bft_reg::Update, map::Op, BFTReg, CvRDT, Map};
 use trust_dns_proto::rr::RecordType;
-use crate::{instances::{Instance, InstanceOp, InstanceState}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}};
+use crate::{instances::{ClusterMember, Instance, InstanceOp, InstanceState}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}};
 use form_types::state::{Response, Success};
 
 pub type PeerMap = Map<String, BFTReg<CrdtPeer<String>, String>, String>;
@@ -107,6 +108,14 @@ pub enum InstanceRequest {
     Create(Instance),
     Update(Instance),
     Delete(String),
+    AddClusterMember {
+        build_id: String,
+        cluster_member: ClusterMember
+    },
+    RemoveClusterMember {
+        build_id: String,
+        cluster_member_id: String, 
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -428,22 +437,92 @@ impl DataStore {
     }
 
     async fn handle_dns_create(&mut self, create: FormDnsRecord) -> Result<(), Box<dyn std::error::Error>> {
-        let op = self.network_state.update_dns_local(create);
+        let op = self.network_state.update_dns_local(create.clone());
         self.handle_dns_op(op).await?;
+        let instance_ips = create.formnet_ip.clone(); 
+        let mut ip_iter = instance_ips.iter();
+        while let Some(ip) = ip_iter.next() {
+            let mut instance = self.instance_state.get_instance_by_ip(ip.ip())?;
+            instance.dns_record = Some(create.clone());
+            self.handle_instance_update(instance).await?;
+
+        }
+        let mut ip_addr = create.formnet_ip.clone();
+        ip_addr.extend(create.public_ip.clone());
+        let request = DomainRequest::Create { 
+            domain: create.domain.clone(), 
+            record_type: create.record_type, 
+            ip_addr, 
+            cname_target: create.cname_target.clone(), 
+            ssl_cert: create.ssl_cert, 
+        };
+
+        Client::new()
+            .post("http://127.0.0.1:3005/record/create")
+            .json(&request)
+            .send().await?
+            .json::<DomainResponse>().await?;
 
         Ok(())
     }
 
     async fn handle_dns_update(&mut self, update: FormDnsRecord) -> Result<(), Box<dyn std::error::Error>> {
-        let op = self.network_state.update_dns_local(update);
+        let op = self.network_state.update_dns_local(update.clone());
         self.handle_dns_op(op).await?;
+
+        let instance_ips = update.formnet_ip.clone(); 
+        let mut ip_iter = instance_ips.iter();
+        let mut replace = false;
+        while let Some(ip) = ip_iter.next() {
+            let mut instance = self.instance_state.get_instance_by_ip(ip.ip())?;
+            if let Some(ref mut record) = &mut instance.dns_record {
+                record.formnet_ip.extend(update.formnet_ip.clone()); 
+                record.public_ip.extend(update.public_ip.clone());
+                record.cname_target = update.cname_target.clone();
+                if record.record_type != update.record_type {
+                    replace = true;
+                    record.record_type = update.record_type;
+                }
+
+                if record.domain != update.domain.clone() {
+                    replace = true;
+                    record.domain = update.domain.clone();
+                }
+
+                record.ssl_cert = update.ssl_cert;
+                record.ttl = update.ttl;
+                
+            }
+            self.handle_instance_update(instance).await?;
+
+        }
+        let mut ip_addr = update.formnet_ip.clone();
+        ip_addr.extend(update.public_ip.clone());
+        let request = DomainRequest::Update { 
+            replace,
+            record_type: update.record_type, 
+            ip_addr, 
+            cname_target: update.cname_target.clone(), 
+            ssl_cert: update.ssl_cert, 
+        };
+
+        Client::new()
+            .post(format!("http://127.0.0.1:3005/record/{}/update", update.domain))
+            .json(&request)
+            .send().await?
+            .json::<DomainResponse>().await?;
 
         Ok(())
     }
 
     async fn handle_dns_delete(&mut self, delete: String) -> Result<(), Box<dyn std::error::Error>> {
-        let op = self.network_state.remove_dns_local(delete);
+        let op = self.network_state.remove_dns_local(delete.clone());
         self.handle_dns_op(op).await?;
+
+        Client::new()
+            .post(format!("http://127.0.0.1:3005/record/{}/delete", delete))
+            .send().await?
+            .json::<DomainResponse>().await?;
 
         Ok(())
     }
@@ -453,9 +532,83 @@ impl DataStore {
             InstanceRequest::Op(op) => self.handle_instance_op(op).await?,
             InstanceRequest::Create(create) => self.handle_instance_create(create).await?,
             InstanceRequest::Update(update) => self.handle_instance_update(update).await?,
-            InstanceRequest::Delete(id) => self.handle_instance_delete(id).await? 
+            InstanceRequest::Delete(id) => self.handle_instance_delete(id).await?,
+            InstanceRequest::AddClusterMember { build_id, cluster_member }  => self.handle_add_cluster_member(build_id, cluster_member).await?,
+            InstanceRequest::RemoveClusterMember { build_id, cluster_member_id }  => self.handle_remove_cluster_member(build_id, cluster_member_id).await?,
         }
 
+        Ok(())
+    }
+
+    async fn handle_add_cluster_member(
+        &mut self,
+        build_id: String,
+        cluster_member: ClusterMember
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut instances = self.instance_state.get_instances_by_build_id(build_id);
+        let mut iter_mut = instances.iter_mut();
+        while let Some(instance) = iter_mut.next() {
+            instance.cluster.insert(cluster_member.clone());
+            let instance_op = self.instance_state.update_instance_local(instance.clone());
+            match instance_op {
+                Op::Up { dot: _, ref key, ref op } => {
+                    let _ = self.instance_state.instance_op(instance_op.clone());
+                    if let (true, _) = self.instance_state.instance_op_success(key.to_string(), op.clone()) {
+                        log::info!("Instance Op succesfully applied...");
+                        DataStore::write_to_queue(InstanceRequest::Op(instance_op.clone()), 4).await?;
+                    } else {
+                        return Err(
+                            Box::new(
+                                std::io::Error::new(
+                                    std::io::ErrorKind::Other,
+                                    "update was rejected".to_string()
+                                )
+                            )
+                        )
+                    }
+                }
+                Op::Rm { .. } => {
+                    self.instance_state.instance_op(instance_op.clone());
+                    return Ok(());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn handle_remove_cluster_member(
+        &mut self,
+        build_id: String,
+        cluster_member_id: String
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut instances = self.instance_state.get_instances_by_build_id(build_id);
+        let mut iter_mut = instances.iter_mut();
+        while let Some(instance) = iter_mut.next() {
+            instance.cluster.remove(&cluster_member_id);
+            let instance_op = self.instance_state.update_instance_local(instance.clone());
+            match instance_op {
+                Op::Up { dot: _, ref key, ref op } => {
+                    let _ = self.instance_state.instance_op(instance_op.clone());
+                    if let (true, _) = self.instance_state.instance_op_success(key.to_string(), op.clone()) {
+                        log::info!("Instance Op succesfully applied...");
+                        DataStore::write_to_queue(InstanceRequest::Op(instance_op.clone()), 4).await?;
+                    } else {
+                        return Err(
+                            Box::new(
+                                std::io::Error::new(
+                                    std::io::ErrorKind::Other,
+                                    "update was rejected".to_string()
+                                )
+                            )
+                        )
+                    }
+                }
+                Op::Rm { .. } => {
+                    self.instance_state.instance_op(instance_op.clone());
+                    return Ok(());
+                }
+            }
+        }
         Ok(())
     }
 
@@ -666,6 +819,7 @@ impl DataStore {
     pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         Router::new()
             .route("/ping", get(pong))
+            .route("/bootstrap/joined_formnet", post(complete_bootstrap))
             .route("/bootstrap/full_state", get(full_state))
             .route("/bootstrap/network_state", get(network_state))
             .route("/bootstrap/peer_state", get(peer_state))
@@ -700,6 +854,8 @@ impl DataStore {
             .route("/instance/create", post(create_instance))
             .route("/instance/update", post(update_instance))
             .route("/instance/:instance_id/get", get(get_instance))
+            .route("/instance/:build_id/get_by_build_id", get(get_instance_by_build_id))
+            .route("/instance/:build_id/get_instance_ips", get(get_instance_ips))
             .route("/instance/:instance_id/delete", post(delete_instance))
             .route("/instance/list", get(list_instances))
             .route("/node/create", post(create_node))
@@ -747,6 +903,66 @@ impl DataStore {
 
         Ok(())
     }
+}
+
+pub async fn complete_bootstrap(State(state): State<Arc<Mutex<DataStore>>>) {
+    let mut guard = state.lock().await;
+    let operators = guard.get_all_active_admin();
+    drop(guard);
+
+    let size = operators.len();
+
+    if size == 0 {
+        return;
+    }
+
+    let sample_size = if size < 10 {
+        size
+    } else {
+        ((size as f64)* 0.33).ceil() as usize
+    };
+
+    let mut keys: Vec<&String> = operators.keys().collect();
+    let mut rng = thread_rng();
+    keys.shuffle(&mut rng);
+
+    let mut sample = HashMap::new();
+
+    for key in keys.into_iter().take(sample_size) {
+        if let Some(value) = operators.get(key) {
+            sample.insert(key.clone(), value.clone());
+        }
+    }
+
+    let client = Client::new();
+
+    tokio::spawn(async move {
+        let mut sample_iter = sample.iter();
+        while let Some((id, peer)) = sample_iter.next() {
+            match client.get(
+                format!("http://{}:3004/bootstrap/full_state", peer.ip())
+            ).send().await {
+                Ok(r) => match r.json::<MergeableState>().await {
+                    Ok(mergeable_state) => {
+                        let mut guard = state.lock().await; 
+                        guard.network_state.peers.merge(mergeable_state.peers);
+                        guard.network_state.cidrs.merge(mergeable_state.cidrs);
+                        guard.network_state.associations.merge(mergeable_state.assocs);
+                        guard.network_state.dns_state.zones.merge(mergeable_state.dns);
+                        guard.instance_state.map.merge(mergeable_state.instances);
+                        guard.node_state.map.merge(mergeable_state.nodes);
+                        drop(guard);
+                    }
+                    Err(e) => {
+                        log::error!("Error attempting to deserialize mergeable state from {id} at {}: {e}", peer.ip());
+                    }
+                }
+                Err(e) => {
+                    log::error!("Error attempting to get mergeable state from {id} at {}: {e}", peer.ip());
+                }
+            }
+        }
+    });
 }
 
 pub async fn process_message(message: Vec<u8>, state: Arc<Mutex<DataStore>>) -> Result<(), Box<dyn std::error::Error>> {
@@ -2094,6 +2310,58 @@ async fn get_instance(
     return Json(Response::Failure { reason: Some(format!("Unable to find instance with instance_id, node_id: {}", id))})
 }
 
+
+async fn get_instance_by_build_id(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path(id): Path<String>,
+) -> Json<Response<Instance>> {
+    let datastore = state.lock().await;
+    log::info!("Attempting to get instance {id}");
+    let instances: Vec<Instance> = datastore.instance_state.map.iter().filter_map(|ctx| {
+        let (id, reg) = ctx.val;
+        if let Some(val) = reg.val() {
+            let instance = val.value();
+            if instance.build_id == *id {
+                Some(instance)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }).collect();
+
+    return Json(Response::Success(Success::List(instances)));
+}
+
+async fn get_instance_ips(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path(id): Path<String>,
+) -> Json<Response<IpAddr>> {
+    let datastore = state.lock().await;
+    log::info!("Attempting to get instance {id}");
+    let instances: Vec<Instance> = datastore.instance_state.map.iter().filter_map(|ctx| {
+        let (id, reg) = ctx.val;
+        if let Some(val) = reg.val() {
+            let instance = val.value();
+            if instance.build_id == *id {
+                Some(instance)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }).collect();
+
+    let ips = instances.iter().filter_map(|inst| {
+        inst.formnet_ip
+    }).collect();
+
+    return Json(Response::Success(Success::List(ips)));
+}
+
+
 async fn delete_instance(
     State(state): State<Arc<Mutex<DataStore>>>,
     Path(_id): Path<(String, String)>,
@@ -2448,6 +2716,8 @@ mod tests {
             created_at: 0,
             updated_at: 0,
             last_snapshot: 0,
+            formnet_ip: None,
+            dns_record: None,
             status: InstanceStatus::Created,
             host_region: "us-east".to_string(),
             resources: InstanceResources {

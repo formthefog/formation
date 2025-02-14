@@ -8,7 +8,7 @@ use trust_dns_proto::rr::RecordType;
 
 use crate::resolvectl_dns;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FormDnsRecord {
     pub domain: String,
     pub record_type: RecordType,
