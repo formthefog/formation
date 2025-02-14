@@ -55,10 +55,6 @@ jobs:
           targets: aarch64-apple-darwin
 
       - name: Build macOS (arm64)
-        env:
-          CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER: aarch64-apple-darwin14-clang
-          CC_aarch64_apple_darwin: aarch64-apple-darwin14-clang
-          CXX_aarch64_apple_darwin: aarch64-apple-darwin14-clang++
         run: |
           cargo build --release --bin form --target aarch64-apple-darwin --features treehacks 
           cargo build --release --bin formnet-up --target aarch64-apple-darwin
