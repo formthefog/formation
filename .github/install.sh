@@ -159,12 +159,8 @@ fi
 
 # Verify binaries work
 log "Testing binaries..."
-if ! "$INSTALL_DIR/form" --version >/dev/null 2>&1; then
+if ! "$INSTALL_DIR/form" --help > /dev/null 2>&1; then
     error "form binary verification failed"
-fi
-
-if ! "$INSTALL_DIR/formnet-up" --version >/dev/null 2>&1; then
-    error "formnet-up binary verification failed"
 fi
 
 # Installation complete

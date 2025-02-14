@@ -49,6 +49,8 @@ pub struct Form {
     formnet_port: u16,
     #[clap(short='q', default_value_t=true)]
     queue: bool,
+    /// The passsword you provided to encrypt your keystore
+    /// when you ran `form kit init`
     #[clap(short='P', long="password")]
     keystore_password: Option<String>,
     /// The subcommand that will be called 
@@ -56,16 +58,33 @@ pub struct Form {
     pub command: FormCommand
 }
 
+/// `form` is the core command of the CLI, all subcommands fall under the  
+/// `form` command
 #[derive(Debug, Subcommand)]
 pub enum FormCommand {
+    /// Commands related to building a developer kit locally,
+    /// including the `init` wizard
     #[clap(subcommand)]
     Kit(KitCommand),
+    /// Commands related to managing your wallet locally,
     #[clap(subcommand)]
     Wallet(WalletCommand),
+    /// Commands related to building your workload in a manner that is
+    /// compatible with the formation network
     #[clap(subcommand)]
     Pack(PackCommand),
+    /// Commands related to managing the build and deployment of you workload 
+    /// including status, join (to join formnet), leave (to leave and uninstall formnet),
+    /// `formnet-up` to refresh the peers in formnet and stay up to date on the routes
+    /// and endpoints to peers, including your workload instances.
+    /// and get_ips to get the formnet ip addresses of the redundant instances
+    /// from your build id
     #[clap(subcommand)]
     Manage(ManageCommand),
+    /// Commands related to managing domain names associated with your workload 
+    /// this includes adding and removing domains from pointing to particular
+    /// builds, and it includes the ability to get a vanity domain for developer
+    /// access within formnet
     #[clap(subcommand)]
     Dns(DnsCommand),
 }
