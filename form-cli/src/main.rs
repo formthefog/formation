@@ -1,5 +1,5 @@
 use std::{net::IpAddr, path::PathBuf};
-
+use form_types::state::{Response, Success};
 use clap::{Parser, Subcommand};
 use dialoguer::{theme::ColorfulTheme, Confirm};
 use colored::*;
@@ -9,6 +9,7 @@ use form_cli::{
 use form_p2p::queue::QUEUE_PORT;
 use formnet::{leave, uninstall};
 use reqwest::Client;
+use serde_json::Value;
 
 /// The official developer CLI for building, deploying and managing 
 /// verifiable confidential VPS instances in the Formation network
@@ -185,11 +186,30 @@ The {} interface has officially been removed from your machine
                     let build_id = get_ip_command.build_id.clone();
                     let host = config.hosts[0].clone();
                     let resp = Client::new()
-                        .post(format!("http://{host}:3004/instance/{build_id}/get_instance_ips"))
+                        .post(format!("http://{host}:3004/instance/list"))
                         .send()
-                        .await?.json::<Vec<IpAddr>>().await?;
+                        .await?.json::<Response<Value>>().await?;
 
-                    let ips: Vec<String> = resp.iter().map(|ip| ip.to_string()).collect();
+                    let ips = match resp {
+                        Response::Success(Success::List(values)) => {
+                            values.iter().filter_map(|inst| {
+                                if let Some(bid) = inst.get("build_id").and_then(|bid| bid.as_str()) {
+                                    if bid == build_id {
+                                        if let Some(ip) = inst.get("formnet_ip").and_then(|ip| ip.as_str()) {
+                                            Some(ip.to_string())
+                                        } else {
+                                            None 
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            }).collect::<Vec<String>>()
+                        }
+                        _ => vec![],
+                    };
                     let ips_string = ips.join(", ");
                     println!(r#"
 Your build has {} instances, below are their formnet ip addresses:
