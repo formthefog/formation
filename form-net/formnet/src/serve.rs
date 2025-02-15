@@ -164,11 +164,14 @@ pub async fn serve(
     });
 
     tokio::spawn(async move {
-        let mut interval = interval(Duration::from_secs(20));
+        let mut interval = interval(Duration::from_secs(10)); 
         loop {
             interval.tick().await;
-            if let Err(e) = fetch_server().await {
-                log::error!("Error fetching peers from self: {e}");
+            if let Ok(peers) = DatabasePeer::<String, CrdtMap>::list().await {
+                let peer_vec = peers.iter().map(|p| p.inner.clone()).collect();
+                if let Err(e) = fetch_server(peer_vec).await {
+                    log::error!("Error fetching peers from server: {e}");
+                }
             }
         }
     });
