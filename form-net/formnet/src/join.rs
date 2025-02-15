@@ -1,12 +1,11 @@
-use std::{collections::{HashSet, VecDeque}, net::{IpAddr, SocketAddr}, path::PathBuf, str::FromStr, thread, time::Duration};
+use std::{net::{IpAddr, SocketAddr}, path::PathBuf, str::FromStr, thread, time::Duration};
 use form_types::{BootCompleteRequest, PeerType, VmmResponse};
 use formnet_server::ConfigFile;
-use futures::{stream::FuturesUnordered, StreamExt};
-use ipnet::{IpNet, Ipv4Net};
+use ipnet::IpNet;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use shared::{interface_config::InterfaceConfig, wg, Endpoint, NetworkOpts};
-use wireguard_control::{Device, DeviceUpdate, InterfaceName, KeyPair};
+use shared::{interface_config::InterfaceConfig, wg, NetworkOpts};
+use wireguard_control::{Device, InterfaceName, KeyPair};
 use crate::{api::{BootstrapInfo, JoinResponse as BootstrapResponse, Response}, fetch, up, CONFIG_DIR, DATA_DIR, NETWORK_NAME};
 
 

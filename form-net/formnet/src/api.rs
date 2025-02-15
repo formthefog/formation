@@ -63,7 +63,6 @@ pub async fn server(
 }
 
 async fn join(
-    State(state): State<Arc<RwLock<FormnetApiState>>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(request): Json<BootstrapInfo>,
 ) -> Json<Response> {
