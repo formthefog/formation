@@ -44,10 +44,11 @@ impl JoinCommand {
     pub async fn handle_join_command(
         &self,
         provider: String,
-        keystore: Keystore
+        keystore: Keystore,
+        publicip: Option<String>
     ) -> Result<(), Box<dyn std::error::Error>> {
         let address = hex::encode(Address::from_private_key(&self.get_signing_key(Some(keystore))?));
-        user_join_formnet(address, provider).await?;
+        user_join_formnet(address, provider, publicip).await?;
         Ok(())
     }
 

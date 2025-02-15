@@ -9,7 +9,10 @@ use form_types::PeerType;
 use formnet::{init::init, serve::serve};
 use formnet::{ensure_crdt_datastore, leave, request_to_join, uninstall, user_join_formnet, vm_join_formnet, NETWORK_NAME};
 #[cfg(target_os = "linux")]
-use formnet::{revert_formnet_resolver, set_formnet_resolver}; 
+use formnet::{revert_formnet_resolver, set_formnet_resolver};
+use reqwest::Client;
+use serde_json::Value; 
+use colored::Colorize;
 
 #[derive(Clone, Debug, Parser)]
 struct Cli {
@@ -111,7 +114,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let my_ip = request_to_join(
                             parser.bootstraps.clone(),
                             address.clone(),
-                            PeerType::Operator
+                            PeerType::Operator,
+                            None,
                         ).await?;
                         ensure_crdt_datastore().await?;
                         my_ip
@@ -120,7 +124,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let my_ip = request_to_join(
                             operator_config.clone().unwrap().bootstrap_nodes.clone(),
                             address.clone(),
-                            PeerType::Operator
+                            PeerType::Operator,
+                            None
                         ).await?;
                         ensure_crdt_datastore().await?;
                         my_ip
@@ -182,8 +187,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Membership::User(opts) => {
+            let publicip = {
+                let res = Client::new().get("http://api.ipify.org?format=json")
+                    .send().await?.json::<Value>().await;
+                let ipopt = if let Ok(ip) =  res {
+                        let opt = ip.clone().get("ip").and_then(|i| i.as_str()).clone().map(String::from);
+                        opt
+                } else {
+                    None
+                };
+                ipopt
+            };
+            if let Some(ref ip) = publicip {
+                println!("Found your {}: {}", "public IP".bold().bright_blue(), ip.bold().bright_yellow());
+            }
+
+
             let address = hex::encode(Address::from_private_key(&SigningKey::from_slice(&hex::decode(&opts.secret_key)?)?));
-            user_join_formnet(address, opts.provider).await?;
+            user_join_formnet(address, opts.provider, publicip).await?;
         } 
         Membership::Instance => {
             vm_join_formnet().await?;

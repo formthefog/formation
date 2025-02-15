@@ -59,7 +59,7 @@ pub enum JoinResponse {
     Error(String) 
 }
 
-pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type: PeerType) -> Result<IpAddr, Box<dyn std::error::Error>> {
+pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type: PeerType, public_ip: Option<String>) -> Result<IpAddr, Box<dyn std::error::Error>> {
     if let Err(e) = std::fs::remove_file(PathBuf::from(DATA_DIR).join("formnet").with_extension("json")) {
         log::error!("Pre-existing datastore did not exist: {e}"); 
     }
@@ -98,16 +98,20 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
     let bootstrap_info = bootstrap_info.unwrap(); 
 
     let keypair = KeyPair::generate();
-    let publicip = publicip::get_any(
-        publicip::Preference::Ipv4
-    ).ok_or(
-        Box::new(
-            std::io::Error::new(
-                std::io::ErrorKind::Other,
-                    "unable to acquire public ip"
+    let publicip = if let Some(ip) = public_ip {
+        ip.parse::<IpAddr>()?
+    } else {
+        publicip::get_any(
+            publicip::Preference::Ipv4
+        ).ok_or(
+            Box::new(
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                        "unable to acquire public ip"
+                )
             )
-        )
-    )?;
+        )?
+    };
 
     log::info!("Checking for common endpoints...");
     let mut common_endpoints: FuturesUnordered<_> = bootstrap.iter().map(|dial| {
@@ -305,8 +309,8 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
     return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Did not receive a valid invitation")));
 }
 
-pub async fn user_join_formnet(address: String, provider: String) -> Result<(), Box<dyn std::error::Error>> {
-    request_to_join(vec![provider], address, PeerType::User).await?;
+pub async fn user_join_formnet(address: String, provider: String, public_ip: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+    request_to_join(vec![provider], address, PeerType::User, public_ip).await?;
     Ok(())
 }
 
@@ -316,7 +320,7 @@ pub async fn vm_join_formnet() -> Result<(), Box<dyn std::error::Error>> {
 
     let name = std::fs::read_to_string("/etc/vm_name")?;
     let build_id = std::fs::read_to_string("/etc/build_id")?;
-    match request_to_join(vec![host_public_ip.clone()], name.clone(), form_types::PeerType::Instance).await {
+    match request_to_join(vec![host_public_ip.clone()], name.clone(), form_types::PeerType::Instance, None).await {
         Ok(ip)=> {
             log::info!("Received invitation");
             let formnet_ip = ip; 

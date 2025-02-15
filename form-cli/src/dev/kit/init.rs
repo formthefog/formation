@@ -10,6 +10,8 @@ use rand::thread_rng;
 use serde::{Serialize, Deserialize};
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select, Password};
 use crate::{encrypt_file, save_config, Config};
+use reqwest::Client;
+use serde_json::Value;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Keystore {
@@ -345,7 +347,20 @@ impl Init {
 
 
 pub async fn join_formnet(address: String, provider: String) -> Result<(), Box<dyn std::error::Error>> {
-    user_join_formnet(address, provider).await?;
-
+    let publicip = {
+        let res = Client::new().get("http://api.ipify.org?format=json")
+            .send().await?.json::<Value>().await;
+        let ipopt = if let Ok(ip) =  res {
+                let opt = ip.clone().get("ip").and_then(|i| i.as_str()).clone().map(String::from);
+                opt
+        } else {
+            None
+        };
+        ipopt
+    };
+    if let Some(ref ip) = publicip {
+        println!("Found your {}: {}", "public IP".bold().bright_blue(), ip.bold().bright_yellow());
+    }
+    user_join_formnet(address, provider, publicip).await?;
     Ok(())
 }

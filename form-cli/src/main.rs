@@ -1,5 +1,5 @@
 use std::{net::IpAddr, path::PathBuf};
-
+use form_types::state::{Response, Success};
 use clap::{Parser, Subcommand};
 use dialoguer::{theme::ColorfulTheme, Confirm};
 use colored::*;
@@ -9,6 +9,7 @@ use form_cli::{
 use form_p2p::queue::QUEUE_PORT;
 use formnet::{leave, uninstall};
 use reqwest::Client;
+use serde_json::Value;
 
 /// The official developer CLI for building, deploying and managing 
 /// verifiable confidential VPS instances in the Formation network
@@ -53,6 +54,8 @@ pub struct Form {
     /// when you ran `form kit init`
     #[clap(short='P', long="password")]
     keystore_password: Option<String>,
+    #[clap(short='D', long="debug", default_value_t=false)]
+    debug: bool,
     /// The subcommand that will be called 
     #[clap(subcommand)]
     pub command: FormCommand
@@ -138,7 +141,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         FormCommand::Kit(ref mut kit_command) => {
-            simple_logger::SimpleLogger::new().init().unwrap();
+            if parser.debug {
+                simple_logger::SimpleLogger::new().init().unwrap();
+            }
             match kit_command {
                 KitCommand::Init(ref mut init) => {
                     let (config, keystore) = init.handle().await?;
@@ -159,10 +164,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         FormCommand::Manage(ref manage_command) => {
             match manage_command {
                 ManageCommand::Join(join_command) => {
-                    simple_logger::SimpleLogger::new().init().unwrap();
+                    if parser.debug {
+                        simple_logger::SimpleLogger::new().init().unwrap();
+                    }
+                    let publicip = {
+                        let res = Client::new().get("http://api.ipify.org?format=json")
+                            .send().await?.json::<Value>().await;
+                        let ipopt = if let Ok(ip) =  res {
+                                let opt = ip.clone().get("ip").and_then(|i| i.as_str()).clone().map(String::from);
+                                opt
+                        } else {
+                            None
+                        };
+                        ipopt
+                    };
+                    if let Some(ref ip) = publicip {
+                        println!("Found your {}: {}", "public IP".bold().bright_blue(), ip.bold().bright_yellow());
+                    }
                     let (config, keystore) = load_config_and_keystore(&parser).await?;
                     let provider = config.hosts[0].clone();
-                    join_command.handle_join_command(provider, keystore).await?;
+                    join_command.handle_join_command(provider, keystore, publicip).await?;
                 }
                 ManageCommand::Leave(_) => {
                     let (config, keystore) = load_config_and_keystore(&parser).await?;
@@ -185,11 +206,30 @@ The {} interface has officially been removed from your machine
                     let build_id = get_ip_command.build_id.clone();
                     let host = config.hosts[0].clone();
                     let resp = Client::new()
-                        .post(format!("http://{host}:3004/instance/{build_id}/get_instance_ips"))
+                        .get(format!("http://{host}:3004/instance/list"))
                         .send()
-                        .await?.json::<Vec<IpAddr>>().await?;
+                        .await?.json::<Response<Value>>().await?;
 
-                    let ips: Vec<String> = resp.iter().map(|ip| ip.to_string()).collect();
+                    let ips = match resp {
+                        Response::Success(Success::List(values)) => {
+                            values.iter().filter_map(|inst| {
+                                if let Some(bid) = inst.get("build_id").and_then(|bid| bid.as_str()) {
+                                    if bid == build_id {
+                                        if let Some(ip) = inst.get("formnet_ip").and_then(|ip| ip.as_str()) {
+                                            Some(ip.to_string())
+                                        } else {
+                                            None 
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            }).collect::<Vec<String>>()
+                        }
+                        _ => vec![],
+                    };
                     let ips_string = ips.join(", ");
                     println!(r#"
 Your build has {} instances, below are their formnet ip addresses:
