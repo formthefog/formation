@@ -1,13 +1,13 @@
-use std::{collections::{HashSet, VecDeque}, net::{IpAddr, SocketAddr}, path::PathBuf, str::FromStr, time::Duration};
+use std::{collections::{HashSet, VecDeque}, net::{IpAddr, SocketAddr}, path::PathBuf, str::FromStr, thread, time::Duration};
 use form_types::{BootCompleteRequest, PeerType, VmmResponse};
 use formnet_server::ConfigFile;
 use futures::{stream::FuturesUnordered, StreamExt};
-use ipnet::IpNet;
+use ipnet::{IpNet, Ipv4Net};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use shared::{interface_config::InterfaceConfig, wg, Endpoint, NetworkOpts};
-use wireguard_control::{Device, InterfaceName, KeyPair};
-use crate::{api::{BootstrapInfo, JoinResponse as BootstrapResponse, Response}, up, CONFIG_DIR, DATA_DIR, NETWORK_NAME};
+use wireguard_control::{Device, DeviceUpdate, InterfaceName, KeyPair};
+use crate::{api::{BootstrapInfo, JoinResponse as BootstrapResponse, Response}, fetch, up, CONFIG_DIR, DATA_DIR, NETWORK_NAME};
 
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -59,10 +59,70 @@ pub enum JoinResponse {
     Error(String) 
 }
 
-pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type: PeerType, public_ip: Option<String>) -> Result<IpAddr, Box<dyn std::error::Error>> {
-    if let Err(e) = std::fs::remove_file(PathBuf::from(DATA_DIR).join("formnet").with_extension("json")) {
-        log::error!("Pre-existing datastore did not exist: {e}"); 
+async fn try_holepunch_fetch() -> bool {
+    let mut fetch_success = false;
+    for _ in 0..3 {
+        if fetch(None).await.is_ok() {
+            fetch_success = true;
+            break;
+        }
+        thread::sleep(Duration::from_secs(1));
     }
+    fetch_success
+}
+
+async fn check_already_joined(bootstrap: Vec<String>, id: &str) -> Result<(bool, Option<IpAddr>), Box<dyn std::error::Error>> {
+    let mut iter = bootstrap.iter();
+    while let Some(dial) = iter.next() {
+        match Client::new().get(format!("http://{dial}:51820/fetch")).send().await {
+            Ok(resp) => {
+                let r = resp.json::<Response>().await;
+                match r {
+                    Ok(Response::Fetch(peers)) => {
+                        if let Some(p) = peers.iter().find(|p| p.id == id) {
+                            let config = ConfigFile::from_file(PathBuf::from(CONFIG_DIR).join(NETWORK_NAME).with_extension("conf"))?;
+                            if let Some(admin) = peers.iter().find(|p| p.is_admin) {
+                                wg::up(
+                                    &InterfaceName::from_str(NETWORK_NAME)?,
+                                    &config.private_key,
+                                    IpNet::new(p.ip, 8)?, 
+                                    None,
+                                    Some((&admin.public_key, admin.ip, admin.endpoint.clone().unwrap().resolve()?)), 
+                                    NetworkOpts::default(),
+                                )?;
+                            }
+                            if !try_holepunch_fetch().await {
+                                eprintln!(
+                                    "Failed to fetch peers from server, you will need to manually run the 'up' command."
+                                );
+                            }
+                            return Ok((true, Some(p.ip)));
+                        }
+                    }
+                    Err(e) => {
+                        log::error!(
+                            "Could not deserialize response from {dial}: {e}"
+                        )
+                    }
+                    Ok(resp_val) => {
+                        log::error!(
+                            "Received invalid response type from {dial}/fetch endpoint: {resp_val:?}" 
+                        )
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!(
+                    "API call to {dial}/fetch failed: {e}"
+                )
+            }
+        }
+    }
+
+    Ok((false, None))
+}
+
+async fn try_get_bootstrap_info(bootstrap: Vec<String>) -> Result<BootstrapInfo, Box<dyn std::error::Error>> {
     let client = Client::new();
     let mut iter = bootstrap.iter();
     let mut bootstrap_info: Option<BootstrapInfo> = None;
@@ -92,221 +152,206 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
     }
 
     if bootstrap_info.is_none() {
-        return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Was unable to acquire bootstrap information from any bootstrap nodes provided")));
-    }
-
-    let bootstrap_info = bootstrap_info.unwrap(); 
-
-    let keypair = KeyPair::generate();
-    let publicip = if let Some(ip) = public_ip {
-        ip.parse::<IpAddr>()?
-    } else {
-        publicip::get_any(
-            publicip::Preference::Ipv4
-        ).ok_or(
+        return Err(
             Box::new(
                 std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                        "unable to acquire public ip"
+                    std::io::ErrorKind::Other, 
+                    "Was unable to acquire bootstrap information from any bootstrap nodes provided"
                 )
             )
-        )?
+        );
+    }
+
+    Ok(bootstrap_info.unwrap())
+}
+
+fn write_config_file(
+    keypair: KeyPair,
+    request: BootstrapInfo,
+    ip: IpAddr,
+    bootstrap_info: BootstrapInfo,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let config_file = ConfigFile {
+        private_key: keypair.private.to_base64(),
+        address: ip.clone(),
+        listen_port: match request.external_endpoint {
+            Some(endpoint) => {
+                Some(endpoint.port())
+            },
+            None => None
+        },
+        network_cidr_prefix: 8,
+        bootstrap: Some(hex::encode(&serde_json::to_vec(&bootstrap_info)?)) 
     };
 
-    log::info!("Checking for common endpoints...");
-    let mut common_endpoints: FuturesUnordered<_> = bootstrap.iter().map(|dial| {
-        let inner_client = client.clone();
-        let inner_address = address.clone();
-        async move {
-            log::info!("Dialing node {dial}");
-            match inner_client.get(format!("http://{dial}:51820/fetch"))
-                .send().await {
-                    Ok(resp) => match resp.json::<Response>().await {
-                    Ok(Response::Fetch(peers)) => {
-                        let common_endpoint = peers.iter().filter_map(|p| {
-                            p.endpoint.clone() 
-                        }).collect::<Vec<Endpoint>>().iter().find_map(|ep| {
-                            match ep.resolve() {
-                                Ok(addr) => {
-                                    if addr.ip() == publicip {
-                                        log::warn!("found common endpoint {addr:?}");
-                                        Some(addr)
-                                    } else {
-                                        None
-                                    }
-                                }
-                                Err(_) => None 
-                            }
-                        });
+    std::fs::create_dir_all(PathBuf::from(CONFIG_DIR))?;
+    config_file.write_to_path(
+        PathBuf::from(CONFIG_DIR).join(NETWORK_NAME).with_extension("conf")
+    )?;
+    log::info!("Wrote config file");
+    Ok(())
+}
 
-                        let common_id = peers.iter().find_map(|p| {
-                            if &p.id == &inner_address {
-                                log::warn!("found common id {}", p.id);
-                                Some(p.ip)
-                            } else {
-                                None
-                            }
-                        });
-                        (common_endpoint, common_id)
-                    }
-                    Err(e) => {
-                        log::error!("Received error trying to fetch peers... {e}");
-                        (None, None)
-                    }
-                    Ok(r) => {
-                        log::error!("Received invalid response: {r:?}");
-                        (None, None)
-                    }
+fn try_bring_formnet_up(
+    keypair: KeyPair,
+    ip: IpAddr,
+    request: BootstrapInfo,
+    bootstrap_info: BootstrapInfo,
+) -> Result<(), Box<dyn std::error::Error>> {
+    wg::up(
+        &InterfaceName::from_str("formnet")?,
+        &keypair.private.to_base64(), 
+        IpNet::new(ip.clone(), 8)?,
+        match request.external_endpoint {
+            Some(addr) => Some(addr.port()),
+            None => None
+        },
+        Some((
+            &bootstrap_info.pubkey,
+            bootstrap_info.internal_endpoint.unwrap(),
+            bootstrap_info.external_endpoint.unwrap(),
+        )), 
+        NetworkOpts::default(),
+    )?;
+
+    Ok(())
+}
+
+fn log_initial_endpoints() {
+    #[cfg(target_os = "linux")]
+    if let Ok(info) = Device::get(&InterfaceName::from_str("formnet").unwrap(), wireguard_control::Backend::Kernel) {
+        log::info!("Current device info: {info:?}");
+        for peer in info.peers {
+            log::info!("Acquired device info for peer {peer:?}");
+            if let Some(endpoint) = peer.config.endpoint {
+                log::info!("Acquired endpoint {endpoint:?} for peer..."); 
             }
-            Err(_) => (None, None)
         }
-    }}).collect();
-
-    let mut complete_common_endpoints = vec![];
-    while let Some(complete) = common_endpoints.next().await {
-        complete_common_endpoints.push(complete);
-    };
-
-    let common_id = complete_common_endpoints.iter().find(|(_, ip)| ip.is_some()); 
-    
-    if let Some((_, commond_id)) = common_id {
-        return Ok(commond_id.unwrap()); 
     }
-    
-    let ports_used = complete_common_endpoints.iter().filter_map(|ce| {
-        match ce {
-            (None, None) => None,
-            (Some(e1), None) => Some(vec![e1.clone()]),
-            (None, Some(_)) => None, 
-            (Some(_), Some(_)) => None        
+    #[cfg(not(target_os = "linux"))]
+    if let Ok(info) = Device::get(&InterfaceName::from_str("formnet").unwrap(), wireguard_control::Backend::Userspace) {
+        log::info!("Current device info: {info:?}");
+        for peer in info.peers {
+            log::info!("Acquired device info for peer {peer:?}");
+            if let Some(endpoint) = peer.config.endpoint {
+                log::info!("Acquired endpoint {endpoint:?} for peer..."); 
+            }
         }
-    }).collect::<Vec<Vec<SocketAddr>>>()
-    .iter().flatten().cloned().collect::<Vec<SocketAddr>>()
-    .iter().map(|addr| addr.port()).collect::<HashSet<u16>>();
-
-    let mut next_port = (51820..64000).collect::<VecDeque<u16>>();
-    next_port.retain(|n| !ports_used.contains(n));
-
-    if next_port.len() == 0 {
-        return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "There are no ports available on this device")));
     }
+}
 
-    let next_port = next_port.pop_front().unwrap();
-    log::warn!("using port {next_port:?}");
 
-    let request = match peer_type { 
+async fn try_join_formnet(
+    bootstrap_info: BootstrapInfo,
+    request: BootstrapInfo,
+    keypair: KeyPair
+) -> Result<IpAddr, Box<dyn std::error::Error>> {
+    let dial = bootstrap_info.external_endpoint.unwrap();
+    match Client::new().post(&format!("http://{dial}:51820/join"))
+    .json(&request)
+    .send()
+    .await?.json::<Response>().await {
+        Ok(Response::Join(BootstrapResponse::Success(ip))) => {
+            log::info!("Bringing Wireguard interface up...");
+            write_config_file(keypair.clone(), request.clone(), ip.clone(), bootstrap_info.clone())?;
+            try_bring_formnet_up(keypair, ip, request, bootstrap_info)?; 
+            thread::sleep(Duration::from_secs(5));
+
+            if !try_holepunch_fetch().await {
+                eprintln!(
+                    "Failed to fetch peers from server, you will need to manually run the 'up' command."
+                );
+            };
+            log_initial_endpoints();
+            log::info!("Wireguard interface is up, saved config file");
+            return Ok(ip.clone());
+        }
+        Err(e) => {
+            log::error!("Error attempting to join network: {e}");
+        }
+        Ok(r) => {
+            log::error!("Received invalid response type when trying to join network: {r:?}");
+        }
+    }
+    eprintln!("Didn't receive a valid response from bootstrap, unable to join formnet: {:?}", bootstrap_info.external_endpoint);
+    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Did not receive a valid invitation")));
+}
+
+fn build_join_request(
+    peer_type: PeerType,
+    keypair: KeyPair,
+    address: String,
+    public_ip: Option<String>
+) -> Result<BootstrapInfo, Box<dyn std::error::Error>> {
+    match peer_type { 
         PeerType::Operator => {
-            BootstrapInfo {
+            let publicip = if let Some(ip) = public_ip {
+                    ip.parse::<IpAddr>()?
+            } else {
+                publicip::get_any(
+                    publicip::Preference::Ipv4
+                ).ok_or(
+                    Box::new(
+                        std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                                "unable to acquire public ip"
+                        )
+                    )
+                )?
+            };
+
+            Ok(BootstrapInfo {
                 id: address.to_string(),
                 peer_type: PeerType::Operator,
                 cidr_id: "formnet".to_string(),
                 pubkey: keypair.public.to_base64(),
                 internal_endpoint: None,
                 external_endpoint: Some(SocketAddr::new(publicip, 51820)),
-            }
+            })
         },
         PeerType::User => {
-            BootstrapInfo {
+            Ok(BootstrapInfo {
                 id: address.to_string(),
                 peer_type: PeerType::User,
                 cidr_id: "formnet".to_string(),
                 pubkey: keypair.public.to_base64(),
                 internal_endpoint: None,
-                external_endpoint: Some(SocketAddr::new(publicip, next_port))
-            }
+                external_endpoint: None, 
+            })
         },
         PeerType::Instance => {
-            BootstrapInfo {
+            Ok(BootstrapInfo {
                 id: address.to_string(),
                 peer_type: PeerType::Instance,
                 cidr_id: "formnet".to_string(),
                 pubkey: keypair.public.to_base64(),
                 internal_endpoint: None,
-                external_endpoint: Some(SocketAddr::new(publicip, next_port))
-            }
+                external_endpoint: None, 
+            })
         }
-    };
+    }
+}
+
+pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type: PeerType, public_ip: Option<String>) -> Result<IpAddr, Box<dyn std::error::Error>> {
+    if let Err(e) = std::fs::remove_file(PathBuf::from(DATA_DIR).join("formnet").with_extension("json")) {
+        log::error!("Pre-existing datastore did not exist: {e}"); 
+    }
+
+    if let Ok((true, Some(ip))) = check_already_joined(bootstrap.clone(), &address).await {
+        if !try_holepunch_fetch().await {
+            println!("initial attempt to fetch failed, you will need to call `form manage formnet-up`") 
+        }
+        return Ok(ip);
+    } 
+
+    let bootstrap_info = try_get_bootstrap_info(bootstrap.clone()).await?;
+    let keypair = KeyPair::generate();
+    let request = build_join_request(peer_type, keypair.clone(), address, public_ip)?;
 
     log::info!("Built join request: {request:?}");
 
-    let mut iter = bootstrap.iter();
-    while let Some(dial) = iter.next() {
-        log::info!("Attemptiing to dial {dial} to request to join the network");
-        match Client::new().post(&format!("http://{dial}:51820/join"))
-        .json(&request)
-        .send()
-        .await {
-            Ok(response) => match response.json::<Response>().await {
-                Ok(Response::Join(BootstrapResponse::Success(ip))) => {
-                    log::info!("Bringing Wireguard interface up...");
-                    match wg::up(
-                        &InterfaceName::from_str("formnet")?,
-                        &keypair.private.to_base64(), 
-                        IpNet::new(ip.clone(), 8)?,
-                        Some(request.external_endpoint.unwrap().port()),
-                        Some((
-                            &bootstrap_info.pubkey,
-                            bootstrap_info.internal_endpoint.unwrap(),
-                            bootstrap_info.external_endpoint.unwrap(),
-                        )), 
-                        NetworkOpts::default(),
-                    ) {
-                        Ok(()) => {
-                            log::info!("Joined formnet, writing config file");
-                            let config_file = ConfigFile {
-                                private_key: keypair.private.to_base64(),
-                                address: ip.clone(),
-                                listen_port: Some(request.external_endpoint.unwrap().port()),
-                                network_cidr_prefix: 8,
-                                bootstrap: Some(hex::encode(&serde_json::to_vec(&bootstrap_info)?)) 
-                            };
-                            std::fs::create_dir_all(PathBuf::from(CONFIG_DIR))?;
-                            config_file.write_to_path(
-                                PathBuf::from(CONFIG_DIR).join(NETWORK_NAME).with_extension("conf")
-                            )?;
-                            log::info!("Wrote config file");
-                            log::info!("Wireguard interface is up, saved config file");
-                            #[cfg(target_os = "linux")]
-                            if let Ok(info) = Device::get(&InterfaceName::from_str("formnet").unwrap(), wireguard_control::Backend::Kernel) {
-                                log::info!("Current device info: {info:?}");
-                                for peer in info.peers {
-                                    log::info!("Acquired device info for peer {peer:?}");
-                                    if let Some(endpoint) = peer.config.endpoint {
-                                        log::info!("Acquired endpoint {endpoint:?} for peer..."); 
-                                    }
-                                }
-                            }
-                            #[cfg(not(target_os = "linux"))]
-                            if let Ok(info) = Device::get(&InterfaceName::from_str("formnet").unwrap(), wireguard_control::Backend::Userspace) {
-                                log::info!("Current device info: {info:?}");
-                                for peer in info.peers {
-                                    log::info!("Acquired device info for peer {peer:?}");
-                                    if let Some(endpoint) = peer.config.endpoint {
-                                        log::info!("Acquired endpoint {endpoint:?} for peer..."); 
-                                    }
-                                }
-                            }
-                            return Ok(ip.clone());
-                        }
-                        Err(e) => {
-                            return Err(Box::new(e))
-                        }
-                    }
-                }
-                Err(e) => {
-                    log::error!("Error attempting to join network: {e}");
-                }
-                Ok(r) => {
-                    log::error!("Received invalid response type when trying to join network: {r:?}");
-                }
-            }
-            Err(e) => {
-                log::error!("Didn't receive a response: {e}")
-            }
-        }
-    }
-    log::info!("Didn't receive a valid response from any bootstraps, unable to join formnet: {bootstrap:?}");
-    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Did not receive a valid invitation")));
+    try_join_formnet(bootstrap_info, request, keypair).await
+
 }
 
 pub async fn user_join_formnet(address: String, provider: String, public_ip: Option<String>) -> Result<(), Box<dyn std::error::Error>> {

@@ -4,12 +4,12 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use form_types::PeerType;
-use parking_lot::RwLock;
 use reqwest::Client;
+use tokio::sync::RwLock;
 use tokio::time::interval;
 use std::time::Duration;
 use std::{net::SocketAddr, ops::Deref};
-use formnet_server::{ConfigFile, Endpoints, VERSION};
+use formnet_server::{ConfigFile, VERSION};
 use formnet_server::{db::CrdtMap, DatabasePeer};
 use ipnet::IpNet;
 use shared::{get_local_addrs, wg, Endpoint, NetworkOpts, PeerContents};
@@ -128,7 +128,7 @@ pub async fn serve(
     );
 
     let public_key = wireguard_control::Key::from_base64(&config.private_key)?.get_public();
-    let _endpoints = spawn_endpoint_refresher(interface_name, network_opts).await;
+    let endpoints = spawn_endpoint_refresher(interface_name, network_opts).await;
     spawn_expired_invite_sweeper().await;
     log::info!("formnet-server {} starting.", VERSION);
     let publicip = publicip::get_any(publicip::Preference::Ipv4).ok_or(
@@ -176,7 +176,7 @@ pub async fn serve(
         }
     });
 
-    server(my_info).await?;
+    server(my_info, endpoints.clone()).await?;
 
     Ok(())
 }
@@ -199,7 +199,7 @@ fn get_listener(addr: SocketAddr, _interface: &InterfaceName) -> Result<TcpListe
 }
 
 
-async fn spawn_endpoint_refresher(interface: InterfaceName, network: NetworkOpts) -> Endpoints {
+async fn spawn_endpoint_refresher(interface: InterfaceName, network: NetworkOpts) -> Arc<RwLock<HashMap<String, SocketAddr>>> {
     let endpoints = Arc::new(RwLock::new(HashMap::new()));
     tokio::task::spawn({
         log::info!("Spawning endpoint refresher");
@@ -215,7 +215,7 @@ async fn spawn_endpoint_refresher(interface: InterfaceName, network: NetworkOpts
                         if let Some(endpoint) = peer.config.endpoint {
                             log::info!("Acquired endpoint {endpoint:?} for peer... Updating...");
                             endpoints
-                                .write()
+                                .write().await
                                 .insert(peer.config.public_key.to_base64(), endpoint);
                         }
                     }

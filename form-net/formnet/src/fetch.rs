@@ -32,7 +32,7 @@ pub async fn fetch(
             &interface,
             &config.private_key,
             config.address.into(),
-            config.listen_port,
+            None,
             Some((
                 &pubkey,
                 internal,
@@ -47,25 +47,46 @@ pub async fn fetch(
         interface.as_str_lossy()
     );
 
-    let internal_resp = Client::new().get(format!("http://{internal}:{host_port}/fetch")).send();
-    let external_resp = Client::new().get(format!("http://{external}:{host_port}/fetch")).send();
-    tokio::select! {
-        Ok(resp) = internal_resp => {
-            if let Err(e) = handle_server_response(resp, &interface, network, data_dir, interface_up, internal.to_string(), config.address.to_string(), host_port, hosts_path).await {
-                log::error!(
-                    "Error handling server response from fetch call: {e}"
-                )
+    let mut fetch_success = false;
+    for _ in 0..3 {
+        let internal_resp = Client::new().get(format!("http://{internal}:{host_port}/fetch")).send();
+        match internal_resp.await {
+            Ok(resp) => {
+                if let Err(e) = handle_server_response(resp, &interface, network, data_dir.clone(), interface_up, internal.to_string(), config.address.to_string(), host_port, hosts_path.clone()).await {
+                    log::error!(
+                        "Error handling server response from fetch call: {e}"
+                    )
+                } else {
+                    fetch_success = true;
+                    break;
+                }
             }
-            
-        }
-        Ok(resp) = external_resp => {
-            if let Err(e) = handle_server_response(resp, &interface, network, data_dir, interface_up, internal.to_string(), config.address.to_string(), host_port, hosts_path).await {
+            Err(e) => {
                 log::error!(
-                    "Error handling server response from fetch call: {e}"
+                    "Error getting server response from internal fetch call: {e}"
                 )
             }
         }
     }
+
+    if !fetch_success {
+        let external_resp = Client::new().get(format!("http://{external}:{host_port}/fetch")).send();
+        match external_resp.await {
+            Ok(resp) => {
+                if let Err(e) = handle_server_response(resp, &interface, network, data_dir, interface_up, internal.to_string(), config.address.to_string(), host_port, hosts_path).await {
+                    log::error!(
+                        "Error handling server response from fetch call: {e}"
+                    )
+                }
+            }
+            Err(e) => {
+                log::error!(
+                    "Error getting server response from external fetch call: {e}"
+                )
+            }
+        }
+    }
+
     Ok(())
 }
 
