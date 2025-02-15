@@ -161,6 +161,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             match manage_command {
                 ManageCommand::Join(join_command) => {
                     simple_logger::SimpleLogger::new().init().unwrap();
+                    let publicip = {
+                        if let Ok(ip) = Client::new().get("http://api.ipify.org?format=json")
+                            .send().await?.json::<Value>().await {
+                                ip.get("ip").and_then(|i| i.as_str()).to_string() 
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some(ip) = publicip {
+                        println!("Found your {}: {}", "public IP".bold().bright_blue(), ip.bold().bright_yellow());
+                    }
                     let (config, keystore) = load_config_and_keystore(&parser).await?;
                     let provider = config.hosts[0].clone();
                     join_command.handle_join_command(provider, keystore).await?;

@@ -9,7 +9,9 @@ use form_types::PeerType;
 use formnet::{init::init, serve::serve};
 use formnet::{ensure_crdt_datastore, leave, request_to_join, uninstall, user_join_formnet, vm_join_formnet, NETWORK_NAME};
 #[cfg(target_os = "linux")]
-use formnet::{revert_formnet_resolver, set_formnet_resolver}; 
+use formnet::{revert_formnet_resolver, set_formnet_resolver};
+use reqwest::Client;
+use serde_json::Value; 
 
 #[derive(Clone, Debug, Parser)]
 struct Cli {
@@ -182,8 +184,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Membership::User(opts) => {
+            let publicip = {
+                if let Ok(ip) = Client::new().get("http://api.ipify.org?format=json")
+                    .send().await?.json::<Value>().await {
+                        ip.get("ip").and_then(|i| i.as_str()).to_string() 
+                } else {
+                    None
+                }
+            };
             let address = hex::encode(Address::from_private_key(&SigningKey::from_slice(&hex::decode(&opts.secret_key)?)?));
-            user_join_formnet(address, opts.provider).await?;
+            user_join_formnet(address, opts.provider, publicip).await?;
         } 
         Membership::Instance => {
             vm_join_formnet().await?;
