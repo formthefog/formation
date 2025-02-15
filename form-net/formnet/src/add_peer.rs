@@ -21,19 +21,42 @@ pub async fn add_peer(
     let interface = InterfaceName::from_str(NETWORK_NAME)?;
 
     log::info!("Gathering peers...");
-    let peers = DatabasePeer::<String, CrdtMap>::list().await?
+    let mut peers = DatabasePeer::<String, CrdtMap>::list().await?
         .into_iter()
         .map(|dp| dp.inner)
         .collect::<Vec<_>>();
 
-    if let Some(peer) = peers.iter().find(|p| p.endpoint == Some(Endpoint::from(addr))) {
-        return Ok(peer.ip); 
-    }
-
-    if let Some(ep) = endpoint {
-        if let Some(peer) = peers.iter().find(|p| p.endpoint == Some(Endpoint::from(ep))) {
-            return Ok(peer.ip);
+    if let Some(ref mut peer) = peers.iter_mut().find(|p| p.id == peer_id) {
+        if peer.public_key != pubkey {
+            return Err(
+                Box::new(
+                    std::io::Error::new(
+                        std::io::ErrorKind::Other, 
+                        "Peer ID Match: peer already exists, but public key provided does not match"
+                    )
+                )
+            );
         }
+        if let Some(ref mut wg_endpoint) = peer.endpoint {
+            if wg_endpoint != &Endpoint::from(addr) {
+                *wg_endpoint = Endpoint::from(addr);
+            }
+            if let Some(address) = endpoint {
+                if wg_endpoint != &Endpoint::from(address) {
+                    peer.candidates.push(Endpoint::from(address));
+                }
+            }
+        }
+
+        let mut db_peer = DatabasePeer::<String, CrdtMap>::from(peer.clone());
+
+        db_peer.update(PeerContents {
+            candidates: peer.candidates.clone(),
+            endpoint: peer.endpoint.clone(),
+            ..peer.contents.clone()
+        }).await?;
+
+        return Ok(peer.ip.clone());
     }
 
     log::info!("Building peer...");
@@ -42,28 +65,25 @@ pub async fn add_peer(
         &peer_type,
         peer_id,
         pubkey,
-        endpoint
+        addr
     ).await?; 
 
     let ip = peer_request.ip;
 
     log::info!("Built peer, attempting to add peer {peer_id} to datastore");
     let peer = DatabasePeer::<String, CrdtMap>::create(peer_request).await?;
-
     log::info!("Added peer {peer_id} to datastore");
     if Device::get(&interface, network.backend).is_ok() {
         // Update the current WireGuard interface with the new peers.
         log::info!("Adding peer to device");
-        tokio::time::sleep(REDEEM_TRANSITION_WAIT).await;
         DeviceUpdate::new()
             .add_peer(PeerConfigBuilder::from(&*peer))
             .apply(&interface, network.backend)
             .map_err(|_| ServerError::WireGuard)?;
+        tokio::time::sleep(REDEEM_TRANSITION_WAIT).await;
 
         log::info!("adding to WireGuard interface: {}", &*peer);
     }
-
-    log::info!("Got server peer");
 
     return Ok(ip)
 }
@@ -73,7 +93,7 @@ pub async fn build_peer(
     peer_type: &PeerType,
     peer_id: &str,
     pubkey: String,
-    endpoint: Option<SocketAddr>
+    addr: SocketAddr,
 ) -> Result<PeerContents<String>, Box<dyn std::error::Error>> {
     let cidr = DatabaseCidr::<String, CrdtMap>::get("formnet".to_string()).await?; 
     let mut available_ip = None;
@@ -85,18 +105,9 @@ pub async fn build_peer(
         }
     }
 
-    let endpoint: Option<Endpoint> = if let Some(endpoint) = endpoint {
-        Some(endpoint.into())
-    } else {
-        return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Endpoint is required, otherwise handshake cannot complete")));
-    };
-
     let available_ip = available_ip.expect("No IPs in this CIDR are avavilable");
 
-    let name = peer_id.to_string();
-
-    log::info!("Checking valid host name for {name}");
-    valid_hostname(&Hostname::from_str(&name)?, &peer_type)?;
+    log::info!("Checking valid host name for {peer_id}");
     let is_admin = match peer_type {
         PeerType::Operator => true,
         _ => false,
@@ -106,11 +117,11 @@ pub async fn build_peer(
     let invite_expires: Duration = invite_expires.into();
 
     let peer_request = PeerContents {
-        name: Hostname::from_str(&name)?,
+        name: Hostname::from_str(peer_id)?,
         ip: available_ip,
         cidr_id: cidr.id.clone(),
         public_key: pubkey,
-        endpoint,
+        endpoint: Some(addr.into()),
         is_admin,
         is_disabled: false,
         is_redeemed: true,
@@ -149,8 +160,4 @@ pub fn build_peer_invitation(
     };
 
     Ok(peer_invitation)
-}
-
-pub fn valid_hostname(_name: &Hostname, _peer_type: &PeerType) -> Result<(), Box<dyn std::error::Error>> {
-    Ok(())
 }
