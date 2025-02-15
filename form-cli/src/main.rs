@@ -186,7 +186,7 @@ The {} interface has officially been removed from your machine
                     let build_id = get_ip_command.build_id.clone();
                     let host = config.hosts[0].clone();
                     let resp = Client::new()
-                        .post(format!("http://{host}:3004/instance/list"))
+                        .get(format!("http://{host}:3004/instance/list"))
                         .send()
                         .await?.json::<Response<Value>>().await?;
 
