@@ -54,6 +54,8 @@ pub struct Form {
     /// when you ran `form kit init`
     #[clap(short='P', long="password")]
     keystore_password: Option<String>,
+    #[clap(short='D', long="debug", default_value_t=false)]
+    debug: bool,
     /// The subcommand that will be called 
     #[clap(subcommand)]
     pub command: FormCommand
@@ -139,7 +141,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         FormCommand::Kit(ref mut kit_command) => {
-            simple_logger::SimpleLogger::new().init().unwrap();
+            if parser.debug {
+                simple_logger::SimpleLogger::new().init().unwrap();
+            }
             match kit_command {
                 KitCommand::Init(ref mut init) => {
                     let (config, keystore) = init.handle().await?;
@@ -160,21 +164,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         FormCommand::Manage(ref manage_command) => {
             match manage_command {
                 ManageCommand::Join(join_command) => {
-                    simple_logger::SimpleLogger::new().init().unwrap();
+                    if parser.debug {
+                        simple_logger::SimpleLogger::new().init().unwrap();
+                    }
                     let publicip = {
-                        if let Ok(ip) = Client::new().get("http://api.ipify.org?format=json")
-                            .send().await?.json::<Value>().await {
-                                ip.get("ip").and_then(|i| i.as_str()).to_string() 
+                        let res = Client::new().get("http://api.ipify.org?format=json")
+                            .send().await?.json::<Value>().await;
+                        let ipopt = if let Ok(ip) =  res {
+                                let opt = ip.clone().get("ip").and_then(|i| i.as_str()).clone().map(String::from);
+                                opt
                         } else {
                             None
-                        }
+                        };
+                        ipopt
                     };
-                    if let Some(ip) = publicip {
+                    if let Some(ref ip) = publicip {
                         println!("Found your {}: {}", "public IP".bold().bright_blue(), ip.bold().bright_yellow());
                     }
                     let (config, keystore) = load_config_and_keystore(&parser).await?;
                     let provider = config.hosts[0].clone();
-                    join_command.handle_join_command(provider, keystore).await?;
+                    join_command.handle_join_command(provider, keystore, publicip).await?;
                 }
                 ManageCommand::Leave(_) => {
                     let (config, keystore) = load_config_and_keystore(&parser).await?;
