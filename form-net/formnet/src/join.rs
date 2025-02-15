@@ -98,7 +98,7 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
     let bootstrap_info = bootstrap_info.unwrap(); 
 
     let keypair = KeyPair::generate();
-    let public_ip = if let Some(ip) = public_ip {
+    let publicip = if let Some(ip) = public_ip {
         ip.parse::<IpAddr>()?
     } else {
         publicip::get_any(
