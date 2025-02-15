@@ -1,4 +1,4 @@
-use std::{net::IpAddr, path::PathBuf};
+use std::path::PathBuf;
 use form_types::state::{Response, Success};
 use clap::{Parser, Subcommand};
 use dialoguer::{theme::ColorfulTheme, Confirm};
@@ -127,9 +127,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let (config, keystore) = load_config_and_keystore(&parser).await?;
                     let provider = config.hosts[0].clone();
                     if parser.queue {
-                        let resp = ship_command.clone().handle_queue(&provider, Some(keystore)).await?;
+                        let _ = ship_command.clone().handle_queue(&provider, Some(keystore)).await?;
                     } else {
-                        let resp = ship_command.clone().handle(&provider, config.pack_manager_port).await?;
+                        let _ = ship_command.clone().handle(&provider, config.pack_manager_port).await?;
                     }
                 }
                 PackCommand::Status(status_command) => {
