@@ -1,4 +1,4 @@
-use std::{net::{IpAddr, SocketAddr}, path::PathBuf, str::FromStr, sync::Arc, time::Instant};
+use std::{net::{IpAddr, SocketAddr}, path::PathBuf, str::FromStr, time::Instant};
 use form_types::state::{Response as StateResponse, Success};
 use client::{data_store::DataStore, nat::{self, NatTraverse}, util};
 use formnet_server::ConfigFile;
@@ -235,6 +235,7 @@ async fn handle_peer_updates(
     Ok(())
 }
 
+#[allow(unused)]
 async fn try_nat_traversal_server(
     device: Device, 
     my_ip: String, 
