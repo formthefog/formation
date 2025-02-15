@@ -1,4 +1,8 @@
-# Formation 
+# Formation
+
+A public verifiable and self-replicating protocol for trustless, confidential virtual private servers (VPS) coordinating as a Fog Compute network to power the Age of Autonomy.
+
+---
 
 ## Table of Contents
 
@@ -24,73 +28,99 @@
   - [Advanced Topics](#advanced-topics)
   - [Troubleshooting](#troubleshooting)
 
+## Overview
 
 #### A public verfiable and self-replicating protocol for trustless confidential virtual private servers (VPS), coordinating as a Fog Compute network to power the Age of Autonomy.
 
-<hr>
-
 ## Special Thanks
 
->"If I have seen further, it is by standing on the shoulders of giants" - Sir Isaac Newton 
+> "If I have seen further, it is by standing on the shoulders of giants." – Sir Isaac Newton
 
-This project leans heavily on the great work from [Rust-VMM](https://github.com/rust-vmm), [Cloud-Hypervisor](https://github.com/cloud-hypervisor/cloud-hypervisor), [Innernet](https://github.com/tonarino/innernet) and [DStack-VM](https://github.com/amiller/dstack-vm) without which the timeline for this project would have extended many more years.
+This project builds upon the impressive work of [Rust-VMM](https://github.com/rust-vmm), [Cloud-Hypervisor](https://github.com/cloud-hypervisor/cloud-hypervisor), [Innernet](https://github.com/tonarino/innernet), and [DStack-VM](https://github.com/amiller/dstack-vm).
 
-## Contributing to Formation
+---
 
-As an Open Source project, we not only encourage, but rely on you to contribute to the project. Before you begin contributing please be sure to read, in full, the CONTRIBUTING file in this repository.
+## Contributing
 
-### WARNING! 
-<hr>
+As an open source project, we welcome your contributions. Before submitting changes, please review the [CONTRIBUTING](./CONTRIBUTING.md) file in its entirety.
 
-<p> This project is still very early in its development. While it is inching closer to being production ready, there are no guarantees made. Please report issues here in the primary repository.
-</p>
+---
+## Pre-release Notice
 
-## Running a Node
+> **WARNING:**  
+> Formation is in early development. Although it is nearing production readiness, no guarantees are provided. Please report any issues in this repository.
 
-Currently Formation is only known to work out of the box on Ubuntu 22.04, and the documentation provided herein assumes you are running Ubuntu 22.04. 
+---
 
-<hr>
+## Prerequisites & Setup
 
-#### Setting up local network configuration
+### System Requirements
 
-Before launching Formation, you will want to ensure that your network and machine's network interface configuration is set up properly to run the protocl.
+- **Operating System:** Ubuntu 22.04
+- **Resources:** Minimum of 32 physical cores, 64 GB of RAM, and at least 8TB of storage (full devnet participation).
 
-First and foremost, you will want to have the ports related to the various systems service APIs exposes/forwarded to your machine. 
+### System Dependencies
 
-Different routers and ISPs handle port forwarding differently, so we suggest you search the web for router and ISP specific instructions.
+Install required packages:
+```bash
+sudo apt update
+sudo apt install -y build-essential bridge-utils kmod pkg-config libssl-dev libudev-dev protobuf-compiler libsqlite3-dev
+   ```
 
-The default ports that the system's service APIs run on are:
+   - `build-essential`: Required for compiling code.
+   - `bridge-utils`: For setting up the network bridge.
+   - `kmod`: For managing kernel modules.
+   - `pkg-config`: For finding library dependencies.
+   - `libssl-dev`: SSL library for cryptography.
+   - `libudev-dev`: Library required by HIDAPI.
+   - `protobuf-compiler`: Protocol Buffers compiler.
+   - `libsqlite3-dev`: Required for SQLite support.
 
-`51820` for `formnet` join requests API
+### Rust Toolchain & Docker
 
-`3002` for `form-vmm` API
+Ensure Rust is installed and updated:
+```bash
+# install
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-`3003` for `form-pack-manager` API
+# source env
+. "$HOME/.cargo/env"
 
-`3004` for `form-state` API (BFT-CRDT Globally Replicated Datastore)
-and 
+# update
+rustup update
+```
+Verify `cc` is installed:
+```bash
+which cc
+```
+If missing, install via `build-essential`.
 
-`53333` for `form-p2p` BFT-CRDT Message queue.
+Install Docker and ensure it is running. Refer to [Docker's Ubuntu installation guide.](https://docs.docker.com/engine/install/ubuntu/).
 
+---
+## Network Configuration
+### Configuring Your Local Network
+Before launching Formation, ensure that the necessary ports are open/forwarded:
 
-You will also need a primary bridge network, currently, it must be called `br0` 
-though in a future release this will become configurable, however, having
-the primary bridge interface called `br0` is best practice. 
+**3002:** `form-vmm` API
+
+**3003:** `form-pack-manager` API
+
+**51820:** `formnet` interface
+
+**3004:** for `form-state` API (BFT-CRDT Globally Replicated Datastore)
+
+**53333** for `form-p2p` BFT-CRDT Message queue.
+
+Search for router/ISP-specific instructions on port forwarding if needed.
+
+### Setting Up a Bridge Interface
+
+Formation requires a primary bridge interface named `br0`. If not already set up, follow these steps:
+
 
 Ensure that you have a `br0` primary bridge interface set up on you machine with an IP address
 on a valid private IP range with a default route. You will also need to setup NAT.
-
-In order to make this process easy for you, we have provided a script in this repo
-
-`./scripts/validate_network_config.sh`
-
-Simply run this with sudo privileges:
-
-```bash
-cd /path/to/formation/repo
-
-sudo ./scripts/validate-network-config.sh
-```
 
 By running this script, assuming you do not have significant amounts of customized networking on the 
 machine you are running Formation on, you should get a properly configured network and be able to move forward.
@@ -226,49 +256,21 @@ Second, you will need to pull the official images:
 ```bash
 # Pull formation-minimal 
 
-First you will need to pull the 
-docker pull cryptonomikhan/formation-minimal
+# First you will need to pull the 
+docker pull cryptonomikhan/formation-minimal:v0.1.0
 
 # Retag it
-docker tag cryptonomikhan/formation-minimal formation-minimal
+docker tag cryptonomikhan/formation-minimal:v0.1.0 formation-minimal
 
 # Pull form-build-server
-docker pull cryptonomikhan/form-build-server
+docker pull cryptonomikhan/form-build-server:v0.1.0
 
 # Retag it
-docker tag cryptonomikhan/form-build-server form-build-server
+docker tag cryptonomikhan/form-build-server:v0.1.0 form-build-server
 ```
 
 Then you can run it, ensure you use the `--privileged` flag `--network=host` and
 provide it with the necessary devices and volumes (`/lib/modules` & `/var/run/docker.sock`)
-
-You will also need to provide a volume/mount for the operator config, which contains
-your secret key or mnemonic phrase, which is used to derive your identification,
-and is used to sign messages to ensure authenticity.
-
-You will then want to ensure that you also provide the path to the operator
-config file as an environment variable inside the container.
-
-If you chose to provide a password for the encryption of your keys in the config
-file (currently required, though will not be in the near future) you will
-want to provide the password as an environment variable as well.
-
-```bash
-docker run --rm --privileged --network=host \
-    --device=/dev/kvm \
-    --device=/dev/vhost-net \
-    --device=/dev/null \
-    --device=/dev/zero \
-    --device=/dev/random \
-    --device=/dev/urandom \
-    -v /lib/modules:/lib/modules:ro \
-    -v /var/run/docker.sock:/var/run/docker.sock \
-    -v /path/to/config:/path/to/secrets \
-    -e SECRET_PATH=/path/to/config \
-    -e PASSWORD=<your-encryption-password> \
-    --mount type=tmpfs,destination=/dev/hugepages,tmpfs-mode=1770 \
-    -dit formation:latest
-```
 
 The **Formation** docker image requires that it be run in *privileged* mode, and while privileged mode is outside the scope of this particular document, we highly suggest you take the time to understand the implications of such. 
 
@@ -322,7 +324,7 @@ docker run --rm --privileged --network=host \
     -e SECRET_PATH=/path/to/config \
     -e PASSWORD=<your-encryption-password> \
     --mount type=tmpfs,destination=/dev/hugepages,tmpfs-mode=1770 \
-    -dit formation-minimal:latest
+    -dit formation-minimal
 
 ```
 
