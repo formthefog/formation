@@ -38,6 +38,14 @@ pub struct UpdateCommand {
     pub domain_name: String,
     /// The build id for the instances you want this domain to point to 
     #[clap(long="build-id", short='b')]
-    pub build_id: String
+    pub build_id: String,
+    #[clap(long="tls-enabled", short='t', default_value_t=false)]
+    pub ssl_cert: bool,
 }
 
+
+impl UpdateCommand {
+    pub fn handle_update_command(&self, _provider: String) -> Result<(), Box<dyn std::error::Error>> {
+        Ok(())
+    }
+}

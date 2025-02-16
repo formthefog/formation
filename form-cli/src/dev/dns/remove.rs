@@ -42,3 +42,8 @@ pub struct RemoveCommand {
     pub build_id: String
 }
 
+impl RemoveCommand {
+    pub fn handle_remove_command(&self, _provider: String) -> Result<(), Box<dyn std::error::Error>> {
+        Ok(())
+    }
+}
