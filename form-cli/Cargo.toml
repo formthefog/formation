@@ -35,6 +35,7 @@ hex = "0.4"
 random_word = { version = "0.4", features = ["en"] }
 form-types = { path = "../form-types" }
 form-pack = { path = "../form-pack", default-features = false }
+form-state = { path = "../form-state" }
 shared = { path = "../form-net/shared" }
 formnet = { path = "../form-net/formnet" }
 form-config = { path = "../form-config" }

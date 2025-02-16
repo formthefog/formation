@@ -1,7 +1,8 @@
 use clap::Args;
 use colored::Colorize;
-use form_pack::manager::{PackBuildStatus, PackResponse};
+use form_types::state::{Response as StateResponse, Success};
 use reqwest::Client;
+use serde_json::Value;
 
 #[derive(Debug, Clone, Args)]
 pub struct StatusCommand {
@@ -12,9 +13,9 @@ pub struct StatusCommand {
 impl StatusCommand {
     pub async fn handle_status(&self, provider: String, port: u16) -> Result<(), Box<dyn std::error::Error>> {
         let status = Client::new()
-            .post(&format!("http://{provider}:{port}/{}/get_status", self.build_id))
+            .post(&format!("http://{provider}:{port}/instance/{}/get_by_build_id", self.build_id))
             .send().await?
-            .json::<PackResponse>()
+            .json::<StateResponse<Value>>()
             .await?;
 
         print_pack_status(status, self.build_id.clone());
@@ -23,10 +24,10 @@ impl StatusCommand {
     }
 }
 
-pub fn print_pack_status(status: PackResponse, build_id: String) {
+pub fn print_pack_status(status: StateResponse<Value>, build_id: String) {
     match status {
-        PackResponse::Status(
-            PackBuildStatus::Started(_id)
+        StateResponse::Success(
+            Success::List(instances)
         ) => {
             println!(r#"
 Your build has {} but has not yet {}.
@@ -61,73 +62,14 @@ One of our core contributors will be glad to help you out.
 "@formthefog".blue(),
 );
         }
-        PackResponse::Status(
-            PackBuildStatus::Failed { build_id, reason }
-        ) => {
-            println!(r#"
-We regret to inform you that your build with build id {} has {}.
-
-The reason for the falure was: {}
-
-If the reason for the failure is bewildering or does not make sense to you, please
-consider taking one of the following actions:
-
-    1. Join our discord at {} and go to the {} channel and paste this response
-    2. Submitting an {} on our project github at {} 
-    3. Sending us a direct message on X at {}
-
-One of our core contributors will be glad to help you out.
-"#,
-build_id.bright_blue(),
-"Failed".bright_red(),
-reason.italic().bright_magenta(),
-"discord.gg/formation".blue(),
-"chewing-glass".bright_yellow(),
-"Issue".yellow(),
-"http://github.com/formthefog/formation.git".blue(),
-"@formthefog".blue(),
-);
-        }
-        PackResponse::Status(
-            PackBuildStatus::Completed(instance)
-        ) => {
-            println!(r#"
-We are overjoyed to inform you that your build with build id {} has {}.
-
-You can now `{}` your build by running:
-
-```
-{}
-```
-
-If you run into any issues during the `{}` phase of deployment, please consider
-taking one of the following actions:
-
-    1. Join our discord at {} and go to the {} channel and paste this response
-    2. Submitting an {} on our project github at {} 
-    3. Sending us a direct message on X at {}
-
-One of our core contributors will be glad to help you out.
-"#,
-instance.build_id.bright_blue(),
-"Completed".bright_red(),
-"ship".blue(),
-"form pack [OPTIONS] ship".bright_yellow(),
-"ship".blue(),
-"discord.gg/formation".blue(),
-"chewing-glass".bright_yellow(),
-"Issue".yellow(),
-"http://github.com/formthefog/formation.git".blue(),
-"@formthefog".blue(),
-);
-        }
-        PackResponse::Failure => {
+        StateResponse::Failure { reason } => {
             println!(r#"
 Something went wrong attempting to get the status for your build 
 with build id: {}.
 
-We are not exactly sure what happened, but the best steps to debug this
-are as follows:
+Reason: {:?}
+
+The  best steps to debug this are as follows:
 
     1. Double check your `{}` to ensure they are still servicing the network
         1.a. If not, you may want to consider rebuilding your `{}` to select a new provider
@@ -140,6 +82,7 @@ are as follows:
     6. Sending us a direct message on X at {}
 "#,
 build_id.blue(),
+reason,
 "provider".bright_yellow(),
 "form kit".bright_magenta(),
 "http://docs.formation.cloud/#fault-challenge".bright_blue(),
@@ -176,3 +119,35 @@ status,
         }
     }
 }
+
+/*
+println!(r#"
+We are overjoyed to inform you that your build with build id {} has {}.
+
+You can now `{}` your build by running:
+
+```
+{}
+```
+
+If you run into any issues during the `{}` phase of deployment, please consider
+taking one of the following actions:
+
+    1. Join our discord at {} and go to the {} channel and paste this response
+    2. Submitting an {} on our project github at {} 
+    3. Sending us a direct message on X at {}
+
+One of our core contributors will be glad to help you out.
+"#,
+instance.build_id.bright_blue(),
+"Completed".bright_red(),
+"ship".blue(),
+"form pack [OPTIONS] ship".bright_yellow(),
+"ship".blue(),
+"discord.gg/formation".blue(),
+"chewing-glass".bright_yellow(),
+"Issue".yellow(),
+"http://github.com/formthefog/formation.git".blue(),
+"@formthefog".blue(),
+);
+*/

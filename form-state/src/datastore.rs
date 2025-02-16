@@ -2318,10 +2318,10 @@ async fn get_instance_by_build_id(
     let datastore = state.lock().await;
     log::info!("Attempting to get instance {id}");
     let instances: Vec<Instance> = datastore.instance_state.map.iter().filter_map(|ctx| {
-        let (id, reg) = ctx.val;
+        let (_, reg) = ctx.val;
         if let Some(val) = reg.val() {
             let instance = val.value();
-            if instance.build_id == *id {
+            if instance.build_id == id {
                 Some(instance)
             } else {
                 None
