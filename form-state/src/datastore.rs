@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, net::IpAddr, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
+use std::{collections::{HashMap, HashSet}, net::{IpAddr, SocketAddr}, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
 use axum::{extract::{State, Path}, routing::{get, post}, Json, Router};
 use form_dns::{api::{DomainRequest, DomainResponse}, store::FormDnsRecord};
 use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
@@ -1723,7 +1723,7 @@ async fn request_vanity(
         )
     }
 
-    let instances = datastore.instance_state.map.iter().filter_map(|ctx| {
+    let mut instances = datastore.instance_state.map.iter().filter_map(|ctx| {
         let (_, v) = ctx.val;
         if let Some(v) = v.val() {
             let instance = v.value();
@@ -1750,6 +1750,77 @@ async fn request_vanity(
             None
         }
     }).collect::<Vec<Host>>();
+
+    let formnet_ip = instances.iter().filter_map(|inst| {
+        inst.formnet_ip
+    }).collect::<Vec<IpAddr>>();
+
+    let dns_a_record = FormDnsRecord {
+        domain,
+        record_type: RecordType::A,
+        formnet_ip: formnet_ip.iter().map(|ip| {
+            SocketAddr::new(*ip, 80)
+        }).collect(),
+        public_ip: vec![],
+        cname_target: None,
+        ssl_cert: false,
+        ttl: 3600
+    };
+
+    let request = DnsRequest::Create(dns_a_record.clone());
+
+    match Client::new().post("http://127.0.0.1:3004/dns/create")
+        .json(&request)
+        .send().await {
+            Ok(resp) => {
+                match resp.json::<Response<FormDnsRecord>>().await {
+                    Ok(r) => {
+                        match r {
+                            Response::Failure { reason } => {
+                                return Json(Response::Failure { reason })
+                            }
+                            _ => {}
+                        }
+                    }
+                    Err(e) => {
+                        return Json(Response::Failure { reason: Some(e.to_string()) })
+                    }
+                }
+            }
+            Err(e) => {
+                return Json(Response::Failure { reason: Some(e.to_string()) })
+            }
+        };
+
+    instances.iter_mut().for_each(|inst| {
+        inst.dns_record = Some(dns_a_record.clone());
+    });
+
+    for instance in instances {
+        let request = InstanceRequest::Update(instance);
+        match Client::new().post("http://127.0.0.1:3004/instance/update")
+            .json(&request)
+            .send().await {
+                Ok(resp) => {
+                    match resp.json::<Response<FormDnsRecord>>().await {
+                        Ok(r) => {
+                            match r {
+                                Response::Failure { reason } => {
+                                    return Json(Response::Failure { reason })
+                                }
+                                _ => {}
+                            }
+                        }
+                        Err(e) => {
+                            return Json(Response::Failure { reason: Some(e.to_string()) })
+                        }
+                    }
+                }
+                Err(e) => {
+                    return Json(Response::Failure { reason: Some(e.to_string()) })
+                }
+            };
+    }
 
     drop(datastore);
 
@@ -1781,7 +1852,7 @@ async fn request_public(
         )
     }
 
-    let instances = datastore.instance_state.map.iter().filter_map(|ctx| {
+    let mut instances = datastore.instance_state.map.iter().filter_map(|ctx| {
         let (_, v) = ctx.val;
         if let Some(v) = v.val() {
             let instance = v.value();
@@ -1808,6 +1879,93 @@ async fn request_public(
             None
         }
     }).collect::<Vec<Host>>();
+
+    let formnet_ip = instances.iter().filter_map(|inst| {
+        inst.formnet_ip
+    }).collect::<Vec<IpAddr>>();
+
+    let cname_target = node_hosts.iter().find_map(|h| {
+        match h {
+            Host::Domain(domain) => Some(domain), 
+            _ => None
+        }
+    }).cloned();
+
+    let a_record_target = node_hosts.iter().filter_map(|h| {
+        match h {
+            Host::Ipv4(ipv4) => Some(IpAddr::V4(ipv4.clone())),
+            _ => None,
+        }
+    }).collect::<Vec<IpAddr>>();
+
+    let dns_a_record = FormDnsRecord {
+        domain: domain.clone(),
+        record_type: RecordType::A,
+        formnet_ip: formnet_ip.iter().map(|ip| {
+            SocketAddr::new(*ip, 80)
+        }).collect(),
+        public_ip: a_record_target.iter().map(|ip| {
+            SocketAddr::new(*ip, 80)
+        }).collect(),
+        cname_target,
+        ssl_cert: false,
+        ttl: 3600
+    };
+
+    let request = DnsRequest::Create(dns_a_record.clone());
+
+    match Client::new().post("http://127.0.0.1:3004/dns/create")
+        .json(&request)
+        .send().await {
+            Ok(resp) => {
+                match resp.json::<Response<FormDnsRecord>>().await {
+                    Ok(r) => {
+                        match r {
+                            Response::Failure { reason } => {
+                                return Json(Response::Failure { reason })
+                            }
+                            _ => {}
+                        }
+                    }
+                    Err(e) => {
+                        return Json(Response::Failure { reason: Some(e.to_string()) })
+                    }
+                }
+            }
+            Err(e) => {
+                return Json(Response::Failure { reason: Some(e.to_string()) })
+            }
+        };
+
+    instances.iter_mut().for_each(|inst| {
+        inst.dns_record = Some(dns_a_record.clone());
+    });
+
+    for instance in instances {
+        let request = InstanceRequest::Update(instance);
+        match Client::new().post("http://127.0.0.1:3004/instance/update")
+            .json(&request)
+            .send().await {
+                Ok(resp) => {
+                    match resp.json::<Response<FormDnsRecord>>().await {
+                        Ok(r) => {
+                            match r {
+                                Response::Failure { reason } => {
+                                    return Json(Response::Failure { reason })
+                                }
+                                _ => {}
+                            }
+                        }
+                        Err(e) => {
+                            return Json(Response::Failure { reason: Some(e.to_string()) })
+                        }
+                    }
+                }
+                Err(e) => {
+                    return Json(Response::Failure { reason: Some(e.to_string()) })
+                }
+            };
+    }
 
     drop(datastore);
 
