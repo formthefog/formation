@@ -1,4 +1,4 @@
-use std::{collections::{btree_map::{Iter, IterMut}, BTreeMap}, net::IpAddr};
+use std::{collections::{btree_map::{Iter, IterMut}, BTreeMap}, fmt::Display, net::IpAddr};
 use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, CmRDT, Map, bft_reg::Update};
 use form_dns::store::FormDnsRecord;
 use form_types::state::{Response, Success};
@@ -19,6 +19,21 @@ pub enum InstanceStatus {
     Stopped,
     Killed,
     CriticalError,
+}
+
+impl Display for InstanceStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InstanceStatus::Building => writeln!(f, "{}", "Building"),
+            InstanceStatus::Built => writeln!(f, "{}", "Built"),
+            InstanceStatus::Created => writeln!(f, "{}", "Created"),
+            InstanceStatus::Started => writeln!(f, "{}", "Started"),
+            InstanceStatus::Stopped => writeln!(f, "{}", "Stopped"),
+            InstanceStatus::Killed => writeln!(f, "{}", "Killed"),
+            InstanceStatus::CriticalError => writeln!(f, "{}", "Critical Error"),
+
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
