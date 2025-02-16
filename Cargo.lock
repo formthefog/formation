@@ -2683,6 +2683,7 @@ dependencies = [
  "tiny-keccak",
  "tokio",
  "tokio-util",
+ "url 2.5.4",
  "uuid",
 ]
 
@@ -2842,6 +2843,7 @@ dependencies = [
  "tiny-keccak",
  "tokio",
  "trust-dns-proto 0.23.2",
+ "url 2.5.4",
 ]
 
 [[package]]

@@ -11,6 +11,7 @@ use tokio::{net::TcpListener, sync::Mutex};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use crdts::{bft_reg::Update, map::Op, BFTReg, CvRDT, Map};
 use trust_dns_proto::rr::RecordType;
+use url::Host;
 use crate::{instances::{ClusterMember, Instance, InstanceOp, InstanceState}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}};
 use form_types::state::{Response, Success};
 
@@ -846,11 +847,13 @@ impl DataStore {
             .route("/assoc/delete", post(delete_assoc))
             .route("/assoc/list", get(list_assoc))
             .route("/assoc/:cidr_id/relationships", get(relationships))
+            .route("/dns/:domain/:build_id/request_vanity", post(request_vanity))
+            .route("/dns/:domain/:build_id/request_public", post(request_public))
             .route("/dns/create", post(create_dns))
             .route("/dns/update", post(update_dns))
             .route("/dns/:domain/delete", post(delete_dns))
-            .route("/dns/:domain/get", post(get_dns_record))
-            .route("/dns/list", post(list_dns_records))
+            .route("/dns/:domain/get", get(get_dns_record))
+            .route("/dns/list", get(list_dns_records))
             .route("/instance/create", post(create_instance))
             .route("/instance/update", post(update_instance))
             .route("/instance/:instance_id/get", get(get_instance))
@@ -1694,6 +1697,122 @@ async fn relationships(
 ) -> Json<Response<Vec<(Cidr<String>, Cidr<String>)>>> {
     let ships = state.lock().await.get_relationships(cidr_id);
     Json(Response::Success(Success::Relationships(ships)))
+}
+
+async fn request_vanity(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path((domain, build_id)): Path<(String, String)>,
+) -> Json<Response<Host>> {
+    let datastore = state.lock().await;
+    let assigned = datastore.network_state.dns_state.zones.iter().any(|ctx| {
+        let (d, _) = ctx.val;
+        if *d == domain {
+            true
+        } else {
+            false
+        }
+    });
+
+    if assigned {
+        return Json(
+            Response::Failure { 
+                reason: Some(
+                    format!("Domain name requested is already assigned, if it is assigned to one of your instances run `form [OPTIONS] dns remove` first")
+                ) 
+            }
+        )
+    }
+
+    let instances = datastore.instance_state.map.iter().filter_map(|ctx| {
+        let (_, v) = ctx.val;
+        if let Some(v) = v.val() {
+            let instance = v.value();
+            if instance.build_id == build_id {
+                Some(instance.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }).collect::<Vec<Instance>>();
+
+    let node_hosts = datastore.node_state.map.iter().filter_map(|ctx| {
+        let (i, v) = ctx.val;
+        let is_host = instances.iter().any(|inst| inst.node_id == *i);
+        if is_host {
+            if let Some(reg_node) = v.val() {
+                Some(reg_node.value().host.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }).collect::<Vec<Host>>();
+
+    drop(datastore);
+
+    Json(Response::Success(Success::List(node_hosts)))
+
+}
+
+async fn request_public(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path((domain, build_id)): Path<(String, String)>,
+) -> Json<Response<Host>> {
+    let datastore = state.lock().await;
+    let assigned = datastore.network_state.dns_state.zones.iter().any(|ctx| {
+        let (d, _) = ctx.val;
+        if *d == domain {
+            true
+        } else {
+            false
+        }
+    });
+
+    if assigned {
+        return Json(
+            Response::Failure { 
+                reason: Some(
+                    format!("Domain name requested is already assigned, if it is assigned to one of your instances run `form [OPTIONS] dns remove` first")
+                ) 
+            }
+        )
+    }
+
+    let instances = datastore.instance_state.map.iter().filter_map(|ctx| {
+        let (_, v) = ctx.val;
+        if let Some(v) = v.val() {
+            let instance = v.value();
+            if instance.build_id == build_id {
+                Some(instance.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }).collect::<Vec<Instance>>();
+
+    let node_hosts = datastore.node_state.map.iter().filter_map(|ctx| {
+        let (i, v) = ctx.val;
+        let is_host = instances.iter().any(|inst| inst.node_id == *i);
+        if is_host {
+            if let Some(reg_node) = v.val() {
+                Some(reg_node.value().host.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }).collect::<Vec<Host>>();
+
+    drop(datastore);
+
+    Json(Response::Success(Success::List(node_hosts)))
+
 }
 
 async fn create_dns(
