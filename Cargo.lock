@@ -2665,6 +2665,7 @@ dependencies = [
  "form-dns",
  "form-p2p",
  "form-pack",
+ "form-state",
  "form-types",
  "formnet",
  "futures",
@@ -2682,6 +2683,7 @@ dependencies = [
  "tiny-keccak",
  "tokio",
  "tokio-util",
+ "url 2.5.4",
  "uuid",
 ]
 
@@ -2768,6 +2770,7 @@ dependencies = [
  "form-config",
  "form-p2p",
  "form-state",
+ "form-types",
  "futures",
  "futures-util",
  "get_if_addrs",
@@ -2840,6 +2843,7 @@ dependencies = [
  "tiny-keccak",
  "tokio",
  "trust-dns-proto 0.23.2",
+ "url 2.5.4",
 ]
 
 [[package]]

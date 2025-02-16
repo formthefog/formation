@@ -1,6 +1,7 @@
 use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, CmRDT, Map, bft_reg::Update};
 use k256::ecdsa::SigningKey;
 use tiny_keccak::Hasher;
+use url::Host;
 use crate::Actor;
 use serde::{Serialize, Deserialize};
 
@@ -17,6 +18,7 @@ pub struct Node {
     pub(crate) capacity: NodeCapacity,
     pub(crate) availability: NodeAvailability,
     pub(crate) metadata: NodeMetadata,
+    pub host: Host
 }
 
 impl Sha3Hash for Node {

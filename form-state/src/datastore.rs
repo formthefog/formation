@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, net::IpAddr, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
+use std::{collections::{HashMap, HashSet}, net::{IpAddr, SocketAddr}, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
 use axum::{extract::{State, Path}, routing::{get, post}, Json, Router};
 use form_dns::{api::{DomainRequest, DomainResponse}, store::FormDnsRecord};
 use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
@@ -11,6 +11,7 @@ use tokio::{net::TcpListener, sync::Mutex};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use crdts::{bft_reg::Update, map::Op, BFTReg, CvRDT, Map};
 use trust_dns_proto::rr::RecordType;
+use url::Host;
 use crate::{instances::{ClusterMember, Instance, InstanceOp, InstanceState}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}};
 use form_types::state::{Response, Success};
 
@@ -846,11 +847,13 @@ impl DataStore {
             .route("/assoc/delete", post(delete_assoc))
             .route("/assoc/list", get(list_assoc))
             .route("/assoc/:cidr_id/relationships", get(relationships))
+            .route("/dns/:domain/:build_id/request_vanity", post(request_vanity))
+            .route("/dns/:domain/:build_id/request_public", post(request_public))
             .route("/dns/create", post(create_dns))
             .route("/dns/update", post(update_dns))
             .route("/dns/:domain/delete", post(delete_dns))
-            .route("/dns/:domain/get", post(get_dns_record))
-            .route("/dns/list", post(list_dns_records))
+            .route("/dns/:domain/get", get(get_dns_record))
+            .route("/dns/list", get(list_dns_records))
             .route("/instance/create", post(create_instance))
             .route("/instance/update", post(update_instance))
             .route("/instance/:instance_id/get", get(get_instance))
@@ -1696,6 +1699,280 @@ async fn relationships(
     Json(Response::Success(Success::Relationships(ships)))
 }
 
+async fn request_vanity(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path((domain, build_id)): Path<(String, String)>,
+) -> Json<Response<Host>> {
+    let datastore = state.lock().await;
+    let assigned = datastore.network_state.dns_state.zones.iter().any(|ctx| {
+        let (d, _) = ctx.val;
+        if *d == domain {
+            true
+        } else {
+            false
+        }
+    });
+
+    if assigned {
+        return Json(
+            Response::Failure { 
+                reason: Some(
+                    format!("Domain name requested is already assigned, if it is assigned to one of your instances run `form [OPTIONS] dns remove` first")
+                ) 
+            }
+        )
+    }
+
+    let mut instances = datastore.instance_state.map.iter().filter_map(|ctx| {
+        let (_, v) = ctx.val;
+        if let Some(v) = v.val() {
+            let instance = v.value();
+            if instance.build_id == build_id {
+                Some(instance.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }).collect::<Vec<Instance>>();
+
+    let node_hosts = datastore.node_state.map.iter().filter_map(|ctx| {
+        let (i, v) = ctx.val;
+        let is_host = instances.iter().any(|inst| inst.node_id == *i);
+        if is_host {
+            if let Some(reg_node) = v.val() {
+                Some(reg_node.value().host.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }).collect::<Vec<Host>>();
+
+    let formnet_ip = instances.iter().filter_map(|inst| {
+        inst.formnet_ip
+    }).collect::<Vec<IpAddr>>();
+
+    let dns_a_record = FormDnsRecord {
+        domain,
+        record_type: RecordType::A,
+        formnet_ip: formnet_ip.iter().map(|ip| {
+            SocketAddr::new(*ip, 80)
+        }).collect(),
+        public_ip: vec![],
+        cname_target: None,
+        ssl_cert: false,
+        ttl: 3600
+    };
+
+    let request = DnsRequest::Create(dns_a_record.clone());
+
+    match Client::new().post("http://127.0.0.1:3004/dns/create")
+        .json(&request)
+        .send().await {
+            Ok(resp) => {
+                match resp.json::<Response<FormDnsRecord>>().await {
+                    Ok(r) => {
+                        match r {
+                            Response::Failure { reason } => {
+                                return Json(Response::Failure { reason })
+                            }
+                            _ => {}
+                        }
+                    }
+                    Err(e) => {
+                        return Json(Response::Failure { reason: Some(e.to_string()) })
+                    }
+                }
+            }
+            Err(e) => {
+                return Json(Response::Failure { reason: Some(e.to_string()) })
+            }
+        };
+
+    instances.iter_mut().for_each(|inst| {
+        inst.dns_record = Some(dns_a_record.clone());
+    });
+
+    for instance in instances {
+        let request = InstanceRequest::Update(instance);
+        match Client::new().post("http://127.0.0.1:3004/instance/update")
+            .json(&request)
+            .send().await {
+                Ok(resp) => {
+                    match resp.json::<Response<FormDnsRecord>>().await {
+                        Ok(r) => {
+                            match r {
+                                Response::Failure { reason } => {
+                                    return Json(Response::Failure { reason })
+                                }
+                                _ => {}
+                            }
+                        }
+                        Err(e) => {
+                            return Json(Response::Failure { reason: Some(e.to_string()) })
+                        }
+                    }
+                }
+                Err(e) => {
+                    return Json(Response::Failure { reason: Some(e.to_string()) })
+                }
+            };
+    }
+
+    drop(datastore);
+
+    Json(Response::Success(Success::List(node_hosts)))
+
+}
+
+async fn request_public(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path((domain, build_id)): Path<(String, String)>,
+) -> Json<Response<Host>> {
+    let datastore = state.lock().await;
+    let assigned = datastore.network_state.dns_state.zones.iter().any(|ctx| {
+        let (d, _) = ctx.val;
+        if *d == domain {
+            true
+        } else {
+            false
+        }
+    });
+
+    if assigned {
+        return Json(
+            Response::Failure { 
+                reason: Some(
+                    format!("Domain name requested is already assigned, if it is assigned to one of your instances run `form [OPTIONS] dns remove` first")
+                ) 
+            }
+        )
+    }
+
+    let mut instances = datastore.instance_state.map.iter().filter_map(|ctx| {
+        let (_, v) = ctx.val;
+        if let Some(v) = v.val() {
+            let instance = v.value();
+            if instance.build_id == build_id {
+                Some(instance.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }).collect::<Vec<Instance>>();
+
+    let node_hosts = datastore.node_state.map.iter().filter_map(|ctx| {
+        let (i, v) = ctx.val;
+        let is_host = instances.iter().any(|inst| inst.node_id == *i);
+        if is_host {
+            if let Some(reg_node) = v.val() {
+                Some(reg_node.value().host.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }).collect::<Vec<Host>>();
+
+    let formnet_ip = instances.iter().filter_map(|inst| {
+        inst.formnet_ip
+    }).collect::<Vec<IpAddr>>();
+
+    let cname_target = node_hosts.iter().find_map(|h| {
+        match h {
+            Host::Domain(domain) => Some(domain), 
+            _ => None
+        }
+    }).cloned();
+
+    let a_record_target = node_hosts.iter().filter_map(|h| {
+        match h {
+            Host::Ipv4(ipv4) => Some(IpAddr::V4(ipv4.clone())),
+            _ => None,
+        }
+    }).collect::<Vec<IpAddr>>();
+
+    let dns_a_record = FormDnsRecord {
+        domain: domain.clone(),
+        record_type: RecordType::A,
+        formnet_ip: formnet_ip.iter().map(|ip| {
+            SocketAddr::new(*ip, 80)
+        }).collect(),
+        public_ip: a_record_target.iter().map(|ip| {
+            SocketAddr::new(*ip, 80)
+        }).collect(),
+        cname_target,
+        ssl_cert: false,
+        ttl: 3600
+    };
+
+    let request = DnsRequest::Create(dns_a_record.clone());
+
+    match Client::new().post("http://127.0.0.1:3004/dns/create")
+        .json(&request)
+        .send().await {
+            Ok(resp) => {
+                match resp.json::<Response<FormDnsRecord>>().await {
+                    Ok(r) => {
+                        match r {
+                            Response::Failure { reason } => {
+                                return Json(Response::Failure { reason })
+                            }
+                            _ => {}
+                        }
+                    }
+                    Err(e) => {
+                        return Json(Response::Failure { reason: Some(e.to_string()) })
+                    }
+                }
+            }
+            Err(e) => {
+                return Json(Response::Failure { reason: Some(e.to_string()) })
+            }
+        };
+
+    instances.iter_mut().for_each(|inst| {
+        inst.dns_record = Some(dns_a_record.clone());
+    });
+
+    for instance in instances {
+        let request = InstanceRequest::Update(instance);
+        match Client::new().post("http://127.0.0.1:3004/instance/update")
+            .json(&request)
+            .send().await {
+                Ok(resp) => {
+                    match resp.json::<Response<FormDnsRecord>>().await {
+                        Ok(r) => {
+                            match r {
+                                Response::Failure { reason } => {
+                                    return Json(Response::Failure { reason })
+                                }
+                                _ => {}
+                            }
+                        }
+                        Err(e) => {
+                            return Json(Response::Failure { reason: Some(e.to_string()) })
+                        }
+                    }
+                }
+                Err(e) => {
+                    return Json(Response::Failure { reason: Some(e.to_string()) })
+                }
+            };
+    }
+
+    drop(datastore);
+
+    Json(Response::Success(Success::List(node_hosts)))
+
+}
+
 async fn create_dns(
     State(state): State<Arc<Mutex<DataStore>>>,
     Json(request): Json<DnsRequest>
@@ -2318,10 +2595,10 @@ async fn get_instance_by_build_id(
     let datastore = state.lock().await;
     log::info!("Attempting to get instance {id}");
     let instances: Vec<Instance> = datastore.instance_state.map.iter().filter_map(|ctx| {
-        let (id, reg) = ctx.val;
+        let (_, reg) = ctx.val;
         if let Some(val) = reg.val() {
             let instance = val.value();
-            if instance.build_id == *id {
+            if instance.build_id == id {
                 Some(instance)
             } else {
                 None

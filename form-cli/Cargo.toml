@@ -35,6 +35,7 @@ hex = "0.4"
 random_word = { version = "0.4", features = ["en"] }
 form-types = { path = "../form-types" }
 form-pack = { path = "../form-pack", default-features = false }
+form-state = { path = "../form-state" }
 shared = { path = "../form-net/shared" }
 formnet = { path = "../form-net/formnet" }
 form-config = { path = "../form-config" }
@@ -49,3 +50,4 @@ tiny-keccak = { version = "2.0.2", features = ["sha3"] }
 crdts = { git = "http://github.com/Cryptonomikhan/rust-crdt", rev = "1fe4992" }
 form-dns = { path = "../form-dns" }
 simple_logger = "5"
+url = "2" 

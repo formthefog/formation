@@ -135,8 +135,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 PackCommand::Status(status_command) => {
                     let (config, _) = load_config_and_keystore(&parser).await?;
                     let provider = config.hosts[0].clone();
-                    let port = config.pack_manager_port;
-                    status_command.handle_status(provider, port).await?;
+                    status_command.handle_status(provider, 3004).await?;
                 }
             }
         }

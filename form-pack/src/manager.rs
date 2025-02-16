@@ -1,5 +1,4 @@
 #![allow(unused_assignments)]
-use std::collections::BTreeMap;
 use std::io::{Cursor, Read, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -27,7 +26,8 @@ use serde::{Serialize, Deserialize};
 use tempfile::tempdir;
 use tokio::sync::Mutex;
 use crdts::bft_reg::RecoverableSignature;
-use form_state::instances::{Instance, InstanceAnnotations, InstanceCluster, InstanceEncryption, InstanceMetadata, InstanceMonitoring, InstanceResources, InstanceSecurity, InstanceStatus};
+use form_state::instances::{Instance, InstanceResources, InstanceStatus};
+use form_types::state::{Response as StateResponse, Success};
 use crate::image_builder::IMAGE_PATH;
 use crate::formfile::Formfile;
 
@@ -199,7 +199,7 @@ impl FormPackManager {
         }
     }
 
-    pub async fn write_pack_status_started(message: &PackBuildRequest) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn write_pack_status_started(message: &PackBuildRequest, node_id: String) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let signer_address = {
             let pk = VerifyingKey::recover_from_msg(
                 &message.hash,
@@ -213,12 +213,34 @@ impl FormPackManager {
         hasher.update(signer_address.as_ref());
         hasher.update(message.request.formfile.name.as_bytes());
         hasher.finalize(&mut hash);
+        let instance_id = build_instance_id(node_id.clone(), hex::encode(hash))?;
+
+        let instance = Instance {
+            instance_id,
+            node_id,
+            build_id: hex::encode(hash),
+            instance_owner: hex::encode(signer_address),
+            updated_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
+            status: InstanceStatus::Building,
+            formfile: serde_json::to_string(&message.request.formfile)?,
+            resources: InstanceResources {
+                vcpus: message.request.formfile.get_vcpus(),
+                memory_mb: message.request.formfile.get_memory() as u32,
+                bandwidth_mbps: 1000,
+                gpu: None,
+            },
+            ..Default::default()
+        };
         let status_message = PackBuildResponse {
             status: PackBuildStatus::Started(hex::encode(hash)),
             request: message.clone()
         };
 
         Self::write_to_queue(status_message, 1, "pack").await?;
+
+        let request = InstanceRequest::Create(instance);
+
+        Self::write_to_queue(request, 4, "state").await?;
 
         Ok(())
     }
@@ -240,52 +262,32 @@ impl FormPackManager {
         hasher.finalize(&mut build_id);
         let instance_id = build_instance_id(node_id.clone(), hex::encode(build_id))?;
 
-        let instance = Instance {
-            instance_id,
-            node_id,
-            build_id: hex::encode(build_id),
-            instance_owner: hex::encode(signer_address),
-            dns_record: None,
-            formnet_ip: None,
-            created_at: 0,
-            updated_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
-            last_snapshot: 0,
-            status: InstanceStatus::Built,
-            host_region: String::new(),
-            cluster: InstanceCluster {
-                members: BTreeMap::new()
-            },
-            formfile: serde_json::to_string(&message.request.formfile)?,
-            metadata: InstanceMetadata {
-                tags: vec![],
-                description: String::new(),
-                annotations: InstanceAnnotations {
-                    deployed_by: String::new(),
-                    build_commit: None,
-                    network_id: 0,
-                },
-                security: InstanceSecurity {
-                    encryption: InstanceEncryption {
-                        is_encrypted: false,
-                        scheme: None
-                    },
-                    tee: false,
-                    hsm: false,
-                },
-                monitoring: InstanceMonitoring {
-                    logging_enabled: false,
-                    metrics_endpoint: String::new(),
+        let mut instance = match Client::new() 
+            .get(format!("http://127.0.0.1:3004/instance/{instance_id}/get"))
+            .send().await?.json::<StateResponse<Instance>>().await {
+                Ok(StateResponse::Success(Success::Some(instance))) => instance,
+                _ => {
+                    Instance {
+                        instance_id,
+                        node_id,
+                        build_id: hex::encode(build_id),
+                        instance_owner: hex::encode(signer_address),
+                        updated_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
+                        formfile: serde_json::to_string(&message.request.formfile)?,
+                        snapshots: None,
+                        resources: InstanceResources {
+                            vcpus: message.request.formfile.get_vcpus(),
+                            memory_mb: message.request.formfile.get_memory() as u32,
+                            bandwidth_mbps: 1000,
+                            gpu: None,
+                        },
+                        ..Default::default()
+                    }
                 }
-            },
-            snapshots: None,
-            resources: InstanceResources {
-                vcpus: message.request.formfile.get_vcpus(),
-                memory_mb: message.request.formfile.get_memory() as u32,
-                bandwidth_mbps: 1000,
-                gpu: None,
-            }
         };
 
+        instance.status = InstanceStatus::Built;
+        
         let status_message = PackBuildResponse {
             status: PackBuildStatus::Completed(instance.clone()),
             request: message.clone()
@@ -325,7 +327,8 @@ impl FormPackManager {
     }
 
     pub async fn handle_pack_request(&mut self, message: PackBuildRequest) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        Self::write_pack_status_started(&message).await?;
+        let node_id = self.node_id.clone();
+        Self::write_pack_status_started(&message, node_id).await?;
         let packdir = tempdir()?;
 
         println!("Created temporary directory to put artifacts into...");
