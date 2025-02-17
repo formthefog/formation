@@ -853,6 +853,7 @@ impl DataStore {
             .route("/dns/update", post(update_dns))
             .route("/dns/:domain/delete", post(delete_dns))
             .route("/dns/:domain/get", get(get_dns_record))
+            .route("/dns/:node_ip/list", get(get_dns_records_by_node_ip))
             .route("/dns/list", get(list_dns_records))
             .route("/instance/create", post(create_instance))
             .route("/instance/update", post(update_instance))
@@ -1140,7 +1141,18 @@ async fn update_user(
         PeerRequest::Update(contents) => {
             log::info!("Update user request was a direct request...");
             log::info!("Building Map Op...");
-            let map_op = datastore.network_state.update_peer_local(contents);
+            let ctx = datastore.network_state.peers.get(&contents.name.to_string().clone());
+            let mut existing_ip = None;
+            if let Some(existing) = ctx.val {
+                if let Some(peer) = existing.val() {
+                    if let Some(endpoint) = peer.value().endpoint {
+                        if let Ok(resolved) = endpoint.resolve() {
+                            existing_ip = Some(resolved.ip())
+                        }
+                    }
+                }
+            };
+            let map_op = datastore.network_state.update_peer_local(contents.clone());
             datastore.network_state.peer_op(map_op.clone());
             match &map_op {
                 crdts::map::Op::Rm { .. } => {
@@ -1153,6 +1165,22 @@ async fn update_user(
                         match datastore.broadcast::<Response<Peer<String>>>(request, "/user/update").await {
                             Ok(()) => return Json(Response::Success(Success::Some(v.into()))),
                             Err(e) => eprintln!("Error broadcasting DeletePeerRequest: {e}")
+                        }
+                        drop(datastore);
+                        if let Some(existing) = existing_ip {
+                            if contents.is_admin {
+                                if let Some(endpoint) = contents.endpoint {
+                                    if let Ok(resolved) = endpoint.resolve() {
+                                        if resolved.ip() == existing {
+                                            let _ = update_dns_ip_addr(
+                                                state.clone(),
+                                                existing.to_string(),
+                                                resolved.ip().to_string(),
+                                            ).await;
+                                        }
+                                    }
+                                }
+                            }
                         }
                         return Json(Response::Success(Success::Some(v.into())))
                     } else {
@@ -2113,6 +2141,60 @@ async fn get_dns_record(
     return Json(Response::Failure { reason: Some(format!("Record does not exist for domain {domain}")) }) 
 }
 
+async fn update_dns_ip_addr(
+    state: Arc<Mutex<DataStore>>,
+    node_ip: String,
+    new_ip: String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if node_ip == new_ip {
+        return Ok(())
+    }
+
+    let records = get_dns_records_by_node_ip(
+        state,
+        node_ip.clone(),
+    ).await;
+
+    if records.is_empty() {
+        return Err(
+            Box::new(
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("0 Dns Records found with public ip of {node_ip}")
+                )
+            )
+        )
+    }
+
+    Ok(())
+}
+
+async fn get_dns_records_by_node_ip(
+    state: Arc<Mutex<DataStore>>,
+    node_ip: String
+) -> Vec<FormDnsRecord> {
+    if node_ip.parse::<IpAddr>().is_ok() {
+        match list_dns_records(State(state)).await {
+            Json(Response::Success(Success::List(dns_records))) => {
+                let node_is_host = dns_records.iter().filter_map(|rec| {
+                    if rec.public_ip.iter().any(|addr| {
+                        node_ip == addr.ip().to_string() 
+                    }) {
+                        Some(rec.clone())
+                    } else {
+                        None
+                    }
+                }).collect::<Vec<FormDnsRecord>>();
+                return node_is_host;
+            }
+            Json(Response::Failure { .. }) => return vec![],
+            _ => unreachable!()        
+        }
+    }
+
+    vec![]
+}
+
 async fn list_dns_records(
     State(state): State<Arc<Mutex<DataStore>>>,
 ) -> Json<Response<FormDnsRecord>> {
@@ -3068,6 +3150,7 @@ mod tests {
                     metrics_endpoint: "http://node.metrics".to_string(),
                 },
             },
+            host: Host::Domain("example.com".to_string())
         };
         let node_ctx = nodes.read_ctx().derive_add_ctx(actor.clone());
         let node_op = nodes.update("node1".to_string(), node_ctx, |reg, _| {
@@ -3105,4 +3188,3 @@ mod tests {
         Ok(())
     }
 }
-

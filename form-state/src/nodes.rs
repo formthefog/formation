@@ -9,15 +9,15 @@ pub type NodeOp = Op<String, BFTReg<Node, Actor>, Actor>;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Node {
-    pub(crate) node_id: String,
-    pub(crate) node_owner: String,
-    pub(crate) created_at: i64,
-    pub(crate) updated_at: i64,
-    pub(crate) last_heartbeat: i64,
-    pub(crate) host_region: String,
-    pub(crate) capacity: NodeCapacity,
-    pub(crate) availability: NodeAvailability,
-    pub(crate) metadata: NodeMetadata,
+    pub node_id: String,
+    pub node_owner: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub last_heartbeat: i64,
+    pub host_region: String,
+    pub capacity: NodeCapacity,
+    pub availability: NodeAvailability,
+    pub metadata: NodeMetadata,
     pub host: Host
 }
 
@@ -35,7 +35,6 @@ impl Default for Node {
             availability: Default::default(),
             metadata: Default::default(),
             host: Host::Domain(Default::default())
-
         }
     }
 }

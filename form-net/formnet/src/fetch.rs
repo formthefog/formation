@@ -434,7 +434,6 @@ pub async fn fetch_server(
         return Ok(())
     } else {
         let mut nat_traverse = NatTraverse::new(&interface, NetworkOpts::default().backend, &modifications)?;
-
         // Give time for handshakes with recently changed endpoints to complete before attempting traversal.
         if !nat_traverse.is_finished() {
             std::thread::sleep(nat::STEP_INTERVAL - interface_updated_time.elapsed());
