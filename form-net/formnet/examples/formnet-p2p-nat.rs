@@ -248,7 +248,7 @@ async fn handle_join(
 
     if let Err(e) = DeviceUpdate::new()
         .add_peer(config_builder)
-        .apply(&InterfaceName::from_str("formnet").unwrap(), Backend::Kernel)
+        .apply(&InterfaceName::from_str("formnet").unwrap(), Backend::default())
     {
         return Json(Response::Join(JoinResponse::Failure {
             reason: e.to_string(),
@@ -274,7 +274,7 @@ async fn handle_candidates(
 
         if let Err(e) = DeviceUpdate::new()
             .add_peer(builder)
-            .apply(&InterfaceName::from_str("formnet").unwrap(), Backend::Kernel)
+            .apply(&InterfaceName::from_str("formnet").unwrap(), Backend::default())
         {
             return Json(Response::Error(e.to_string()));
         }
@@ -298,7 +298,7 @@ fn spawn_endpoint_refresher(state: BootstrapState) {
         let mut interval = tokio::time::interval(Duration::from_secs(10));
         loop {
             interval.tick().await;
-            if let Ok(info) = Device::get(&InterfaceName::from_str("formnet").unwrap(), Backend::Kernel)
+            if let Ok(info) = Device::get(&InterfaceName::from_str("formnet").unwrap(), Backend::default())
             {
                 let mut endpoints = state.endpoints.write().await;
                 for peer in info.peers {
@@ -317,7 +317,7 @@ fn spawn_candidate_updates(bootstrap: String) {
         loop {
             interval.tick().await;
             // Get our local addresses as candidates
-            if let Ok(device) = Device::get(&InterfaceName::from_str("formnet").unwrap(), Backend::Kernel)
+            if let Ok(device) = Device::get(&InterfaceName::from_str("formnet").unwrap(), Backend::default())
             {
                 let candidates = get_local_addrs()
                     .unwrap()

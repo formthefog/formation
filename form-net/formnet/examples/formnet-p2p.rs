@@ -69,7 +69,7 @@ async fn bootstrap_wg_up() -> Result<(), Box<dyn std::error::Error>> {
         let mut interval = tokio::time::interval(Duration::from_secs(10));
         loop {
             interval.tick().await;
-            if let Ok(info) = Device::get(&InterfaceName::from_str("formnet").unwrap(), Backend::Kernel) {
+            if let Ok(info) = Device::get(&InterfaceName::from_str("formnet").unwrap(), Backend::default()) {
                 log::info!("Acquired device info");
                 for peer in info.peers {
                     log::info!("Acquired device info for peer {peer:?}");
@@ -150,7 +150,7 @@ async fn handle_join(
         .add_peer(config_builder)
         .apply(
             &InterfaceName::from_str("formnet").unwrap(), 
-            Backend::Kernel
+            Backend::default()
         ).unwrap();
 
     Json(JoinResponse::Success)
