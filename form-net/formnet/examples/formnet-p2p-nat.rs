@@ -20,6 +20,13 @@ use log::{info, Level};
 // Simplified error handling for brevity.
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Candidates {
+    pub pubkey: String,
+    pub candidates: Vec<SocketAddr>,
+}
+
 // Track both internal and external endpoints, plus NAT candidates
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct PeerInfo {
@@ -223,7 +230,7 @@ async fn server(
     let router = Router::new()
         .route("/bootstrap", get(get_bootstrap_info))
         .route("/join", put(handle_join))
-        .route("/:public_key/candidates", post(handle_candidates))
+        .route("/candidates", post(handle_candidates))
         .route("/ping", get(handle_ping))
         .with_state(state);
 
@@ -272,10 +279,10 @@ async fn handle_join(
 async fn handle_candidates(
     State(state): State<Arc<BootstrapState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    Path(pubkey): Path<String>,
-    Json(candidates): Json<Vec<SocketAddr>>,
+    Json(candidates): Json<Candidates>,
 ) -> Json<Response> {
     // Find peer by their current endpoint
+    let Candidates { pubkey, candidates }  = candidates;
     log::info!("Recevied candidates for {pubkey}: {candidates:?}");
     let mut endpoints = state.endpoints.write().await; 
     let public_candidates = candidates.iter().map(|c| {
@@ -347,18 +354,21 @@ fn spawn_candidate_updates(bootstrap: String) {
             if let Ok(device) = Device::get(&InterfaceName::from_str("formnet").unwrap(), Backend::default())
             {
                 if let Some(key) = device.private_key {
-                    let public_key = key.get_public().to_base64();
+                    let pubkey = key.get_public().to_base64();
 
                     let candidates = get_local_addrs()
                         .unwrap()
                         .map(|addr| SocketAddr::new(addr, device.listen_port.unwrap_or(51820)))
                         .collect::<Vec<_>>();
+                    let candidates = Candidates {
+                        pubkey, candidates
+                    };
 
                     log::info!("Reporting candidates: {candidates:?}");
 
-                    log::info!("Sending candidates to {bootstrap}/{public_key}/candidates");
+                    log::info!("Sending candidates to {bootstrap}/candidates");
                     if let Err(e) = Client::new()
-                        .post(format!("http://{bootstrap}/{public_key}/candidates"))
+                        .post(format!("http://{bootstrap}/candidates"))
                         .json(&candidates)
                         .send()
                         .await
