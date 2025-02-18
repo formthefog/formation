@@ -254,8 +254,8 @@ async fn try_join_formnet(
         Ok(Response::Join(BootstrapResponse::Success(ip))) => {
             log::info!("Bringing Wireguard interface up...");
             write_config_file(keypair.clone(), request.clone(), ip.clone(), bootstrap_info.clone())?;
-            try_bring_formnet_up(keypair, ip, request, bootstrap_info)?; 
             thread::sleep(Duration::from_secs(5));
+            try_bring_formnet_up(keypair, ip, request, bootstrap_info)?; 
 
             if !try_holepunch_fetch().await {
                 eprintln!(
