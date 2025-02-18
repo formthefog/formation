@@ -71,7 +71,7 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    simple_logger::SimpleLogger::init_with_level(Level::Info).unwrap();
+    simple_logger::init_with_level(Level::Info).unwrap();
     
     let parser = Cli::parse();
     if let Some(bs) = parser.bootstrap {
