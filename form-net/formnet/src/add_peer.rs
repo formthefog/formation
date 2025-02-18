@@ -93,7 +93,7 @@ pub async fn build_peer(
     peer_type: &PeerType,
     peer_id: &str,
     pubkey: String,
-    addr: SocketAddr,
+    _addr: SocketAddr,
 ) -> Result<PeerContents<String>, Box<dyn std::error::Error>> {
     let cidr = DatabaseCidr::<String, CrdtMap>::get("formnet".to_string()).await?; 
     let mut available_ip = None;
@@ -121,7 +121,7 @@ pub async fn build_peer(
         ip: available_ip,
         cidr_id: cidr.id.clone(),
         public_key: pubkey,
-        endpoint: Some(addr.into()),
+        endpoint: None,
         is_admin,
         is_disabled: false,
         is_redeemed: true,

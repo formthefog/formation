@@ -1,9 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    str::FromStr,
-    sync::Arc,
-    time::Duration,
+    collections::{HashMap, HashSet}, net::{IpAddr, Ipv4Addr, SocketAddr}, str::FromStr, sync::Arc, time::{Duration, Instant}
 };
 
 use axum::{
@@ -15,9 +11,14 @@ use clap::Parser;
 use ipnet::IpNet;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use shared::{get_local_addrs, wg, REDEEM_TRANSITION_WAIT};
+use shared::{get_local_addrs, wg::{self, DeviceExt}, REDEEM_TRANSITION_WAIT};
 use tokio::{net::TcpListener, sync::RwLock, time::interval};
 use wireguard_control::{Backend, Device, DeviceUpdate, InterfaceName, Key, KeyPair, PeerConfigBuilder};
+use std::thread;
+use log::info;
+
+// Simplified error handling for brevity.
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 // Track both internal and external endpoints, plus NAT candidates
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -59,6 +60,7 @@ struct BootstrapState {
     used_ips: Arc<RwLock<HashSet<IpAddr>>>,
     // Track real endpoints seen from connections
     endpoints: Arc<RwLock<HashMap<String, SocketAddr>>>,
+    peers: Arc<RwLock<HashMap<String, PeerInfo>>>,
 }
 
 #[derive(Clone, Debug, Parser)]
@@ -68,7 +70,7 @@ struct Cli {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
     simple_logger::SimpleLogger::new().init().unwrap();
     
     let parser = Cli::parse();
@@ -84,7 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 // Bootstrap node setup and operation
-async fn bootstrap_node() -> Result<(), Box<dyn std::error::Error>> {
+async fn bootstrap_node() -> Result<()> {
     // Generate keys and get external IP
     let keypair = KeyPair::generate();
     let pubkey = keypair.public.to_base64();
@@ -113,10 +115,12 @@ async fn bootstrap_node() -> Result<(), Box<dyn std::error::Error>> {
         info,
         used_ips: Arc::new(RwLock::new(HashSet::new())),
         endpoints: Arc::new(RwLock::new(HashMap::new())),
+        peers: Arc::new(RwLock::new(HashMap::new()))
     };
 
     // Start endpoint refresh task
     spawn_endpoint_refresher(state.clone());
+    spawn_nat_traversal_task(state.clone());
 
     // Start server
     server("0.0.0.0", 51820, state).await?;
@@ -125,7 +129,7 @@ async fn bootstrap_node() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 // Peer node setup and operation
-async fn peer_node(bootstrap: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn peer_node(bootstrap: &str) -> Result<()> {
     // Get bootstrap node info
     log::info!("Fetching bootstrap info from {bootstrap}");
     let bootstrap_info = Client::new()
@@ -213,7 +217,7 @@ async fn server(
     address: &str,
     port: u16,
     state: BootstrapState,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<()> {
     let state = Arc::new(state);
 
     let router = Router::new()
@@ -254,8 +258,7 @@ async fn handle_join(
     let config_builder = PeerConfigBuilder::new(&pubkey)
         .replace_allowed_ips()
         .add_allowed_ip(ip, 32)
-        .set_persistent_keepalive_interval(25)
-        .set_endpoint(addr);
+        .set_persistent_keepalive_interval(25);
 
     if let Err(e) = DeviceUpdate::new()
         .add_peer(config_builder)
@@ -278,11 +281,8 @@ async fn handle_candidates(
     let endpoints = state.endpoints.read().await;
     if let Some((pubkey, _)) = endpoints.iter().find(|(_, ep)| **ep == addr) {
         // Update WireGuard peer configuration with new candidates
-        let mut builder = PeerConfigBuilder::new(&Key::from_base64(pubkey).unwrap());
-        if let Some(&candidate) = candidates.first() {
-            builder = builder.set_endpoint(candidate);
-        }
-
+        let builder = PeerConfigBuilder::new(&Key::from_base64(pubkey).unwrap());
+        log::info!("Received candidates: {candidates:?}");
         if let Err(e) = DeviceUpdate::new()
             .add_peer(builder)
             .apply(&InterfaceName::from_str("formnet").unwrap(), Backend::default())
@@ -317,6 +317,8 @@ fn spawn_endpoint_refresher(state: BootstrapState) {
                     log::info!("Peer stats: {:?}", peer.stats);
                     if let Some(endpoint) = peer.config.endpoint {
                         endpoints.insert(peer.config.public_key.to_base64(), endpoint);
+                    } else {
+
                     }
                 }
             }
@@ -346,6 +348,90 @@ fn spawn_candidate_updates(bootstrap: String) {
                     .await
                 {
                     log::error!("Failed to update candidates: {e}");
+                }
+            }
+        }
+    });
+}
+
+
+/// Try to traverse NAT for a peer by iterating over candidate endpoints.
+/// - `interface`: your WireGuard interface (e.g. "formnet").
+/// - `backend`: the WireGuard backend (Kernel or Userspace).
+/// - `peer_pubkey`: the peer’s public key (base64 string).
+/// - `mut candidates`: a mutable vector of candidate SocketAddrs (preferably ordered with your best guess last).
+pub fn nat_traverse_step(
+    interface: &InterfaceName,
+    backend: Backend,
+    peer_pubkey: &str,
+    candidates: &mut Vec<SocketAddr>,
+) -> Result<()> {
+    // Loop until we either succeed or run out of candidates.
+    while let Some(candidate) = candidates.pop() {
+        info!("Trying candidate endpoint {} for peer {}", candidate, peer_pubkey);
+
+        // Build the peer update with this candidate.
+        let update = PeerConfigBuilder::new(&Key::from_base64(peer_pubkey)?)
+            .set_endpoint(candidate);
+
+        // Apply the update.
+        DeviceUpdate::new().add_peer(update).apply(interface, backend)?;
+
+        // Wait a short period for the handshake to potentially occur.
+        let start = Instant::now();
+        loop {
+            // Poll the device for the peer's status.
+            let device = Device::get(interface, backend)?;
+            if let Some(peer_info) = device.get_peer(peer_pubkey) {
+                // Check if a handshake has occurred recently.
+                if let Some(ts) = peer_info.stats.last_handshake_time {
+                    // If a handshake happened within the last 2 seconds, consider it successful.
+                    if ts.elapsed().unwrap_or_default() < Duration::from_secs(2) {
+                        info!("Handshake succeeded with candidate {}", candidate);
+                        return Ok(());
+                    }
+                }
+            }
+            if start.elapsed() > Duration::from_secs(1) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+    Err("NAT traversal failed: all candidates exhausted".into())
+}
+
+fn spawn_nat_traversal_task(state: BootstrapState) {
+    tokio::spawn(async move {
+        let interface = InterfaceName::from_str("formnet").unwrap();
+        let backend = Backend::default();
+        loop {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            
+            // Get current device state.
+            let device = match Device::get(&interface, backend) {
+                Ok(dev) => dev,
+                Err(e) => {
+                    log::error!("Failed to get device: {}", e);
+                    continue;
+                }
+            };
+            
+            // For each known peer in our state, check handshake status.
+            let peers = state.peers.read().await;
+            for (pubkey, peer_info) in peers.iter() {
+                // Look up this peer in the device.
+                if let Some(peer_dev) = device.get_peer(pubkey) {
+                    // If no handshake yet, or it's stale, try NAT traversal.
+                    if peer_dev.stats.last_handshake_time.is_none() {
+                        // Use the candidate list from our stored peer info.
+                        let mut candidates = peer_info.candidates.clone();
+                        log::info!("No handshake for peer {} – trying NAT traversal with candidates: {:?}", peer_info.pubkey, candidates);
+                        
+                        if let Err(e) = nat_traverse_step(&interface, backend, pubkey, &mut candidates) {
+                            log::error!("NAT traversal failed for peer {}: {}", pubkey, e);
+                        }
+                    }
                 }
             }
         }
