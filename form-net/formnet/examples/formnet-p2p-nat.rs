@@ -3,7 +3,7 @@ use std::{
 };
 
 use axum::{
-    extract::{ConnectInfo, State},
+    extract::{ConnectInfo, Path, State},
     routing::{get, post, put},
     Json, Router,
 };
@@ -59,7 +59,7 @@ struct BootstrapState {
     // Track assigned IPs
     used_ips: Arc<RwLock<HashSet<IpAddr>>>,
     // Track real endpoints seen from connections
-    endpoints: Arc<RwLock<HashMap<String, SocketAddr>>>,
+    endpoints: Arc<RwLock<HashMap<String, Vec<SocketAddr>>>>,
     peers: Arc<RwLock<HashMap<String, PeerInfo>>>,
 }
 
@@ -236,7 +236,7 @@ async fn server(
 // Handler implementations
 async fn handle_join(
     State(state): State<Arc<BootstrapState>>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    ConnectInfo(_addr): ConnectInfo<SocketAddr>,
     Json(peer_info): Json<PeerInfo>,
 ) -> Json<Response> {
     // Find next available IP
@@ -249,9 +249,6 @@ async fn handle_join(
         used_ips.insert(ip);
         ip
     };
-
-    // Record real endpoint from connection
-    state.endpoints.write().await.insert(peer_info.pubkey.clone(), addr);
 
     // Add to WireGuard interface
     let pubkey = Key::from_base64(&peer_info.pubkey).unwrap();
@@ -274,21 +271,14 @@ async fn handle_join(
 
 async fn handle_candidates(
     State(state): State<Arc<BootstrapState>>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    ConnectInfo(_addr): ConnectInfo<SocketAddr>,
+    Path(pubkey): Path<String>,
     Json(candidates): Json<Vec<SocketAddr>>,
 ) -> Json<Response> {
     // Find peer by their current endpoint
-    let endpoints = state.endpoints.read().await;
-    if let Some((pubkey, _)) = endpoints.iter().find(|(_, ep)| **ep == addr) {
-        // Update WireGuard peer configuration with new candidates
-        let builder = PeerConfigBuilder::new(&Key::from_base64(pubkey).unwrap());
-        log::info!("Received candidates: {candidates:?}");
-        if let Err(e) = DeviceUpdate::new()
-            .add_peer(builder)
-            .apply(&InterfaceName::from_str("formnet").unwrap(), Backend::default())
-        {
-            return Json(Response::Error(e.to_string()));
-        }
+    let mut endpoints = state.endpoints.write().await; 
+    if let Some(entry) = endpoints.get_mut(&pubkey) {
+        entry.extend(candidates.iter());
     }
     Json(Response::Ping)
 }
@@ -316,9 +306,22 @@ fn spawn_endpoint_refresher(state: BootstrapState) {
                     log::info!("Peer config: {:?}", peer.config);
                     log::info!("Peer stats: {:?}", peer.stats);
                     if let Some(endpoint) = peer.config.endpoint {
-                        endpoints.insert(peer.config.public_key.to_base64(), endpoint);
+                        if let Some(entry) = endpoints.get_mut(&peer.config.public_key.to_base64()) {
+                            entry.insert(0, endpoint);
+                        } else {
+                            let mut vec = Vec::new();
+                            vec.push(endpoint);
+                            endpoints.insert(peer.config.public_key.to_base64(), vec);
+                        }
                     } else {
-
+                        if let Some(entry) = endpoints.get(&peer.config.public_key.to_base64()) {
+                            let try_endpoint = entry.first().unwrap();
+                            let builder = PeerConfigBuilder::new(&peer.config.public_key)
+                                .set_endpoint(*try_endpoint);
+                            DeviceUpdate::new()
+                                .add_peer(builder)
+                                .apply(&InterfaceName::from_str("formnet").unwrap(), Backend::default()).unwrap();
+                        }
                     }
                 }
             }
