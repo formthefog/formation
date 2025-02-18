@@ -15,8 +15,8 @@ use clap::Parser;
 use ipnet::IpNet;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use shared::{get_local_addrs, wg};
-use tokio::{net::TcpListener, sync::RwLock};
+use shared::{get_local_addrs, wg, REDEEM_TRANSITION_WAIT};
+use tokio::{net::TcpListener, sync::RwLock, time::interval};
 use wireguard_control::{Backend, Device, DeviceUpdate, InterfaceName, Key, KeyPair, PeerConfigBuilder};
 
 // Track both internal and external endpoints, plus NAT candidates
@@ -180,12 +180,21 @@ async fn peer_node(bootstrap: &str) -> Result<(), Box<dyn std::error::Error>> {
         )),
         shared::NetworkOpts::default(),
     )?;
+    std::thread::sleep(REDEEM_TRANSITION_WAIT);
+    log::info!("Spawning candidate updates");
 
     // Start NAT candidate updates
     spawn_candidate_updates(bootstrap.to_string());
 
     // Test internal connectivity
+    let mut interval = interval(Duration::from_secs(10));
     loop {
+        interval.tick().await;
+        let device = Device::get(&InterfaceName::from_str("formnet")?, Backend::default())?;
+        for peer in device.peers {
+            log::info!("Peer Info: {:?}", peer.config);
+            log::info!("Peer Stats: {:?}", peer.stats);
+        }
         match Client::new()
             .get(format!("http://{}:{}/ping", bootstrap_info.internal_endpoint, 51820))
             .send()
@@ -326,6 +335,8 @@ fn spawn_candidate_updates(bootstrap: String) {
                     .unwrap()
                     .map(|addr| SocketAddr::new(addr, device.listen_port.unwrap_or(51820)))
                     .collect::<Vec<_>>();
+
+                log::info!("Reporting candidates: {candidates:?}");
 
                 if let Err(e) = Client::new()
                     .post(format!("http://{bootstrap}/candidates"))
