@@ -223,7 +223,7 @@ async fn server(
     let router = Router::new()
         .route("/bootstrap", get(get_bootstrap_info))
         .route("/join", put(handle_join))
-        .route("/candidates", post(handle_candidates))
+        .route("/:public_key/candidates", post(handle_candidates))
         .route("/ping", get(handle_ping))
         .with_state(state);
 
