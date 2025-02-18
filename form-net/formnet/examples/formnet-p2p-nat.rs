@@ -276,9 +276,12 @@ async fn handle_candidates(
     Json(candidates): Json<Vec<SocketAddr>>,
 ) -> Json<Response> {
     // Find peer by their current endpoint
+    log::info!("Recevied candidates for {pubkey}: {candidates:?}");
     let mut endpoints = state.endpoints.write().await; 
     if let Some(entry) = endpoints.get_mut(&pubkey) {
         entry.extend(candidates.iter());
+    } else {
+        endpoints.insert(pubkey, candidates);
     }
     Json(Response::Ping)
 }
