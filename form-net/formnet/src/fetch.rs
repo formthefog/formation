@@ -6,7 +6,7 @@ use futures::{stream::FuturesUnordered, StreamExt};
 use hostsfile::HostsBuilder;
 use reqwest::{Client, Response as ServerResponse};
 use shared::{get_local_addrs, wg::{self, DeviceExt}, Endpoint, IoErrorContext, NatOpts, NetworkOpts, Peer, PeerDiff};
-use wireguard_control::{Device, DeviceUpdate, InterfaceName, PeerConfigBuilder};
+use wireguard_control::{Backend, Device, DeviceUpdate, InterfaceName, PeerConfigBuilder};
 
 use crate::{api::{BootstrapInfo, Response}, CONFIG_DIR, DATA_DIR, NETWORK_NAME};
 
@@ -47,45 +47,16 @@ pub async fn fetch(
         interface.as_str_lossy()
     );
 
-    let mut fetch_success = false;
-    for _ in 0..3 {
-        let internal_resp = Client::new().get(format!("http://{internal}:{host_port}/fetch")).send();
-        match internal_resp.await {
-            Ok(resp) => {
-                if let Err(e) = handle_server_response(resp, &interface, network, data_dir.clone(), interface_up, internal.to_string(), config.address.to_string(), host_port, hosts_path.clone()).await {
-                    log::error!(
-                        "Error handling server response from fetch call: {e}"
-                    )
-                } else {
-                    fetch_success = true;
-                    break;
-                }
-            }
-            Err(e) => {
+    let internal_resp = Client::new().get(format!("http://{internal}:{host_port}/fetch")).send();
+    match internal_resp.await {
+        Ok(resp) => {
+            if let Err(e) = handle_server_response(resp, &interface, network, data_dir.clone(), interface_up, internal.to_string(), config.address.to_string(), host_port, hosts_path.clone()).await {
                 log::error!(
-                    "Error getting server response from internal fetch call: {e}"
+                    "Error handling server response from fetch call: {e}"
                 )
             }
         }
-    }
-
-    if !fetch_success {
-        let ip = external.ip();
-        let external_resp = Client::new().get(format!("http://{ip}:{host_port}/fetch")).send();
-        match external_resp.await {
-            Ok(resp) => {
-                if let Err(e) = handle_server_response(resp, &interface, network, data_dir, interface_up, internal.to_string(), config.address.to_string(), host_port, hosts_path).await {
-                    log::error!(
-                        "Error handling server response from fetch call: {e}"
-                    )
-                }
-            }
-            Err(e) => {
-                log::error!(
-                    "Error getting server response from external fetch call: {e}"
-                )
-            }
-        }
+        Err(e) => log::error!("Error fetching: {e}"),
     }
 
     Ok(())
@@ -218,7 +189,10 @@ async fn handle_peer_updates(
     let candidates: Vec<Endpoint> = get_local_addrs()?
         .filter(|ip| !NatOpts::default().is_excluded(*ip))
         .map(|addr| SocketAddr::from((addr, device.listen_port.unwrap_or(51820))).into())
-        .collect::<Vec<Endpoint>>();
+        .collect::<Vec<Endpoint>>().iter().filter_map(|ep| match ep.resolve() {
+            Ok(addr) => Some(addr.into()),
+            Err(_) => None
+        }).collect::<Vec<Endpoint>>();
     log::info!(
         "reporting {} interface address{} as NAT traversal candidates",
         candidates.len(),
@@ -414,6 +388,7 @@ pub async fn fetch_server(
                 None => None
             }
         }).collect();
+
         let mut futures: FuturesUnordered<_> = valid_admin.iter().map(|p| {
             let addr = p.endpoint.clone().unwrap().resolve().unwrap();
             let ip = addr.ip().to_string();
@@ -448,6 +423,62 @@ pub async fn fetch_server(
                 nat_traverse.remaining()
             );
             nat_traverse.step()?;
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn report_initial_candidates(bootstraps: Vec<String>, my_ip: String) -> Result<(), Box<dyn std::error::Error>> {
+    let device = Device::get(&InterfaceName::from_str("formnet")?, Backend::default())?;
+    log::info!("Getting candidates...");
+    let candidates: Vec<Endpoint> = get_local_addrs()?
+        .filter(|ip| !NatOpts::default().is_excluded(*ip))
+        .map(|addr| SocketAddr::from((addr, device.listen_port.unwrap_or(51820))).into())
+        .collect::<Vec<Endpoint>>();
+
+    log::info!(
+        "reporting {} interface address{} as NAT traversal candidates",
+        candidates.len(),
+        if candidates.len() == 1 { "" } else { "es" },
+    );
+    for candidate in &candidates {
+        log::debug!("  candidate: {}", candidate);
+    }
+
+    for bootstrap in bootstraps {
+        if let Ok(_) = Client::new().post(format!("http://{bootstrap}:51820/{}/candidates", my_ip))
+            .json(&candidates)
+            .send().await {
+                log::info!("Successfully sent candidates");
+                break;
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn report_candidates(admins: Vec<String>, my_ip: String) -> Result<(), Box<dyn std::error::Error>> { 
+    let device = Device::get(&InterfaceName::from_str("formnet")?, Backend::default())?;
+    log::info!("Getting candidates...");
+    let candidates: Vec<Endpoint> = get_local_addrs()?
+        .filter(|ip| !NatOpts::default().is_excluded(*ip))
+        .map(|addr| SocketAddr::from((addr, device.listen_port.unwrap_or(51820))).into())
+        .collect::<Vec<Endpoint>>();
+    log::info!(
+        "reporting {} interface address{} as NAT traversal candidates",
+        candidates.len(),
+        if candidates.len() == 1 { "" } else { "es" },
+    );
+    for candidate in &candidates {
+        log::debug!("  candidate: {}", candidate);
+    }
+    for admin in admins {
+        if let Ok(_) = Client::new().post(format!("http://{admin}/{}/candidates", my_ip))
+            .json(&candidates)
+            .send().await {
+                log::info!("Successfully sent candidates");
+                break;
         }
     }
 

@@ -12,7 +12,6 @@ pub async fn add_peer(
     peer_type: &PeerType,
     peer_id: &str,
     pubkey: String,
-    endpoint: Option<SocketAddr>,
     addr: SocketAddr,
 ) -> Result<IpAddr, Box<dyn std::error::Error>> {
     log::warn!("ATTEMPTING TO ADD PEER {peer_id}...");
@@ -37,24 +36,6 @@ pub async fn add_peer(
                 )
             );
         }
-        if let Some(ref mut wg_endpoint) = peer.endpoint {
-            if wg_endpoint != &Endpoint::from(addr) {
-                *wg_endpoint = Endpoint::from(addr);
-            }
-            if let Some(address) = endpoint {
-                if wg_endpoint != &Endpoint::from(address) {
-                    peer.candidates.push(Endpoint::from(address));
-                }
-            }
-        }
-
-        let mut db_peer = DatabasePeer::<String, CrdtMap>::from(peer.clone());
-
-        db_peer.update(PeerContents {
-            candidates: peer.candidates.clone(),
-            endpoint: peer.endpoint.clone(),
-            ..peer.contents.clone()
-        }).await?;
 
         return Ok(peer.ip.clone());
     }

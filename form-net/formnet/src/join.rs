@@ -6,7 +6,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use shared::{interface_config::InterfaceConfig, wg, NetworkOpts};
 use wireguard_control::{Device, InterfaceName, KeyPair};
-use crate::{api::{BootstrapInfo, JoinResponse as BootstrapResponse, Response}, fetch, up, CONFIG_DIR, DATA_DIR, NETWORK_NAME};
+use crate::{api::{BootstrapInfo, JoinResponse as BootstrapResponse, Response}, fetch, report_initial_candidates, up, CONFIG_DIR, DATA_DIR, NETWORK_NAME};
 
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -58,16 +58,19 @@ pub enum JoinResponse {
     Error(String) 
 }
 
-async fn try_holepunch_fetch() -> bool {
-    let mut fetch_success = false;
-    for _ in 0..3 {
-        if fetch(None).await.is_ok() {
-            fetch_success = true;
-            break;
+async fn try_holepunch_fetch(bootstrap: Vec<String>, my_ip: String) -> bool {
+    if let Ok(_) = report_initial_candidates(bootstrap, my_ip).await {
+        let mut fetch_success = false;
+        for _ in 0..3 {
+            if fetch(None).await.is_ok() {
+                fetch_success = true;
+                break;
+            }
+            thread::sleep(Duration::from_secs(1));
         }
-        thread::sleep(Duration::from_secs(1));
+        return fetch_success
     }
-    fetch_success
+    false
 }
 
 async fn check_already_joined(bootstrap: Vec<String>, id: &str) -> Result<(bool, Option<IpAddr>), Box<dyn std::error::Error>> {
@@ -90,7 +93,7 @@ async fn check_already_joined(bootstrap: Vec<String>, id: &str) -> Result<(bool,
                                     NetworkOpts::default(),
                                 )?;
                             }
-                            if !try_holepunch_fetch().await {
+                            if !try_holepunch_fetch(bootstrap, p.ip.to_string()).await {
                                 eprintln!(
                                     "Failed to fetch peers from server, you will need to manually run the 'up' command."
                                 );
@@ -257,7 +260,7 @@ async fn try_join_formnet(
             thread::sleep(Duration::from_secs(5));
             try_bring_formnet_up(keypair, ip, request, bootstrap_info)?; 
 
-            if !try_holepunch_fetch().await {
+            if !try_holepunch_fetch(vec![dial.to_string()], ip.to_string()).await {
                 eprintln!(
                     "Failed to fetch peers from server, you will need to manually run the 'up' command."
                 );
@@ -338,7 +341,7 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
     }
 
     if let Ok((true, Some(ip))) = check_already_joined(bootstrap.clone(), &address).await {
-        if !try_holepunch_fetch().await {
+        if !try_holepunch_fetch(bootstrap, ip.to_string()).await {
             println!("initial attempt to fetch failed, you will need to call `form manage formnet-up`") 
         }
         return Ok(ip);

@@ -67,7 +67,7 @@ async fn join(
     Json(request): Json<BootstrapInfo>,
 ) -> Json<Response> {
     log::info!("Received join request");
-    match add_peer(&NetworkOpts::default(), &request.peer_type, &request.id, request.pubkey, request.external_endpoint, addr).await {
+    match add_peer(&NetworkOpts::default(), &request.peer_type, &request.id, request.pubkey, addr).await {
         Ok(ip) => {
             log::info!("Added peer, returning IP {ip}");
             Json(Response::Join(JoinResponse::Success(ip)))
@@ -104,6 +104,19 @@ async fn candidates(
     Path(ip): Path<String>,
     Json(contents): Json<Vec<Endpoint>> 
 ) {
+
+    let public_ip = addr.ip();
+    let contents = contents.iter().filter_map(|ep| {
+        match ep.resolve() {
+            Ok(socket_addr) => {
+                let ep_port = socket_addr.port(); 
+                let pub_ep = Endpoint::from(SocketAddr::new(public_ip, ep_port));
+                Some(pub_ep)
+            }
+            Err(_) => None
+        }
+    }).collect::<Vec<Endpoint>>();
+
     if let Ok(ip) = ip.parse::<IpAddr>() {
         if let Ok(device) = Device::get(&InterfaceName::from_str("formnet").unwrap(), NetworkOpts::default().backend) {
             if let Some(peer_info) = device.peers.iter().find(|p| {
@@ -111,8 +124,6 @@ async fn candidates(
             }) {
                 if let Some(current_endpoint) = peer_info.config.endpoint {
                     let mut selected_peer = DatabasePeer::<String, CrdtMap>::get_from_ip(ip).await;
-                    let mut contents = contents.clone();
-                    contents.push(addr.into());
                     match selected_peer {
                         Ok(ref mut dbpeer) => {
                             let _ = dbpeer.update(
@@ -122,14 +133,32 @@ async fn candidates(
                                     ..dbpeer.contents.clone()
                                 }
                             ).await;
-                            dbpeer.endpoint = Some(current_endpoint.into());
-                            dbpeer.candidates = contents;
-
-                            let peers = &mut [DatabasePeer::from(dbpeer.clone())]; 
-                            inject_endpoints(state, peers).await;
                         }
                         Err(e) => {
                             log::error!("Error getting peer, peer may not exist in datatore: {e}");
+                        }
+                    }
+                } else {
+                    let mut selected_peer = DatabasePeer::<String, CrdtMap>::get_from_ip(ip).await;
+                    if let Some(current_endpoint) = contents.clone().first() {
+                        match selected_peer {
+                            Ok(ref mut dbpeer) => {
+                                let _ = dbpeer.update(
+                                    PeerContents {
+                                        endpoint: Some(current_endpoint.clone()),
+                                        candidates: contents.clone(),
+                                        ..dbpeer.contents.clone()
+                                    }
+                                ).await;
+                                let endpoints = state.write().await.endpoints.clone();
+                                let mut guard = endpoints.write().await;
+                                guard.insert(dbpeer.public_key.clone(), current_endpoint.resolve().unwrap());
+                                drop(guard);
+                                drop(endpoints);
+                            }
+                            Err(e) => {
+                                log::error!("Error getting peer, peer may not exist in datatore: {e}");
+                            }
                         }
                     }
                 }
