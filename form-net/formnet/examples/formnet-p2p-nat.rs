@@ -187,7 +187,7 @@ async fn peer_node(bootstrap: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Test internal connectivity
     loop {
         match Client::new()
-            .get(format!("http://{}/ping", bootstrap_info.internal_endpoint))
+            .get(format!("http://{}:{}/ping", bootstrap_info.internal_endpoint, 51820))
             .send()
             .await
         {
