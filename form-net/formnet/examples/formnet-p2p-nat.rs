@@ -244,6 +244,7 @@ async fn handle_join(
     let config_builder = PeerConfigBuilder::new(&pubkey)
         .replace_allowed_ips()
         .add_allowed_ip(ip, 32)
+        .set_persistent_keepalive_interval(25)
         .set_endpoint(addr);
 
     if let Err(e) = DeviceUpdate::new()
