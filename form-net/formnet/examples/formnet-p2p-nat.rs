@@ -271,17 +271,23 @@ async fn handle_join(
 
 async fn handle_candidates(
     State(state): State<Arc<BootstrapState>>,
-    ConnectInfo(_addr): ConnectInfo<SocketAddr>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Path(pubkey): Path<String>,
     Json(candidates): Json<Vec<SocketAddr>>,
 ) -> Json<Response> {
     // Find peer by their current endpoint
     log::info!("Recevied candidates for {pubkey}: {candidates:?}");
     let mut endpoints = state.endpoints.write().await; 
+    let public_candidates = candidates.iter().map(|c| {
+        let port = c.port();
+        let ip = addr.ip();
+        let addr = SocketAddr::new(ip, port);
+        addr
+    }).collect::<Vec<SocketAddr>>();
     if let Some(entry) = endpoints.get_mut(&pubkey) {
-        entry.extend(candidates.iter());
+        entry.extend(public_candidates);
     } else {
-        endpoints.insert(pubkey, candidates);
+        endpoints.insert(pubkey, public_candidates);
     }
     Json(Response::Ping)
 }
@@ -340,21 +346,25 @@ fn spawn_candidate_updates(bootstrap: String) {
             // Get our local addresses as candidates
             if let Ok(device) = Device::get(&InterfaceName::from_str("formnet").unwrap(), Backend::default())
             {
-                let candidates = get_local_addrs()
-                    .unwrap()
-                    .map(|addr| SocketAddr::new(addr, device.listen_port.unwrap_or(51820)))
-                    .collect::<Vec<_>>();
+                if let Some(key) = device.private_key {
+                    let public_key = key.get_public().to_base64();
 
-                log::info!("Reporting candidates: {candidates:?}");
+                    let candidates = get_local_addrs()
+                        .unwrap()
+                        .map(|addr| SocketAddr::new(addr, device.listen_port.unwrap_or(51820)))
+                        .collect::<Vec<_>>();
 
-                log::info!("Sending candidates to {bootstrap}/candidates");
-                if let Err(e) = Client::new()
-                    .post(format!("http://{bootstrap}/candidates"))
-                    .json(&candidates)
-                    .send()
-                    .await
-                {
-                    log::error!("Failed to update candidates: {e}");
+                    log::info!("Reporting candidates: {candidates:?}");
+
+                    log::info!("Sending candidates to {bootstrap}/{public_key}/candidates");
+                    if let Err(e) = Client::new()
+                        .post(format!("http://{bootstrap}/{public_key}/candidates"))
+                        .json(&candidates)
+                        .send()
+                        .await
+                    {
+                        log::error!("Failed to update candidates: {e}");
+                    }
                 }
             }
         }
