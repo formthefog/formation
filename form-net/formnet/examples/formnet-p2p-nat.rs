@@ -302,6 +302,8 @@ fn spawn_endpoint_refresher(state: BootstrapState) {
             {
                 let mut endpoints = state.endpoints.write().await;
                 for peer in info.peers {
+                    log::info!("Peer config: {:?}", peer.config);
+                    log::info!("Peer stats: {:?}", peer.stats);
                     if let Some(endpoint) = peer.config.endpoint {
                         endpoints.insert(peer.config.public_key.to_base64(), endpoint);
                     }
