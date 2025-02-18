@@ -246,7 +246,8 @@ async fn try_join_formnet(
     keypair: KeyPair
 ) -> Result<IpAddr, Box<dyn std::error::Error>> {
     let dial = bootstrap_info.external_endpoint.unwrap();
-    match Client::new().post(&format!("http://{dial}:51820/join"))
+    log::info!("Attempting to dial {dial}");
+    match Client::new().post(&format!("http://{dial}/join"))
     .json(&request)
     .send()
     .await?.json::<Response>().await {

@@ -2151,8 +2151,8 @@ async fn update_dns_ip_addr(
     }
 
     let records = get_dns_records_by_node_ip(
-        state,
-        node_ip.clone(),
+        State(state),
+        Path(node_ip.clone()),
     ).await;
 
     if records.is_empty() {
@@ -2170,9 +2170,9 @@ async fn update_dns_ip_addr(
 }
 
 async fn get_dns_records_by_node_ip(
-    state: Arc<Mutex<DataStore>>,
-    node_ip: String
-) -> Vec<FormDnsRecord> {
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path(node_ip): Path<String>
+) -> Json<Vec<FormDnsRecord>> {
     if node_ip.parse::<IpAddr>().is_ok() {
         match list_dns_records(State(state)).await {
             Json(Response::Success(Success::List(dns_records))) => {
@@ -2185,14 +2185,14 @@ async fn get_dns_records_by_node_ip(
                         None
                     }
                 }).collect::<Vec<FormDnsRecord>>();
-                return node_is_host;
+                return Json(node_is_host);
             }
-            Json(Response::Failure { .. }) => return vec![],
+            Json(Response::Failure { .. }) => return Json(vec![]),
             _ => unreachable!()        
         }
     }
 
-    vec![]
+    Json(vec![])
 }
 
 async fn list_dns_records(

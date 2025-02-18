@@ -70,7 +70,8 @@ pub async fn fetch(
     }
 
     if !fetch_success {
-        let external_resp = Client::new().get(format!("http://{external}:{host_port}/fetch")).send();
+        let ip = external.ip();
+        let external_resp = Client::new().get(format!("http://{ip}:{host_port}/fetch")).send();
         match external_resp.await {
             Ok(resp) => {
                 if let Err(e) = handle_server_response(resp, &interface, network, data_dir, interface_up, internal.to_string(), config.address.to_string(), host_port, hosts_path).await {
