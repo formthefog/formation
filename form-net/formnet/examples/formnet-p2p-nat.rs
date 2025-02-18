@@ -191,6 +191,7 @@ async fn peer_node(bootstrap: &str) -> Result<(), Box<dyn std::error::Error>> {
     loop {
         interval.tick().await;
         let device = Device::get(&InterfaceName::from_str("formnet")?, Backend::default())?;
+        log::info!("Full Device: {:?}", device);
         for peer in device.peers {
             log::info!("Peer Info: {:?}", peer.config);
             log::info!("Peer Stats: {:?}", peer.stats);
