@@ -15,7 +15,7 @@ use shared::{get_local_addrs, wg::{self, DeviceExt}, REDEEM_TRANSITION_WAIT};
 use tokio::{net::TcpListener, sync::RwLock, time::interval};
 use wireguard_control::{Backend, Device, DeviceUpdate, InterfaceName, Key, KeyPair, PeerConfigBuilder};
 use std::thread;
-use log::info;
+use log::{info, Level};
 
 // Simplified error handling for brevity.
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -71,7 +71,7 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    simple_logger::SimpleLogger::new().init().unwrap();
+    simple_logger::SimpleLogger::init_with_level(Level::Info).unwrap();
     
     let parser = Cli::parse();
     if let Some(bs) = parser.bootstrap {
@@ -341,6 +341,7 @@ fn spawn_candidate_updates(bootstrap: String) {
 
                 log::info!("Reporting candidates: {candidates:?}");
 
+                log::info!("Sending candidates to {bootstrap}/candidates");
                 if let Err(e) = Client::new()
                     .post(format!("http://{bootstrap}/candidates"))
                     .json(&candidates)
