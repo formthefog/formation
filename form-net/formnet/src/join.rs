@@ -255,6 +255,7 @@ async fn try_join_formnet(
     .send()
     .await?.json::<Response>().await {
         Ok(Response::Join(BootstrapResponse::Success(ip))) => {
+            log::info!("Received my IP from bootstrap: {ip}");
             log::info!("Bringing Wireguard interface up...");
             write_config_file(keypair.clone(), request.clone(), ip.clone(), bootstrap_info.clone())?;
             thread::sleep(Duration::from_secs(5));
@@ -348,9 +349,10 @@ pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type:
     } 
 
     let bootstrap_info = try_get_bootstrap_info(bootstrap.clone()).await?;
+    log::info!("Acquired bootstrap info: {bootstrap_info:?}");
     let keypair = KeyPair::generate();
+    log::info!("generated keypair");
     let request = build_join_request(peer_type, keypair.clone(), address, public_ip)?;
-
     log::info!("Built join request: {request:?}");
 
     try_join_formnet(bootstrap_info, request, keypair).await

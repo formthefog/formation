@@ -447,6 +447,7 @@ pub async fn report_initial_candidates(bootstraps: Vec<String>, my_ip: String) -
     }
 
     for bootstrap in bootstraps {
+        log::info!("reporting candidates to {bootstrap}");
         if let Ok(_) = Client::new().post(format!("http://{bootstrap}:51820/{}/candidates", my_ip))
             .json(&candidates)
             .send().await {

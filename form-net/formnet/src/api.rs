@@ -67,7 +67,7 @@ async fn join(
     Json(request): Json<BootstrapInfo>,
 ) -> Json<Response> {
     log::info!("Received join request");
-    match add_peer(&NetworkOpts::default(), &request.peer_type, &request.id, request.pubkey, addr).await {
+    match add_peer(&NetworkOpts::default(), &request.peer_type, &request.id, request.external_endpoint, request.pubkey, addr).await {
         Ok(ip) => {
             log::info!("Added peer, returning IP {ip}");
             Json(Response::Join(JoinResponse::Success(ip)))
