@@ -447,12 +447,14 @@ pub async fn report_initial_candidates(bootstraps: Vec<String>, my_ip: String) -
     }
 
     for bootstrap in bootstraps {
-        log::info!("reporting candidates to {bootstrap}");
-        if let Ok(_) = Client::new().post(format!("http://{bootstrap}:51820/{}/candidates", my_ip))
+        log::info!("reporting candidates to {bootstrap}/{my_ip}/candidates");
+        if let Err(e) = Client::new().post(format!("http://{bootstrap}/{}/candidates", my_ip))
             .json(&candidates)
             .send().await {
-                log::info!("Successfully sent candidates");
-                break;
+                log::error!("Error sending NAT candidates: {e}");
+        } else {
+            log::info!("Successfully sent candidates");
+            break;
         }
     }
 
