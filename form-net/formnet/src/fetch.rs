@@ -240,11 +240,14 @@ async fn handle_peer_updates(
     for candidate in &candidates {
         log::debug!("  candidate: {}", candidate);
     }
-    match Client::new().post(format!("http://{external}/{}/candidates", my_ip))
-        .json(&candidates)
-        .send().await {
-            Ok(_) => log::info!("Successfully sent candidates"),
-            Err(e) => log::error!("Unable to send candidates: {e}")
+
+    if !candidates.is_empty() {
+        match Client::new().post(format!("http://{external}/{}/candidates", my_ip))
+            .json(&candidates)
+            .send().await {
+                Ok(_) => log::info!("Successfully sent candidates"),
+                Err(e) => log::error!("Unable to send candidates: {e}")
+        }
     }
     if NatOpts::default().no_nat_traversal {
         log::debug!("NAT traversal explicitly disabled, not attempting.");
@@ -296,34 +299,36 @@ async fn try_nat_traversal_server(
     for candidate in &candidates {
         log::debug!("  candidate: {}", candidate);
     }
-    let all_admin = Client::new().get(format!("http://127.0.0.1:3004/user/list_admin")).send().await?.json::<StateResponse<Peer<String>>>().await?;
-    if let StateResponse::Success(Success::List(admin)) = all_admin {
-        let valid_admin: Vec<_> = admin.iter().filter_map(|p| {
-            match &p.endpoint {
-                Some(endpoint) => {
-                    match endpoint.resolve() {
-                        Ok(_) => Some(p.clone()),
-                        Err(e) => {
-                            log::error!("Unable to resolve endpoint for {}: {e}", &p.id);
-                            None
+    if !candidates.is_empty() {
+        let all_admin = Client::new().get(format!("http://127.0.0.1:3004/user/list_admin")).send().await?.json::<StateResponse<Peer<String>>>().await?;
+        if let StateResponse::Success(Success::List(admin)) = all_admin {
+            let valid_admin: Vec<_> = admin.iter().filter_map(|p| {
+                match &p.endpoint {
+                    Some(endpoint) => {
+                        match endpoint.resolve() {
+                            Ok(_) => Some(p.clone()),
+                            Err(e) => {
+                                log::error!("Unable to resolve endpoint for {}: {e}", &p.id);
+                                None
+                            }
                         }
                     }
+                    None => None
                 }
-                None => None
-            }
-        }).collect();
-        let mut futures: FuturesUnordered<_> = valid_admin.iter().map(|p| {
-            let addr = p.endpoint.clone().unwrap().resolve().unwrap();
-            let ip = addr.ip().to_string();
-            let port = addr.port();
-            Client::new().post(format!("http://{ip}:{port}/{}/candidates", my_ip))
-                .json(&candidates)
-                .send()     
-        }).collect();
+            }).collect();
+            let mut futures: FuturesUnordered<_> = valid_admin.iter().map(|p| {
+                let addr = p.endpoint.clone().unwrap().resolve().unwrap();
+                let ip = addr.ip().to_string();
+                let port = addr.port();
+                Client::new().post(format!("http://{ip}:{port}/{}/candidates", my_ip))
+                    .json(&candidates)
+                    .send()     
+            }).collect();
 
-        while let Some(complete) = futures.next().await {
-            if let Err(e) = complete {
-                log::error!("Error sending candidates to one of admin: {e}"); 
+            while let Some(complete) = futures.next().await {
+                if let Err(e) = complete {
+                    log::error!("Error sending candidates to one of admin: {e}"); 
+                }
             }
         }
     }

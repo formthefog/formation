@@ -105,7 +105,7 @@ async fn candidates(
     Json(contents): Json<Vec<Endpoint>> 
 ) {
 
-    log::info!("Received candidates from {addr}");
+    log::info!("Received candidates from {addr}: {contents:?}");
 
     let public_ip = addr.ip();
     let contents = contents.iter().filter_map(|ep| {
