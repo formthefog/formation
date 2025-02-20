@@ -191,6 +191,10 @@ async fn handle_peer_updates(
     host_port: u16
 ) -> Result<(), Box<dyn std::error::Error>> {
     let device = Device::get(&interface, network.backend)?;
+    log::info!("Current peer info:");
+    for peer in &device.peers {
+        log::info!("\t{:?}\n", peer);
+    }
     let modifications = device.diff(&peers);
     let mut store = DataStore::open_or_create(&data_dir, &interface)?;
     let updates = modifications
@@ -261,6 +265,11 @@ async fn handle_peer_updates(
             );
             nat_traverse.step()?;
         }
+    }
+
+    log::info!("New device info:");
+    for peer in &device.peers {
+        log::info!("\t{:?}\n", peer);
     }
 
     Ok(())
