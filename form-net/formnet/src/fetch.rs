@@ -59,7 +59,7 @@ pub async fn fetch(
     let bootstrap_resp = Client::new().get(format!("http://{external}/fetch")).send();
     match bootstrap_resp.await {
         Ok(resp) => {
-            if let Err(e) = handle_server_response(resp, &interface, network, data_dir.clone(), interface_up, internal.to_string(), config.address.to_string(), host_port, hosts_path.clone()).await {
+            if let Err(e) = handle_server_response(resp, &interface, network, data_dir.clone(), interface_up, external.to_string(), config.address.to_string(), host_port, hosts_path.clone()).await {
                 log::error!(
                     "Error handling server response from fetch call: {e}"
                 )
@@ -200,6 +200,8 @@ async fn handle_peer_updates(
         .map(PeerConfigBuilder::from)
         .collect::<Vec<_>>();
 
+    log::info!("Updating peers: {updates:?}");
+
     if !updates.is_empty() || !interface_up {
         DeviceUpdate::new()
             .add_peers(&updates)
@@ -234,7 +236,7 @@ async fn handle_peer_updates(
     for candidate in &candidates {
         log::debug!("  candidate: {}", candidate);
     }
-    match Client::new().post(format!("http://{external}:{host_port}/{}/candidates", my_ip))
+    match Client::new().post(format!("http://{external}/{}/candidates", my_ip))
         .json(&candidates)
         .send().await {
             Ok(_) => log::info!("Successfully sent candidates"),

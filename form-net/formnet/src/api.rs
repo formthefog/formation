@@ -119,6 +119,8 @@ async fn candidates(
         }
     }).collect::<Vec<Endpoint>>();
 
+    log::info!("Endpoints resolved: {contents:?}");
+
     if let Ok(ip) = ip.parse::<IpAddr>() {
         if let Ok(device) = Device::get(&InterfaceName::from_str("formnet").unwrap(), NetworkOpts::default().backend) {
             if let Some(peer_info) = device.peers.iter().find(|p| {
@@ -126,10 +128,13 @@ async fn candidates(
             }) {
                 log::info!("Parsed IP address");
                 if let Some(current_endpoint) = peer_info.config.endpoint {
-                    log::info!("Existing endpoint exists... Adding candidates");
+                    log::info!("Existing endpoint exists...");
                     let mut selected_peer = DatabasePeer::<String, CrdtMap>::get_from_ip(ip).await;
                     match selected_peer {
                         Ok(ref mut dbpeer) => {
+                            if !contents.contains(&current_endpoint.into()) { 
+                                log::info!("Current endpoint is likely stale");
+                            }
                             let _ = dbpeer.update(
                                 PeerContents {
                                     endpoint: Some(current_endpoint.into()),
