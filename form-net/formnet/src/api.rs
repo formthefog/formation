@@ -167,9 +167,8 @@ async fn candidates(
                             match PeerDiff::new(Some(peer_info), Some(&peer)) {
                                 Ok(Some(diff)) => {
                                     let _ = DeviceUpdate::new()
-                                        .replace_peers()
                                         .add_peer(PeerConfigBuilder::from(diff))
-                                        .apply(&InterfaceName::from_str("formnet").unwrap(), Backend::default());
+                                        .apply(&interface_name, Backend::default());
 
                                     let endpoints = state.write().await.endpoints.clone();
                                     let mut guard = endpoints.write().await;
@@ -178,16 +177,7 @@ async fn candidates(
                                     drop(endpoints);
                                 }
                                 Ok(None) => {
-                                    log::warn!("No peer diff force inserting peer");
-                                    let _ = DeviceUpdate::new()
-                                        .replace_peers()
-                                        .add_peer(PeerConfigBuilder::from(&peer))
-                                        .apply(&interface_name, Backend::default());
-                                    let endpoints = state.write().await.endpoints.clone();
-                                    let mut guard = endpoints.write().await;
-                                    guard.insert(dbpeer.public_key.clone(), current_endpoint.resolve().unwrap());
-                                    drop(guard);
-                                    drop(endpoints);
+                                    log::warn!("No peer diff");
                                 }
                                 Err(e) => log::error!("Error creating peer diff: {e}"),
                             };
