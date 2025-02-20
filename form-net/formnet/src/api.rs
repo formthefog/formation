@@ -2,10 +2,10 @@ use std::{collections::HashMap, net::{IpAddr, SocketAddr}, str::FromStr, sync::A
 use form_types::PeerType;
 use formnet_server::{db::CrdtMap, DatabasePeer};
 use serde::{Serialize, Deserialize};
-use shared::{Endpoint, NetworkOpts, Peer, PeerContents};
+use shared::{wg::DeviceExt, Endpoint, NetworkOpts, Peer, PeerContents, PeerDiff};
 use tokio::{net::TcpListener, sync::RwLock};
 use axum::{extract::{ConnectInfo, Path, State}, routing::{get, post}, Json, Router};
-use wireguard_control::{AllowedIp, Device, InterfaceName};
+use wireguard_control::{AllowedIp, Backend, Device, DeviceUpdate, InterfaceName, PeerConfigBuilder};
 
 use crate::{add_peer, handle_leave_request};
 
@@ -132,16 +132,49 @@ async fn candidates(
                     let mut selected_peer = DatabasePeer::<String, CrdtMap>::get_from_ip(ip).await;
                     match selected_peer {
                         Ok(ref mut dbpeer) => {
+                            let mut stale_endpoint = false;
                             if !contents.contains(&current_endpoint.into()) { 
-                                log::info!("Current endpoint is likely stale");
+                                log::info!("Current endpoint is stale");
+                                stale_endpoint = true;
                             }
-                            let _ = dbpeer.update(
-                                PeerContents {
-                                    endpoint: Some(current_endpoint.into()),
-                                    candidates: contents.clone(),
-                                    ..dbpeer.contents.clone()
+                            let best_candidate = contents.iter().find(|ep| {
+                                match ep.resolve() {
+                                    Ok(resolved) => {
+                                        log::info!("Found a better candidate: {resolved}");
+                                        resolved.is_ipv4()
+                                    }
+                                    _ => false
                                 }
+                            });
+                            let current_endpoint = if stale_endpoint && best_candidate.is_some() {
+                                best_candidate.unwrap().clone()
+                            } else {
+                                current_endpoint.into()
+                            };
+                            let peer_contents = PeerContents {
+                                endpoint: Some(current_endpoint),
+                                candidates: contents.clone(),
+                                ..dbpeer.contents.clone()
+                            };
+                            let peer = Peer {
+                                id: dbpeer.id.clone(),
+                                contents: peer_contents.clone()
+                            };
+                            let _ = dbpeer.update(
+                                peer_contents.clone()
                             ).await;
+                            let interface_name = InterfaceName::from_str("formnet").unwrap();
+                            let device = Device::get(&interface_name, Backend::default()).unwrap();
+                            let old_info = device.get_peer(&dbpeer.public_key);
+                            match PeerDiff::new(old_info, Some(&peer)) {
+                                Ok(Some(diff)) => {
+                                    let _ = DeviceUpdate::new()
+                                        .add_peer(PeerConfigBuilder::from(diff))
+                                        .apply(&InterfaceName::from_str("formnet").unwrap(), Backend::default());
+                                }
+                                Ok(None) => log::error!("No peer diff"),
+                                Err(e) => log::error!("Error creating peer diff: {e}"),
+                            };
                         }
                         Err(e) => {
                             log::error!("Error getting peer, peer may not exist in datatore: {e}");

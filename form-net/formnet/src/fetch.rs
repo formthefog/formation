@@ -188,7 +188,7 @@ async fn handle_peer_updates(
     hosts_path: Option<PathBuf>,
     external: String,
     my_ip: String,
-    host_port: u16
+    _host_port: u16
 ) -> Result<(), Box<dyn std::error::Error>> {
     let device = Device::get(&interface, network.backend)?;
     log::info!("Current peer info:");
