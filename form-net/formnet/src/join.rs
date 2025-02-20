@@ -69,6 +69,8 @@ async fn try_holepunch_fetch(bootstrap: Vec<String>, my_ip: String) -> bool {
             thread::sleep(Duration::from_secs(1));
         }
         return fetch_success
+    } else {
+        log::error!("Error reporting candidates");
     }
     false
 }

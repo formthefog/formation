@@ -27,7 +27,7 @@ jobs:
 
       - name: Build Linux (x86_64)
         run: |
-          cargo build --release --bin form --target x86_64-unknown-linux-gnu --features treehacks 
+          cargo build --release --bin form --target x86_64-unknown-linux-gnu
           cargo build --release --bin formnet-up --target x86_64-unknown-linux-gnu 
           # Place built binaries in a dedicated directory
           mkdir -p release_binaries
@@ -55,7 +55,7 @@ jobs:
 
       - name: Build macOS (arm64)
         run: |
-          cargo build --release --bin form --target aarch64-apple-darwin --features treehacks 
+          cargo build --release --bin form --target aarch64-apple-darwin 
           cargo build --release --bin formnet-up --target aarch64-apple-darwin
           # Place built binaries in a dedicated directory
           mkdir -p release_binaries
