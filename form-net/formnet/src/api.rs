@@ -133,7 +133,7 @@ async fn candidates(
                     match selected_peer {
                         Ok(ref mut dbpeer) => {
                             let mut stale_endpoint = false;
-                            if !contents.contains(&current_endpoint.into()) { 
+                            if !contents.is_empty() && !contents.contains(&current_endpoint.into()) { 
                                 log::info!("Current endpoint is stale");
                                 stale_endpoint = true;
                             }
