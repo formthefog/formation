@@ -734,6 +734,7 @@ impl<'a, T: Display + Clone + PartialEq> PeerDiff<'a, T> {
             let resolved = new.endpoint.as_ref().and_then(|e| e.resolve().ok());
             if let Some(addr) = resolved {
                 if old.is_none() || matches!(old, Some(old) if old.endpoint != resolved) {
+                    log::info!("Endpoint changed! Setting endpoint in bulder: {addr}");
                     builder = builder.set_endpoint(addr);
                     changes.push(PeerChange::Endpoint {
                         old: old.and_then(|p| p.endpoint),

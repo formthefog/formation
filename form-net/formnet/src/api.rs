@@ -164,12 +164,7 @@ async fn candidates(
                                 peer_contents.clone()
                             ).await;
                             let interface_name = InterfaceName::from_str("formnet").unwrap();
-                            let device = Device::get(&interface_name, Backend::default()).unwrap();
-                            let old_info = device.get_peer(&dbpeer.public_key);
-                            if !old_info.is_some() {
-                                log::info!("Peer didn't exist in device");
-                            }
-                            match PeerDiff::new(old_info, Some(&peer)) {
+                            match PeerDiff::new(Some(peer_info), Some(&peer)) {
                                 Ok(Some(diff)) => {
                                     let _ = DeviceUpdate::new()
                                         .replace_peers()
@@ -182,7 +177,18 @@ async fn candidates(
                                     drop(guard);
                                     drop(endpoints);
                                 }
-                                Ok(None) => log::error!("No peer diff"),
+                                Ok(None) => {
+                                    log::warn!("No peer diff force inserting peer");
+                                    let _ = DeviceUpdate::new()
+                                        .replace_peers()
+                                        .add_peer(PeerConfigBuilder::from(&peer))
+                                        .apply(&interface_name, Backend::default());
+                                    let endpoints = state.write().await.endpoints.clone();
+                                    let mut guard = endpoints.write().await;
+                                    guard.insert(dbpeer.public_key.clone(), current_endpoint.resolve().unwrap());
+                                    drop(guard);
+                                    drop(endpoints);
+                                }
                                 Err(e) => log::error!("Error creating peer diff: {e}"),
                             };
                         }
