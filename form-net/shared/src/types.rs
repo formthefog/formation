@@ -725,16 +725,44 @@ impl<'a, T: Display + Clone + PartialEq> PeerDiff<'a, T> {
             });
         }
 
-        // We won't update the endpoint if there's already a stable connection.
-        if !old_info
-            .map(|info| info.is_recently_connected())
-            .unwrap_or_default()
-        {
-            let mut endpoint_changed = false;
-            let resolved = new.endpoint.as_ref().and_then(|e| e.resolve().ok());
-            if let Some(addr) = resolved {
-                if old.is_none() || matches!(old, Some(old) if old.endpoint != resolved) {
-                    log::info!("Endpoint changed! Setting endpoint in bulder: {addr}");
+        // Set endpoint changed to false initially
+        let mut endpoint_changed = false;
+        // Get the resolved socket address
+        let resolved = new.endpoint.as_ref().and_then(|e| e.resolve().ok());
+        // If there is a resolved socket address
+        if let Some(addr) = resolved {
+            // Check if this is a brand new entry
+            let new_entry = old.is_none();
+            let mut new_ip = false;
+            // If it is NOT a brand new entry
+            if !new_entry {
+                // Check if there's an endpoint already
+                if let Some(old_addr) = old.unwrap().endpoint {
+                    // if there's an endpoint already
+                    // check if there's an IP address match to 
+                    // the new resolved address
+                    if old_addr.ip() != addr.ip() {
+                        // If ip don't match auto update
+                        new_ip = true
+                    }                
+                } else {
+                    // If there is no endpoint auto update
+                    new_ip = true
+                }
+            } else {
+                // If it's a new entry auto update 
+                new_ip = true
+            };
+
+            if new_ip {
+                builder = builder.set_endpoint(addr);
+                changes.push(PeerChange::Endpoint {
+                    old: old.and_then(|p| p.endpoint),
+                    new: Some(addr),
+                });
+                endpoint_changed = true;
+            } else {
+                if !old_info.map(|info| info.is_recently_connected()).unwrap_or_default() {
                     builder = builder.set_endpoint(addr);
                     changes.push(PeerChange::Endpoint {
                         old: old.and_then(|p| p.endpoint),
@@ -743,6 +771,7 @@ impl<'a, T: Display + Clone + PartialEq> PeerDiff<'a, T> {
                     endpoint_changed = true;
                 }
             }
+
             if !endpoint_changed && !new.candidates.is_empty() {
                 changes.push(PeerChange::NatTraverseReattempt)
             }
