@@ -152,7 +152,7 @@ async fn candidates(
                                 current_endpoint.into()
                             };
                             let peer_contents = PeerContents {
-                                endpoint: Some(current_endpoint),
+                                endpoint: Some(current_endpoint.clone()),
                                 candidates: contents.clone(),
                                 ..dbpeer.contents.clone()
                             };
@@ -166,11 +166,21 @@ async fn candidates(
                             let interface_name = InterfaceName::from_str("formnet").unwrap();
                             let device = Device::get(&interface_name, Backend::default()).unwrap();
                             let old_info = device.get_peer(&dbpeer.public_key);
+                            if !old_info.is_some() {
+                                log::info!("Peer didn't exist in device");
+                            }
                             match PeerDiff::new(old_info, Some(&peer)) {
                                 Ok(Some(diff)) => {
                                     let _ = DeviceUpdate::new()
+                                        .replace_peers()
                                         .add_peer(PeerConfigBuilder::from(diff))
                                         .apply(&InterfaceName::from_str("formnet").unwrap(), Backend::default());
+
+                                    let endpoints = state.write().await.endpoints.clone();
+                                    let mut guard = endpoints.write().await;
+                                    guard.insert(dbpeer.public_key.clone(), current_endpoint.resolve().unwrap());
+                                    drop(guard);
+                                    drop(endpoints);
                                 }
                                 Ok(None) => log::error!("No peer diff"),
                                 Err(e) => log::error!("Error creating peer diff: {e}"),

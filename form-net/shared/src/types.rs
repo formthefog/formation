@@ -651,6 +651,8 @@ impl<'a, T: Display + Clone + PartialEq> PeerDiff<'a, T> {
         old_info: Option<&'a PeerInfo>,
         new: Option<&'a Peer<T>>,
     ) -> Result<Option<Self>, Error> {
+        log::info!("Old Peer: {}", old_info.is_some());
+        log::info!("New Peer: {}", new.is_some());
         let old = old_info.map(|p| &p.config);
         match (old_info, new) {
             (Some(old), Some(new)) if old.config.public_key.to_base64() != new.public_key => Err(
