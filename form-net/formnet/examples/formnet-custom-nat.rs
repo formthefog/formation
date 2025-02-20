@@ -71,18 +71,26 @@ async fn respond_to_ping(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     let mut buf = vec![0u8; 1024];
     loop {
-        let (len, src) = socket.recv_from(&mut buf).await?;
-        let received: Message = serde_json::from_slice(&buf[..len])?;
-        if let Message::Ping { id: ref sender_id, nonce } = received {
-            println!("Received Ping from {src} (sender id: {sender_id}). Sending Pong...");
-            let pong = Message::Pong {
-                id: id.to_string(),
-                nonce,
-            };
-            let data = serde_json::to_vec(&pong)?;
-            socket.send_to(&data, src).await?;
-        } else {
-            println!("Ignoring non-Ping message: {:?}", received);
+        tokio::select! {
+            res = socket.recv_from(&mut buf) => {
+                match res {
+                    Ok((len, src)) => {
+                        let received: Message = serde_json::from_slice(&buf[..len])?;
+                        if let Message::Ping { id: ref sender_id, nonce } = received {
+                            println!("Received Ping from {src} (sender id: {sender_id}). Sending Pong...");
+                            let pong = Message::Pong {
+                                id: id.to_string(),
+                                nonce,
+                            };
+                            let data = serde_json::to_vec(&pong)?;
+                            socket.send_to(&data, src).await?;
+                        } else {
+                            println!("Ignoring non-Ping message: {:?}", received);
+                        }
+                    }
+                    Err(e) => eprintln!("{e}"),
+                }
+            }
         }
     }
 }
