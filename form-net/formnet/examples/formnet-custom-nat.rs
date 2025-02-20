@@ -86,7 +86,7 @@ async fn run_client(id: String, peer: SocketAddr) -> Result<(), Box<dyn std::err
 
     // Set a timeout for receiving the response.
     let mut buf = Vec::new();
-    let timeout = Duration::from_secs(5);
+    let timeout = Duration::from_secs(20);
     let _ = time::timeout(timeout, stream.read_to_end(&mut buf)).await??;
     let response: Message = serde_json::from_slice(&buf)?;
     match response {
