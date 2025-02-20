@@ -3,7 +3,7 @@ use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, time::Duration};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream},
     time,
 };
@@ -38,13 +38,14 @@ enum Message {
 
 /// Handles an incoming connection on the server side.
 async fn handle_connection(mut stream: TcpStream, id: String) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut buf = Vec::new();
-    stream.read_to_end(&mut buf).await?;
+    let mut buf = [0; 1024]; 
+
+    let n = stream.read(&mut buf).await?;
     if buf.is_empty() {
         println!("Received an empty message");
         return Ok(());
     }
-    let msg: Message = serde_json::from_slice(&buf)?;
+    let msg: Message = serde_json::from_slice(&buf[..n])?;
     match msg {
         Message::Ping { id: sender_id, nonce } => {
             println!("Received Ping from {}. Sending Pong...", sender_id);
@@ -83,6 +84,7 @@ async fn run_client(id: String, peer: SocketAddr) -> Result<(), Box<dyn std::err
     let data = serde_json::to_vec(&ping)?;
     println!("Sending Ping: {:?}", ping);
     stream.write_all(&data).await?;
+    stream.flush().await?;
 
     // Set a timeout for receiving the response.
     let mut buf = Vec::new();
