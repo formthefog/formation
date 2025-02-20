@@ -191,7 +191,7 @@ async fn inject_endpoints(state: Arc<RwLock<FormnetApiState>>, peers: &mut [Data
         if let Some(wg_endpoint) = reader.get(&peer.public_key) {
             if peer.contents.endpoint.is_none() {
                 peer.contents.endpoint = Some(wg_endpoint.to_owned().into());
-            } else {
+            } else if !peer.contents.candidates.contains(&wg_endpoint.to_owned().into()) {
                 peer.contents.candidates.push(wg_endpoint.to_owned().into());
             }
             let new_contents = peer.contents.clone();

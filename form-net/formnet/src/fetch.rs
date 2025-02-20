@@ -20,6 +20,15 @@ pub async fn fetch(
     let config = ConfigFile::from_file(config_dir.join(NETWORK_NAME).with_extension("conf"))?; 
     let interface_up = interface_up(interface.clone()).await;
     let (pubkey, internal, external) = get_bootstrap_info_from_config(&config).await?;
+    let store = DataStore::<String>::open_or_create(&data_dir, &interface)?;
+
+    let admins = store.peers().iter().filter_map(|p| {
+        if p.is_admin {
+            Some(p.clone())
+        } else {
+            None
+        }
+    }).collect::<Vec<Peer<String>>>();
 
     let host_port = external.port();
 
@@ -36,7 +45,7 @@ pub async fn fetch(
             Some((
                 &pubkey,
                 internal,
-                external,
+                external.clone(),
             )),
             NetworkOpts::default(),
         )?;
@@ -47,8 +56,8 @@ pub async fn fetch(
         interface.as_str_lossy()
     );
 
-    let internal_resp = Client::new().get(format!("http://{internal}:{host_port}/fetch")).send();
-    match internal_resp.await {
+    let bootstrap_resp = Client::new().get(format!("http://{external}/fetch")).send();
+    match bootstrap_resp.await {
         Ok(resp) => {
             if let Err(e) = handle_server_response(resp, &interface, network, data_dir.clone(), interface_up, internal.to_string(), config.address.to_string(), host_port, hosts_path.clone()).await {
                 log::error!(
@@ -56,7 +65,31 @@ pub async fn fetch(
                 )
             }
         }
-        Err(e) => log::error!("Error fetching: {e}"),
+        Err(e) => {
+            log::error!("Error fetching from bootstrap: {e}");
+            for admin in admins {
+                if let Some(ref external) = &admin.endpoint {
+                    if let Ok(endpoint) = external.resolve() {
+                        if let Ok(resp) = Client::new().get(format!("http://{endpoint}/fetch")).send().await {
+                            match handle_server_response(
+                                resp, 
+                                &interface, 
+                                network, 
+                                data_dir.clone(), 
+                                interface_up, 
+                                endpoint.to_string(),
+                                config.address.to_string(), 
+                                endpoint.port(), 
+                                hosts_path.clone()).await 
+                            {
+                                Ok(_) => break,
+                                Err(e) => log::error!("Error handling server response from fetch call to {external}: {e}"),
+                            }
+                        }
+                    }
+                }
+            }
+        },
     }
 
     Ok(())
@@ -113,7 +146,7 @@ async fn handle_server_response(
     network: NetworkOpts,
     data_dir: PathBuf,
     interface_up: bool,
-    internal: String,
+    external: String,
     my_ip: String,
     host_port: u16,
     hosts_path: Option<PathBuf>,
@@ -127,7 +160,7 @@ async fn handle_server_response(
                 data_dir,
                 interface_up,
                 hosts_path,
-                internal,
+                external,
                 my_ip,
                 host_port,
             ).await {
@@ -153,7 +186,7 @@ async fn handle_peer_updates(
     data_dir: PathBuf,
     interface_up: bool,
     hosts_path: Option<PathBuf>,
-    internal: String,
+    external: String,
     my_ip: String,
     host_port: u16
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -201,7 +234,7 @@ async fn handle_peer_updates(
     for candidate in &candidates {
         log::debug!("  candidate: {}", candidate);
     }
-    match Client::new().post(format!("http://{internal}:{host_port}/{}/candidates", my_ip))
+    match Client::new().post(format!("http://{external}:{host_port}/{}/candidates", my_ip))
         .json(&candidates)
         .send().await {
             Ok(_) => log::info!("Successfully sent candidates"),
