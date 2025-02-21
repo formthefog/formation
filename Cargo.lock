@@ -2792,6 +2792,7 @@ dependencies = [
  "chrono",
  "form-p2p",
  "hex",
+ "log",
  "nvml-wrapper",
  "pnet",
  "rand",
