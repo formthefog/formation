@@ -240,6 +240,9 @@ ips_string.yellow(),
 );
                 }
                 ManageCommand::FormnetUp(formnet_up_command) => {
+                if parser.debug {
+                    simple_logger::SimpleLogger::new().init().unwrap();
+                }
                     formnet_up_command.handle_formnet_up()?;
                 }
                 _ => {}

@@ -72,6 +72,7 @@ parking_lot = "0.12"
 form-config = { path = "../../form-config" }
 daemonize = "0.5"
 colored = "3"
+rand = "0.8"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 socket2 = { version = "0.5.2", features = ["all"] }

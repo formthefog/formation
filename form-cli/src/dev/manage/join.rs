@@ -86,7 +86,7 @@ impl FormnetUp {
         let _child = Command::new("nohup")
             .arg("formnet-up")
             .stdout(std::fs::File::create(".formnet.log")?)
-            .stdout(std::fs::File::create(".formnet-errors.log")?)
+            .stderr(std::fs::File::create(".formnet-errors.log")?)
             .spawn()?;
 
         println!(

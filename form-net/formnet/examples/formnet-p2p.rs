@@ -1,6 +1,6 @@
 use std::{net::{IpAddr, SocketAddr}, str::FromStr, sync::Arc, time::Duration};
 
-use axum::{extract::State, routing::{put, get}, Json, Router};
+use axum::{extract::{ConnectInfo, State}, routing::{get, put}, Json, Router};
 use clap::Parser;
 use ipnet::IpNet;
 use reqwest::Client;
@@ -26,7 +26,7 @@ struct BootstrapInfo {
 struct PeerInfo {
     pub pubkey: String,
     pub internal_endpoint: IpAddr,
-    pub external_endpoint: SocketAddr,
+    pub external_endpoint: Option<SocketAddr>,
 }
 
 #[derive(Clone, Debug, Parser)]
@@ -69,7 +69,7 @@ async fn bootstrap_wg_up() -> Result<(), Box<dyn std::error::Error>> {
         let mut interval = tokio::time::interval(Duration::from_secs(10));
         loop {
             interval.tick().await;
-            if let Ok(info) = Device::get(&InterfaceName::from_str("formnet").unwrap(), Backend::Kernel) {
+            if let Ok(info) = Device::get(&InterfaceName::from_str("formnet").unwrap(), Backend::default()) {
                 log::info!("Acquired device info");
                 for peer in info.peers {
                     log::info!("Acquired device info for peer {peer:?}");
@@ -97,12 +97,7 @@ async fn peer_wg_up(bootstrap: &str) -> Result<(), Box<dyn std::error::Error>> {
     let peer_info = PeerInfo {
         pubkey: keypair.public.to_base64(),
         internal_endpoint: "10.0.0.2".parse()?,
-        external_endpoint: SocketAddr::new(
-            publicip::get_any(
-                publicip::Preference::Ipv4
-            ).unwrap(),
-            51820
-        )
+        external_endpoint: None    
     };
 
     wg::up(
@@ -143,6 +138,7 @@ async fn server(address: &str, port: u16, bootstrap_info: BootstrapInfo) -> Resu
 }
 
 async fn handle_join(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(peer_info): Json<PeerInfo>
 ) -> Json<JoinResponse> {
     let pubkey = Key::from_base64(&peer_info.pubkey).unwrap();
@@ -154,7 +150,7 @@ async fn handle_join(
         .add_peer(config_builder)
         .apply(
             &InterfaceName::from_str("formnet").unwrap(), 
-            Backend::Kernel
+            Backend::default()
         ).unwrap();
 
     Json(JoinResponse::Success)

@@ -2,7 +2,7 @@ use std::{net::{IpAddr, SocketAddr}, str::FromStr, time::{Duration, SystemTime}}
 use form_types::PeerType;
 use formnet_server::{db::CrdtMap, DatabaseCidr, DatabasePeer, ServerError};
 use ipnet::IpNet;
-use shared::{interface_config::{InterfaceConfig, InterfaceInfo, ServerInfo}, Cidr, Endpoint, Hostname, IpNetExt, NetworkOpts, Peer, PeerContents, Timestring, PERSISTENT_KEEPALIVE_INTERVAL_SECS, REDEEM_TRANSITION_WAIT};
+use shared::{interface_config::{InterfaceConfig, InterfaceInfo, ServerInfo}, Cidr, Hostname, IpNetExt, NetworkOpts, Peer, PeerContents, Timestring, PERSISTENT_KEEPALIVE_INTERVAL_SECS, REDEEM_TRANSITION_WAIT};
 use wireguard_control::{Device, DeviceUpdate, InterfaceName, KeyPair, PeerConfigBuilder};
 
 use crate::NETWORK_NAME;
@@ -11,8 +11,8 @@ pub async fn add_peer(
     network: &NetworkOpts,
     peer_type: &PeerType,
     peer_id: &str,
-    pubkey: String,
     endpoint: Option<SocketAddr>,
+    pubkey: String,
     addr: SocketAddr,
 ) -> Result<IpAddr, Box<dyn std::error::Error>> {
     log::warn!("ATTEMPTING TO ADD PEER {peer_id}...");
@@ -37,24 +37,6 @@ pub async fn add_peer(
                 )
             );
         }
-        if let Some(ref mut wg_endpoint) = peer.endpoint {
-            if wg_endpoint != &Endpoint::from(addr) {
-                *wg_endpoint = Endpoint::from(addr);
-            }
-            if let Some(address) = endpoint {
-                if wg_endpoint != &Endpoint::from(address) {
-                    peer.candidates.push(Endpoint::from(address));
-                }
-            }
-        }
-
-        let mut db_peer = DatabasePeer::<String, CrdtMap>::from(peer.clone());
-
-        db_peer.update(PeerContents {
-            candidates: peer.candidates.clone(),
-            endpoint: peer.endpoint.clone(),
-            ..peer.contents.clone()
-        }).await?;
 
         return Ok(peer.ip.clone());
     }
@@ -64,6 +46,7 @@ pub async fn add_peer(
         &peers,
         &peer_type,
         peer_id,
+        endpoint,
         pubkey,
         addr
     ).await?; 
@@ -92,8 +75,9 @@ pub async fn build_peer(
     peers: &[Peer<String>],
     peer_type: &PeerType,
     peer_id: &str,
+    endpoint: Option<SocketAddr>,
     pubkey: String,
-    addr: SocketAddr,
+    _addr: SocketAddr,
 ) -> Result<PeerContents<String>, Box<dyn std::error::Error>> {
     let cidr = DatabaseCidr::<String, CrdtMap>::get("formnet".to_string()).await?; 
     let mut available_ip = None;
@@ -121,7 +105,10 @@ pub async fn build_peer(
         ip: available_ip,
         cidr_id: cidr.id.clone(),
         public_key: pubkey,
-        endpoint: Some(addr.into()),
+        endpoint: match endpoint {
+            Some(addr) => Some(addr.into()),
+            None => None
+        },
         is_admin,
         is_disabled: false,
         is_redeemed: true,

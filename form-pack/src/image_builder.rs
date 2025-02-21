@@ -198,6 +198,7 @@ async fn handle_formfile(
         .write("/etc/netplan/01-custom-netplan.yaml", &write_netplan())
         .run_command("apt-get -y update")
         .run_command("apt-get -y upgrade");
+
     println!("Built base command...");
 
     // Create users

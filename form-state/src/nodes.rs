@@ -9,16 +9,34 @@ pub type NodeOp = Op<String, BFTReg<Node, Actor>, Actor>;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Node {
-    pub(crate) node_id: String,
-    pub(crate) node_owner: String,
-    pub(crate) created_at: i64,
-    pub(crate) updated_at: i64,
-    pub(crate) last_heartbeat: i64,
-    pub(crate) host_region: String,
-    pub(crate) capacity: NodeCapacity,
-    pub(crate) availability: NodeAvailability,
-    pub(crate) metadata: NodeMetadata,
+    pub node_id: String,
+    pub node_owner: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub last_heartbeat: i64,
+    pub host_region: String,
+    pub capacity: NodeCapacity,
+    pub availability: NodeAvailability,
+    pub metadata: NodeMetadata,
     pub host: Host
+}
+
+impl Default for Node {
+    fn default() -> Self {
+        let null_hex = hex::encode(&[0u8; 32]);
+        Self {
+            node_id: null_hex.clone(),
+            node_owner: null_hex.clone(),
+            created_at: 0,
+            updated_at: 0,
+            last_heartbeat: 0,
+            host_region: Default::default(),
+            capacity: Default::default(),
+            availability: Default::default(),
+            metadata: Default::default(),
+            host: Host::Domain(Default::default())
+        }
+    }
 }
 
 impl Sha3Hash for Node {
@@ -68,7 +86,7 @@ impl Node {
 }
 
 /// Describes the resource capacity of the node.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeCapacity {
     pub(crate) vcpus: u8,
     pub(crate) memory_mb: u32,
@@ -117,7 +135,7 @@ impl NodeGpu {
 }
 
 /// Contains real-time availability information of the node.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeAvailability {
     pub(crate) uptime_seconds: u64,
     pub(crate) load_average: u32,
@@ -139,7 +157,7 @@ impl NodeAvailability {
 }
 
 /// Additional metadata for operational context.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeMetadata {
     pub(crate) tags: Vec<String>,
     pub(crate) description: String,
@@ -166,7 +184,7 @@ impl NodeMetadata {
 }
 
 /// Additional annotations, such as roles and datacenter info.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeAnnotations {
     pub(crate) roles: Vec<String>,     // e.g. ["compute", "storage"]
     pub(crate) datacenter: String,     // Which datacenter the node belongs to.
@@ -183,7 +201,7 @@ impl NodeAnnotations {
 }
 
 /// Monitoring settings specific to the node.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeMonitoring {
     pub(crate) logging_enabled: bool,
     pub(crate) metrics_endpoint: String,

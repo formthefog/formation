@@ -202,7 +202,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Found your {}: {}", "public IP".bold().bright_blue(), ip.bold().bright_yellow());
             }
 
-
             let address = hex::encode(Address::from_private_key(&SigningKey::from_slice(&hex::decode(&opts.secret_key)?)?));
             user_join_formnet(address, opts.provider, publicip).await?;
         } 
