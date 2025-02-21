@@ -1,6 +1,7 @@
 use std::{collections::{HashMap, HashSet}, net::{IpAddr, SocketAddr}, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
 use axum::{extract::{State, Path}, routing::{get, post}, Json, Router};
 use form_dns::{api::{DomainRequest, DomainResponse}, store::FormDnsRecord};
+use form_node_metrics::{capabilities::NodeCapabilities, capacity::NodeCapacity, metrics::NodeMetrics};
 use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
 use rand::{seq::SliceRandom, thread_rng};
 use reqwest::Client;
@@ -125,6 +126,20 @@ pub enum NodeRequest {
     Create(Node),
     Update(Node),
     Delete(String),
+    SetInitialMetrics {
+        node_id: String,
+        node_capabilities: NodeCapabilities,
+        node_capacity: NodeCapacity,
+    },
+    UpdateMetrics {
+        node_id: String,
+        node_capacity: NodeCapacity,
+        node_metrics: NodeMetrics,
+    },
+    Heartbeat {
+        node_id: String,
+        timestamp: i64,
+    }
 }
 
 impl DataStore {
@@ -666,7 +681,31 @@ impl DataStore {
             NodeRequest::Op(op) => self.handle_node_op(op).await?,
             NodeRequest::Create(create) => self.handle_node_create(create).await?,
             NodeRequest::Update(update) => self.handle_node_update(update).await?,
-            NodeRequest::Delete(id) => self.handle_node_delete(id).await? 
+            NodeRequest::Delete(id) => self.handle_node_delete(id).await?,
+            NodeRequest::SetInitialMetrics { node_id, node_capabilities, node_capacity } => self.handle_node_initial_metrics(node_id, node_capabilities, node_capacity).await?,
+            NodeRequest::Heartbeat { node_id, timestamp } => self.handle_node_heartbeat(node_id, timestamp).await?,
+            NodeRequest::UpdateMetrics { node_id, node_capacity, node_metrics } => self.handle_node_update_metrics(node_id, node_capacity, node_metrics).await?,
+        }
+        Ok(())
+    }
+
+    async fn handle_node_heartbeat(&mut self, node_id: String, timestamp: i64) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(node_op) = self.node_state.update_node_heartbeat(node_id, timestamp) {
+            self.handle_node_op(node_op).await?;
+        }
+        Ok(())
+    }
+
+    async fn handle_node_update_metrics(&mut self, node_id: String, node_capacity: NodeCapacity, node_metrics: NodeMetrics) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(node_op) = self.node_state.update_node_metrics(node_id, node_capacity, node_metrics) {
+            self.handle_node_op(node_op).await?;
+        }
+        Ok(())
+    }
+
+    async fn handle_node_initial_metrics(&mut self, node_id: String, node_capabilities: NodeCapabilities, node_capacity: NodeCapacity) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(node_op) = self.node_state.set_initial_node_capabilities(node_id, node_capacity, node_capabilities) {
+            self.handle_node_op(node_op).await?;
         }
         Ok(())
     }

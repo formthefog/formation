@@ -16,7 +16,7 @@ pub struct Node {
     pub updated_at: i64,
     pub last_heartbeat: i64,
     pub host_region: String,
-    pub capabilites: NodeCapabilities,
+    pub capabilities: NodeCapabilities,
     pub capacity: NodeCapacity,
     pub metrics: NodeMetrics,
     pub metadata: NodeMetadata,
@@ -33,7 +33,7 @@ impl Default for Node {
             updated_at: 0,
             last_heartbeat: 0,
             host_region: Default::default(),
-            capabilites: Default::default(),
+            capabilities: Default::default(),
             capacity: Default::default(),
             metrics: Default::default(),
             metadata: Default::default(),
@@ -189,6 +189,43 @@ impl NodeState {
         });
         log::info!("Node op created, returning...");
         op
+    }
+
+    pub fn update_node_heartbeat(&mut self, node_id: String, timestamp: i64) -> Option<NodeOp> {
+        if let Some(node_reg) = self.map.get(&node_id).val {
+            if let Some(node_val) = node_reg.val() {
+                let mut node = node_val.value();
+                node.last_heartbeat = timestamp;
+                return Some(self.update_node_local(node))
+            }
+        }
+
+        None
+    }
+
+    pub fn update_node_metrics(&mut self, node_id: String, node_capacity: NodeCapacity, node_metrics: NodeMetrics) -> Option<NodeOp> {
+        if let Some(node_reg) = self.map.get(&node_id).val {
+            if let Some(node_val) = node_reg.val() {
+                let mut node = node_val.value();
+                node.capacity = node_capacity;
+                node.metrics = node_metrics;
+                return Some(self.update_node_local(node))
+            }
+        }
+
+        None
+    }
+
+    pub fn set_initial_node_capabilities(&mut self, node_id: String, node_capacity: NodeCapacity, node_capabilities: NodeCapabilities) -> Option<NodeOp> {
+        if let Some(node_reg) = self.map.get(&node_id).val {
+            if let Some(node_val) = node_reg.val() {
+                let mut node = node_val.value();
+                node.capacity = node_capacity;
+                node.capabilities = node_capabilities;
+                return Some(self.update_node_local(node))
+            }
+        }
+        None
     }
 
     /// Remove a node record locally.
