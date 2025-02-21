@@ -1,10 +1,9 @@
 // capabilities.rs
-//
 use nvml_wrapper::Nvml;
 use serde::{Serialize, Deserialize};
 use pnet::datalink;
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeCapabilities {
     pub cpu_model: String,
     pub cpu_cores: usize,
@@ -62,7 +61,7 @@ impl NodeCapabilities {
     }
 }
 
-#[derive(Clone, Default, Debug, Serialize, Deserialize)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NetworkCapability {
     pub interface_name: String,
     pub link_speed_mbps: Option<u64>,
@@ -140,7 +139,7 @@ impl NetworkCapability {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct GpuInfo {
     pub vendor: String,
     pub model: Option<String>,
@@ -268,7 +267,7 @@ fn detect_gpus() -> Vec<GpuInfo> {
     gpus
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TpmInfo {
     // Basic TPM details
     pub present: bool,
@@ -282,7 +281,7 @@ pub struct TpmInfo {
     pub firmware_version: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SgxInfo {
     pub supported: bool, // CPU + BIOS has SGX enabled
     pub driver_loaded: bool, // is the SGX driver loaded (/dev/sgx_enclave or /dev/isgx)
@@ -297,14 +296,14 @@ pub struct SgxInfo {
 
 impl SgxInfo {}
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EpcSection {
     // typically from CPUID leaf 0x12 sub-leafs describing EPC memory ranges
     pub base_address: u64,
     pub size_bytes: u64,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SevInfo {
     pub supported: bool,          // CPU supports SEV (and it's enabled in BIOS)
     pub sev_es_supported: bool,   // indicates SEV-ES is supported

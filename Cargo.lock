@@ -2906,6 +2906,7 @@ dependencies = [
  "crdts",
  "form-config",
  "form-dns",
+ "form-node-metrics",
  "form-p2p",
  "form-types",
  "futures",

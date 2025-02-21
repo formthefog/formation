@@ -2,7 +2,7 @@ use std::{collections::HashMap, net::{IpAddr, SocketAddr}, str::FromStr, sync::A
 use form_types::PeerType;
 use formnet_server::{db::CrdtMap, DatabasePeer};
 use serde::{Serialize, Deserialize};
-use shared::{wg::DeviceExt, Endpoint, NetworkOpts, Peer, PeerContents, PeerDiff};
+use shared::{Endpoint, NetworkOpts, Peer, PeerContents, PeerDiff};
 use tokio::{net::TcpListener, sync::RwLock};
 use axum::{extract::{ConnectInfo, Path, State}, routing::{get, post}, Json, Router};
 use wireguard_control::{AllowedIp, Backend, Device, DeviceUpdate, InterfaceName, PeerConfigBuilder};

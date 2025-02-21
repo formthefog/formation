@@ -5,12 +5,12 @@ use sysinfo::{ProcessesToUpdate, System};
 use nvml_wrapper::Nvml;
 use tokio::{sync::Mutex, time::interval};  // using NVML for GPU metrics (optional feature)
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeMetrics {
     // Load averages (1, 5, 15 minute)
-    pub load_avg_1: f64,
-    pub load_avg_5: f64,
-    pub load_avg_15: f64,
+    pub load_avg_1: i64,
+    pub load_avg_5: i64,
+    pub load_avg_15: i64,
 
     // System process count
     pub process_count: usize,
@@ -22,9 +22,9 @@ pub struct NodeMetrics {
     pub network_out_bytes_per_sec: u64,
 
     // Temperatures and power usage
-    pub cpu_temperature: Option<f32>,   // in °C
-    pub gpu_temperature: Option<f32>,   // in °C (if applicable)
-    pub power_usage_watts: Option<f32>, // in Watts (if available)
+    pub cpu_temperature: Option<u32>,   // in °C
+    pub gpu_temperature: Option<u32>,   // in °C (if applicable)
+    pub power_usage_watts: Option<u32>, // in Watts (if available)
 }
 
 pub struct MetricsCollector {
@@ -91,7 +91,8 @@ impl MetricsCollector {
             if let Some(temp) = component.temperature() {
                 let label = component.label().to_lowercase();
                 if label.contains("cpu") || label.contains("package") {
-                    cpu_temp = Some(temp);
+                    let temp_scaled: u32 = (temp * 100.0).round() as u32;
+                    cpu_temp = Some(temp_scaled);
                     break;
                 }
             }
@@ -104,11 +105,11 @@ impl MetricsCollector {
             if let Ok(device) = nvml.device_by_index(0) {
                 // Get GPU core temperature (Sensor type: GPU core)
                 if let Ok(temp) = device.temperature(nvml_wrapper::enum_wrappers::device::TemperatureSensor::Gpu) {
-                    gpu_temp = Some(temp as f32);
+                    gpu_temp = Some(temp);
                 }
                 // Get GPU power usage (mW -> convert to Watts)
                 if let Ok(usage) = device.power_usage() {
-                    power_watts = Some(usage as f32 / 1000.0);
+                    power_watts = Some(usage);
                 }
             }
         }
@@ -117,9 +118,9 @@ impl MetricsCollector {
 
         // Build the NodeMetrics struct with collected values
         NodeMetrics {
-            load_avg_1:  load_avg.one,
-            load_avg_5:  load_avg.five,
-            load_avg_15: load_avg.fifteen,
+            load_avg_1:  (load_avg.one * 1000.0).round() as i64,
+            load_avg_5:  (load_avg.five * 1000.0).round() as i64,
+            load_avg_15: (load_avg.fifteen * 1000.0).round() as i64,
             process_count,
             disk_read_bytes_per_sec:  disk_read_bps,
             disk_write_bytes_per_sec: disk_write_bps,

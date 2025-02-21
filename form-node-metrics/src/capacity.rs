@@ -4,10 +4,10 @@ use serde::{Serialize, Deserialize};
 use sysinfo::System;
 use tokio::{sync::Mutex, time::interval};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeCapacity {
     pub cpu_total_cores: usize,
-    pub cpu_available_cores: f32,   // using f32 to represent fractional available cores or usage%
+    pub cpu_available_cores: i64,
     pub memory_total_bytes: u64,
     pub memory_available_bytes: u64,
     pub storage_total_bytes: u64,
@@ -26,6 +26,7 @@ pub fn get_current_capacity() -> NodeCapacity {
     let total_cores = sys.cpus().len() as usize;
     let total_cpu_usage_percent = sys.global_cpu_usage(); // e.g., 0.0 to 100.0
     let available_cores = ((100.0 - total_cpu_usage_percent) / 100.0) * total_cores as f32;
+    let available_cores_scaled: i64 = (available_cores * 1000.0).round() as i64;
 
     // Memory: total and available (in bytes)
     let total_mem = sys.total_memory();       // bytes of RAM total&#8203;:contentReference[oaicite:10]{index=10}
@@ -51,7 +52,7 @@ pub fn get_current_capacity() -> NodeCapacity {
 
     NodeCapacity {
         cpu_total_cores: total_cores,
-        cpu_available_cores: available_cores,
+        cpu_available_cores: available_cores_scaled,
         memory_total_bytes: total_mem,
         memory_available_bytes: avail_mem,
         storage_total_bytes: total_disk,

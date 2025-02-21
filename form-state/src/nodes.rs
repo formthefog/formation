@@ -1,4 +1,5 @@
 use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, CmRDT, Map, bft_reg::Update};
+use form_node_metrics::{capabilities::NodeCapabilities, capacity::NodeCapacity, metrics::NodeMetrics};
 use k256::ecdsa::SigningKey;
 use tiny_keccak::Hasher;
 use url::Host;
@@ -15,8 +16,9 @@ pub struct Node {
     pub updated_at: i64,
     pub last_heartbeat: i64,
     pub host_region: String,
+    pub capabilites: NodeCapabilities,
     pub capacity: NodeCapacity,
-    pub availability: NodeAvailability,
+    pub metrics: NodeMetrics,
     pub metadata: NodeMetadata,
     pub host: Host
 }
@@ -31,8 +33,9 @@ impl Default for Node {
             updated_at: 0,
             last_heartbeat: 0,
             host_region: Default::default(),
+            capabilites: Default::default(),
             capacity: Default::default(),
-            availability: Default::default(),
+            metrics: Default::default(),
             metadata: Default::default(),
             host: Host::Domain(Default::default())
         }
@@ -76,83 +79,12 @@ impl Node {
         &self.capacity
     }
 
-    pub fn availability(&self) -> &NodeAvailability {
-        &self.availability
+    pub fn metrics(&self) -> &NodeMetrics {
+        &self.metrics
     }
 
     pub fn metadata(&self) -> &NodeMetadata {
         &self.metadata
-    }
-}
-
-/// Describes the resource capacity of the node.
-#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct NodeCapacity {
-    pub(crate) vcpus: u8,
-    pub(crate) memory_mb: u32,
-    pub(crate) bandwidth_mbps: u32,
-    pub(crate) gpu: Option<NodeGpu>,
-}
-
-impl NodeCapacity {
-    pub fn vcpus(&self) -> u8 {
-        self.vcpus
-    }
-
-    pub fn memory_mb(&self) -> u32 {
-        self.memory_mb
-    }
-
-    pub fn bandwidth_mbps(&self) -> u32 {
-        self.bandwidth_mbps
-    }
-
-    pub fn gpu(&self) -> Option<NodeGpu> {
-        self.gpu.clone()
-    }
-}
-
-/// Describes available GPU capacity on the node.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct NodeGpu {
-    pub(crate) count: u8,
-    pub(crate) model: String,
-    pub(crate) vram_mb: u32,
-}
-
-impl NodeGpu {
-    pub fn count(&self) -> u8 {
-        self.count
-    }
-
-    pub fn model(&self) -> &str {
-        &self.model
-    }
-
-    pub fn vram_mb(&self) -> u32 {
-        self.vram_mb
-    }
-}
-
-/// Contains real-time availability information of the node.
-#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct NodeAvailability {
-    pub(crate) uptime_seconds: u64,
-    pub(crate) load_average: u32,
-    pub(crate) status: String, // e.g. "online", "offline", "maintenance"
-}
-
-impl NodeAvailability {
-    pub fn uptime_seconds(&self) -> u64 {
-        self.uptime_seconds
-    }
-
-    pub fn load_average(&self) -> f64 {
-        self.load_average as f64 / 100.0
-    }
-
-    pub fn status(&self) -> &str {
-        &self.status
     }
 }
 
