@@ -2791,6 +2791,7 @@ dependencies = [
  "bincode",
  "chrono",
  "nvml-wrapper",
+ "pnet",
  "rand",
  "raw-cpuid",
  "serde",
