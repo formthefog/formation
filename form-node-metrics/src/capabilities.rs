@@ -1,7 +1,6 @@
-use std::path::Path;
-
-use nvml_wrapper::Nvml;
 // capabilities.rs
+//
+use nvml_wrapper::Nvml;
 use serde::{Serialize, Deserialize};
 use pnet::datalink;
 
@@ -294,8 +293,9 @@ pub struct SgxInfo {
     pub epc_sections: Vec<EpcSection>,
     pub misc_select: Option<u32>,        // from CPUID enumerations
     pub attributes: Option<u64>,         // from CPUID enumerations
-    // Additional fields gleaned from the `sgx` crate or direct CPUID
 }
+
+impl SgxInfo {}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EpcSection {
