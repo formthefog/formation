@@ -2788,10 +2788,14 @@ dependencies = [
 name = "form-node-metrics"
 version = "0.1.0"
 dependencies = [
+ "alloy-primitives",
  "bincode",
  "chrono",
+ "clap",
+ "form-config",
  "form-p2p",
  "hex",
+ "k256",
  "log",
  "nvml-wrapper",
  "pnet",
