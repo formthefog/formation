@@ -1,54 +1,49 @@
+#[cfg(target_os = "linux")]
 use procfs::{diskstats, DiskStat};
 use serde::{Serialize, Deserialize};
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)] 
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DiskMetrics {
-    device: String,
-    total_space: i64,
-    available_space: i64,
-    read_bytes_per_sec: i64,
-    write_bytes_per_sec: i64,
-    read_iops: i64,
-    write_iops: i64,
+    pub device_name: String,
+    pub reads_completed: u64,
+    pub reads_merged: u64,
+    pub sectors_read: u64,
+    pub time_reading: u64,
+    pub writes_completed: u64,
+    pub writes_merged: u64,
+    pub sectors_written: u64,
+    pub time_writing: u64,
+    pub io_in_progress: u64,
+    pub time_doing_io: u64,
+    pub weighted_time_doing_io: u64,
 }
 
-pub async fn collect_disks(prev: Option<Vec<DiskStat>>, interval: u64) -> (Vec<DiskMetrics>, Vec<DiskStat>) {
-    let mut disks = vec![];
-    for disk in &sysinfo::Disks::new_with_refreshed_list() {
-        disks.push(DiskMetrics {
-            device: disk.name().to_string_lossy().to_string(),
-            total_space: disk.total_space() as i64,
-            available_space: disk.available_space() as i64,
-            read_bytes_per_sec: (disk.usage().read_bytes / interval) as i64, 
-            write_bytes_per_sec: (disk.usage().written_bytes / interval) as i64,
-            read_iops: 0,
-            write_iops: 0,
-        });
+pub fn collect_disk_metrics() -> Vec<DiskMetrics> {
+    #[cfg(target_os = "linux")]
+    {
+        match diskstats() {
+            Ok(stats) => stats.into_iter().map(|stat| DiskMetrics {
+                device_name: stat.name,
+                reads_completed: stat.reads_completed,
+                reads_merged: stat.reads_merged,
+                sectors_read: stat.sectors_read,
+                time_reading: stat.time_reading,
+                writes_completed: stat.writes_completed,
+                writes_merged: stat.writes_merged,
+                sectors_written: stat.sectors_written,
+                time_writing: stat.time_writing,
+                io_in_progress: stat.io_in_progress,
+                time_doing_io: stat.time_doing_io,
+                weighted_time_doing_io: stat.weighted_time_doing_io,
+            }).collect(),
+            Err(_) => Vec::new(),
+        }
     }
 
-    let stats = if let Ok(stats) = diskstats() {
-        for disk in &stats {
-            if let Some(disk_metrics) = disks.iter_mut().find(|d| d.device == disk.name) {
-                if let Some(prev) = &prev {
-                    if let Some(prev_metrics) = prev.iter().find(|d| d.name == disk.name) {
-                        let rps = (((disk.sectors_read - prev_metrics.sectors_read) * 512) / interval) as i64;
-                        let wps = (((disk.sectors_written - prev_metrics.sectors_written) * 512) / interval) as i64;
-
-                        disk_metrics.write_iops = wps;
-                        disk_metrics.read_iops = rps;
-                    }
-                } else {
-                    let rps = (disk.sectors_read * 512 / interval) as i64;
-                    let wps = (disk.sectors_written * 512 / interval) as i64;
-                    disk_metrics.write_iops = wps;
-                    disk_metrics.read_iops = rps;
-                }
-            }
-        }
-        stats
-    } else {
-        vec![]
-    };
-
-    (disks, stats)
+    #[cfg(not(target_os = "linux"))]
+    {
+        // On non-Linux platforms, return empty metrics for now
+        // TODO: Implement macOS disk metrics using IOKit or similar
+        Vec::new()
+    }
 }
