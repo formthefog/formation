@@ -3,6 +3,7 @@ use axum::{extract::{State, Path}, routing::{get, post}, Json, Router};
 use form_dns::{api::{DomainRequest, DomainResponse}, store::FormDnsRecord};
 use form_node_metrics::{capabilities::NodeCapabilities, capacity::NodeCapacity, metrics::NodeMetrics, NodeMetricsRequest};
 use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
+use form_vm_metrics::system::SystemMetrics;
 use rand::{seq::SliceRandom, thread_rng};
 use reqwest::Client;
 use serde_json::Value;
@@ -13,7 +14,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use crdts::{bft_reg::Update, map::Op, BFTReg, CvRDT, Map};
 use trust_dns_proto::rr::RecordType;
 use url::Host;
-use crate::{instances::{ClusterMember, Instance, InstanceOp, InstanceState}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}};
+use crate::{instances::{ClusterMember, Instance, InstanceOp, InstanceState, InstanceStatus}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}};
 use form_types::state::{Response, Success};
 
 pub type PeerMap = Map<String, BFTReg<CrdtPeer<String>, String>, String>;
@@ -892,12 +893,17 @@ impl DataStore {
             .route("/instance/:build_id/get_by_build_id", get(get_instance_by_build_id))
             .route("/instance/:build_id/get_instance_ips", get(get_instance_ips))
             .route("/instance/:instance_id/delete", post(delete_instance))
+            .route("/instance/:instance_id/metrics", get(get_instance_metrics))
+            .route("/instance/list/metrics", get(list_instance_metrics))
+            .route("/cluster/:build_id/metrics", get(get_cluster_metrics))
             .route("/instance/list", get(list_instances))
             .route("/node/create", post(create_node))
             .route("/node/update", post(update_node))
             .route("/node/:id/get", get(get_node))
             .route("/node/:id/delete", post(delete_node))
             .route("/node/list", get(list_nodes))
+            .route("/node/:id/metrics", get(get_node_metrics))
+            .route("/node/list/metrics", get(list_node_metrics))
             .with_state(state)
     }
 
@@ -2735,7 +2741,7 @@ async fn get_instance_ips(
     let datastore = state.lock().await;
     log::info!("Attempting to get instance {id}");
     let instances: Vec<Instance> = datastore.instance_state.map.iter().filter_map(|ctx| {
-        let (id, reg) = ctx.val;
+        let (_, reg) = ctx.val;
         if let Some(val) = reg.val() {
             let instance = val.value();
             if instance.build_id == *id {
@@ -2753,6 +2759,134 @@ async fn get_instance_ips(
     }).collect();
 
     return Json(Response::Success(Success::List(ips)));
+}
+
+async fn get_instance_metrics(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path(id): Path<String>,
+) -> Json<Response<SystemMetrics>> {
+    let datastore = state.lock().await;
+    if let Some(reg) = datastore.instance_state.map.get(&id).val {
+        if let Some(node) = reg.val() {
+            let instance = node.value();
+            if instance.status == InstanceStatus::Started { 
+                if let Some(ip) = instance.formnet_ip {
+                    let endpoint = format!("http://{ip}:63210/get");
+                    match Client::new()
+                        .get(endpoint)
+                        .send().await {
+                            Ok(resp) => {
+                                match resp.json::<SystemMetrics>().await {
+                                    Ok(r) => {
+                                        return Json(Response::Success(Success::Some(r)))
+                                    }
+                                    Err(e) => {
+                                        return Json(Response::Failure { reason: Some(format!("Unable to deserialize response from VM: {e}")) })
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                return Json(Response::Failure { reason: Some(e.to_string()) })
+                            }
+                    }
+                } else {
+                    return Json(Response::Failure { reason: Some("Instance has no formnet ip".to_string()) });
+                }
+            } else {
+                return Json(Response::Failure { reason: Some("Instance has not started".to_string()) });
+            }
+        } else {
+            return Json(Response::Failure { reason: Some("No record of instance in datastore".to_string()) });
+        }
+    } else {
+        return Json(Response::Failure { reason: Some("No record of instance in datastore".to_string()) });
+    }
+}
+
+async fn list_instance_metrics(
+    State(state): State<Arc<Mutex<DataStore>>>
+) -> Json<Response<SystemMetrics>> {
+    let datastore = state.lock().await.instance_state.clone();
+    let instances: Vec<Instance> = datastore.map().iter().filter_map(|ctx| {
+        let (_, value) = ctx.val;
+        match value.val() {
+            Some(node) => {
+                Some(node.value())
+            }
+            None => return None
+        }
+    }).collect(); 
+
+    let mut metrics = vec![];
+    for instance in instances {
+        if let Some(ip) = instance.formnet_ip {
+            let endpoint = format!("http://{ip}:63210/get");
+            match Client::new()
+                .get(endpoint)
+                .send().await {
+                    Ok(resp) => {
+                        match resp.json::<SystemMetrics>().await {
+                            Ok(r) => {
+                                metrics.push(r);
+                            }
+                            Err(e) => {
+                                log::error!("Unable to deserialize response from VM: {e}");
+                            }
+                        }
+                    }
+                    Err(e) => { 
+                        log::error!("{e}");
+                    }
+            }
+        }
+    }
+
+    if !metrics.is_empty() {
+        return Json(Response::Success(Success::List(metrics)))
+    } else {
+        return Json(Response::Failure { reason: Some("Unable to collect any metrics from any instances".to_string()) });
+    }
+}
+
+async fn get_cluster_metrics(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path(id): Path<String>,
+) -> Json<Response<SystemMetrics>> {
+    let datastore = state.lock().await;
+    log::info!("Attempting to get instance {id}");
+    let endpoints: Vec<String> = datastore.instance_state.map.iter().filter_map(|ctx| {
+        let (_, reg) = ctx.val;
+        if let Some(val) = reg.val() {
+            let instance = val.value();
+            if instance.build_id == *id {
+                match instance.formnet_ip {
+                    Some(ip) => Some(format!("http://{ip}:63210/get")),
+                    None => None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }).collect();
+
+    let mut results = vec![]; 
+    for endpoint in endpoints {
+        if let Ok(resp) = Client::new()
+            .get(endpoint)
+            .send().await {
+                if let Ok(r) = resp.json::<SystemMetrics>().await {
+                    results.push(r);
+                }
+            }
+    };
+
+    if !results.is_empty() {
+        Json(Response::Success(Success::List(results)))
+    } else {
+        Json(Response::Failure { reason: Some(format!("Unable to acquire any metrics foor instances with build_id: {id}")) }) 
+    }
 }
 
 
@@ -2982,7 +3116,36 @@ async fn get_node(
         return Json(Response::Success(Success::Some(node)))
     }
 
-    return Json(Response::Failure { reason: Some(format!("Unable to find instance with id: {node_id}"))})
+    return Json(Response::Failure { reason: Some(format!("Unable to find node with id: {node_id}"))})
+}
+
+async fn get_node_metrics(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path(node_id): Path<String>,
+) -> Json<Response<NodeMetrics>> {
+    let datastore = state.lock().await;
+    if let Some(node) = datastore.node_state.get_node(node_id.clone()) {
+        return Json(Response::Success(Success::Some(node.metrics)))
+    }
+
+    return Json(Response::Failure { reason: Some(format!("Unable to node instance with id: {node_id}"))})
+}
+
+async fn list_node_metrics(
+    State(state): State<Arc<Mutex<DataStore>>>,
+) -> Json<Response<NodeMetrics>> {
+    let datastore = state.lock().await;
+    let list: Vec<NodeMetrics> = datastore.node_state.map().iter().filter_map(|ctx| {
+        let (_, value) = ctx.val;
+        match value.val() {
+            Some(node) => {
+                return Some(node.value().metrics.clone())
+            }
+            None => return None
+        }
+    }).collect(); 
+
+    return Json(Response::Success(Success::List(list)))
 }
 
 async fn list_nodes(
@@ -3005,7 +3168,7 @@ async fn list_nodes(
 #[cfg(test)]
 mod tests {
     use crate::instances::{InstanceAnnotations, InstanceCluster, InstanceEncryption, InstanceMetadata, InstanceMonitoring, InstanceResources, InstanceSecurity, InstanceStatus};
-    use crate::nodes::{NodeAnnotations, NodeAvailability, NodeCapacity, NodeMetadata, NodeMonitoring};
+    use crate::nodes::{NodeAnnotations, NodeMetadata, NodeMonitoring};
 
     use super::*;
     use k256::ecdsa::SigningKey;

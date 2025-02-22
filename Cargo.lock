@@ -2922,6 +2922,7 @@ dependencies = [
  "form-node-metrics",
  "form-p2p",
  "form-types",
+ "form-vm-metrics",
  "futures",
  "hex",
  "ipnet",

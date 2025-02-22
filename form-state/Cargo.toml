@@ -30,6 +30,7 @@ form-dns = { path = "../form-dns" }
 form-p2p = { path = "../form-p2p" }
 form-types = { path = "../form-types" }
 form-node-metrics = { path = "../form-node-metrics" }
+form-vm-metrics = { path = "../form-vm-metrics" }
 bincode = "1.3.3"
 futures = "0.3"
 url = "2"
