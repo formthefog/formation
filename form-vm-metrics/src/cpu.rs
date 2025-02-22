@@ -1,7 +1,7 @@
 use sysinfo::{ProcessesToUpdate, System};
 use serde::{Serialize, Deserialize};
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)] 
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)] 
 pub struct CpuMetrics {
     usage_pct: i64,
     process_count: usize

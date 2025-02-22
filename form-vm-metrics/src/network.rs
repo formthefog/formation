@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::error::Error;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)] 
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)] 
 pub struct NetworkInterfaceMetrics {
     pub name: String,
     pub bytes_sent: u64,
@@ -17,7 +17,7 @@ pub struct NetworkInterfaceMetrics {
     pub speed: u64, // in bits per second
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)] 
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)] 
 pub struct NetworkMetrics {
     pub interfaces: Vec<NetworkInterfaceMetrics>,
 }

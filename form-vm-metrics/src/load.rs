@@ -1,7 +1,7 @@
 use serde::{Serialize, Deserialize};
 use sysinfo::System;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LoadMetrics {
     pub load1: i64,  // 1-minute load average, scaled to integer (e.g., 1.23 -> 123)
     pub load5: i64,  // 5-minute load average

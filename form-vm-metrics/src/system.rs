@@ -1,12 +1,12 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
+use std::{sync::Arc, time::{SystemTime, UNIX_EPOCH}};
+use tokio::sync::Mutex;
 use procfs::DiskStat;
 use serde::{Serialize, Deserialize};
 use sysinfo::System;
 
 use crate::{cpu::{collect_cpu, CpuMetrics}, disk::{collect_disks, DiskMetrics}, gpu::{collect_gpu_metrics, GpuMetrics}, load::{collect_load_metrics, LoadMetrics}, mem::{collect_memory, MemoryMetrics}, network::{collect_network_metrics, NetworkMetrics}};
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SystemMetrics {
     pub timestamp: i64,
     pub cpu: CpuMetrics,
@@ -19,9 +19,10 @@ pub struct SystemMetrics {
 }
 
 pub async fn collect_system_metrics(
+    system_metrics: Arc<Mutex<SystemMetrics>>,
     disk_stats: Option<Vec<DiskStat>>,
     refresh: u64,
-) -> SystemMetrics {
+) -> Arc<Mutex<SystemMetrics>> {
     let mut sys = System::new_all();
     sys.refresh_all();
 
@@ -36,7 +37,9 @@ pub async fn collect_system_metrics(
     let load = collect_load_metrics();
     let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).expect("Something is seriously wrong with the system").as_secs() as i64;
 
-    SystemMetrics {
+    let mut guard = system_metrics.lock().await;
+
+    *guard = SystemMetrics {
         timestamp,
         cpu,
         memory,
@@ -45,5 +48,8 @@ pub async fn collect_system_metrics(
         network,
         gpus,
         load,
-    }
+    };
+    drop(guard);
+
+    system_metrics
 }
