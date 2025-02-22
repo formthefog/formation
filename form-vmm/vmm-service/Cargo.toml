@@ -39,7 +39,6 @@ rtnetlink = "0.13"
 netlink-packet-core = "0.7"
 netlink-packet-route = "0.17.1"
 ipnet = "2"
-iptables = "0.5"
 futures = "0.3"
 ipnetwork = "0.20.0"
 trust-dns-server = "0.22.0"
@@ -72,7 +71,7 @@ form-pack = { path = "../../form-pack" }
 form-p2p = { path = "../../form-p2p" }
 form-state = { path = "../../form-state" }
 formnet-server = { path = "../../form-net/server" }
-crdts = { git = "http://github.com/Cryptonomikhan/rust-crdt", rev = "1fe4992" }
+crdts = { git = "http://github.com/Cryptonomikhan/rust-crdt", rev = "af3a3dd" }
 alloy-primitives = { version = "0.8", features = ["k256"] } 
 k256 = { version = "0.13", features = ["ecdsa", "ecdsa-core"]}
 hex = "0.4"

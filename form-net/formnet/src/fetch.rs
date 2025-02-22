@@ -6,7 +6,7 @@ use futures::{stream::FuturesUnordered, StreamExt};
 use hostsfile::HostsBuilder;
 use reqwest::{Client, Response as ServerResponse};
 use shared::{get_local_addrs, wg::{self, DeviceExt}, Endpoint, IoErrorContext, NatOpts, NetworkOpts, Peer, PeerDiff};
-use wireguard_control::{Device, DeviceUpdate, InterfaceName, PeerConfigBuilder};
+use wireguard_control::{Backend, Device, DeviceUpdate, InterfaceName, PeerConfigBuilder};
 
 use crate::{api::{BootstrapInfo, Response}, CONFIG_DIR, DATA_DIR, NETWORK_NAME};
 
@@ -20,6 +20,15 @@ pub async fn fetch(
     let config = ConfigFile::from_file(config_dir.join(NETWORK_NAME).with_extension("conf"))?; 
     let interface_up = interface_up(interface.clone()).await;
     let (pubkey, internal, external) = get_bootstrap_info_from_config(&config).await?;
+    let store = DataStore::<String>::open_or_create(&data_dir, &interface)?;
+
+    let admins = store.peers().iter().filter_map(|p| {
+        if p.is_admin {
+            Some(p.clone())
+        } else {
+            None
+        }
+    }).collect::<Vec<Peer<String>>>();
 
     let host_port = external.port();
 
@@ -36,7 +45,7 @@ pub async fn fetch(
             Some((
                 &pubkey,
                 internal,
-                external,
+                external.clone(),
             )),
             NetworkOpts::default(),
         )?;
@@ -47,44 +56,40 @@ pub async fn fetch(
         interface.as_str_lossy()
     );
 
-    let mut fetch_success = false;
-    for _ in 0..3 {
-        let internal_resp = Client::new().get(format!("http://{internal}:{host_port}/fetch")).send();
-        match internal_resp.await {
-            Ok(resp) => {
-                if let Err(e) = handle_server_response(resp, &interface, network, data_dir.clone(), interface_up, internal.to_string(), config.address.to_string(), host_port, hosts_path.clone()).await {
-                    log::error!(
-                        "Error handling server response from fetch call: {e}"
-                    )
-                } else {
-                    fetch_success = true;
-                    break;
-                }
-            }
-            Err(e) => {
+    let bootstrap_resp = Client::new().get(format!("http://{external}/fetch")).send();
+    match bootstrap_resp.await {
+        Ok(resp) => {
+            if let Err(e) = handle_server_response(resp, &interface, network, data_dir.clone(), interface_up, external.to_string(), config.address.to_string(), host_port, hosts_path.clone()).await {
                 log::error!(
-                    "Error getting server response from internal fetch call: {e}"
+                    "Error handling server response from fetch call: {e}"
                 )
             }
         }
-    }
-
-    if !fetch_success {
-        let external_resp = Client::new().get(format!("http://{external}:{host_port}/fetch")).send();
-        match external_resp.await {
-            Ok(resp) => {
-                if let Err(e) = handle_server_response(resp, &interface, network, data_dir, interface_up, internal.to_string(), config.address.to_string(), host_port, hosts_path).await {
-                    log::error!(
-                        "Error handling server response from fetch call: {e}"
-                    )
+        Err(e) => {
+            log::error!("Error fetching from bootstrap: {e}");
+            for admin in admins {
+                if let Some(ref external) = &admin.endpoint {
+                    if let Ok(endpoint) = external.resolve() {
+                        if let Ok(resp) = Client::new().get(format!("http://{endpoint}/fetch")).send().await {
+                            match handle_server_response(
+                                resp, 
+                                &interface, 
+                                network, 
+                                data_dir.clone(), 
+                                interface_up, 
+                                endpoint.to_string(),
+                                config.address.to_string(), 
+                                endpoint.port(), 
+                                hosts_path.clone()).await 
+                            {
+                                Ok(_) => break,
+                                Err(e) => log::error!("Error handling server response from fetch call to {external}: {e}"),
+                            }
+                        }
+                    }
                 }
             }
-            Err(e) => {
-                log::error!(
-                    "Error getting server response from external fetch call: {e}"
-                )
-            }
-        }
+        },
     }
 
     Ok(())
@@ -141,7 +146,7 @@ async fn handle_server_response(
     network: NetworkOpts,
     data_dir: PathBuf,
     interface_up: bool,
-    internal: String,
+    external: String,
     my_ip: String,
     host_port: u16,
     hosts_path: Option<PathBuf>,
@@ -155,7 +160,7 @@ async fn handle_server_response(
                 data_dir,
                 interface_up,
                 hosts_path,
-                internal,
+                external,
                 my_ip,
                 host_port,
             ).await {
@@ -181,11 +186,15 @@ async fn handle_peer_updates(
     data_dir: PathBuf,
     interface_up: bool,
     hosts_path: Option<PathBuf>,
-    internal: String,
+    external: String,
     my_ip: String,
-    host_port: u16
+    _host_port: u16
 ) -> Result<(), Box<dyn std::error::Error>> {
     let device = Device::get(&interface, network.backend)?;
+    log::info!("Current peer info:");
+    for peer in &device.peers {
+        log::info!("\t{:?}\n", peer);
+    }
     let modifications = device.diff(&peers);
     let mut store = DataStore::open_or_create(&data_dir, &interface)?;
     let updates = modifications
@@ -194,6 +203,8 @@ async fn handle_peer_updates(
         .cloned()
         .map(PeerConfigBuilder::from)
         .collect::<Vec<_>>();
+
+    log::info!("Updating peers: {updates:?}");
 
     if !updates.is_empty() || !interface_up {
         DeviceUpdate::new()
@@ -217,7 +228,10 @@ async fn handle_peer_updates(
     let candidates: Vec<Endpoint> = get_local_addrs()?
         .filter(|ip| !NatOpts::default().is_excluded(*ip))
         .map(|addr| SocketAddr::from((addr, device.listen_port.unwrap_or(51820))).into())
-        .collect::<Vec<Endpoint>>();
+        .collect::<Vec<Endpoint>>().iter().filter_map(|ep| match ep.resolve() {
+            Ok(addr) => Some(addr.into()),
+            Err(_) => None
+        }).collect::<Vec<Endpoint>>();
     log::info!(
         "reporting {} interface address{} as NAT traversal candidates",
         candidates.len(),
@@ -226,11 +240,14 @@ async fn handle_peer_updates(
     for candidate in &candidates {
         log::debug!("  candidate: {}", candidate);
     }
-    match Client::new().post(format!("http://{internal}:{host_port}/{}/candidates", my_ip))
-        .json(&candidates)
-        .send().await {
-            Ok(_) => log::info!("Successfully sent candidates"),
-            Err(e) => log::error!("Unable to send candidates: {e}")
+
+    if !candidates.is_empty() {
+        match Client::new().post(format!("http://{external}/{}/candidates", my_ip))
+            .json(&candidates)
+            .send().await {
+                Ok(_) => log::info!("Successfully sent candidates"),
+                Err(e) => log::error!("Unable to send candidates: {e}")
+        }
     }
     if NatOpts::default().no_nat_traversal {
         log::debug!("NAT traversal explicitly disabled, not attempting.");
@@ -251,6 +268,11 @@ async fn handle_peer_updates(
             );
             nat_traverse.step()?;
         }
+    }
+
+    log::info!("New device info:");
+    for peer in &device.peers {
+        log::info!("\t{:?}\n", peer);
     }
 
     Ok(())
@@ -277,34 +299,36 @@ async fn try_nat_traversal_server(
     for candidate in &candidates {
         log::debug!("  candidate: {}", candidate);
     }
-    let all_admin = Client::new().get(format!("http://127.0.0.1:3004/user/list_admin")).send().await?.json::<StateResponse<Peer<String>>>().await?;
-    if let StateResponse::Success(Success::List(admin)) = all_admin {
-        let valid_admin: Vec<_> = admin.iter().filter_map(|p| {
-            match &p.endpoint {
-                Some(endpoint) => {
-                    match endpoint.resolve() {
-                        Ok(_) => Some(p.clone()),
-                        Err(e) => {
-                            log::error!("Unable to resolve endpoint for {}: {e}", &p.id);
-                            None
+    if !candidates.is_empty() {
+        let all_admin = Client::new().get(format!("http://127.0.0.1:3004/user/list_admin")).send().await?.json::<StateResponse<Peer<String>>>().await?;
+        if let StateResponse::Success(Success::List(admin)) = all_admin {
+            let valid_admin: Vec<_> = admin.iter().filter_map(|p| {
+                match &p.endpoint {
+                    Some(endpoint) => {
+                        match endpoint.resolve() {
+                            Ok(_) => Some(p.clone()),
+                            Err(e) => {
+                                log::error!("Unable to resolve endpoint for {}: {e}", &p.id);
+                                None
+                            }
                         }
                     }
+                    None => None
                 }
-                None => None
-            }
-        }).collect();
-        let mut futures: FuturesUnordered<_> = valid_admin.iter().map(|p| {
-            let addr = p.endpoint.clone().unwrap().resolve().unwrap();
-            let ip = addr.ip().to_string();
-            let port = addr.port();
-            Client::new().post(format!("http://{ip}:{port}/{}/candidates", my_ip))
-                .json(&candidates)
-                .send()     
-        }).collect();
+            }).collect();
+            let mut futures: FuturesUnordered<_> = valid_admin.iter().map(|p| {
+                let addr = p.endpoint.clone().unwrap().resolve().unwrap();
+                let ip = addr.ip().to_string();
+                let port = addr.port();
+                Client::new().post(format!("http://{ip}:{port}/{}/candidates", my_ip))
+                    .json(&candidates)
+                    .send()     
+            }).collect();
 
-        while let Some(complete) = futures.next().await {
-            if let Err(e) = complete {
-                log::error!("Error sending candidates to one of admin: {e}"); 
+            while let Some(complete) = futures.next().await {
+                if let Err(e) = complete {
+                    log::error!("Error sending candidates to one of admin: {e}"); 
+                }
             }
         }
     }
@@ -413,6 +437,7 @@ pub async fn fetch_server(
                 None => None
             }
         }).collect();
+
         let mut futures: FuturesUnordered<_> = valid_admin.iter().map(|p| {
             let addr = p.endpoint.clone().unwrap().resolve().unwrap();
             let ip = addr.ip().to_string();
@@ -434,7 +459,6 @@ pub async fn fetch_server(
         return Ok(())
     } else {
         let mut nat_traverse = NatTraverse::new(&interface, NetworkOpts::default().backend, &modifications)?;
-
         // Give time for handshakes with recently changed endpoints to complete before attempting traversal.
         if !nat_traverse.is_finished() {
             std::thread::sleep(nat::STEP_INTERVAL - interface_updated_time.elapsed());
@@ -448,6 +472,65 @@ pub async fn fetch_server(
                 nat_traverse.remaining()
             );
             nat_traverse.step()?;
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn report_initial_candidates(bootstraps: Vec<String>, my_ip: String) -> Result<(), Box<dyn std::error::Error>> {
+    let device = Device::get(&InterfaceName::from_str("formnet")?, Backend::default())?;
+    log::info!("Getting candidates...");
+    let candidates: Vec<Endpoint> = get_local_addrs()?
+        .filter(|ip| !NatOpts::default().is_excluded(*ip))
+        .map(|addr| SocketAddr::from((addr, device.listen_port.unwrap_or(51820))).into())
+        .collect::<Vec<Endpoint>>();
+
+    log::info!(
+        "reporting {} interface address{} as NAT traversal candidates",
+        candidates.len(),
+        if candidates.len() == 1 { "" } else { "es" },
+    );
+    for candidate in &candidates {
+        log::debug!("  candidate: {}", candidate);
+    }
+
+    for bootstrap in bootstraps {
+        log::info!("reporting candidates to {bootstrap}/{my_ip}/candidates");
+        if let Err(e) = Client::new().post(format!("http://{bootstrap}/{}/candidates", my_ip))
+            .json(&candidates)
+            .send().await {
+                log::error!("Error sending NAT candidates: {e}");
+        } else {
+            log::info!("Successfully sent candidates");
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn report_candidates(admins: Vec<String>, my_ip: String) -> Result<(), Box<dyn std::error::Error>> { 
+    let device = Device::get(&InterfaceName::from_str("formnet")?, Backend::default())?;
+    log::info!("Getting candidates...");
+    let candidates: Vec<Endpoint> = get_local_addrs()?
+        .filter(|ip| !NatOpts::default().is_excluded(*ip))
+        .map(|addr| SocketAddr::from((addr, device.listen_port.unwrap_or(51820))).into())
+        .collect::<Vec<Endpoint>>();
+    log::info!(
+        "reporting {} interface address{} as NAT traversal candidates",
+        candidates.len(),
+        if candidates.len() == 1 { "" } else { "es" },
+    );
+    for candidate in &candidates {
+        log::debug!("  candidate: {}", candidate);
+    }
+    for admin in admins {
+        if let Ok(_) = Client::new().post(format!("http://{admin}/{}/candidates", my_ip))
+            .json(&candidates)
+            .send().await {
+                log::info!("Successfully sent candidates");
+                break;
         }
     }
 

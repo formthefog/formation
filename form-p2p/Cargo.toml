@@ -26,7 +26,7 @@ hex = "0.4.3"
 base64 = "0.22"
 sha3 = "0.10"
 url = "2"
-crdts = { git = "http://github.com/Cryptonomikhan/rust-crdt", rev = "1fe4992" }
+crdts = { git = "http://github.com/Cryptonomikhan/rust-crdt", rev = "af3a3dd" }
 tiny-keccak = { version = "2.0.2", features = ["sha3"] }
 reqwest = { version = "0.12", features = ["json", "stream"] }
 axum = { version = "0.7.9", features = ["multipart"] } 
@@ -37,6 +37,9 @@ simple_logger = "5"
 bytes = "1"
 futures = "0.3"
 async-stream = "0.3"
+rocksdb = "0.21"
+bincode = "1"
+lazy_static = "1.5"
 
 
 [dev-dependencies]

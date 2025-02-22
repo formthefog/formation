@@ -866,6 +866,7 @@ Formpack for {name} doesn't exist:
                     heartbeats_skipped: 0,
                 };
 
+
                 log::info!("Built AddClusterMember InstanceRequest");
                 let request = InstanceRequest::AddClusterMember { build_id: build_id.to_string(), cluster_member }; 
                 log::info!("Writing AddClusterMember InstanceRequest to queue...");
@@ -873,6 +874,9 @@ Formpack for {name} doesn't exist:
                 
                 log::info!("Adding formnet_ip to instance");
                 instance.formnet_ip = Some(formnet_ip.parse()?);
+                instance.status = InstanceStatus::Started;
+                let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64; 
+                instance.updated_at = timestamp;
 
                 log::info!("Updating instance...");
                 let request = InstanceRequest::Update(instance);

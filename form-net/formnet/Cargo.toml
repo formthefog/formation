@@ -61,7 +61,7 @@ hostsfile = { path = "../hostsfile" }
 publicip = { path = "../publicip" }
 form-state = { path = "../../form-state/"}
 url = "2"
-crdts = { git = "http://github.com/Cryptonomikhan/rust-crdt", rev = "1fe4992" }
+crdts = { git = "http://github.com/Cryptonomikhan/rust-crdt", rev = "af3a3dd" }
 hyper = { version = "0.14", default-features = false, features = [
   "http1",
   "server",
@@ -72,6 +72,7 @@ parking_lot = "0.12"
 form-config = { path = "../../form-config" }
 daemonize = "0.5"
 colored = "3"
+rand = "0.8"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 socket2 = { version = "0.5.2", features = ["all"] }

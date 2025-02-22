@@ -38,6 +38,7 @@ impl<'a, T: Display + Clone + PartialEq> NatTraverse<'a, T> {
             peer.candidates
                 .retain(|addr| Some(addr) != endpoint.as_ref());
 
+            log::info!("removed server reported endpoint: {:?}", peer.candidates);
             // Add the server-reported endpoint to the beginning of the list. In the event
             // no other endpoints worked, the remaining endpoint in the list will be the one
             // assigned to the peer so it should default to the server-reported endpoint.
@@ -75,14 +76,14 @@ impl<'a, T: Display + Clone + PartialEq> NatTraverse<'a, T> {
             if let Some(peer_info) = device.get_peer(&peer.public_key) {
                 let recently_connected = peer_info.is_recently_connected();
                 if recently_connected {
-                    log::debug!(
+                    log::info!(
                         "peer {} removed from NAT traverser (connected!).",
                         peer.name
                     );
                 }
                 !recently_connected
             } else {
-                log::debug!(
+                log::info!(
                     "peer {} removed from NAT traverser (no longer on interface).",
                     peer.name
                 );
@@ -102,7 +103,7 @@ impl<'a, T: Display + Clone + PartialEq> NatTraverse<'a, T> {
         let candidate_updates = self.remaining.iter_mut().filter_map(|peer| {
             let endpoint = peer.candidates.pop();
             if let Some(endpoint) = &endpoint {
-                log::debug!("trying endpoint {} for peer {}", endpoint, peer.name);
+                log::info!("trying endpoint {} for peer {}", endpoint, peer.name);
             }
             set_endpoint(&peer.public_key, endpoint.as_ref())
         });
@@ -118,7 +119,7 @@ impl<'a, T: Display + Clone + PartialEq> NatTraverse<'a, T> {
             self.refresh_remaining()?;
 
             if self.is_finished() {
-                log::debug!("NAT traverser is finished!");
+                log::info!("NAT traverser is finished!");
                 break;
             }
             std::thread::sleep(Duration::from_millis(100));

@@ -1,7 +1,9 @@
-use std::{collections::{HashMap, HashSet}, net::{IpAddr, SocketAddr}, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
+use std::{collections::{HashMap, HashSet}, net::{IpAddr, SocketAddr}, path::PathBuf, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
 use axum::{extract::{State, Path}, routing::{get, post}, Json, Router};
 use form_dns::{api::{DomainRequest, DomainResponse}, store::FormDnsRecord};
+use form_node_metrics::{capabilities::NodeCapabilities, capacity::NodeCapacity, metrics::NodeMetrics, NodeMetricsRequest};
 use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
+use form_vm_metrics::system::SystemMetrics;
 use rand::{seq::SliceRandom, thread_rng};
 use reqwest::Client;
 use serde_json::Value;
@@ -12,8 +14,13 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use crdts::{bft_reg::Update, map::Op, BFTReg, CvRDT, Map};
 use trust_dns_proto::rr::RecordType;
 use url::Host;
-use crate::{instances::{ClusterMember, Instance, InstanceOp, InstanceState}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}};
+use crate::{db::{open_db, write_datastore, store_map, DbHandle}, instances::{ClusterMember, Instance, InstanceOp, InstanceState, InstanceStatus}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}};
 use form_types::state::{Response, Success};
+use lazy_static::lazy_static;
+
+lazy_static! {
+    static ref DB_HANDLE: DbHandle = open_db(PathBuf::from("/var/lib/formation/db/form.db"));
+}
 
 pub type PeerMap = Map<String, BFTReg<CrdtPeer<String>, String>, String>;
 pub type CidrMap = Map<String, BFTReg<CrdtCidr<String>, String>, String>;
@@ -66,9 +73,9 @@ impl From<DataStore> for MergeableState {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DataStore {
-    network_state: NetworkState,
-    instance_state: InstanceState,
-    node_state: NodeState
+    pub network_state: NetworkState,
+    pub instance_state: InstanceState,
+    pub node_state: NodeState,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -133,7 +140,7 @@ impl DataStore {
         let instance_state = InstanceState::new(node_id.clone(), pk.clone());
         let node_state = NodeState::new(node_id.clone(), pk.clone());
 
-        Self { network_state, instance_state, node_state }
+        Self { network_state, instance_state, node_state } 
     }
 
     pub fn new_from_state(
@@ -247,6 +254,7 @@ impl DataStore {
                 if let (true, _) = self.network_state.peer_op_success(key.clone(), op.clone()) {
                     log::info!("Peer Op succesffully applied...");
                     DataStore::write_to_queue(PeerRequest::Op(peer_op.clone()), 0).await?;
+                    write_datastore(&DB_HANDLE, &self.clone())?;
                 } else {
                     log::info!("Peer Op rejected...");
                     return Err(
@@ -307,6 +315,7 @@ impl DataStore {
                 if let (true, _) = self.network_state.cidr_op_success(key.clone(), op.clone()) {
                     log::info!("CIDR Op succesffully applied...");
                     DataStore::write_to_queue(CidrRequest::Op(cidr_op.clone()), 1).await?;
+                    write_datastore(&DB_HANDLE, &self.clone())?;
                 } else {
                     log::info!("CIDR Op rejected...");
                     return Err(
@@ -364,6 +373,7 @@ impl DataStore {
                 if let (true, _) = self.network_state.associations_op_success(key.clone(), op.clone()) {
                     log::info!("Assoc Op succesffully applied...");
                     DataStore::write_to_queue(AssocRequest::Op(assoc_op.clone()), 2).await?;
+                    write_datastore(&DB_HANDLE, &self.clone())?;
                 } else {
                     log::info!("Assoc Op rejected...");
                     return Err(
@@ -416,6 +426,7 @@ impl DataStore {
                 if let (true, _) = self.network_state.dns_op_success(key.clone(), op.clone()) {
                     log::info!("DNS Op succesffully applied...");
                     DataStore::write_to_queue(DnsRequest::Op(dns_op.clone()), 3).await?;
+                    write_datastore(&DB_HANDLE, &self.clone())?;
                 } else {
                     log::info!("DNS Op rejected...");
                     return Err(
@@ -557,6 +568,7 @@ impl DataStore {
                     if let (true, _) = self.instance_state.instance_op_success(key.to_string(), op.clone()) {
                         log::info!("Instance Op succesfully applied...");
                         DataStore::write_to_queue(InstanceRequest::Op(instance_op.clone()), 4).await?;
+                        write_datastore(&DB_HANDLE, &self.clone())?;
                     } else {
                         return Err(
                             Box::new(
@@ -593,6 +605,7 @@ impl DataStore {
                     if let (true, _) = self.instance_state.instance_op_success(key.to_string(), op.clone()) {
                         log::info!("Instance Op succesfully applied...");
                         DataStore::write_to_queue(InstanceRequest::Op(instance_op.clone()), 4).await?;
+                        write_datastore(&DB_HANDLE, &self.clone())?;
                     } else {
                         return Err(
                             Box::new(
@@ -620,6 +633,7 @@ impl DataStore {
                 if let (true, _) = self.instance_state.instance_op_success(key.clone(), op.clone()) {
                     log::info!("Instance Op succesffully applied...");
                     DataStore::write_to_queue(InstanceRequest::Op(instance_op.clone()), 4).await?;
+                    write_datastore(&DB_HANDLE, &self.clone())?;
                 } else {
                     log::info!("Instance Op rejected...");
                     return Err(
@@ -666,7 +680,37 @@ impl DataStore {
             NodeRequest::Op(op) => self.handle_node_op(op).await?,
             NodeRequest::Create(create) => self.handle_node_create(create).await?,
             NodeRequest::Update(update) => self.handle_node_update(update).await?,
-            NodeRequest::Delete(id) => self.handle_node_delete(id).await? 
+            NodeRequest::Delete(id) => self.handle_node_delete(id).await?,
+        }
+        Ok(())
+    }
+
+    async fn handle_node_metrics_request(&mut self, node_metrics_request: NodeMetricsRequest) -> Result<(), Box<dyn std::error::Error>> {
+        match node_metrics_request {
+            NodeMetricsRequest::SetInitialMetrics { node_id, node_capabilities, node_capacity } => self.handle_node_initial_metrics(node_id, node_capabilities, node_capacity).await?,
+            NodeMetricsRequest::Heartbeat { node_id, timestamp } => self.handle_node_heartbeat(node_id, timestamp).await?,
+            NodeMetricsRequest::UpdateMetrics { node_id, node_capacity, node_metrics } => self.handle_node_update_metrics(node_id, node_capacity, node_metrics).await?,
+        }
+        Ok(())
+    }
+
+    async fn handle_node_heartbeat(&mut self, node_id: String, timestamp: i64) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(node_op) = self.node_state.update_node_heartbeat(node_id, timestamp) {
+            self.handle_node_op(node_op).await?;
+        }
+        Ok(())
+    }
+
+    async fn handle_node_update_metrics(&mut self, node_id: String, node_capacity: NodeCapacity, node_metrics: NodeMetrics) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(node_op) = self.node_state.update_node_metrics(node_id, node_capacity, node_metrics) {
+            self.handle_node_op(node_op).await?;
+        }
+        Ok(())
+    }
+
+    async fn handle_node_initial_metrics(&mut self, node_id: String, node_capabilities: NodeCapabilities, node_capacity: NodeCapacity) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(node_op) = self.node_state.set_initial_node_capabilities(node_id, node_capacity, node_capabilities) {
+            self.handle_node_op(node_op).await?;
         }
         Ok(())
     }
@@ -678,6 +722,7 @@ impl DataStore {
                 if let (true, _) = self.node_state.node_op_success(key.clone(), op.clone()) {
                     log::info!("Peer Op succesffully applied...");
                     DataStore::write_to_queue(NodeRequest::Op(node_op.clone()), 5).await?;
+                    write_datastore(&DB_HANDLE, &self.clone())?;
                 } else {
                     log::info!("Peer Op rejected...");
                     return Err(
@@ -853,6 +898,7 @@ impl DataStore {
             .route("/dns/update", post(update_dns))
             .route("/dns/:domain/delete", post(delete_dns))
             .route("/dns/:domain/get", get(get_dns_record))
+            .route("/dns/:node_ip/list", get(get_dns_records_by_node_ip))
             .route("/dns/list", get(list_dns_records))
             .route("/instance/create", post(create_instance))
             .route("/instance/update", post(update_instance))
@@ -860,12 +906,17 @@ impl DataStore {
             .route("/instance/:build_id/get_by_build_id", get(get_instance_by_build_id))
             .route("/instance/:build_id/get_instance_ips", get(get_instance_ips))
             .route("/instance/:instance_id/delete", post(delete_instance))
+            .route("/instance/:instance_id/metrics", get(get_instance_metrics))
+            .route("/instance/list/metrics", get(list_instance_metrics))
+            .route("/cluster/:build_id/metrics", get(get_cluster_metrics))
             .route("/instance/list", get(list_instances))
             .route("/node/create", post(create_node))
             .route("/node/update", post(update_node))
             .route("/node/:id/get", get(get_node))
             .route("/node/:id/delete", post(delete_node))
             .route("/node/list", get(list_nodes))
+            .route("/node/:id/metrics", get(get_node_metrics))
+            .route("/node/list/metrics", get(list_node_metrics))
             .with_state(state)
     }
 
@@ -1005,6 +1056,10 @@ pub async fn process_message(message: Vec<u8>, state: Arc<Mutex<DataStore>>) -> 
             let node_request: NodeRequest = serde_json::from_slice(payload)?;
             guard.handle_node_request(node_request).await?;
         },
+        6 => {
+            let node_metrics_request: NodeMetricsRequest = serde_json::from_slice(payload)?;
+            guard.handle_node_metrics_request(node_metrics_request).await?;
+        }
         _ => unreachable!()
     }
 
@@ -1072,6 +1127,7 @@ async fn create_user(
                     datastore.network_state.peer_op(map_op.clone());
                     if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
                         log::info!("Peer Op succesffully applied...");
+                        let _ = write_datastore(&DB_HANDLE, &datastore.clone());
                         return Json(Response::Success(Success::Some(v.into())))
                     } else {
                         log::info!("Peer Op rejected...");
@@ -1098,7 +1154,10 @@ async fn create_user(
                         log::info!("Map Op was successful, broadcasting...");
                         let request = PeerRequest::Op(map_op);
                         match datastore.broadcast::<Response<Peer<String>>>(request, "/user/create").await {
-                            Ok(()) => return Json(Response::Success(Success::Some(v.into()))),
+                            Ok(()) => {
+                                let _ = write_datastore(&DB_HANDLE, &datastore.clone());
+                                return Json(Response::Success(Success::Some(v.into())))
+                            }
                             Err(e) => eprintln!("Error broadcasting DeletePeerRequest: {e}")
                         }
                         return Json(Response::Success(Success::Some(v.into())))
@@ -1127,6 +1186,7 @@ async fn update_user(
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     datastore.network_state.peer_op(map_op.clone());
                     if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
+                        let _ = write_datastore(&DB_HANDLE, &datastore.clone());
                         return Json(Response::Success(Success::Some(v.into())))
                     } else {
                         return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
@@ -1140,7 +1200,18 @@ async fn update_user(
         PeerRequest::Update(contents) => {
             log::info!("Update user request was a direct request...");
             log::info!("Building Map Op...");
-            let map_op = datastore.network_state.update_peer_local(contents);
+            let ctx = datastore.network_state.peers.get(&contents.name.to_string().clone());
+            let mut existing_ip = None;
+            if let Some(existing) = ctx.val {
+                if let Some(peer) = existing.val() {
+                    if let Some(endpoint) = peer.value().endpoint {
+                        if let Ok(resolved) = endpoint.resolve() {
+                            existing_ip = Some(resolved.ip())
+                        }
+                    }
+                }
+            };
+            let map_op = datastore.network_state.update_peer_local(contents.clone());
             datastore.network_state.peer_op(map_op.clone());
             match &map_op {
                 crdts::map::Op::Rm { .. } => {
@@ -1151,8 +1222,27 @@ async fn update_user(
                         log::info!("Map Op was successful, broadcasting...");
                         let request = PeerRequest::Op(map_op);
                         match datastore.broadcast::<Response<Peer<String>>>(request, "/user/update").await {
-                            Ok(()) => return Json(Response::Success(Success::Some(v.into()))),
+                            Ok(()) => {
+                                let _ = write_datastore(&DB_HANDLE, &datastore.clone());
+                                return Json(Response::Success(Success::Some(v.into())));
+                            }
                             Err(e) => eprintln!("Error broadcasting DeletePeerRequest: {e}")
+                        }
+                        drop(datastore);
+                        if let Some(existing) = existing_ip {
+                            if contents.is_admin {
+                                if let Some(endpoint) = contents.endpoint {
+                                    if let Ok(resolved) = endpoint.resolve() {
+                                        if resolved.ip() == existing {
+                                            let _ = update_dns_ip_addr(
+                                                state.clone(),
+                                                existing.to_string(),
+                                                resolved.ip().to_string(),
+                                            ).await;
+                                        }
+                                    }
+                                }
+                            }
                         }
                         return Json(Response::Success(Success::Some(v.into())))
                     } else {
@@ -1181,6 +1271,7 @@ async fn disable_user(
                     datastore.network_state.peer_op(map_op.clone());
                     if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
                         log::info!("Map Op was successful, broadcasting...");
+                        let _ = write_datastore(&DB_HANDLE, &datastore.clone());
                         return Json(Response::Success(Success::Some(v.into())))
                     } else {
                         return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
@@ -1205,7 +1296,10 @@ async fn disable_user(
                         log::info!("Map Op was successful, broadcasting...");
                         let request = PeerRequest::Op(map_op);
                         match datastore.broadcast::<Response<Peer<String>>>(request, "/user/disable").await {
-                            Ok(()) => return Json(Response::Success(Success::Some(v.into()))),
+                            Ok(()) => {
+                                let _ = write_datastore(&DB_HANDLE, &datastore.clone());
+                                return Json(Response::Success(Success::Some(v.into())))
+                            }
                             Err(e) => eprintln!("Error broadcasting DeletePeerRequest: {e}")
                         }
                         return Json(Response::Success(Success::Some(v.into())))
@@ -1234,6 +1328,7 @@ async fn redeem_invite(
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     datastore.network_state.peer_op(map_op.clone());
                     if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
+                        let _ = write_datastore(&DB_HANDLE, &datastore.clone());
                         return Json(Response::Success(Success::Some(v.into())))
                     } else {
                         return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
@@ -1258,7 +1353,10 @@ async fn redeem_invite(
                         log::info!("Map Op was successful, broadcasting...");
                         let request = PeerRequest::Op(map_op);
                         match datastore.broadcast::<Response<Peer<String>>>(request, "/user/redeem").await {
-                            Ok(()) => return Json(Response::Success(Success::Some(v.into()))),
+                            Ok(()) => {
+                                let _ = write_datastore(&DB_HANDLE, &datastore.clone());
+                                return Json(Response::Success(Success::Some(v.into())))
+                            }
                             Err(e) => eprintln!("Error broadcasting DeletePeerRequest: {e}")
                         }
                         return Json(Response::Success(Success::Some(v.into())))
@@ -1445,6 +1543,7 @@ async fn create_cidr(
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     datastore.network_state.cidr_op(map_op.clone());
                     if let (true, v) = datastore.network_state.cidr_op_success(key.clone(), op.clone()) {
+                        let _ = write_datastore(&DB_HANDLE, &datastore.clone());
                         return Json(Response::Success(Success::Some(v.into())))
                     } else {
                         return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
@@ -1466,7 +1565,10 @@ async fn create_cidr(
                     if let (true, v) = datastore.network_state.cidr_op_success(key.clone(), op.clone()) {
                         let request = CidrRequest::Op(map_op);
                         match datastore.broadcast::<Response<Cidr<String>>>(request, "/cidr/create").await {
-                            Ok(()) => return Json(Response::Success(Success::Some(v.into()))),
+                            Ok(()) => {
+                                let _ = write_datastore(&DB_HANDLE, &datastore.clone());
+                                return Json(Response::Success(Success::Some(v.into())))
+                            }
                             Err(e) => eprintln!("Error broadcasting CreateCidrRequest: {e}")
                         }
                         return Json(Response::Success(Success::Some(v.into())))
@@ -1493,6 +1595,7 @@ async fn update_cidr(
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     datastore.network_state.cidr_op(map_op.clone());
                     if let (true, v) = datastore.network_state.cidr_op_success(key.clone(), op.clone()) {
+                        let _ = write_datastore(&DB_HANDLE, &datastore.clone());
                         return Json(Response::Success(Success::Some(v.into())))
                     } else {
                         return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
@@ -1514,7 +1617,10 @@ async fn update_cidr(
                     if let (true, v) = datastore.network_state.cidr_op_success(key.clone(), op.clone()) {
                         let request = CidrRequest::Op(map_op);
                         match datastore.broadcast::<Response<Cidr<String>>>(request, "/cidr/update").await {
-                            Ok(()) => return Json(Response::Success(Success::Some(v.into()))),
+                            Ok(()) => {
+                                let _ = write_datastore(&DB_HANDLE, &datastore.clone());
+                                return Json(Response::Success(Success::Some(v.into())))
+                            }
                             Err(e) => eprintln!("Error broadcasting UpdateCidrRequest: {e}")
                         }
                         return Json(Response::Success(Success::Some(v.into())))
@@ -1607,6 +1713,7 @@ async fn create_assoc(
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     datastore.network_state.associations_op(map_op.clone());
                     if let (true, v) = datastore.network_state.associations_op_success(key.clone(), op.clone()) {
+                        let _ = write_datastore(&DB_HANDLE, &datastore.clone());
                         return Json(Response::Success(Success::Some(v.into())))
                     } else {
                         return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
@@ -1628,7 +1735,10 @@ async fn create_assoc(
                     if let (true, v) = datastore.network_state.associations_op_success(key.clone(), op.clone()) {
                         let request = AssocRequest::Op(map_op);
                         match datastore.broadcast::<Response<Association<String, (String, String)>>>(request, "/assoc/create").await {
-                            Ok(()) => return Json(Response::Success(Success::Some(v.into()))),
+                            Ok(()) => {
+                                let _ = write_datastore(&DB_HANDLE, &datastore.clone());
+                                return Json(Response::Success(Success::Some(v.into())))
+                            }
                             Err(e) => eprintln!("Error broadcasting CreateAssoc Request: {e}")
                         }
                         return Json(Response::Success(Success::Some(v.into())))
@@ -2113,6 +2223,60 @@ async fn get_dns_record(
     return Json(Response::Failure { reason: Some(format!("Record does not exist for domain {domain}")) }) 
 }
 
+async fn update_dns_ip_addr(
+    state: Arc<Mutex<DataStore>>,
+    node_ip: String,
+    new_ip: String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if node_ip == new_ip {
+        return Ok(())
+    }
+
+    let records = get_dns_records_by_node_ip(
+        State(state),
+        Path(node_ip.clone()),
+    ).await;
+
+    if records.is_empty() {
+        return Err(
+            Box::new(
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("0 Dns Records found with public ip of {node_ip}")
+                )
+            )
+        )
+    }
+
+    Ok(())
+}
+
+async fn get_dns_records_by_node_ip(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path(node_ip): Path<String>
+) -> Json<Vec<FormDnsRecord>> {
+    if node_ip.parse::<IpAddr>().is_ok() {
+        match list_dns_records(State(state)).await {
+            Json(Response::Success(Success::List(dns_records))) => {
+                let node_is_host = dns_records.iter().filter_map(|rec| {
+                    if rec.public_ip.iter().any(|addr| {
+                        node_ip == addr.ip().to_string() 
+                    }) {
+                        Some(rec.clone())
+                    } else {
+                        None
+                    }
+                }).collect::<Vec<FormDnsRecord>>();
+                return Json(node_is_host);
+            }
+            Json(Response::Failure { .. }) => return Json(vec![]),
+            _ => unreachable!()        
+        }
+    }
+
+    Json(vec![])
+}
+
 async fn list_dns_records(
     State(state): State<Arc<Mutex<DataStore>>>,
 ) -> Json<Response<FormDnsRecord>> {
@@ -2439,6 +2603,7 @@ async fn handle_create_dns_op(network_state: &NetworkState, key: &str, op: Updat
         if let Some(failure) = failure {
             return failure;
         }
+        let _ = store_map(&DB_HANDLE, "network_state/dns", &network_state.dns_state.zones.clone());
         return Response::Success(Success::Some(v.into()))
     } else {
         log::info!("DNS Op rejected...");
@@ -2457,6 +2622,7 @@ async fn handle_update_dns_op(network_state: &NetworkState, key: &str, op: Updat
         if let Some(failure) = failure {
             return failure;
         }
+        let _ = store_map(&DB_HANDLE, "network_state/dns", &network_state.dns_state.zones.clone());
         return Response::Success(Success::Some(v.into()))
     } else {
         log::info!("Peer Op rejected...");
@@ -2476,6 +2642,7 @@ async fn create_instance(
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     datastore.instance_state.instance_op(map_op.clone());
                     if let (true, v) = datastore.instance_state.instance_op_success(key.clone(), op.clone()) {
+                        let _ = write_datastore(&DB_HANDLE, &datastore.clone());
                         log::info!("Instance Op succesffully applied...");
                         return Json(Response::Success(Success::Some(v.into())))
                     } else {
@@ -2503,7 +2670,10 @@ async fn create_instance(
                         log::info!("Map Op was successful, broadcasting...");
                         let request = InstanceRequest::Op(map_op);
                         match datastore.broadcast::<Response<Instance>>(request, "/instance/create").await {
-                            Ok(()) => return Json(Response::Success(Success::Some(v.into()))),
+                            Ok(()) => {
+                                let _ = write_datastore(&DB_HANDLE, &datastore.clone());
+                                return Json(Response::Success(Success::Some(v.into())))
+                            }
                             Err(e) => eprintln!("Error broadcasting Instance Create Request: {e}")
                         }
                         return Json(Response::Success(Success::Some(v.into())))
@@ -2532,6 +2702,7 @@ async fn update_instance(
                     datastore.instance_state.instance_op(map_op.clone());
                     if let (true, v) = datastore.instance_state.instance_op_success(key.clone(), op.clone()) {
                         log::info!("Instance Op succesffully applied...");
+                        let _ = write_datastore(&DB_HANDLE, &datastore.clone());
                         return Json(Response::Success(Success::Some(v.into())))
                     } else {
                         log::info!("Instance Op rejected...");
@@ -2558,7 +2729,10 @@ async fn update_instance(
                         log::info!("Map Op was successful, broadcasting...");
                         let request = InstanceRequest::Op(map_op);
                         match datastore.broadcast::<Response<Instance>>(request, "/instance/update").await {
-                            Ok(()) => return Json(Response::Success(Success::Some(v.into()))),
+                            Ok(()) => {
+                                let _ = write_datastore(&DB_HANDLE, &datastore.clone());
+                                return Json(Response::Success(Success::Some(v.into())))
+                            }
                             Err(e) => eprintln!("Error broadcasting Instance Update Request: {e}")
                         }
                         return Json(Response::Success(Success::Some(v.into())))
@@ -2618,7 +2792,7 @@ async fn get_instance_ips(
     let datastore = state.lock().await;
     log::info!("Attempting to get instance {id}");
     let instances: Vec<Instance> = datastore.instance_state.map.iter().filter_map(|ctx| {
-        let (id, reg) = ctx.val;
+        let (_, reg) = ctx.val;
         if let Some(val) = reg.val() {
             let instance = val.value();
             if instance.build_id == *id {
@@ -2636,6 +2810,134 @@ async fn get_instance_ips(
     }).collect();
 
     return Json(Response::Success(Success::List(ips)));
+}
+
+async fn get_instance_metrics(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path(id): Path<String>,
+) -> Json<Response<SystemMetrics>> {
+    let datastore = state.lock().await;
+    if let Some(reg) = datastore.instance_state.map.get(&id).val {
+        if let Some(node) = reg.val() {
+            let instance = node.value();
+            if instance.status == InstanceStatus::Started { 
+                if let Some(ip) = instance.formnet_ip {
+                    let endpoint = format!("http://{ip}:63210/get");
+                    match Client::new()
+                        .get(endpoint)
+                        .send().await {
+                            Ok(resp) => {
+                                match resp.json::<SystemMetrics>().await {
+                                    Ok(r) => {
+                                        return Json(Response::Success(Success::Some(r)))
+                                    }
+                                    Err(e) => {
+                                        return Json(Response::Failure { reason: Some(format!("Unable to deserialize response from VM: {e}")) })
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                return Json(Response::Failure { reason: Some(e.to_string()) })
+                            }
+                    }
+                } else {
+                    return Json(Response::Failure { reason: Some("Instance has no formnet ip".to_string()) });
+                }
+            } else {
+                return Json(Response::Failure { reason: Some("Instance has not started".to_string()) });
+            }
+        } else {
+            return Json(Response::Failure { reason: Some("No record of instance in datastore".to_string()) });
+        }
+    } else {
+        return Json(Response::Failure { reason: Some("No record of instance in datastore".to_string()) });
+    }
+}
+
+async fn list_instance_metrics(
+    State(state): State<Arc<Mutex<DataStore>>>
+) -> Json<Response<SystemMetrics>> {
+    let datastore = state.lock().await.instance_state.clone();
+    let instances: Vec<Instance> = datastore.map().iter().filter_map(|ctx| {
+        let (_, value) = ctx.val;
+        match value.val() {
+            Some(node) => {
+                Some(node.value())
+            }
+            None => return None
+        }
+    }).collect(); 
+
+    let mut metrics = vec![];
+    for instance in instances {
+        if let Some(ip) = instance.formnet_ip {
+            let endpoint = format!("http://{ip}:63210/get");
+            match Client::new()
+                .get(endpoint)
+                .send().await {
+                    Ok(resp) => {
+                        match resp.json::<SystemMetrics>().await {
+                            Ok(r) => {
+                                metrics.push(r);
+                            }
+                            Err(e) => {
+                                log::error!("Unable to deserialize response from VM: {e}");
+                            }
+                        }
+                    }
+                    Err(e) => { 
+                        log::error!("{e}");
+                    }
+            }
+        }
+    }
+
+    if !metrics.is_empty() {
+        return Json(Response::Success(Success::List(metrics)))
+    } else {
+        return Json(Response::Failure { reason: Some("Unable to collect any metrics from any instances".to_string()) });
+    }
+}
+
+async fn get_cluster_metrics(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path(id): Path<String>,
+) -> Json<Response<SystemMetrics>> {
+    let datastore = state.lock().await;
+    log::info!("Attempting to get instance {id}");
+    let endpoints: Vec<String> = datastore.instance_state.map.iter().filter_map(|ctx| {
+        let (_, reg) = ctx.val;
+        if let Some(val) = reg.val() {
+            let instance = val.value();
+            if instance.build_id == *id {
+                match instance.formnet_ip {
+                    Some(ip) => Some(format!("http://{ip}:63210/get")),
+                    None => None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }).collect();
+
+    let mut results = vec![]; 
+    for endpoint in endpoints {
+        if let Ok(resp) = Client::new()
+            .get(endpoint)
+            .send().await {
+                if let Ok(r) = resp.json::<SystemMetrics>().await {
+                    results.push(r);
+                }
+            }
+    };
+
+    if !results.is_empty() {
+        Json(Response::Success(Success::List(results)))
+    } else {
+        Json(Response::Failure { reason: Some(format!("Unable to acquire any metrics foor instances with build_id: {id}")) }) 
+    }
 }
 
 
@@ -2714,6 +3016,7 @@ async fn create_node(
                     datastore.node_state.node_op(map_op.clone());
                     if let (true, v) = datastore.node_state.node_op_success(key.clone(), op.clone()) {
                         log::info!("Node Op succesffully applied...");
+                        let _ = write_datastore(&DB_HANDLE, &datastore.clone());
                         return Json(Response::Success(Success::Some(v.into())))
                     } else {
                         log::info!("Node Op rejected...");
@@ -2740,7 +3043,10 @@ async fn create_node(
                         log::info!("Map Op was successful, broadcasting...");
                         let request = NodeRequest::Op(map_op);
                         match datastore.broadcast::<Response<Node>>(request, "/node/create").await {
-                            Ok(()) => return Json(Response::Success(Success::Some(v.into()))),
+                            Ok(()) => {
+                                let _ = write_datastore(&DB_HANDLE, &datastore.clone());
+                                return Json(Response::Success(Success::Some(v.into())))
+                            }
                             Err(e) => eprintln!("Error broadcasting Node Create Request: {e}")
                         }
                         return Json(Response::Success(Success::Some(v.into())))
@@ -2769,6 +3075,7 @@ async fn update_node(
                     datastore.node_state.node_op(map_op.clone());
                     if let (true, v) = datastore.node_state.node_op_success(key.clone(), op.clone()) {
                         log::info!("Node Op succesffully applied...");
+                        let _ = write_datastore(&DB_HANDLE, &datastore.clone());
                         return Json(Response::Success(Success::Some(v.into())))
                     } else {
                         log::info!("Node Op rejected...");
@@ -2795,7 +3102,10 @@ async fn update_node(
                         log::info!("Map Op was successful, broadcasting...");
                         let request = NodeRequest::Op(map_op);
                         match datastore.broadcast::<Response<Node>>(request, "/node/update").await {
-                            Ok(()) => return Json(Response::Success(Success::Some(v.into()))),
+                            Ok(()) => {
+                                let _ = write_datastore(&DB_HANDLE, &datastore.clone());
+                                return Json(Response::Success(Success::Some(v.into())))
+                            }
                             Err(e) => eprintln!("Error broadcasting Node Update Request: {e}")
                         }
                         return Json(Response::Success(Success::Some(v.into())))
@@ -2865,7 +3175,36 @@ async fn get_node(
         return Json(Response::Success(Success::Some(node)))
     }
 
-    return Json(Response::Failure { reason: Some(format!("Unable to find instance with id: {node_id}"))})
+    return Json(Response::Failure { reason: Some(format!("Unable to find node with id: {node_id}"))})
+}
+
+async fn get_node_metrics(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path(node_id): Path<String>,
+) -> Json<Response<NodeMetrics>> {
+    let datastore = state.lock().await;
+    if let Some(node) = datastore.node_state.get_node(node_id.clone()) {
+        return Json(Response::Success(Success::Some(node.metrics)))
+    }
+
+    return Json(Response::Failure { reason: Some(format!("Unable to node instance with id: {node_id}"))})
+}
+
+async fn list_node_metrics(
+    State(state): State<Arc<Mutex<DataStore>>>,
+) -> Json<Response<NodeMetrics>> {
+    let datastore = state.lock().await;
+    let list: Vec<NodeMetrics> = datastore.node_state.map().iter().filter_map(|ctx| {
+        let (_, value) = ctx.val;
+        match value.val() {
+            Some(node) => {
+                return Some(node.value().metrics.clone())
+            }
+            None => return None
+        }
+    }).collect(); 
+
+    return Json(Response::Success(Success::List(list)))
 }
 
 async fn list_nodes(
@@ -2888,7 +3227,7 @@ async fn list_nodes(
 #[cfg(test)]
 mod tests {
     use crate::instances::{InstanceAnnotations, InstanceCluster, InstanceEncryption, InstanceMetadata, InstanceMonitoring, InstanceResources, InstanceSecurity, InstanceStatus};
-    use crate::nodes::{NodeAnnotations, NodeAvailability, NodeCapacity, NodeMetadata, NodeMonitoring};
+    use crate::nodes::{NodeAnnotations, NodeMetadata, NodeMonitoring};
 
     use super::*;
     use k256::ecdsa::SigningKey;
@@ -3045,17 +3384,9 @@ mod tests {
             updated_at: 0,
             last_heartbeat: 0,
             host_region: "us-west".to_string(),
-            capacity: NodeCapacity {
-                vcpus: 4,
-                memory_mb: 8192,
-                bandwidth_mbps: 1000,
-                gpu: None,
-            },
-            availability: NodeAvailability {
-                uptime_seconds: 3600,
-                load_average: 10,
-                status: "online".to_string(),
-            },
+            capabilities: NodeCapabilities::default(),
+            capacity: NodeCapacity::default(), 
+            metrics: NodeMetrics::default(),
             metadata: NodeMetadata {
                 tags: vec!["node_tag".to_string()],
                 description: "Fake node".to_string(),
@@ -3068,6 +3399,7 @@ mod tests {
                     metrics_endpoint: "http://node.metrics".to_string(),
                 },
             },
+            host: Host::Domain("example.com".to_string())
         };
         let node_ctx = nodes.read_ctx().derive_add_ctx(actor.clone());
         let node_op = nodes.update("node1".to_string(), node_ctx, |reg, _| {
@@ -3105,4 +3437,3 @@ mod tests {
         Ok(())
     }
 }
-

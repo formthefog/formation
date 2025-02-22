@@ -42,7 +42,7 @@ members = [
   "form-pack", 
   "form-config", 
   "form-dns", 
-  "form-rplb", 
+  "form-rplb", "form-node-metrics", "form-vm-metrics", 
 ]
 
 [workspace.dependencies]

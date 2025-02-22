@@ -1,4 +1,5 @@
 use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, CmRDT, Map, bft_reg::Update};
+use form_node_metrics::{capabilities::NodeCapabilities, capacity::NodeCapacity, metrics::NodeMetrics};
 use k256::ecdsa::SigningKey;
 use tiny_keccak::Hasher;
 use url::Host;
@@ -9,16 +10,36 @@ pub type NodeOp = Op<String, BFTReg<Node, Actor>, Actor>;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Node {
-    pub(crate) node_id: String,
-    pub(crate) node_owner: String,
-    pub(crate) created_at: i64,
-    pub(crate) updated_at: i64,
-    pub(crate) last_heartbeat: i64,
-    pub(crate) host_region: String,
-    pub(crate) capacity: NodeCapacity,
-    pub(crate) availability: NodeAvailability,
-    pub(crate) metadata: NodeMetadata,
+    pub node_id: String,
+    pub node_owner: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub last_heartbeat: i64,
+    pub host_region: String,
+    pub capabilities: NodeCapabilities,
+    pub capacity: NodeCapacity,
+    pub metrics: NodeMetrics,
+    pub metadata: NodeMetadata,
     pub host: Host
+}
+
+impl Default for Node {
+    fn default() -> Self {
+        let null_hex = hex::encode(&[0u8; 32]);
+        Self {
+            node_id: null_hex.clone(),
+            node_owner: null_hex.clone(),
+            created_at: 0,
+            updated_at: 0,
+            last_heartbeat: 0,
+            host_region: Default::default(),
+            capabilities: Default::default(),
+            capacity: Default::default(),
+            metrics: Default::default(),
+            metadata: Default::default(),
+            host: Host::Domain(Default::default())
+        }
+    }
 }
 
 impl Sha3Hash for Node {
@@ -58,8 +79,8 @@ impl Node {
         &self.capacity
     }
 
-    pub fn availability(&self) -> &NodeAvailability {
-        &self.availability
+    pub fn metrics(&self) -> &NodeMetrics {
+        &self.metrics
     }
 
     pub fn metadata(&self) -> &NodeMetadata {
@@ -67,79 +88,8 @@ impl Node {
     }
 }
 
-/// Describes the resource capacity of the node.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct NodeCapacity {
-    pub(crate) vcpus: u8,
-    pub(crate) memory_mb: u32,
-    pub(crate) bandwidth_mbps: u32,
-    pub(crate) gpu: Option<NodeGpu>,
-}
-
-impl NodeCapacity {
-    pub fn vcpus(&self) -> u8 {
-        self.vcpus
-    }
-
-    pub fn memory_mb(&self) -> u32 {
-        self.memory_mb
-    }
-
-    pub fn bandwidth_mbps(&self) -> u32 {
-        self.bandwidth_mbps
-    }
-
-    pub fn gpu(&self) -> Option<NodeGpu> {
-        self.gpu.clone()
-    }
-}
-
-/// Describes available GPU capacity on the node.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct NodeGpu {
-    pub(crate) count: u8,
-    pub(crate) model: String,
-    pub(crate) vram_mb: u32,
-}
-
-impl NodeGpu {
-    pub fn count(&self) -> u8 {
-        self.count
-    }
-
-    pub fn model(&self) -> &str {
-        &self.model
-    }
-
-    pub fn vram_mb(&self) -> u32 {
-        self.vram_mb
-    }
-}
-
-/// Contains real-time availability information of the node.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct NodeAvailability {
-    pub(crate) uptime_seconds: u64,
-    pub(crate) load_average: u32,
-    pub(crate) status: String, // e.g. "online", "offline", "maintenance"
-}
-
-impl NodeAvailability {
-    pub fn uptime_seconds(&self) -> u64 {
-        self.uptime_seconds
-    }
-
-    pub fn load_average(&self) -> f64 {
-        self.load_average as f64 / 100.0
-    }
-
-    pub fn status(&self) -> &str {
-        &self.status
-    }
-}
-
 /// Additional metadata for operational context.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeMetadata {
     pub(crate) tags: Vec<String>,
     pub(crate) description: String,
@@ -166,7 +116,7 @@ impl NodeMetadata {
 }
 
 /// Additional annotations, such as roles and datacenter info.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeAnnotations {
     pub(crate) roles: Vec<String>,     // e.g. ["compute", "storage"]
     pub(crate) datacenter: String,     // Which datacenter the node belongs to.
@@ -183,7 +133,7 @@ impl NodeAnnotations {
 }
 
 /// Monitoring settings specific to the node.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeMonitoring {
     pub(crate) logging_enabled: bool,
     pub(crate) metrics_endpoint: String,
@@ -239,6 +189,43 @@ impl NodeState {
         });
         log::info!("Node op created, returning...");
         op
+    }
+
+    pub fn update_node_heartbeat(&mut self, node_id: String, timestamp: i64) -> Option<NodeOp> {
+        if let Some(node_reg) = self.map.get(&node_id).val {
+            if let Some(node_val) = node_reg.val() {
+                let mut node = node_val.value();
+                node.last_heartbeat = timestamp;
+                return Some(self.update_node_local(node))
+            }
+        }
+
+        None
+    }
+
+    pub fn update_node_metrics(&mut self, node_id: String, node_capacity: NodeCapacity, node_metrics: NodeMetrics) -> Option<NodeOp> {
+        if let Some(node_reg) = self.map.get(&node_id).val {
+            if let Some(node_val) = node_reg.val() {
+                let mut node = node_val.value();
+                node.capacity = node_capacity;
+                node.metrics = node_metrics;
+                return Some(self.update_node_local(node))
+            }
+        }
+
+        None
+    }
+
+    pub fn set_initial_node_capabilities(&mut self, node_id: String, node_capacity: NodeCapacity, node_capabilities: NodeCapabilities) -> Option<NodeOp> {
+        if let Some(node_reg) = self.map.get(&node_id).val {
+            if let Some(node_val) = node_reg.val() {
+                let mut node = node_val.value();
+                node.capacity = node_capacity;
+                node.capabilities = node_capabilities;
+                return Some(self.update_node_local(node))
+            }
+        }
+        None
     }
 
     /// Remove a node record locally.

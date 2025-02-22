@@ -47,7 +47,7 @@ daemonize = "0.5"
 argon2 = "0.5"
 anyhow = "1"
 tiny-keccak = { version = "2.0.2", features = ["sha3"] }
-crdts = { git = "http://github.com/Cryptonomikhan/rust-crdt", rev = "1fe4992" }
+crdts = { git = "http://github.com/Cryptonomikhan/rust-crdt", rev = "af3a3dd" }
 form-dns = { path = "../form-dns" }
 simple_logger = "5"
 url = "2" 

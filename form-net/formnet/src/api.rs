@@ -2,10 +2,10 @@ use std::{collections::HashMap, net::{IpAddr, SocketAddr}, str::FromStr, sync::A
 use form_types::PeerType;
 use formnet_server::{db::CrdtMap, DatabasePeer};
 use serde::{Serialize, Deserialize};
-use shared::{Endpoint, NetworkOpts, Peer, PeerContents};
+use shared::{Endpoint, NetworkOpts, Peer, PeerContents, PeerDiff};
 use tokio::{net::TcpListener, sync::RwLock};
 use axum::{extract::{ConnectInfo, Path, State}, routing::{get, post}, Json, Router};
-use wireguard_control::{AllowedIp, Device, InterfaceName};
+use wireguard_control::{AllowedIp, Backend, Device, DeviceUpdate, InterfaceName, PeerConfigBuilder};
 
 use crate::{add_peer, handle_leave_request};
 
@@ -67,7 +67,7 @@ async fn join(
     Json(request): Json<BootstrapInfo>,
 ) -> Json<Response> {
     log::info!("Received join request");
-    match add_peer(&NetworkOpts::default(), &request.peer_type, &request.id, request.pubkey, request.external_endpoint, addr).await {
+    match add_peer(&NetworkOpts::default(), &request.peer_type, &request.id, request.external_endpoint, request.pubkey, addr).await {
         Ok(ip) => {
             log::info!("Added peer, returning IP {ip}");
             Json(Response::Join(JoinResponse::Success(ip)))
@@ -104,35 +104,119 @@ async fn candidates(
     Path(ip): Path<String>,
     Json(contents): Json<Vec<Endpoint>> 
 ) {
+
+    log::info!("Received candidates from {addr}: {contents:?}");
+
+    let public_ip = addr.ip();
+    let contents = contents.iter().filter_map(|ep| {
+        match ep.resolve() {
+            Ok(socket_addr) => {
+                let ep_port = socket_addr.port(); 
+                let pub_ep = Endpoint::from(SocketAddr::new(public_ip, ep_port));
+                Some(pub_ep)
+            }
+            Err(_) => None
+        }
+    }).collect::<Vec<Endpoint>>();
+
+    log::info!("Endpoints resolved: {contents:?}");
+
     if let Ok(ip) = ip.parse::<IpAddr>() {
         if let Ok(device) = Device::get(&InterfaceName::from_str("formnet").unwrap(), NetworkOpts::default().backend) {
             if let Some(peer_info) = device.peers.iter().find(|p| {
-                p.config.allowed_ips.contains(&AllowedIp { address: ip, cidr: 8 })
+                p.config.allowed_ips.contains(&AllowedIp { address: ip, cidr: 32 })
             }) {
+                log::info!("Parsed IP address");
                 if let Some(current_endpoint) = peer_info.config.endpoint {
+                    log::info!("Existing endpoint exists...");
                     let mut selected_peer = DatabasePeer::<String, CrdtMap>::get_from_ip(ip).await;
-                    let mut contents = contents.clone();
-                    contents.push(addr.into());
                     match selected_peer {
                         Ok(ref mut dbpeer) => {
-                            let _ = dbpeer.update(
-                                PeerContents {
-                                    endpoint: Some(current_endpoint.into()),
-                                    candidates: contents.clone(),
-                                    ..dbpeer.contents.clone()
+                            let mut stale_endpoint = false;
+                            if !contents.is_empty() && !contents.contains(&current_endpoint.into()) { 
+                                log::info!("Current endpoint is stale");
+                                stale_endpoint = true;
+                            }
+                            let best_candidate = contents.iter().find(|ep| {
+                                match ep.resolve() {
+                                    Ok(resolved) => {
+                                        log::info!("Found a better candidate: {resolved}");
+                                        resolved.is_ipv4()
+                                    }
+                                    _ => false
                                 }
+                            });
+                            let current_endpoint = if stale_endpoint && best_candidate.is_some() {
+                                best_candidate.unwrap().clone()
+                            } else {
+                                current_endpoint.into()
+                            };
+                            let peer_contents = PeerContents {
+                                endpoint: Some(current_endpoint.clone()),
+                                candidates: contents.clone(),
+                                ..dbpeer.contents.clone()
+                            };
+                            let peer = Peer {
+                                id: dbpeer.id.clone(),
+                                contents: peer_contents.clone()
+                            };
+                            let _ = dbpeer.update(
+                                peer_contents.clone()
                             ).await;
-                            dbpeer.endpoint = Some(current_endpoint.into());
-                            dbpeer.candidates = contents;
+                            let interface_name = InterfaceName::from_str("formnet").unwrap();
+                            match PeerDiff::new(Some(peer_info), Some(&peer)) {
+                                Ok(Some(diff)) => {
+                                    let _ = DeviceUpdate::new()
+                                        .add_peer(PeerConfigBuilder::from(diff))
+                                        .apply(&interface_name, Backend::default());
 
-                            let peers = &mut [DatabasePeer::from(dbpeer.clone())]; 
-                            inject_endpoints(state, peers).await;
+                                    let endpoints = state.write().await.endpoints.clone();
+                                    let mut guard = endpoints.write().await;
+                                    guard.insert(dbpeer.public_key.clone(), current_endpoint.resolve().unwrap());
+                                    drop(guard);
+                                    drop(endpoints);
+                                }
+                                Ok(None) => {
+                                    log::warn!("No peer diff");
+                                }
+                                Err(e) => log::error!("Error creating peer diff: {e}"),
+                            };
+                        }
+                        Err(e) => {
+                            log::error!("Error getting peer, peer may not exist in datatore: {e}");
+                        }
+                    }
+                } else {
+                    log::info!("No existing endpoint exists... Adding candidates");
+                    let mut selected_peer = DatabasePeer::<String, CrdtMap>::get_from_ip(ip).await;
+                    match selected_peer {
+                        Ok(ref mut dbpeer) => {
+                            log::info!("Found peer via formnet IP");
+                            if let Some(endpoint) = contents.first() { 
+                                log::info!("Acquired first reported endpoint: {endpoint:?}");
+                                let _ = dbpeer.update(
+                                    PeerContents {
+                                        endpoint: Some(endpoint.clone()),
+                                        candidates: contents.clone(),
+                                            ..dbpeer.contents.clone()
+                                        }
+                                    ).await;
+                                    let endpoints = state.write().await.endpoints.clone();
+                                    let mut guard = endpoints.write().await;
+                                    guard.insert(dbpeer.public_key.clone(), endpoint.resolve().unwrap());
+                                    drop(guard);
+                                    drop(endpoints);
+                            } else {
+                                log::error!("No valid candidates for an endpoint reported");
+                            }
                         }
                         Err(e) => {
                             log::error!("Error getting peer, peer may not exist in datatore: {e}");
                         }
                     }
                 }
+            } else {
+                log::error!("Peer not found in the device");
             }
         } else {
             log::info!("unable to acquiire peer with ip: {ip}");
@@ -151,7 +235,7 @@ async fn inject_endpoints(state: Arc<RwLock<FormnetApiState>>, peers: &mut [Data
         if let Some(wg_endpoint) = reader.get(&peer.public_key) {
             if peer.contents.endpoint.is_none() {
                 peer.contents.endpoint = Some(wg_endpoint.to_owned().into());
-            } else {
+            } else if !peer.contents.candidates.contains(&wg_endpoint.to_owned().into()) {
                 peer.contents.candidates.push(wg_endpoint.to_owned().into());
             }
             let new_contents = peer.contents.clone();

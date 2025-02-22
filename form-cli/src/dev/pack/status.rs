@@ -20,7 +20,7 @@ pub struct StatusCommand {
 impl StatusCommand {
     pub async fn handle_status(&self, provider: String, port: u16) -> Result<(), Box<dyn std::error::Error>> {
         let status = Client::new()
-            .post(&format!("http://{provider}:{port}/instance/{}/get_by_build_id", self.build_id))
+            .get(&format!("http://{provider}:{port}/instance/{}/get_by_build_id", self.build_id))
             .send().await?
             .json::<StateResponse<Instance>>()
             .await?;

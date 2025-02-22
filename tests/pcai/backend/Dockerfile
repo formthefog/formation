@@ -1,6 +1,10 @@
 # Use Python 3.11 slim image
 FROM python:3.11-slim
 
+RUN apt-get update -y
+
+RUN apt-get install -y curl
+
 # Set working directory
 WORKDIR /app
 
