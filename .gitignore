@@ -8,6 +8,7 @@
 /form-rplb/examples/rustls_acme_cache
 /logs
 /secrets
+/form-ubuntu
 .formnet.log
 .formnet-errors.log
 

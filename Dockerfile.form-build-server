@@ -8,12 +8,11 @@ RUN mkdir -p /img
 RUN wget https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img -O /img/jammy-server-cloudimg-amd64.img && \
     ls -l /img/jammy-server-cloudimg-amd64.img
 
-RUN qemu-img convert -O raw /img/jammy-server-cloudimg-amd64.img /img/jammy-server-cloudimg-amd64.raw
-RUN qemu-img resize /img/jammy-server-cloudimg-amd64.raw +4G
 RUN mkdir /scripts
 RUN mkdir /var/lib/formnet
 RUN mkdir /artifacts
 
+COPY ./form-ubuntu/jammy-server-cloudimg-amd64.raw /img/jammy-server-cloudimg-amd64.raw
 COPY ./target/release/form-build-server /bin/form-build-server
 COPY ./target/release/formnet /var/lib/formnet/formnet
 COPY ./artifacts/modules /lib/modules
