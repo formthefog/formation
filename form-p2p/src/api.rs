@@ -12,7 +12,15 @@ use axum::{
 };
 use bytes::Bytes;
 use futures::StreamExt;
-use crate::queue::{FormMQ, QueueRequest, QueueResponse, QUEUE_PORT};
+use crate::{db::{store_topic_queue, open_db}, queue::{FormMQ, QueueRequest, QueueResponse, QUEUE_PORT}};
+use std::path::PathBuf;
+use lazy_static::lazy_static;
+use rocksdb::DB;
+
+lazy_static! {
+    static ref DB_HANDLE: Arc<DB> = open_db(PathBuf::from("/var/lib/formation/db/form.db"));
+}
+
 
 pub async fn bootstrap_topic_queue(dial: String, queue: Arc<RwLock<FormMQ<Vec<u8>>>>) -> Result<(), Box<dyn std::error::Error>> {
     let client = Client::new();
@@ -114,6 +122,9 @@ pub async fn write_op(
         QueueRequest::Op(op) => {
             queue.apply(op.clone());
             queue.op_success(op);
+            drop(queue);
+            let queue = state.read().await.queue().clone();
+            let _ = store_topic_queue(&DB_HANDLE, "form-queue", &queue);
             return Json(QueueResponse::OpSuccess)
         }
         _ => {
@@ -133,9 +144,15 @@ pub async fn write_local(
             match queue.write_local(topic, content) {
                 Ok(op) => if queue.op_success(op.clone()) {
                     tokio::spawn(async move {
-                        if let Err(e) = FormMQ::broadcast_op(op).await {
+                        if let Err(e) = FormMQ::broadcast_op(op.clone()).await {
                             eprintln!("Error broadcasting op: {e}");
                         }
+                    });
+                    drop(queue);
+                    let inner_state = state.clone();
+                    tokio::spawn(async move {
+                        let queue = inner_state.read().await.queue().clone();
+                        let _ = store_topic_queue(&DB_HANDLE, "form-queue", &queue);
                     });
                     return Json(QueueResponse::OpSuccess)
                 } else {

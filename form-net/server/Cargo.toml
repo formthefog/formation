@@ -58,7 +58,7 @@ wireguard-control = { path = "../wireguard-control" }
 form-state = { path = "../../form-state" }
 form-types = { path = "../../form-types" }
 form-p2p = { path = "../../form-p2p/" }
-crdts = { git = "http://github.com/Cryptonomikhan/rust-crdt", rev = "1fe4992" }
+crdts = { git = "http://github.com/Cryptonomikhan/rust-crdt", rev = "af3a3dd" }
 reqwest = { version = "0.12", features = ["json"] }
 async-trait = "0.1"
 
