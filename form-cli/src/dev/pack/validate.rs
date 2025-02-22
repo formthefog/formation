@@ -1,6 +1,6 @@
 use std::path::PathBuf;
-
 use clap::Args;
+use colored::Colorize;
 use form_pack::formfile::FormfileParser;
 use crate::{default_context, default_formfile};
 
@@ -14,15 +14,21 @@ impl ValidateCommand {
     pub async fn handle(&self) -> Result<String, String> {
         let mut parser = FormfileParser::new();
         let content = std::fs::read_to_string(&self.formfile).map_err(|e| e.to_string())?;
-        let _ = parser.parse(&content).map_err(|e| e.to_string());
-        Ok(r#"
-Congratulations! Your Formfile is valid!
+        let formfile = parser.parse(&content).map_err(|e| e.to_string())?;
 
-    To build your Formpack run:
+        Ok(format!("\n{} {}\n\n{}\n{}\n\n{}\n{}\n{}\n\n{}\n{}\n",
+            "✨".bright_green(),
+            "Formfile validation successful!".bold().bright_green(),
+            
+            "📦 Build Configuration:".bold(),
+            format!("   • Name: {}", formfile.name).dimmed(),
 
-        `form pack build .`
+            "🚀 Next Steps:".bold(),
+            "   Run this command to build:".dimmed(),
+            format!("   {} {}", "form pack build".bright_blue(), ".".bright_blue()),
 
-    from the root directory of your project (same location as your Formfile)
-        "#.to_string())
+            "💡 Tip:".bold(),
+            "   Run from the same directory as your Formfile".dimmed()
+        ))
     }
 }
