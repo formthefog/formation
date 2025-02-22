@@ -113,6 +113,18 @@ pub fn print_pack_status(status: StateResponse<Instance>, build_id: String) {
                     "✨ Ready to Ship".bright_green(),
                     "   To deploy your instances, run:".dimmed(),
                     "   form pack ship".bright_blue());
+
+                println!("{}\n{}\n{}\n{}\n{}\n",
+                    "📋 What Happens Next:".bold(),
+                    "   1. Your instances will be deployed to the network".dimmed(),
+                    "   2. Each instance will be assigned a FormNet IP".dimmed(),
+                    "   3. You can check deployment status with:".dimmed(),
+                    format!("      {} {} {}", "form manage get-ip --build-id".bright_blue(), build_id.bright_yellow(), "(after a few minutes)".dimmed()));
+
+                println!("{}\n{}\n{}\n",
+                    "💡 Tips:".bold(),
+                    "   • Make sure you're in your project root directory before shipping".dimmed(),
+                    "   • You can SSH into instances once they have FormNet IPs assigned".dimmed());
             }
 
             // Show SSH instructions if any instance has an IP
@@ -134,7 +146,7 @@ pub fn print_pack_status(status: StateResponse<Instance>, build_id: String) {
                 println!("{}\n{}\n{}\n",
                     "🚀 Instances Running".bright_green(),
                     "   To get updated formnet IP addresses, run:".dimmed(),
-                    "   form manage get-ip".bright_blue());
+                    format!("   {} {} {}", "form manage get-ip --build-id".bright_blue(), build_id.bright_yellow(), "(after a few minutes)".dimmed()));
             }
 
             if status_groups.contains_key("Failed") {
