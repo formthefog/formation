@@ -1320,6 +1320,9 @@ name = "bitflags"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f68f53c83ab957f72c32642f3868eec03eb974d1fb82e453128456482613d36"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "bitvec"
@@ -2964,6 +2967,19 @@ dependencies = [
  "shared",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "form-vm-metrics"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "nvml-wrapper",
+ "procfs",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tokio",
 ]
 
 [[package]]
@@ -5546,6 +5562,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60946a68e5f9d28b0dc1c21bb8a97ee7d018a8b322fa57838ba31cc878e22d99"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "procfs"
+version = "0.17.0"
+source = "git+http://github.com/cryptonomikhan/procfs?rev=9b414a4#9b414a4f4f19f79c403a140102f145211c33ab6d"
+dependencies = [
+ "bitflags 2.8.0",
+ "chrono",
+ "flate2",
+ "procfs-core",
+ "rustix",
+ "serde",
+]
+
+[[package]]
+name = "procfs-core"
+version = "0.17.0"
+source = "git+http://github.com/cryptonomikhan/procfs?rev=9b414a4#9b414a4f4f19f79c403a140102f145211c33ab6d"
+dependencies = [
+ "bitflags 2.8.0",
+ "chrono",
+ "hex",
+ "serde",
 ]
 
 [[package]]
