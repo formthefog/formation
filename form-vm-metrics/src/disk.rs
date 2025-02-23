@@ -1,5 +1,5 @@
 #[cfg(target_os = "linux")]
-use procfs::{diskstats, DiskStat};
+use procfs::diskstats;
 use serde::{Serialize, Deserialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -24,17 +24,17 @@ pub fn collect_disk_metrics() -> Vec<DiskMetrics> {
         match diskstats() {
             Ok(stats) => stats.into_iter().map(|stat| DiskMetrics {
                 device_name: stat.name,
-                reads_completed: stat.reads_completed,
-                reads_merged: stat.reads_merged,
+                reads_completed: stat.reads,
+                reads_merged: stat.merged,
                 sectors_read: stat.sectors_read,
                 time_reading: stat.time_reading,
-                writes_completed: stat.writes_completed,
+                writes_completed: stat.writes,
                 writes_merged: stat.writes_merged,
                 sectors_written: stat.sectors_written,
                 time_writing: stat.time_writing,
-                io_in_progress: stat.io_in_progress,
-                time_doing_io: stat.time_doing_io,
-                weighted_time_doing_io: stat.weighted_time_doing_io,
+                io_in_progress: stat.in_progress,
+                time_doing_io: stat.time_in_progress,
+                weighted_time_doing_io: stat.weighted_time_in_progress,
             }).collect(),
             Err(_) => Vec::new(),
         }

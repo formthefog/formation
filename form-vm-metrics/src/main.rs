@@ -9,7 +9,7 @@ use tokio::{net::TcpListener, sync::{broadcast::channel, Mutex}, time::interval}
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let default_metrics = Arc::new(Mutex::new(SystemMetrics::default()));
-    let system_metrics = collect_system_metrics(default_metrics, None, 30).await;
+    let system_metrics = collect_system_metrics(default_metrics).await;
 
     let (tx, mut rx) = channel(2);
 
@@ -20,12 +20,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut interval = interval(Duration::from_secs(30));
         loop {
             interval.tick().await;
-            let guard = collector_metrics.lock().await;
-            let disk_stats = guard.disk_stats.clone();
-            drop(guard);
             tokio::select! {
                 _ = inner_receiver.recv() => { break }
-                _ = collect_system_metrics(collector_metrics.clone(), Some(disk_stats), 30)  => {}
+                _ = collect_system_metrics(collector_metrics.clone())  => {}
             }
         }
     });

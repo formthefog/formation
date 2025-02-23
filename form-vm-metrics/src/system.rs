@@ -23,9 +23,8 @@ pub struct SystemMetrics {
     pub load: LoadMetrics,
 }
 
-pub async fn collect_system_metrics_async(
+pub async fn collect_system_metrics(
     system_metrics: Arc<Mutex<SystemMetrics>>,
-    refresh: u64,
 ) -> Arc<Mutex<SystemMetrics>> {
     let mut sys = System::new_all();
     sys.refresh_all();
