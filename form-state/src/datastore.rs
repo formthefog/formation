@@ -2816,8 +2816,8 @@ async fn get_instance_metrics(
     State(state): State<Arc<Mutex<DataStore>>>,
     Path(id): Path<String>,
 ) -> Json<Response<SystemMetrics>> {
-    let datastore = state.lock().await;
-    if let Some(reg) = datastore.instance_state.map.get(&id).val {
+    let datastore = state.lock().await.instance_state.clone();
+    if let Some(reg) = datastore.map.get(&id).val {
         if let Some(node) = reg.val() {
             let instance = node.value();
             if instance.status == InstanceStatus::Started { 
