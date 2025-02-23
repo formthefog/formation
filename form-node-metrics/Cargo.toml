@@ -30,8 +30,10 @@ form-config = { path = "../form-config" }
 form-p2p = { path = "../form-p2p" }
 
 [features]
+default = []
 intel = ["sgx"]
 amd = ["sev"]
+tpm = ["tss2"]
 
 [dependencies.sgx]
 version = "0.6"
@@ -43,3 +45,4 @@ optional = true
 
 [dependencies.tss2]
 version = "0.1"
+optional = true

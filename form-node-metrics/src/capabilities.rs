@@ -26,7 +26,7 @@ impl NodeCapabilities {
         // Collect CPU info
         let cpu_model = sys.cpus().get(0)
             .map(|cpu| cpu.brand().to_string())
-            .unwrap_or_default();  // CPU brand as model&#8203;:contentReference[oaicite:6]{index=6}
+            .unwrap_or_default();  // CPU brand as model
 
         let cpu_cores = sys
             .physical_core_count()
@@ -37,27 +37,31 @@ impl NodeCapabilities {
         let total_storage = sysinfo::Disks::new_with_refreshed_list()
             .iter()
             .map(|disk| disk.total_space())
-            .sum();  // sum of all disk sizes&#8203;:contentReference[oaicite:8]{index=8}
+            .sum();  // sum of all disk sizes
 
         // GPU, network, TPM, virtualization can be fetched via other means (placeholder here)
         let gpu_models = detect_gpus(); 
         let network_interfaces = NetworkCapability::collect(); 
+
+        #[cfg(feature = "tpm")]
+        let tpm = detect_tpm();
+        #[cfg(not(feature = "tpm"))]
+        let tpm = None;
+
         let virtualization_type = String::from("BareMetal");
 
-        let cap = NodeCapabilities {
+        Self {
             cpu_model,
             cpu_cores,
             total_memory,
             total_storage,
             gpu_models,
             network_interfaces,
-            tpm: None,
-            sev: None,
+            tpm,
             sgx: None,
+            sev: None,
             virtualization_type: Some(virtualization_type),
-        };
-
-        cap
+        }
     }
 }
 
@@ -108,7 +112,7 @@ impl NetworkCapability {
                     let speed_path = format!("/sys/class/net/{}/speed", iface.name);
                     if let Ok(speed_str) = std::fs::read_to_string(&speed_path) {
                         if let Ok(speed_val) = speed_str.trim().parse::<u64>() {
-                            // The sysfs speed value is in Mbit/s&#8203;:contentReference[oaicite:10]{index=10}
+                            // The sysfs speed value is in Mbit/s
                             if speed_val != 0 {
                                 link_speed = Some(speed_val);
                             }
@@ -279,6 +283,22 @@ pub struct TpmInfo {
     pub description: Option<String>,
     // Could also store firmware version if accessible
     pub firmware_version: Option<String>,
+}
+
+#[cfg(feature = "tpm")]
+fn detect_tpm() -> Option<TpmInfo> {
+    use tss2::*;
+    // Try to detect TPM using tss2
+    match tss2::Context::new() {
+        Ok(_) => Some(TpmInfo {
+            present: true,
+            version: Some("2.0".to_string()),
+            manufacturer: None,
+            description: None,
+            firmware_version: None,
+        }),
+        Err(_) => None,
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
