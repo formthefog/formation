@@ -51,97 +51,155 @@ pub struct BuildCommand {
 pub fn print_queue_response(resp: QueueResponse, build_id: String) {
     match resp {
         QueueResponse::OpSuccess => {
-            println!(r#"
-Your build is being processed, and was accepted successfully.
+            println!("\n{} {}\n",
+                "🎯".bright_green(),
+                "Build request accepted successfully!".bold().bright_green());
 
-This is your unique build id: {}
+            println!("{}\n{}\n",
+                "📋 Build Information:".bold(),
+                format!("   • Build ID: {}", build_id.bright_yellow()));
 
-To check the status of your build, you can run: 
+            println!("{}\n{}\n{}\n",
+                "⏳ Build Status:".bold(),
+                "   To check your build status, run:".dimmed(),
+                format!("   {} {}", "form pack status".bright_blue(), format!("--build-id {}", build_id).bright_blue()));
 
-```
-{}
-```
+            println!("{}\n{}\n",
+                "⏱️  Processing Time:".bold(),
+                "   This process typically takes a couple of minutes".dimmed());
 
-This process typically takes a couple of minutes. 
+            println!("{}\n{}\n{}\n",
+                "🚀 Next Steps:".bold(),
+                "   Once build status shows 'Success', deploy with:".dimmed(),
+                format!("   {} {}", "form pack ship".bright_blue(), ".".bright_blue()));
 
-Once your build status returns Success, you can `{}` it to the network by running:
-
-```
-{}
-```
-
-No need to provide the build ID here, {} of your 
-project, or provide the correct options.
-"#,
-build_id.blue(),
-"form pack [OPTIONS] status <build-id>".bright_yellow(),
-"ship".blue(),
-"form pack [OPTIONS] ship".bright_yellow(),
-"however, ensure you are in the root directory".bright_purple(), 
-);
+            println!("{}\n{}\n",
+                "💡 Tip:".bold(),
+                "   Run ship command from your project root directory".dimmed());
         }
         QueueResponse::Failure { reason } => {
+            println!("\n{} {}\n",
+                "❌".bright_red(),
+                "Build request failed".bold().bright_red());
+
             if let Some(reason) = reason {
-            println!(r#"
-Unforutnately your build request {} for the following reason:
-
-{}
-
-If the reason is missing, or unclear, please consider going to our project
-discord at {} and going to the {} channel, submitting an {} on our project github at {}, 
-or sending us a direct message on X at {}, and someone from our core team will gladly
-help you out.
-"#,
-"FAILED".white().on_bright_red(),
-reason.bright_red().on_black(),
-"discord.gg/formation".blue(),
-"chewing-glass".blue(),
-"issue".bright_yellow(),
-"http://github.com/formthefog/formation.git".blue(),
-"@formthefog".blue(),
-);
+                println!("{}\n{}\n",
+                    "📝 Error Details:".bold(),
+                    format!("   • {}", reason).bright_red());
             }
+
+            println!("{}\n{}\n{}\n{}\n",
+                "🔍 Need Help?".bold(),
+                format!("   • Discord: {}", "discord.gg/formation".bright_blue().underline()),
+                format!("   • GitHub:  {}", "github.com/formthefog/formation".bright_blue().underline()),
+                format!("   • Twitter: {}", "@formthefog".bright_blue().underline()));
         }
         _ => {
-            println!(r#"
-Something went {} wrong. The response received was {:?} which is an invalid response 
-to the `{}` command.
+            println!("\n{} {}\n",
+                "⚠️".bright_yellow(),
+                "Unexpected Response".bold().bright_yellow());
 
-Please consider doing one of the following: 
+            println!("{}\n{}\n",
+                "📝 Details:".bold(),
+                format!("   • Received invalid response: {:?}", resp).bright_yellow());
 
-    1. Join our discord at {} and go to the {} channel and paste this response
-    2. Submitting an {} on our project github at {} 
-    3. Sending us a direct message on X at {}
-
-Someone from our core team will gladly help you out.
-"#,
-"terribly".bright_red().on_blue(),
-resp,
-"form pack [OPTIONS] build".bright_yellow(),
-"discord.gg/formation".blue(),
-"chewing-glass".blue(),
-"issue".bright_yellow(),
-"http://github.com/formthefog/formation.git".blue(),
-"@formthefog".blue(),
-);
+            println!("{}\n{}\n{}\n{}\n",
+                "🔍 Get Support:".bold(),
+                format!("   • Discord: {}", "discord.gg/formation".bright_blue().underline()),
+                format!("   • GitHub:  {}", "github.com/formthefog/formation".bright_blue().underline()),
+                format!("   • Twitter: {}", "@formthefog".bright_blue().underline()));
         }
     }
 }
 
 impl BuildCommand {
     pub async fn handle_queue(mut self, provider: &str, queue_port: u16, keystore: Keystore) -> Result<(), Box<dyn std::error::Error>> {
-        let (request, build_id) = self.pack_build_request_queue(Some(keystore)).await?;
-        let resp: QueueResponse = Client::new()
+        println!("\n{} {}\n",
+            "🔄".bright_blue(),
+            "Preparing build request...".bold());
+
+        let (request, build_id) = match self.pack_build_request_queue(Some(keystore)).await {
+            Ok((req, id)) => (req, id),
+            Err(e) => {
+                println!("\n{} {}\n",
+                    "❌".bright_red(),
+                    "Failed to prepare build request".bold().bright_red());
+                
+                println!("{}\n{}\n",
+                    "📝 Error Details:".bold(),
+                    format!("   • {}", e).bright_red());
+
+                println!("{}\n{}\n{}\n{}\n",
+                    "🔍 Need Help?".bold(),
+                    format!("   • Discord: {}", "discord.gg/formation".bright_blue().underline()),
+                    format!("   • GitHub:  {}", "github.com/formthefog/formation".bright_blue().underline()),
+                    format!("   • Twitter: {}", "@formthefog".bright_blue().underline()));
+                
+                return Err(e);
+            }
+        };
+
+        println!("{} {}\n",
+            "📤".bright_blue(),
+            "Sending build request...".bold());
+
+        let resp: QueueResponse = match Client::new()
             .post(format!("http://{provider}:{queue_port}/queue/write_local"))
             .json(&request)
             .send()
-            .await?
-            .json()
-            .await?;
+            .await {
+                Ok(response) => match response.json().await {
+                    Ok(queue_resp) => queue_resp,
+                    Err(e) => {
+                        println!("\n{} {}\n",
+                            "❌".bright_red(),
+                            "Failed to parse server response".bold().bright_red());
+                        
+                        println!("{}\n{}\n",
+                            "📝 Error Details:".bold(),
+                            format!("   • {}", e).bright_red());
+
+                        println!("{}\n{}\n{}\n{}\n",
+                            "🔍 Need Help?".bold(),
+                            format!("   • Discord: {}", "discord.gg/formation".bright_blue().underline()),
+                            format!("   • GitHub:  {}", "github.com/formthefog/formation".bright_blue().underline()),
+                            format!("   • Twitter: {}", "@formthefog".bright_blue().underline()));
+                        
+                        return Err(e.into());
+                    }
+                },
+                Err(e) => {
+                    println!("\n{} {}\n",
+                        "❌".bright_red(),
+                        "Failed to send build request".bold().bright_red());
+                    
+                    println!("{}\n{}\n",
+                        "📝 Error Details:".bold(),
+                        format!("   • {}", e).bright_red());
+
+                    if e.is_connect() {
+                        println!("{}\n{}\n",
+                            "💡 Connection Tips:".bold(),
+                            "   • Check if the Formation service is running".dimmed());
+                    } else if e.is_timeout() {
+                        println!("{}\n{}\n{}",
+                            "💡 Timeout Tips:".bold(),
+                            "   • The server might be under heavy load".dimmed(),
+                            "   • Try again in a few minutes".dimmed());
+                    }
+
+                    println!("{}\n{}\n{}\n{}\n",
+                        "🔍 Need Help?".bold(),
+                        format!("   • Discord: {}", "discord.gg/formation".bright_blue().underline()),
+                        format!("   • GitHub:  {}", "github.com/formthefog/formation".bright_blue().underline()),
+                        format!("   • Twitter: {}", "@formthefog".bright_blue().underline()));
+                    
+                    return Err(e.into());
+                }
+            };
 
         print_queue_response(resp, build_id);
-
-        return Ok(())
+        Ok(())
     }
 
     pub async fn handle(mut self, provider: &str, formpack_port: u16) -> Result<(), Box<dyn std::error::Error>> {
@@ -214,17 +272,34 @@ impl BuildCommand {
     }
 
     pub fn build_pack(&mut self) -> Result<PathBuf, String> {
-        println!("Parsing Formfile...");
+        println!("\n{} {}\n",
+            "🔄".bright_blue(),
+            "Preparing your build...".bold());
+
+        println!("{}", "📦 Build Steps:".bold());
+        println!("   {} {}", "•".bright_blue(), "Parsing Formfile...".dimmed());
         let pack = Pack::new(self.context_dir.clone()).map_err(|e| e.to_string())?;
-        println!("Gathering Copy Instructions...");
+
+        println!("   {} {}", "•".bright_blue(), "Gathering copy instructions...".dimmed());
         let copy_instructions = self.parse_formfile()?.build_instructions.iter().filter_map(|inst| {
             match inst {
                 BuildInstruction::Copy(to, from) => Some((to.clone(), from.clone())),
                 _ => None
             }
         }).collect::<Vec<(PathBuf, PathBuf)>>();
-        println!("Copy Instructions: {copy_instructions:?}");
-        println!("Preparing artifacts...");
+
+        if !copy_instructions.is_empty() {
+            println!("\n{}", "📋 Copy Instructions:".bold());
+            for (from, to) in &copy_instructions {
+                println!("   {} {} → {}", "•".bright_blue(), 
+                    from.display().to_string().bright_yellow(),
+                    to.display().to_string().bright_yellow());
+            }
+            println!();
+        }
+
+        println!("{}", "📥 Preparing Artifacts:".bold());
+        println!("   {} {}", "•".bright_blue(), "Copying files...".dimmed());
         pack.prepare_artifacts(&copy_instructions).map_err(|e| e.to_string())
     } 
 }
