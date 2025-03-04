@@ -105,13 +105,20 @@ impl GpuManager {
     
     /// Allocate GPUs for a VM based on requested configuration
     pub fn allocate_gpus(&mut self, vm_name: &str, gpu_configs: &mut Vec<GpuConfig>) -> Result<()> {
-        // Refresh GPU detection to ensure we have the latest info
+        log::info!("Allocating GPUs for VM {}: {:?}", vm_name, gpu_configs);
+        
+        // Clone the allocation keys first to avoid borrowing conflicts
+        let allocation_keys: Vec<String> = self.allocated_gpus.keys()
+            .map(|k| k.clone())
+            .collect();
+            
+        // Get all available GPUs
         let available_gpus = self.get_available_gpus()?;
         
-        // Track which GPUs we've allocated in this request
-        let mut allocated_pci_addresses = HashSet::new();
+        // Create a new set for storing the allocated GPUs for this VM
+        let mut allocated_for_vm = HashSet::new();
         
-        // Process each GPU configuration request
+        // Process each GPU config
         for gpu_config in gpu_configs.iter_mut() {
             let model = &gpu_config.model;
             let count = gpu_config.count;
@@ -126,8 +133,8 @@ impl GpuManager {
                     };
                     
                     model_matches && 
-                    !self.allocated_gpus.get(&gpu.pci_address).unwrap_or(&false) &&
-                    !allocated_pci_addresses.contains(&gpu.pci_address)
+                    !allocation_keys.contains(&gpu.pci_address) &&
+                    !allocated_for_vm.contains(&gpu.pci_address)
                 })
                 .collect();
             
@@ -142,7 +149,7 @@ impl GpuManager {
             // Allocate the GPUs
             for i in 0..count as usize {
                 let gpu = matching_gpus[i];
-                allocated_pci_addresses.insert(gpu.pci_address.clone());
+                allocated_for_vm.insert(gpu.pci_address.clone());
                 
                 // Add to the config's assigned devices
                 gpu_config.assigned_devices.push(GpuDeviceInfo {
@@ -154,12 +161,12 @@ impl GpuManager {
         }
         
         // Record the allocations
-        for pci_address in &allocated_pci_addresses {
+        for pci_address in &allocated_for_vm {
             self.allocated_gpus.insert(pci_address.clone(), true);
         }
         
         // Record which VM has these GPUs
-        self.vm_gpu_allocations.insert(vm_name.to_string(), allocated_pci_addresses);
+        self.vm_gpu_allocations.insert(vm_name.to_string(), allocated_for_vm);
         
         Ok(())
     }
@@ -305,9 +312,10 @@ pub fn detect_gpus() -> Result<Vec<GpuDevice>> {
         let driver_path = path.join("driver");
         let current_driver = if driver_path.exists() {
             driver_path.read_link().ok()
-                .and_then(|link| link.file_name())
-                .and_then(|name| name.to_str())
-                .map(|name| name.to_string())
+                .and_then(|link| {
+                    // Convert to string then extract the file name
+                    link.to_string_lossy().rsplit('/').next().map(|s| s.to_string())
+                })
         } else {
             None
         };
@@ -319,9 +327,10 @@ pub fn detect_gpus() -> Result<Vec<GpuDevice>> {
         let iommu_group_path = path.join("iommu_group");
         let iommu_group = if iommu_group_path.exists() {
             iommu_group_path.read_link().ok()
-                .and_then(|link| link.file_name())
-                .and_then(|name| name.to_str())
-                .map(|name| name.to_string())
+                .and_then(|link| {
+                    // Convert to string then extract the file name
+                    link.to_string_lossy().rsplit('/').next().map(|s| s.to_string())
+                })
         } else {
             None
         };
@@ -507,10 +516,12 @@ pub fn unbind_gpu_from_vfio(pci_address: &str) -> Result<()> {
         return Err(anyhow!("Device {} is not bound to any driver", pci_address));
     }
     
-    let current_driver = driver_path.read_link()?
+    let driver_link = driver_path.read_link()?;
+    let current_driver = driver_link
         .file_name()
         .and_then(|name| name.to_str())
-        .ok_or_else(|| anyhow!("Cannot determine current driver"))?;
+        .ok_or_else(|| anyhow!("Cannot determine current driver"))?
+        .to_string();
     
     if current_driver != "vfio-pci" {
         warn!("Device {} is not bound to vfio-pci, but to {}", pci_address, current_driver);

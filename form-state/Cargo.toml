@@ -33,6 +33,6 @@ form-node-metrics = { path = "../form-node-metrics" }
 form-vm-metrics = { path = "../form-vm-metrics" }
 futures = "0.3"
 url = "2"
-rocksdb = "0.21"
+redb = "1.3.0"
 bincode = "1"
 lazy_static = "1.5.0"

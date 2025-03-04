@@ -14,7 +14,8 @@ use vmm::vm_config::{
     PayloadConfig, 
     RngConfig, 
     VhostMode, 
-    VmConfig
+    VmConfig,
+    DeviceConfig,
 };
 
 pub fn create_vm_config(config: &VmInstanceConfig) -> VmConfig {
@@ -92,6 +93,51 @@ pub fn create_vm_config(config: &VmInstanceConfig) -> VmConfig {
         offload_csum: true,
     }]);
     
+    // Process GPU devices if any are configured
+    let devices = if let Some(gpu_configs) = &config.gpu_devices {
+        if !gpu_configs.is_empty() {
+            // Create DeviceConfig entries for each GPU
+            let mut device_configs = Vec::new();
+            
+            for gpu_config in gpu_configs {
+                for gpu_device in &gpu_config.assigned_devices {
+                    // Create a path to the PCI device
+                    let pci_path = PathBuf::from("/sys/bus/pci/devices")
+                        .join(&gpu_device.pci_address);
+                    
+                    // Create DeviceConfig for this GPU
+                    let device_config = DeviceConfig {
+                        path: pci_path,
+                        iommu: true, // Enable IOMMU for GPU passthrough
+                        id: Some(format!("gpu_{}", gpu_device.pci_address.replace(":", "_"))),
+                        pci_segment: 0,
+                        // Configure NVIDIA GPUDirect if enabled
+                        x_nv_gpudirect_clique: if gpu_device.enable_gpudirect {
+                            Some(0) // All GPUs with clique=0 can communicate with each other
+                        } else {
+                            None
+                        },
+                    };
+                    
+                    device_configs.push(device_config);
+                }
+            }
+            
+            if !device_configs.is_empty() {
+                Some(device_configs)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    
+    // Enable IOMMU at the VM level if we have GPU devices
+    let enable_iommu = devices.is_some();
+    
     VmConfig {
         cpus: CpusConfig {
             boot_vcpus: config.vcpu_count,
@@ -121,14 +167,14 @@ pub fn create_vm_config(config: &VmInstanceConfig) -> VmConfig {
         console,
         #[cfg(target_arch = "x86_64")]
         debug_console: vmm::vm_config::DebugConsoleConfig::default(),
-        devices: None,
+        devices, // Use our configured GPU devices
         user_devices: None,
         vdpa: None,
         vsock: None,
         pvpanic: false,
         #[cfg(feature = "pvmemcontrol")]
         pvmemcontrol: None,
-        iommu: false,
+        iommu: enable_iommu, // Enable IOMMU when GPU devices are present
         #[cfg(target_arch = "x86_64")]
         sgx_epc: None,
         numa: None,
