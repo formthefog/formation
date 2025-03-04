@@ -2,8 +2,9 @@ use clap::Args;
 use colored::*;
 use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
 use form_types::{StartVmRequest, VmmResponse};
-use k256::ecdsa::{RecoveryId, SigningKey};
+use k256::ecdsa::{RecoveryId, SigningKey, VerifyingKey, Signature};
 use tiny_keccak::{Hasher, Sha3};
+use alloy_core::primitives::Address;
 use alloy_signer_local::{coins_bip39::English, MnemonicBuilder};
 use crate::Keystore;
 
@@ -158,20 +159,37 @@ impl StartCommand {
     }
 
     pub async fn prepare_start_request_queue(&self, id: &str, keystore: Option<Keystore>) -> Result<QueueRequest, Box<dyn std::error::Error>> {
-        let (signature, recovery_id, _) = self.sign_request(id, keystore)?;
+        let (signature, recovery_id, hash) = self.sign_request(id, keystore.clone())?;
         
         let start_vm_request = StartVmRequest {
             id: id.to_string(),
             name: id.to_string(),
-            signature: Some(signature),
+            signature: Some(signature.clone()),
             recovery_id: recovery_id.to_byte() as u32,
         };
         
-        let serialized = serde_json::to_string(&start_vm_request)?;
+        let recovered_address = Address::from_public_key(
+            &VerifyingKey::recover_from_msg(
+                &hash, 
+                &Signature::from_slice(&hex::decode(&signature)?)?,
+                recovery_id
+            )?
+        );
+
+        println!("Request will be signed by address: {recovered_address:x}");
+
+        let mut hasher = Sha3::v256();
+        let mut topic_hash = [0u8; 32];
+        hasher.update(b"vmm");
+        hasher.finalize(&mut topic_hash);
+        let mut message_code = vec![5]; // Code 5 for start operation (as seen in handle_message in API)
+        message_code.extend(serde_json::to_vec(&start_vm_request)?);
+
+        let queue_request = QueueRequest::Write {
+            content: message_code,
+            topic: hex::encode(topic_hash)
+        };
         
-        Ok(QueueRequest::Write { 
-            content: serialized.into_bytes(),
-            topic: "vm".into(),
-        })
+        Ok(queue_request)
     }
 }
