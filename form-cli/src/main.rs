@@ -265,6 +265,16 @@ ips_string.yellow(),
                         println!("Response: {:?}", resp);
                     }
                 }
+                ManageCommand::Delete(delete_command) => {
+                    let (config, keystore) = load_config_and_keystore(&parser).await?;
+                    let provider = config.hosts[0].clone();
+                    if parser.queue {
+                        delete_command.handle_queue(&provider, Some(keystore)).await?;
+                    } else {
+                        let resp = delete_command.handle(&provider, config.vmm_port).await?;
+                        println!("Response: {:?}", resp);
+                    }
+                }
                 _ => {}
             }
         }
