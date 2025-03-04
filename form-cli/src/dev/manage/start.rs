@@ -1,4 +1,11 @@
 use clap::Args;
+use colored::*;
+use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
+use form_types::{StartVmRequest, VmmResponse};
+use k256::ecdsa::{RecoveryId, SigningKey};
+use tiny_keccak::{Hasher, Sha3};
+use alloy_signer_local::{coins_bip39::English, MnemonicBuilder};
+use crate::Keystore;
 
 #[derive(Clone, Debug, Args)]
 pub struct StartCommand {
@@ -27,4 +34,144 @@ pub struct StartCommand {
     //TODO: Add support for HSM and other Enclave based key storage
     #[clap(long, short)]
     pub mnemonic: Option<String>,
+}
+
+fn print_start_queue_response(resp: QueueResponse, vm_id: &str) {
+    match resp {
+        QueueResponse::OpSuccess => {
+            println!("{} START request has been added to the queue for VM {}.", "✅".green(), vm_id.yellow());
+            println!("You can check the status of your VM using the `form manage status` command.");
+        }
+        QueueResponse::Failure { reason } => {
+            println!("{} Failed to add START request to the queue for VM {}.", "❌".red(), vm_id.yellow());
+            if let Some(message) = reason {
+                println!("Error from queue: {}", message);
+            }
+            println!("Please try again or contact support if the issue persists.");
+        }
+        _ => {
+            println!("{} START request was processed for VM {}.", "ℹ️".blue(), vm_id.yellow());
+            println!("You can check the status of your VM using the `form manage status` command.");
+        }
+    }
+}
+
+impl StartCommand {
+    pub async fn handle(&self, provider: &str, vmm_port: u16) -> Result<VmmResponse, Box<dyn std::error::Error>> {
+        let vm_id = match (&self.id, &self.name) {
+            (Some(id), _) => id.clone(),
+            (_, Some(name)) => name.clone(),
+            _ => return Err("Either id or name must be provided".into()),
+        };
+
+        let client = reqwest::Client::new();
+        let url = format!("http://{}:{}/api/v1/start", provider, vmm_port);
+        
+        // Create the request with optional signature
+        let request = StartVmRequest {
+            id: vm_id.clone(),
+            name: vm_id.clone(),
+            signature: None,
+            recovery_id: 0,
+        };
+
+        // Send the request
+        let response = client.post(&url)
+            .json(&request)
+            .send()
+            .await?
+            .json::<VmmResponse>()
+            .await?;
+
+        Ok(response)
+    }
+
+    pub async fn handle_queue(&self, provider: &str, keystore: Option<Keystore>) -> Result<(), Box<dyn std::error::Error>> {
+        let vm_id = match (&self.id, &self.name) {
+            (Some(id), _) => id.clone(),
+            (_, Some(name)) => name.clone(),
+            _ => return Err("Either id or name must be provided".into()),
+        };
+
+        // Prepare the queue request
+        let queue_request = self.prepare_start_request_queue(&vm_id, keystore).await?;
+
+        // Send the queue request
+        let client = reqwest::Client::new();
+        let url = format!("http://{}:{}/request", provider, QUEUE_PORT);
+        
+        let response = client.post(&url)
+            .json(&queue_request)
+            .send()
+            .await?
+            .json::<QueueResponse>()
+            .await?;
+
+        // Print response to user
+        print_start_queue_response(response, &vm_id);
+
+        Ok(())
+    }
+
+    pub fn get_signing_key(&self, keystore: Option<Keystore>) -> Result<SigningKey, String> {
+        if let Some(pk) = &self.private_key {
+            Ok(SigningKey::from_slice(
+                    &hex::decode(pk)
+                        .map_err(|e| e.to_string())?
+                ).map_err(|e| e.to_string())?
+            )
+        } else if let Some(ks) = keystore {
+            Ok(SigningKey::from_slice(
+                &hex::decode(ks.secret_key)
+                    .map_err(|e| e.to_string())?
+                ).map_err(|e| e.to_string())?
+            )
+        } else if let Some(mnemonic) = &self.mnemonic {
+            Ok(SigningKey::from_slice(&MnemonicBuilder::<English>::default()
+                .phrase(mnemonic)
+                .derivation_path("m/44'/60'/0'/0/0").map_err(|e| e.to_string())?
+                .build().map_err(|e| e.to_string())?.to_field_bytes().to_vec()
+            ).map_err(|e| e.to_string())?)
+        } else {
+            Err("A signing key is required, use either private_key, mnemonic or keyfile CLI arg to provide a valid signing key".to_string())
+        }
+    }
+
+    pub fn sign_request(&self, id: &str, keystore: Option<Keystore>) -> Result<(String, RecoveryId, [u8; 32]), String> {
+        let key = self.get_signing_key(keystore)?;
+        
+        // Create a message for signing
+        let mut hasher = Sha3::v256();
+        let message = format!("StartVmRequest:{}", id);
+        let mut hash = [0u8; 32];
+        hasher.update(message.as_bytes());
+        hasher.finalize(&mut hash);
+        
+        // Sign the message
+        let (signature, recovery_id) = key.sign_prehash_recoverable(&hash)
+            .map_err(|e| e.to_string())?;
+        
+        // Encode the signature
+        let signature_hex = hex::encode(signature.to_bytes());
+        
+        Ok((signature_hex, recovery_id, hash))
+    }
+
+    pub async fn prepare_start_request_queue(&self, id: &str, keystore: Option<Keystore>) -> Result<QueueRequest, Box<dyn std::error::Error>> {
+        let (signature, recovery_id, _) = self.sign_request(id, keystore)?;
+        
+        let start_vm_request = StartVmRequest {
+            id: id.to_string(),
+            name: id.to_string(),
+            signature: Some(signature),
+            recovery_id: recovery_id.to_byte() as u32,
+        };
+        
+        let serialized = serde_json::to_string(&start_vm_request)?;
+        
+        Ok(QueueRequest::Write { 
+            content: serialized.into_bytes(),
+            topic: "vm".into(),
+        })
+    }
 }
