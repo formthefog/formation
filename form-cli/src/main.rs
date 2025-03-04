@@ -245,6 +245,16 @@ ips_string.yellow(),
                 }
                     formnet_up_command.handle_formnet_up()?;
                 }
+                ManageCommand::Stop(stop_command) => {
+                    let (config, keystore) = load_config_and_keystore(&parser).await?;
+                    let provider = config.hosts[0].clone();
+                    if parser.queue {
+                        stop_command.handle_queue(&provider, Some(keystore)).await?;
+                    } else {
+                        let resp = stop_command.handle(&provider, config.vmm_port).await?;
+                        println!("Response: {:?}", resp);
+                    }
+                }
                 _ => {}
             }
         }
