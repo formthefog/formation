@@ -74,6 +74,7 @@ impl FormfileParser {
             "VCPU" | "CPU" | "CORES" => self.parse_vcpus(args)?,
             "MEMORY" | "MEM" | "MBS" => self.parse_memory(args)?,
             "DISK" | "STORAGE" => self.parse_disk(args)?,
+            "GPU" => self.parse_gpu(args)?,
             "WORKDIR" => self.parse_workdir(args)?,
             "ENTRYPOINT" => self.parse_entrypoint(args)?,
             _ => {}
@@ -909,6 +910,51 @@ impl FormfileParser {
         Ok((key.to_string(), value.to_string()))
     }
 
+    pub fn parse_gpu(&mut self, args: &str) -> Result<(), Box<dyn std::error::Error>> {
+        // Parse format like "RTX5090:2" or just "H100" (which defaults to 1)
+        let parts: Vec<&str> = args.split(':').collect();
+        
+        let model = parts[0].trim();
+        // Validate the model is one of the supported ones
+        match model {
+            "RTX5090" | "H100" | "H200" | "B200" => {},
+            _ => {
+                return Err(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Unsupported GPU model: {}. Supported models are: RTX5090, H100, H200, B200", model)
+                )));
+            }
+        }
+        
+        let count = if parts.len() > 1 {
+            let count_str = parts[1].trim();
+            let count = count_str.parse::<u8>().map_err(|_| {
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Invalid GPU count: {}. Must be a number between 1 and 8", count_str)
+                ))
+            })?;
+            
+            if count < 1 || count > 8 {
+                return Err(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Invalid GPU count: {}. Must be between 1 and 8", count)
+                )));
+            }
+            
+            count
+        } else {
+            1 // Default to 1 if no count specified
+        };
+        
+        self.system_config.push(SystemConfigOpt::Gpu(GpuRequest {
+            model: model.to_string(),
+            count,
+        }));
+        
+        Ok(())
+    }
+
     pub fn build_formfile(&self) -> Result<Formfile, Box<dyn std::error::Error>> {
         let name = if let Some(name) = &self.name {
             name.to_string()
@@ -974,6 +1020,24 @@ impl Formfile {
                 _ => None,
             }
         }).unwrap_or_else(|| &1).clone()
+    }
+    
+    /// Get the list of GPU devices specified in the Formfile
+    pub fn get_gpu_devices(&self) -> Option<Vec<String>> {
+        let gpus: Vec<String> = self.system_config.iter()
+            .filter_map(|opt| {
+                match opt {
+                    SystemConfigOpt::Gpu(request) => Some(format!("{}:{}", request.model, request.count)),
+                    _ => None,
+                }
+            })
+            .collect();
+            
+        if gpus.is_empty() {
+            None
+        } else {
+            Some(gpus)
+        }
     }
 }
 
@@ -1066,6 +1130,15 @@ pub enum SystemConfigOpt {
     Memory(usize),
     Disk(u16),
     // Devices (GPUs, etc.)
+    Gpu(GpuRequest), // Model and quantity of GPUs requested
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GpuRequest {
+    /// GPU model requested (e.g., "RTX5090", "H100", "H200", "B200")
+    pub model: String,
+    /// Number of GPUs requested (1-8)
+    pub count: u8,
 }
 
 impl SystemConfigOpt {
@@ -1081,6 +1154,10 @@ impl SystemConfigOpt {
             }
             Self::Disk(gbs) => {
                 opts_map.insert("disk".to_string(), serde_json::json!(gbs));
+            }
+            Self::Gpu(request) => {
+                opts_map.insert("gpu_model".to_string(), serde_json::json!(request.model));
+                opts_map.insert("gpu_count".to_string(), serde_json::json!(request.count));
             }
         }
         map.insert("system_config".to_string(), serde_json::json!(opts_map));
