@@ -1039,6 +1039,16 @@ impl Formfile {
             Some(gpus)
         }
     }
+
+    /// Get the storage size in GB specified in the formfile, if any
+    pub fn get_storage(&self) -> Option<u16> {
+        self.system_config.iter().find_map(|opt| {
+            match opt {
+                SystemConfigOpt::Disk(gb) => Some(gb),
+                _ => None,
+            }
+        }).cloned()
+    }
 }
 
 /// Instructions that are executed during teh image build phase
