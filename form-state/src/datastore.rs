@@ -161,6 +161,11 @@ pub enum AccountRequest {
         address: String,
         instance_id: String,
     },
+    TransferOwnership {
+        from_address: String,
+        to_address: String,
+        instance_id: String,
+    },
 }
 
 impl DataStore {
@@ -821,6 +826,9 @@ impl DataStore {
             AccountRequest::RemoveAuthorization { address, instance_id } => {
                 self.handle_remove_authorization(address, instance_id).await?;
             }
+            AccountRequest::TransferOwnership { from_address, to_address, instance_id } => {
+                self.handle_transfer_ownership(from_address, to_address, instance_id).await?;
+            }
         }
 
         Ok(())
@@ -894,6 +902,20 @@ impl DataStore {
     async fn handle_remove_authorization(&mut self, address: String, instance_id: String) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(mut account) = self.account_state.get_account(&address) {
             account.remove_authorization(&instance_id);
+            let op = self.account_state.update_account_local(account);
+            self.handle_account_op(op).await?;
+        }
+        Ok(())
+    }
+
+    async fn handle_transfer_ownership(&mut self, from_address: String, to_address: String, instance_id: String) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(mut account) = self.account_state.get_account(&from_address) {
+            account.remove_owned_instance(&instance_id);
+            let op = self.account_state.update_account_local(account);
+            self.handle_account_op(op).await?;
+        }
+        if let Some(mut account) = self.account_state.get_account(&to_address) {
+            account.add_owned_instance(instance_id);
             let op = self.account_state.update_account_local(account);
             self.handle_account_op(op).await?;
         }
@@ -1058,6 +1080,7 @@ impl DataStore {
             .route("/account/create", post(create_account))
             .route("/account/update", post(update_account))
             .route("/account/delete", post(delete_account))
+            .route("/account/transfer-ownership", post(transfer_instance_ownership))
             .with_state(state)
     }
     pub async fn run(self, mut shutdown: tokio::sync::broadcast::Receiver<()>) -> Result<(), Box<dyn std::error::Error>> {
@@ -3561,6 +3584,84 @@ async fn delete_account(
         _ => {
             return Json(Response::Failure { 
                 reason: Some("Invalid request type for account deletion".to_string()) 
+            });
+        }
+    }
+}
+
+async fn transfer_instance_ownership(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Json(request): Json<AccountRequest>,
+) -> Json<Response<Account>> {
+    log::info!("Received instance ownership transfer request");
+    
+    let mut datastore = state.lock().await;
+    
+    match request {
+        AccountRequest::TransferOwnership { from_address, to_address, instance_id } => {
+            // Check if source account exists
+            if datastore.account_state.get_account(&from_address).is_none() {
+                return Json(Response::Failure { 
+                    reason: Some(format!("Source account with address {} does not exist", from_address)) 
+                });
+            }
+            
+            // Check if destination account exists
+            if datastore.account_state.get_account(&to_address).is_none() {
+                return Json(Response::Failure { 
+                    reason: Some(format!("Destination account with address {} does not exist", to_address)) 
+                });
+            }
+            
+            // Check if the instance exists
+            if let Some(instance) = datastore.instance_state.get_instance(instance_id.clone()) {
+                // Check if the source account owns the instance
+                let owners = datastore.account_state.get_owners_of_instance(&instance_id);
+                let is_owned_by_source = owners.iter().any(|account| account.address == from_address);
+                
+                if !is_owned_by_source {
+                    return Json(Response::Failure { 
+                        reason: Some(format!("Source account does not own the instance {}", instance_id)) 
+                    });
+                }
+                
+                // Perform the ownership transfer
+                if let Err(e) = datastore.handle_transfer_ownership(from_address.clone(), to_address.clone(), instance_id.clone()).await {
+                    return Json(Response::Failure { 
+                        reason: Some(format!("Failed to transfer ownership: {}", e)) 
+                    });
+                }
+                
+                // Get the updated account
+                if let Some(account) = datastore.account_state.get_account(&to_address) {
+                    // Write to persistent storage
+                    let _ = write_datastore(&DB_HANDLE, &datastore.clone());
+                    
+                    // Add transfer operation to message queue
+                    let transfer_request = AccountRequest::TransferOwnership {
+                        from_address: from_address.clone(),
+                        to_address: to_address.clone(),
+                        instance_id: instance_id.clone(),
+                    };
+                    if let Err(e) = DataStore::write_to_queue(transfer_request, 7).await {
+                        log::error!("Error writing transfer operation to queue: {}", e);
+                    }
+                    
+                    return Json(Response::Success(Success::Some(account)));
+                } else {
+                    return Json(Response::Failure { 
+                        reason: Some("Failed to retrieve updated account after transfer".to_string()) 
+                    });
+                }
+            } else {
+                return Json(Response::Failure { 
+                    reason: Some(format!("Instance with ID {} does not exist", instance_id)) 
+                });
+            }
+        },
+        _ => {
+            return Json(Response::Failure { 
+                reason: Some("Invalid request type for ownership transfer".to_string()) 
             });
         }
     }
