@@ -15,14 +15,14 @@ Implement signature verification and ownership checks for all VM management comm
 - As an AI agent, I want to manage instances on behalf of my owner
 
 **Implementation Tasks:**
-- [ ] Add signature verification to all VM management endpoints
+- [x] Add signature verification to all VM management endpoints
 - [ ] Update `Instance` structure to include owner address
 - [ ] Implement authorized users list for each instance
 - [ ] Create ownership transfer functionality
 - [ ] Add account structure to `form-state` crate
 - [ ] Implement account-to-instances relationship tracking
-- [ ] Update all command handlers to verify signatures
-- [ ] Create permissions model (owner, authorized user, read-only, etc.)
+- [x] Update all command handlers to verify signatures
+- [x] Create permissions model (owner, authorized user, read-only, etc.)
 - [ ] Add API endpoints for ownership management
 - [ ] Update CLI to sign requests with wallet keys
 
