@@ -11,10 +11,10 @@ use shared::{Association, AssociationContents, Cidr, CidrContents, Peer, PeerCon
 use tiny_keccak::{Hasher, Sha3};
 use tokio::{net::TcpListener, sync::Mutex};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use crdts::{bft_reg::Update, map::Op, BFTReg, CvRDT, Map};
+use crdts::{bft_reg::Update, map::Op, BFTReg, CvRDT, Map, CmRDT};
 use trust_dns_proto::rr::RecordType;
 use url::Host;
-use crate::{db::{open_db, write_datastore, store_map, DbHandle}, instances::{ClusterMember, Instance, InstanceOp, InstanceState, InstanceStatus}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}};
+use crate::{db::{open_db, write_datastore, store_map, DbHandle}, instances::{ClusterMember, Instance, InstanceOp, InstanceState, InstanceStatus}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}, accounts::{Account, AccountOp, AccountState, AuthorizationLevel}};
 use form_types::state::{Response, Success};
 use lazy_static::lazy_static;
 
@@ -28,6 +28,7 @@ pub type AssocMap = Map<String, BFTReg<CrdtAssociation<String>, String>, String>
 pub type DnsMap = Map<String, BFTReg<CrdtDnsRecord, String>, String>;
 pub type InstanceMap = Map<String, BFTReg<Instance, String>, String>;
 pub type NodeMap = Map<String, BFTReg<Node, String>, String>;
+pub type AccountMap = Map<String, BFTReg<Account, String>, String>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MergeableNetworkState {
@@ -55,7 +56,8 @@ pub struct MergeableState {
     assocs: AssocMap,
     dns: DnsMap,
     instances: InstanceMap,
-    nodes: NodeMap
+    nodes: NodeMap,
+    accounts: AccountMap
 }
 
 impl From<DataStore> for MergeableState {
@@ -67,6 +69,7 @@ impl From<DataStore> for MergeableState {
             dns: value.network_state.dns_state.zones.clone(),
             instances: value.instance_state.map.clone(),
             nodes: value.node_state.map.clone(),
+            accounts: value.account_state.map.clone(),
         }
     }
 }
@@ -76,6 +79,7 @@ pub struct DataStore {
     pub network_state: NetworkState,
     pub instance_state: InstanceState,
     pub node_state: NodeState,
+    pub account_state: AccountState,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -134,13 +138,43 @@ pub enum NodeRequest {
     Delete(String),
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum AccountRequest {
+    Op(AccountOp),
+    Create(Account),
+    Update(Account),
+    Delete(String),
+    AddOwnedInstance {
+        address: String,
+        instance_id: String,
+    },
+    RemoveOwnedInstance {
+        address: String,
+        instance_id: String,
+    },
+    AddAuthorization {
+        address: String,
+        instance_id: String,
+        level: AuthorizationLevel,
+    },
+    RemoveAuthorization {
+        address: String,
+        instance_id: String,
+    },
+    TransferOwnership {
+        from_address: String,
+        to_address: String,
+        instance_id: String,
+    },
+}
+
 impl DataStore {
     pub fn new(node_id: String, pk: String) -> Self {
         let network_state = NetworkState::new(node_id.clone(), pk.clone());
         let instance_state = InstanceState::new(node_id.clone(), pk.clone());
         let node_state = NodeState::new(node_id.clone(), pk.clone());
 
-        Self { network_state, instance_state, node_state } 
+        Self { network_state, instance_state, node_state, account_state: AccountState::new(node_id, pk) } 
     }
 
     pub fn new_from_state(
@@ -156,6 +190,7 @@ impl DataStore {
         local.network_state.dns_state.zones.merge(other.dns);
         local.instance_state.map.merge(other.instances);
         local.node_state.map.merge(other.nodes);
+        local.account_state.map.merge(other.accounts);
         log::info!("Built new datastore from state... Returning...");
         local
     }
@@ -764,6 +799,138 @@ impl DataStore {
         Ok(())
     }
 
+    // Account handler methods
+    async fn handle_account_request(&mut self, account_request: AccountRequest) -> Result<(), Box<dyn std::error::Error>> {
+        match account_request {
+            AccountRequest::Op(op) => {
+                self.handle_account_op(op).await?;
+            }
+            AccountRequest::Create(create) => {
+                self.handle_account_create(create).await?;
+            }
+            AccountRequest::Update(update) => {
+                self.handle_account_update(update).await?;
+            }
+            AccountRequest::Delete(delete) => {
+                self.handle_account_delete(delete).await?;
+            }
+            AccountRequest::AddOwnedInstance { address, instance_id } => {
+                self.handle_add_owned_instance(address, instance_id).await?;
+            }
+            AccountRequest::RemoveOwnedInstance { address, instance_id } => {
+                self.handle_remove_owned_instance(address, instance_id).await?;
+            }
+            AccountRequest::AddAuthorization { address, instance_id, level } => {
+                self.handle_add_authorization(address, instance_id, level).await?;
+            }
+            AccountRequest::RemoveAuthorization { address, instance_id } => {
+                self.handle_remove_authorization(address, instance_id).await?;
+            }
+            AccountRequest::TransferOwnership { from_address, to_address, instance_id } => {
+                self.handle_transfer_ownership(from_address, to_address, instance_id).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn handle_account_op(&mut self, account_op: AccountOp) -> Result<(), Box<dyn std::error::Error>> {
+        self.account_state.map.apply(account_op);
+        Ok(())
+    }
+
+    async fn handle_account_create(&mut self, create: Account) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.account_state.update_account_local(create);
+        self.handle_account_op(op).await
+    }
+
+    async fn handle_account_update(&mut self, update: Account) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.account_state.update_account_local(update);
+        self.handle_account_op(op).await
+    }
+
+    async fn handle_account_delete(&mut self, delete: String) -> Result<(), Box<dyn std::error::Error>> {
+        // Check if account exists
+        let account = match self.account_state.get_account(&delete) {
+            Some(account) => account,
+            None => return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Account with address {} does not exist", delete)
+            ))),
+        };
+        
+        // Delete the account (remove it from the map)
+        let op = self.account_state.remove_account_local(delete);
+        // Apply the operation directly
+        self.account_state.map.apply(op.clone());
+        
+        // Write to queue
+        if let Err(e) = DataStore::write_to_queue(AccountRequest::Op(op), 7).await {
+            log::error!("Error writing to queue: {}", e);
+        }
+        
+        Ok(())
+    }
+
+    async fn handle_add_owned_instance(&mut self, address: String, instance_id: String) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(mut account) = self.account_state.get_account(&address) {
+            account.add_owned_instance(instance_id);
+            let op = self.account_state.update_account_local(account);
+            self.handle_account_op(op).await?;
+        }
+        Ok(())
+    }
+
+    async fn handle_remove_owned_instance(&mut self, address: String, instance_id: String) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(mut account) = self.account_state.get_account(&address) {
+            account.remove_owned_instance(&instance_id);
+            let op = self.account_state.update_account_local(account);
+            self.handle_account_op(op).await?;
+        }
+        Ok(())
+    }
+
+    async fn handle_add_authorization(&mut self, address: String, instance_id: String, level: AuthorizationLevel) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(mut account) = self.account_state.get_account(&address) {
+            account.add_authorization(instance_id, level);
+            let op = self.account_state.update_account_local(account);
+            self.handle_account_op(op).await?;
+        }
+        Ok(())
+    }
+
+    async fn handle_remove_authorization(&mut self, address: String, instance_id: String) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(mut account) = self.account_state.get_account(&address) {
+            account.remove_authorization(&instance_id);
+            let op = self.account_state.update_account_local(account);
+            self.handle_account_op(op).await?;
+        }
+        Ok(())
+    }
+
+    async fn handle_transfer_ownership(&mut self, from_address: String, to_address: String, instance_id: String) -> Result<(), Box<dyn std::error::Error>> {
+        // Check and update the accounts
+        if let Some(mut account) = self.account_state.get_account(&from_address) {
+            account.remove_owned_instance(&instance_id);
+            let op = self.account_state.update_account_local(account);
+            self.handle_account_op(op).await?;
+        }
+        if let Some(mut account) = self.account_state.get_account(&to_address) {
+            account.add_owned_instance(instance_id.clone());
+            let op = self.account_state.update_account_local(account);
+            self.handle_account_op(op).await?;
+        }
+        
+        // Update the instance owner field
+        if let Some(mut instance) = self.instance_state.get_instance(instance_id.clone()) {
+            instance.instance_owner = to_address;
+            let op = self.instance_state.update_instance_local(instance);
+            self.handle_instance_op(op).await?;
+        }
+        
+        Ok(())
+    }
+
     pub async fn write_to_queue(
         message: impl Serialize + Clone,
         sub_topic: u8,
@@ -917,9 +1084,14 @@ impl DataStore {
             .route("/node/list", get(list_nodes))
             .route("/node/:id/metrics", get(get_node_metrics))
             .route("/node/list/metrics", get(list_node_metrics))
+            .route("/account/:address/get", get(get_account))
+            .route("/account/list", get(list_accounts))
+            .route("/account/create", post(create_account))
+            .route("/account/update", post(update_account))
+            .route("/account/delete", post(delete_account))
+            .route("/account/transfer-ownership", post(transfer_instance_ownership))
             .with_state(state)
     }
-
     pub async fn run(self, mut shutdown: tokio::sync::broadcast::Receiver<()>) -> Result<(), Box<dyn std::error::Error>> {
         let datastore = Arc::new(Mutex::new(self));
         let router = Self::app(datastore.clone());
@@ -1015,6 +1187,7 @@ pub async fn complete_bootstrap(State(state): State<Arc<Mutex<DataStore>>>) {
                     log::error!("Error attempting to get mergeable state from {id} at {}: {e}", peer.ip());
                 }
             }
+
         }
     });
 }
@@ -1059,7 +1232,12 @@ pub async fn process_message(message: Vec<u8>, state: Arc<Mutex<DataStore>>) -> 
         6 => {
             let node_metrics_request: NodeMetricsRequest = serde_json::from_slice(payload)?;
             guard.handle_node_metrics_request(node_metrics_request).await?;
-        }
+        },
+        7 => {
+            log::info!("Pulled account request from queue, processing...");
+            let account_request: AccountRequest = serde_json::from_slice(payload)?;
+            guard.handle_account_request(account_request).await?;
+        },
         _ => unreachable!()
     }
 
@@ -3224,6 +3402,287 @@ async fn list_nodes(
     return Json(Response::Success(Success::List(list)))
 }
 
+async fn list_accounts(
+    State(state): State<Arc<Mutex<DataStore>>>,
+) -> Json<Response<Account>> {
+    log::info!("Requesting a list of all accounts...");
+    let mut accounts = Vec::new();
+    
+    // Get all accounts from the map
+    let datastore = state.lock().await;
+    for ctx in datastore.account_state.map.iter() {
+        let (_, reg) = ctx.val;
+        if let Some(val) = reg.val() {
+            accounts.push(val.value());
+        }
+    }
+    
+    log::info!("Retrieved a list of all accounts... Returning...");
+    Json(Response::Success(Success::List(accounts)))
+}
+
+async fn get_account(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path(address): Path<String>
+) -> Json<Response<Account>> {
+    log::info!("Request to get account with address {address}");
+    if let Some(account) = state.lock().await.account_state.get_account(&address) {
+        log::info!("Found account with address {address}");
+        return Json(Response::Success(Success::Some(account)))
+    } 
+    Json(Response::Failure { reason: Some(format!("Account with address {address} not found")) })
+}
+
+async fn create_account(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Json(request): Json<AccountRequest>,
+) -> Json<Response<Account>> {
+    log::info!("Received account create request");
+    
+    let mut datastore = state.lock().await;
+    
+    match request {
+        AccountRequest::Create(account) => {
+            // Check if an account with this address already exists
+            if datastore.account_state.get_account(&account.address).is_some() {
+                return Json(Response::Failure { 
+                    reason: Some(format!("Account with address {} already exists", account.address)) 
+                });
+            }
+            
+            // Create the account
+            let op = datastore.account_state.update_account_local(account);
+            
+            // Apply the operation
+            if let Err(e) = datastore.handle_account_op(op.clone()).await {
+                return Json(Response::Failure { 
+                    reason: Some(format!("Failed to create account: {}", e)) 
+                });
+            }
+            
+            // Get the created account
+            match &op {
+                crdts::map::Op::Up { key, .. } => {
+                    if let Some(account) = datastore.account_state.get_account(key) {
+                        // Write to persistent storage
+                        let _ = write_datastore(&DB_HANDLE, &datastore.clone());
+                        
+                        // Add to message queue
+                        if let Err(e) = DataStore::write_to_queue(AccountRequest::Op(op), 7).await {
+                            log::error!("Error writing to queue: {}", e);
+                        }
+                        
+                        return Json(Response::Success(Success::Some(account)));
+                    } else {
+                        return Json(Response::Failure { 
+                            reason: Some("Failed to retrieve created account".to_string()) 
+                        });
+                    }
+                },
+                _ => {
+                    return Json(Response::Failure { 
+                        reason: Some("Invalid operation type for account creation".to_string()) 
+                    });
+                }
+            }
+        },
+        _ => {
+            return Json(Response::Failure { 
+                reason: Some("Invalid request type for account creation".to_string()) 
+            });
+        }
+    }
+}
+
+async fn update_account(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Json(request): Json<AccountRequest>,
+) -> Json<Response<Account>> {
+    log::info!("Received account update request");
+    
+    let mut datastore = state.lock().await;
+    
+    match request {
+        AccountRequest::Update(account) => {
+            // Check if the account exists
+            if datastore.account_state.get_account(&account.address).is_none() {
+                return Json(Response::Failure { 
+                    reason: Some(format!("Account with address {} does not exist", account.address)) 
+                });
+            }
+            
+            // Update the account
+            let op = datastore.account_state.update_account_local(account);
+            
+            // Apply the operation
+            if let Err(e) = datastore.handle_account_op(op.clone()).await {
+                return Json(Response::Failure { 
+                    reason: Some(format!("Failed to update account: {}", e)) 
+                });
+            }
+            
+            // Get the updated account
+            match &op {
+                crdts::map::Op::Up { key, .. } => {
+                    if let Some(account) = datastore.account_state.get_account(key) {
+                        // Write to persistent storage
+                        let _ = write_datastore(&DB_HANDLE, &datastore.clone());
+                        
+                        // Add to message queue
+                        if let Err(e) = DataStore::write_to_queue(AccountRequest::Op(op), 7).await {
+                            log::error!("Error writing to queue: {}", e);
+                        }
+                        
+                        return Json(Response::Success(Success::Some(account)));
+                    } else {
+                        return Json(Response::Failure { 
+                            reason: Some("Failed to retrieve updated account".to_string()) 
+                        });
+                    }
+                },
+                _ => {
+                    return Json(Response::Failure { 
+                        reason: Some("Invalid operation type for account update".to_string()) 
+                    });
+                }
+            }
+        },
+        _ => {
+            return Json(Response::Failure { 
+                reason: Some("Invalid request type for account update".to_string()) 
+            });
+        }
+    }
+}
+
+async fn delete_account(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Json(request): Json<AccountRequest>,
+) -> Json<Response<Account>> {
+    log::info!("Received account delete request");
+    
+    let mut datastore = state.lock().await;
+    
+    match request {
+        AccountRequest::Delete(address) => {
+            // Check if the account exists
+            let account = match datastore.account_state.get_account(&address) {
+                Some(account) => account,
+                None => {
+                    return Json(Response::Failure { 
+                        reason: Some(format!("Account with address {} does not exist", address)) 
+                    });
+                }
+            };
+            
+            // Create a copy for the response
+            let account_copy = account.clone();
+            
+            // Attempt to delete the account
+            if let Err(e) = datastore.handle_account_delete(address).await {
+                return Json(Response::Failure { 
+                    reason: Some(format!("Failed to delete account: {}", e)) 
+                });
+            }
+            
+            // Write to persistent storage
+            let _ = write_datastore(&DB_HANDLE, &datastore.clone());
+            
+            return Json(Response::Success(Success::Some(account_copy)));
+        },
+        _ => {
+            return Json(Response::Failure { 
+                reason: Some("Invalid request type for account deletion".to_string()) 
+            });
+        }
+    }
+}
+
+async fn transfer_instance_ownership(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Json(request): Json<AccountRequest>,
+) -> Json<Response<Account>> {
+    log::info!("Received instance ownership transfer request");
+    
+    let mut datastore = state.lock().await;
+    
+    match request {
+        AccountRequest::TransferOwnership { from_address, to_address, instance_id } => {
+            // Check if source account exists
+            if datastore.account_state.get_account(&from_address).is_none() {
+                return Json(Response::Failure { 
+                    reason: Some(format!("Source account with address {} does not exist", from_address)) 
+                });
+            }
+            
+            // Check if destination account exists
+            if datastore.account_state.get_account(&to_address).is_none() {
+                return Json(Response::Failure { 
+                    reason: Some(format!("Destination account with address {} does not exist", to_address)) 
+                });
+            }
+            
+            // Check if the instance exists
+            if let Some(_instance) = datastore.instance_state.get_instance(instance_id.clone()) {
+                // Check if the source account owns the instance
+                let owners = datastore.account_state.get_owners_of_instance(&instance_id);
+                let is_owned_by_source = owners.iter().any(|account| account.address == from_address);
+                
+                if !is_owned_by_source {
+                    return Json(Response::Failure { 
+                        reason: Some(format!("Source account does not own the instance {}", instance_id)) 
+                    });
+                }
+                
+                // Verify that the source account has Owner authorization level
+                if !datastore.account_state.verify_authorization(&from_address, &instance_id, &AuthorizationLevel::Owner) {
+                    return Json(Response::Failure { 
+                        reason: Some(format!("Source account does not have Owner authorization for instance {}", instance_id)) 
+                    });
+                }
+                
+                // Perform the ownership transfer
+                if let Err(e) = datastore.handle_transfer_ownership(from_address.clone(), to_address.clone(), instance_id.clone()).await {
+                    return Json(Response::Failure { 
+                        reason: Some(format!("Failed to transfer ownership: {}", e)) 
+                    });
+                }
+                
+                // Get the updated account
+                if let Some(account) = datastore.account_state.get_account(&to_address) {
+                    // Write to persistent storage
+                    let _ = write_datastore(&DB_HANDLE, &datastore.clone());
+                    
+                    // Add transfer operation to message queue
+                    let transfer_request = AccountRequest::TransferOwnership {
+                        from_address: from_address.clone(),
+                        to_address: to_address.clone(),
+                        instance_id: instance_id.clone(),
+                    };
+                    if let Err(e) = DataStore::write_to_queue(transfer_request, 7).await {
+                        log::error!("Error writing transfer operation to queue: {}", e);
+                    }
+                    
+                    return Json(Response::Success(Success::Some(account)));
+                } else {
+                    return Json(Response::Failure { 
+                        reason: Some("Failed to retrieve updated account after transfer".to_string()) 
+                    });
+                }
+            } else {
+                return Json(Response::Failure { 
+                    reason: Some(format!("Instance with ID {} does not exist", instance_id)) 
+                });
+            }
+        },
+        _ => {
+            return Json(Response::Failure { 
+                reason: Some("Invalid request type for ownership transfer".to_string()) 
+            });
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::instances::{InstanceAnnotations, InstanceCluster, InstanceEncryption, InstanceMetadata, InstanceMonitoring, InstanceResources, InstanceSecurity, InstanceStatus};
@@ -3416,6 +3875,7 @@ mod tests {
             dns,
             instances,
             nodes,
+            accounts: Map::new(),
         };
 
         assert!(serde_json::to_string(&mergeable_state.peers).is_ok());
@@ -3437,3 +3897,5 @@ mod tests {
         Ok(())
     }
 }
+
+

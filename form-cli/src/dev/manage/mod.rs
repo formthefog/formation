@@ -8,6 +8,7 @@ pub mod rm;
 pub mod commit;
 pub mod config;
 pub mod join;
+pub mod account;
 
 pub use start::StartCommand;
 pub use stop::StopCommand;
@@ -17,6 +18,7 @@ pub use rm::RemoveCommand;
 pub use commit::CommitCommand;
 pub use config::ConfigCommand;
 pub use join::{JoinCommand, FormnetUp};
+pub use account::TransferOwnershipCommand;
 
 #[derive(Debug, Subcommand)]
 pub enum ManageCommand {
@@ -33,6 +35,8 @@ pub enum ManageCommand {
     FormnetUp(FormnetUp),
     GetIp(GetIpCommand),
     Leave(LeaveCommand),
+    /// Transfer ownership of an instance from one account to another
+    TransferOwnership(TransferOwnershipCommand),
 }
 
 

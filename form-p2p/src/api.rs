@@ -15,10 +15,10 @@ use futures::StreamExt;
 use crate::{db::{store_topic_queue, open_db}, queue::{FormMQ, QueueRequest, QueueResponse, QUEUE_PORT}};
 use std::path::PathBuf;
 use lazy_static::lazy_static;
-use rocksdb::DB;
+use redb::Database;
 
 lazy_static! {
-    static ref DB_HANDLE: Arc<DB> = open_db(PathBuf::from("/var/lib/formation/db/form.db"));
+    static ref DB_HANDLE: Arc<Database> = open_db(PathBuf::from("/var/lib/formation/db/form.db"));
 }
 
 

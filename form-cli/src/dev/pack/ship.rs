@@ -116,18 +116,39 @@ resp,
 
 
 impl ShipCommand {
-    pub async fn handle(&self, provider: &str, vmm_port: u16) -> Result<VmmResponse, Box<dyn std::error::Error>> {
+    pub async fn handle(&mut self, provider: &str, vmm_port: u16, keystore: Option<Keystore>) -> Result<VmmResponse, Box<dyn std::error::Error>> {
+        // Parse the formfile
         let mut parser = FormfileParser::new();
         let contents = std::fs::read_to_string(&self.formfile)?;
         let formfile = parser.parse(&contents)?;
         let formfile_string = serde_json::to_string(&formfile)?;
-        let name = formfile.name.clone();
+        
+        // Generate signature for the request
+        let (signature, recovery_id, hash) = self.sign_payload(keystore.clone())?;
+        
+        // Use the name derived from the signing key for consistency with the queue-based method
+        let name = hex::encode(self.derive_name(&self.get_signing_key(keystore.clone())?)?);
+        println!("Instance name: {name}");
+        
+        // Create the request with signature
         let request = CreateVmRequest {
             name,
             formfile: formfile_string,
-            signature: None,
-            recovery_id: 0
+            signature: Some(signature.clone()),
+            recovery_id: recovery_id.to_byte() as u32
         };
+        
+        // Show user which address is signing the request
+        let recovered_address = Address::from_public_key(
+            &VerifyingKey::recover_from_msg(
+                &hash, 
+                &Signature::from_slice(&hex::decode(&signature)?)?,
+                recovery_id
+            )?
+        );
+        println!("Request will be signed by address: {recovered_address:x}");
+        
+        // Send the request
         Ok(reqwest::Client::new() 
             .post(&format!("http://{provider}:{vmm_port}/vm/create"))
             .json(&request)

@@ -7,6 +7,7 @@ pub mod service;
 pub mod cli;
 pub mod api;
 pub mod util;
+pub mod gpu;
 
 pub use config::{NetworkConfig, DefaultVmParams, ResourceLimits, ServicePaths};
 pub use service::*;

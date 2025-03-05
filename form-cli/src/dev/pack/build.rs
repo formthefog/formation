@@ -4,7 +4,7 @@ use clap::Args;
 use colored::Colorize;
 use crdts::bft_reg::RecoverableSignature;
 use form_p2p::queue::{QueueRequest, QueueResponse};
-use k256::ecdsa::{RecoveryId, SigningKey};
+use k256::ecdsa::{RecoveryId, SigningKey, VerifyingKey, Signature};
 use tiny_keccak::{Hasher, Sha3};
 use std::path::PathBuf;
 use reqwest::{Client, multipart::Form};
@@ -202,8 +202,28 @@ impl BuildCommand {
         Ok(())
     }
 
-    pub async fn handle(mut self, provider: &str, formpack_port: u16) -> Result<(), Box<dyn std::error::Error>> {
-        let form = self.pack_build_request().await?;
+    pub async fn handle(mut self, provider: &str, formpack_port: u16, keystore: Option<Keystore>) -> Result<(), Box<dyn std::error::Error>> {
+        // Generate signature for the request
+        let (signature, recovery_id, hash) = self.sign_payload(keystore.clone())?;
+        
+        // Show user which address is signing the request
+        let recovered_address = Address::from_public_key(
+            &VerifyingKey::recover_from_msg(
+                &hash, 
+                &Signature::from_slice(&hex::decode(&signature)?)?,
+                recovery_id
+            )?
+        );
+        println!("Request will be signed by address: {recovered_address:x}");
+        
+        // Create a multipart form with the signature
+        let mut form = self.pack_build_request().await?;
+        
+        // Add signature fields to the form
+        form = form.text("signature", signature.clone())
+                   .text("recovery_id", recovery_id.to_byte().to_string());
+        
+        // Send the request
         let _resp: PackResponse = Client::new()
             .post(format!("http://{provider}:{formpack_port}/build"))
             .multipart(form)

@@ -26,6 +26,31 @@ pub struct VmInstanceConfig {
     pub console_type: ConsoleType,
     pub formfile: String,
     pub owner: String,
+    /// List of GPU device configurations
+    pub gpu_devices: Option<Vec<GpuConfig>>,
+}
+
+/// Configuration for a GPU device to be passed through to a VM
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GpuConfig {
+    /// GPU model requested (e.g., "RTX5090", "H100", "H200", "B200")
+    pub model: String,
+    /// Number of GPUs requested (1-8)
+    pub count: u8,
+    /// Actual PCI addresses of the assigned GPUs (filled by the system, not by the user)
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub assigned_devices: Vec<GpuDeviceInfo>,
+}
+
+/// Information about an assigned GPU device
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GpuDeviceInfo {
+    /// PCI address of the GPU (e.g., "0000:01:00.0")
+    pub pci_address: String,
+    /// IOMMU group to which this device belongs
+    pub iommu_group: Option<String>,
+    /// Enable NVIDIA GPUDirect P2P DMA over PCIe
+    pub enable_gpudirect: bool,
 }
 
 impl Default for VmInstanceConfig {
@@ -45,6 +70,7 @@ impl Default for VmInstanceConfig {
             rng_source: None,
             console_type: ConsoleType::Virtio,
             owner: String::new(),
+            gpu_devices: None,
         }
     }
 }
@@ -69,6 +95,28 @@ impl VmInstanceConfig {
         }
         if self.vcpu_count == 0 {
             return Err(VmmError::Config("Must have at least 1 vCPU".into()));
+        }
+
+        // Validate GPU configurations if any are specified
+        if let Some(gpu_configs) = &self.gpu_devices {
+            for gpu in gpu_configs {
+                // Validate model is supported
+                match gpu.model.as_str() {
+                    "RTX5090" | "H100" | "H200" | "B200" => {},
+                    _ => {
+                        return Err(VmmError::Config(
+                            format!("Unsupported GPU model: {}. Supported models are: RTX5090, H100, H200, B200", gpu.model)
+                        ));
+                    }
+                }
+                
+                // Validate count is between 1 and 8
+                if gpu.count < 1 || gpu.count > 8 {
+                    return Err(VmmError::Config(
+                        format!("Invalid GPU count: {}. Must be between 1 and 8", gpu.count)
+                    ));
+                }
+            }
         }
 
         Ok(())
@@ -129,6 +177,28 @@ impl TryFrom<&VmmEvent> for VmInstanceConfig {
                 let memory_mb = formfile.get_memory();
                 let vcpu_count = formfile.get_vcpus();
 
+                // Extract GPU device configurations from the Formfile if available
+                let gpu_configs = formfile.get_gpu_devices().map(|devices| {
+                    devices.iter()
+                        .map(|gpu_str| {
+                            // Parse the format "MODEL:COUNT"
+                            let parts: Vec<&str> = gpu_str.split(':').collect();
+                            let model = parts[0].to_string();
+                            let count = if parts.len() > 1 {
+                                parts[1].parse::<u8>().unwrap_or(1)
+                            } else {
+                                1
+                            };
+                            
+                            GpuConfig {
+                                model,
+                                count,
+                                assigned_devices: Vec::new(),
+                            }
+                        })
+                        .collect::<Vec<GpuConfig>>()
+                });
+
                 Ok(VmInstanceConfig {
                     rootfs_path,
                     memory_mb: memory_mb.try_into().map_err(|_| {
@@ -140,6 +210,7 @@ impl TryFrom<&VmmEvent> for VmInstanceConfig {
                     name: name.clone(),
                     owner: owner.to_string(),
                     formfile: serde_json::to_string(&formfile).map_err(|e| VmmError::Config(e.to_string()))?,
+                    gpu_devices: gpu_configs,
                     ..Default::default()
                 })
             },

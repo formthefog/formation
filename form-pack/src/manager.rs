@@ -328,6 +328,35 @@ impl FormPackManager {
 
     pub async fn handle_pack_request(&mut self, message: PackBuildRequest) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let node_id = self.node_id.clone();
+        
+        // First check if we're responsible for this workload using the capability matcher
+        println!("Checking if this node is responsible for handling the workload...");
+        let formfile = &message.request.formfile;
+        let build_id = hex::encode(message.hash);
+        
+        // Create the capability matcher
+        let capability_matcher = crate::capability_matcher::CapabilityMatcher::new(None);
+        
+        // Check if we're responsible for this workload
+        match capability_matcher.is_local_node_responsible(formfile, &node_id, &build_id).await {
+            Ok(is_responsible) => {
+                if !is_responsible {
+                    let reason = "Node is not responsible for this workload according to the capability matcher".to_string();
+                    println!("{}", reason);
+                    Self::write_pack_status_failed(&message, reason).await?;
+                    return Ok(());
+                }
+                println!("Node is responsible for this workload, proceeding with build...");
+            },
+            Err(e) => {
+                let reason = format!("Failed to determine if node is responsible: {}", e);
+                println!("{}", reason);
+                Self::write_pack_status_failed(&message, reason).await?;
+                return Ok(());
+            }
+        }
+        
+        // If we get here, we're responsible for the workload
         Self::write_pack_status_started(&message, node_id).await?;
         let packdir = tempdir()?;
 
@@ -357,7 +386,7 @@ impl FormPackManager {
 
         println!("Building FormPackMonitor for {} build...", formfile.name);
         let mut monitor = FormPackMonitor::new().await?; 
-        println!("Attmpting to build image for {}...", formfile.name);
+        println!("Attempting to build image for {}...", formfile.name);
         monitor.build_image(
             self.node_id.clone(),
             message.request.name.clone(),
