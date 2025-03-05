@@ -106,10 +106,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("getting provider from config");
                     let provider = config.hosts[0].clone();
                     if parser.queue {
-                        let resp = build_command.clone().handle_queue(&provider, QUEUE_PORT, keystore).await;
+                        let resp = build_command.clone().handle_queue(&provider, QUEUE_PORT, keystore.clone()).await;
                         println!("Response: {resp:?}");
                     } else {
-                        let resp = build_command.clone().handle(&provider, config.pack_manager_port).await;
+                        let resp = build_command.clone().handle(&provider, config.pack_manager_port, Some(keystore)).await;
                         println!("Response: {resp:?}");
                     }
                 }
@@ -129,7 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if parser.queue {
                         let _ = ship_command.clone().handle_queue(&provider, Some(keystore)).await?;
                     } else {
-                        let _ = ship_command.clone().handle(&provider, config.pack_manager_port).await?;
+                        let _ = ship_command.clone().handle(&provider, config.pack_manager_port, Some(keystore)).await?;
                     }
                 }
                 PackCommand::Status(status_command) => {
@@ -251,7 +251,7 @@ ips_string.yellow(),
                     if parser.queue {
                         stop_command.handle_queue(&provider, Some(keystore)).await?;
                     } else {
-                        let resp = stop_command.handle(&provider, config.vmm_port).await?;
+                        let resp = stop_command.handle(&provider, config.vmm_port, Some(keystore)).await?;
                         println!("Response: {:?}", resp);
                     }
                 }
@@ -261,7 +261,7 @@ ips_string.yellow(),
                     if parser.queue {
                         start_command.handle_queue(&provider, Some(keystore)).await?;
                     } else {
-                        let resp = start_command.handle(&provider, config.vmm_port).await?;
+                        let resp = start_command.handle(&provider, config.vmm_port, Some(keystore)).await?;
                         println!("Response: {:?}", resp);
                     }
                 }
@@ -271,7 +271,7 @@ ips_string.yellow(),
                     if parser.queue {
                         delete_command.handle_queue(&provider, Some(keystore)).await?;
                     } else {
-                        let resp = delete_command.handle(&provider, config.vmm_port).await?;
+                        let resp = delete_command.handle(&provider, config.vmm_port, Some(keystore)).await?;
                         println!("Response: {:?}", resp);
                     }
                 }

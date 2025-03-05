@@ -58,24 +58,37 @@ fn print_delete_queue_response(resp: QueueResponse, vm_id: &str) {
 }
 
 impl DeleteCommand {
-    pub async fn handle(&self, provider: &str, vmm_port: u16) -> Result<VmmResponse, Box<dyn std::error::Error>> {
+    pub async fn handle(&self, provider: &str, vmm_port: u16, keystore: Option<Keystore>) -> Result<VmmResponse, Box<dyn std::error::Error>> {
         let vm_id = match (&self.id, &self.name) {
             (Some(id), _) => id.clone(),
             (_, Some(name)) => name.clone(),
             _ => return Err("Either id or name must be provided".into()),
         };
 
-        let client = reqwest::Client::new();
-        let url = format!("http://{}:{}/api/v1/delete", provider, vmm_port);
+        // Generate signature for the request
+        let (signature, recovery_id, hash) = self.sign_request(&vm_id, keystore.clone())?;
         
-        // Create the request with optional signature
+        // Create the request with signature
         let request = DeleteVmRequest {
             id: vm_id.clone(),
             name: vm_id.clone(),
-            signature: None,
-            recovery_id: 0,
+            signature: Some(signature.clone()),
+            recovery_id: recovery_id.to_byte() as u32,
         };
+        
+        // Show user which address is signing the request
+        let recovered_address = Address::from_public_key(
+            &VerifyingKey::recover_from_msg(
+                &hash, 
+                &Signature::from_slice(&hex::decode(&signature)?)?,
+                recovery_id
+            )?
+        );
+        println!("Request will be signed by address: {recovered_address:x}");
 
+        let client = reqwest::Client::new();
+        let url = format!("http://{}:{}/api/v1/delete", provider, vmm_port);
+        
         // Send the request
         let response = client.post(&url)
             .json(&request)

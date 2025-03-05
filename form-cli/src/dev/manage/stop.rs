@@ -105,17 +105,30 @@ Someone from our core team will gladly help you out.
 }
 
 impl StopCommand {
-    pub async fn handle(&self, provider: &str, vmm_port: u16) -> Result<VmmResponse, Box<dyn std::error::Error>> {
+    pub async fn handle(&self, provider: &str, vmm_port: u16, keystore: Option<Keystore>) -> Result<VmmResponse, Box<dyn std::error::Error>> {
         // Validate inputs - need at least id or name
         let id = self.id.clone().ok_or("Instance ID is required when name is not provided")?;
         let name = self.name.clone().unwrap_or_else(|| id.clone());
         
+        // Generate signature for the request
+        let (signature, recovery_id, hash) = self.sign_request(&id, keystore.clone())?;
+        
         let request = StopVmRequest {
             id,
             name,
-            signature: None,
-            recovery_id: 0
+            signature: Some(signature.clone()),
+            recovery_id: recovery_id.to_byte() as u32,
         };
+        
+        // Show user which address is signing the request
+        let recovered_address = Address::from_public_key(
+            &VerifyingKey::recover_from_msg(
+                &hash, 
+                &Signature::from_slice(&hex::decode(&signature)?)?,
+                recovery_id
+            )?
+        );
+        println!("Request will be signed by address: {recovered_address:x}");
         
         Ok(reqwest::Client::new() 
             .post(&format!("http://{provider}:{vmm_port}/vm/stop"))
@@ -123,8 +136,7 @@ impl StopCommand {
             .send()
             .await?
             .json::<VmmResponse>()
-            .await?
-        )
+            .await?)
     }
 
     pub async fn handle_queue(&self, provider: &str, keystore: Option<Keystore>) -> Result<(), Box<dyn std::error::Error>> {

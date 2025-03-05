@@ -18,7 +18,7 @@ Implement signature verification and ownership checks for all VM management comm
 - [x] Add signature verification to all VM management endpoints
 - [x] Update `Instance` structure to include owner address
 - [x] Implement authorized users list for each instance
-- [ ] Create ownership transfer functionality
+- [x] Create ownership transfer functionality
 - [x] Add account structure to `form-state` crate
 - [x] Implement account-to-instances relationship tracking
 - [x] Update all command handlers to verify signatures
@@ -29,7 +29,7 @@ Implement signature verification and ownership checks for all VM management comm
   - [x] `create_account` - Create a new account
   - [x] `update_account` - Update existing account
   - [x] `delete_account` - Delete an account
-- [ ] Update CLI to sign requests with wallet keys
+- [x] Update CLI to sign requests with wallet keys
 
 ### 2. formnet Improvements
 

@@ -909,16 +909,25 @@ impl DataStore {
     }
 
     async fn handle_transfer_ownership(&mut self, from_address: String, to_address: String, instance_id: String) -> Result<(), Box<dyn std::error::Error>> {
+        // Check and update the accounts
         if let Some(mut account) = self.account_state.get_account(&from_address) {
             account.remove_owned_instance(&instance_id);
             let op = self.account_state.update_account_local(account);
             self.handle_account_op(op).await?;
         }
         if let Some(mut account) = self.account_state.get_account(&to_address) {
-            account.add_owned_instance(instance_id);
+            account.add_owned_instance(instance_id.clone());
             let op = self.account_state.update_account_local(account);
             self.handle_account_op(op).await?;
         }
+        
+        // Update the instance owner field
+        if let Some(mut instance) = self.instance_state.get_instance(instance_id.clone()) {
+            instance.instance_owner = to_address;
+            let op = self.instance_state.update_instance_local(instance);
+            self.handle_instance_op(op).await?;
+        }
+        
         Ok(())
     }
 
@@ -3614,7 +3623,7 @@ async fn transfer_instance_ownership(
             }
             
             // Check if the instance exists
-            if let Some(instance) = datastore.instance_state.get_instance(instance_id.clone()) {
+            if let Some(_instance) = datastore.instance_state.get_instance(instance_id.clone()) {
                 // Check if the source account owns the instance
                 let owners = datastore.account_state.get_owners_of_instance(&instance_id);
                 let is_owned_by_source = owners.iter().any(|account| account.address == from_address);
@@ -3622,6 +3631,13 @@ async fn transfer_instance_ownership(
                 if !is_owned_by_source {
                     return Json(Response::Failure { 
                         reason: Some(format!("Source account does not own the instance {}", instance_id)) 
+                    });
+                }
+                
+                // Verify that the source account has Owner authorization level
+                if !datastore.account_state.verify_authorization(&from_address, &instance_id, &AuthorizationLevel::Owner) {
+                    return Json(Response::Failure { 
+                        reason: Some(format!("Source account does not have Owner authorization for instance {}", instance_id)) 
                     });
                 }
                 
