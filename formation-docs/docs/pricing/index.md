@@ -46,7 +46,7 @@ GPU instances also include the standard compute resources needed to run them.
 The Inference Engine uses a token-based pricing model:
 
 | Model Size |Price (per 1 Million tokens) |
-|------------------------------|
+|------------|------------------------------|
 | < 32B Parameters | $0.1 |
 | 32B - 110B Parameters | $0.2 |
 | 110B - 500B Parameters | $0.3 |

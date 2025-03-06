@@ -1,0 +1,1 @@
+---\nid: domain-configuration\ntitle: Domain Configuration Guide\nsidebar_label: Domain Configuration\n---\n\n# Domain Configuration Guide\n\nComing Soon\n\nThis document will provide guidance on configuring domains for applications deployed on the Formation platform.

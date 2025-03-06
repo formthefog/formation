@@ -1,0 +1,1 @@
+---\nid: multi-stage-builds\ntitle: Multi-stage Builds Guide\nsidebar_label: Multi-stage Builds\n---\n\n# Multi-stage Builds Guide\n\nComing Soon\n\nThis document will provide guidance on using multi-stage builds in Formfiles for efficient application deployment on the Formation platform.

@@ -8,18 +8,17 @@ Welcome to the Formation Developer Reference. This section provides comprehensiv
 
 * [Formfile Reference](./formfile-reference.md) - Complete documentation for all Formfile directives and syntax
 * [CLI Reference](./cli-reference.md) - Comprehensive reference for all Formation CLI commands and options
-* [API & SDK Reference](./api-sdk-reference.md) - Reference documentation for the Formation API and SDKs
+* [API Reference](./api-reference.md) - Reference documentation for the Formation API
 
 ### Configuration References
 
-* [Configuration File Reference](./configuration-reference.md) - Documentation for Formation configuration files
+* [Configuration Reference](./configuration-reference.md) - Documentation for Formation configuration
 * [Environment Variables Reference](./environment-variables.md) - List of all supported environment variables
 * [Network Configuration Reference](./network-reference.md) - Documentation for networking configuration
 
 ### Advanced References
 
 * [Resource Specification Reference](./resource-spec-reference.md) - Detailed specifications for resource requests and limits
-* [Instance Types Reference](./instance-types-reference.md) - Catalog of available instance types and their specifications
 * [Error Codes Reference](./error-codes.md) - List of error codes and their meanings
 * [Metrics Reference](./metrics-reference.md) - Available metrics for monitoring applications
 
@@ -52,12 +51,11 @@ Reference documentation works best when used alongside the [Developer Guides](..
 
 Here are some common reference tasks:
 
-- Looking up a specific CLI command and its options
+- Looking up a specific CLI command and its options (e.g., `form pack build`, `form pack ship`)
 - Checking the syntax of a Formfile directive
 - Finding the parameters for an API endpoint
 - Understanding available options for configuration
 - Reviewing error codes when troubleshooting
-- Finding details about resource specifications
 
 ## Reference Conventions
 
