@@ -1,0 +1,1 @@
+---\nid: custom-base-images\ntitle: Custom Base Images Guide\nsidebar_label: Custom Base Images\n---\n\n# Custom Base Images Guide\n\nComing Soon\n\nThis document will provide guidance on creating and using custom base images for applications deployed on the Formation platform.

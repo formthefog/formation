@@ -1,0 +1,1 @@
+---\nid: resource-optimization\ntitle: Resource Optimization Guide\nsidebar_label: Resource Optimization\n---\n\n# Resource Optimization Guide\n\nComing Soon\n\nThis document will provide guidance on optimizing resource usage for applications deployed on the Formation platform.

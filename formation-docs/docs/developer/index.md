@@ -1,81 +1,76 @@
+---
+id: index
+title: Developer Documentation
+sidebar_label: Overview
+---
+
 # Developer Documentation
 
-Welcome to the Formation Developer Documentation. This comprehensive resource will help you build, deploy, and manage applications on the Formation decentralized cloud platform.
+Welcome to the Formation Developer Documentation. This comprehensive resource will help you build, deploy, and maintain applications on the Formation cloud platform.
 
 ## Documentation Sections
 
 ### [Getting Started](./getting-started/index.md)
 
-Start here if you're new to Formation. This section will guide you through setting up your environment, deploying your first application, and understanding the core concepts of the platform.
+Start here if you're new to developing on Formation. This section will guide you through initial setup, basic concepts, and your first deployment.
 
 ### [Guides](./guides/index.md)
 
-Step-by-step instructions for accomplishing specific tasks on Formation, from writing effective Formfiles to setting up networking and optimizing resources.
+Step-by-step instructions for accomplishing specific development tasks, from writing Formfiles to managing deployments and networking.
 
 ### [Reference](./reference/index.md)
 
-Comprehensive technical documentation including complete references for the Formfile syntax, CLI commands, API endpoints, and configuration options.
+Comprehensive technical documentation including complete references for Formfile directives, CLI commands, API endpoints, and configuration options.
 
 ### [Tutorials](./tutorials/index.md)
 
-Detailed tutorials that walk you through real-world scenarios and common use cases for deploying various types of applications on Formation.
+Detailed tutorials that walk you through real-world scenarios such as deploying web applications, databases, and microservices.
 
 ### [Examples](./examples/index.md)
 
-A collection of example applications and configurations to help you understand best practices and get inspiration for your own projects.
+Ready-to-use example projects and code snippets that demonstrate best practices and common patterns.
 
-## Key Features for Developers
+## Key Benefits for Developers
 
-### Virtual Machine Deployments
+### Global Network
 
-Formation provides full virtual machines rather than containers, offering:
+Deploy your applications on a global, decentralized cloud:
 
-- Complete isolation for enhanced security
-- Full operating system access
-- Flexibility to run any software stack
-- Persistent storage by default
-- Guaranteed resources
+- Automatic redundancy across geographic regions
+- Low-latency edge deployment capabilities
+- Trustless, verifiable infrastructure 
+- Confidential computing for sensitive workloads
 
-### Ethereum-based Authentication
+### Simplified Deployment
 
-Secure your deployments with Ethereum wallet authentication:
+Streamlined developer experience:
 
-- Use existing Ethereum wallets
-- Cryptographic authentication
-- Verifiable ownership
-- Web3-native authorization
+- Formfile-based declarative deployments
+- Integrated CLI for all operations
+- Strong authentication and permission model
+- Comprehensive monitoring and logging
 
-### Global Networking with Formnet
+### Flexible Workloads
 
-Connect your applications with Formation's built-in overlay network:
+Support for diverse application types:
 
-- Secure WireGuard-based networking
-- Automatic DNS resolution
-- Built-in service discovery
-- Public and private networking
-- Custom domain support
+- Web applications and APIs
+- Databases and storage solutions
+- Machine learning and AI workloads
+- Long-running services and batch jobs
 
-### Resource Flexibility
+### Developer-Focused Tools
 
-Right-size your computing resources:
+Tools and services designed for developers:
 
-- Specify exact CPU, memory, and storage requirements
-- Pay only for what you use
-- Scale resources up or down as needed
-- Access specialized hardware like GPUs
-
-### Web3-Native Platform
-
-Built for the decentralized web:
-
-- Tokenized compute resources
-- Decentralized governance
-- Community-owned infrastructure
-- Transparent pricing and execution
+- Form-kit SDK for simplified development
+- Comprehensive API for programmatic control
+- Integration with popular CI/CD platforms
+- Detailed documentation and examples
 
 ## Getting Started
 
-If you're new to Formation, here's how to get started:
+If you're new to developing on Formation, here's how to get started:
 
 1. **Install the Formation CLI:**
    ```bash
@@ -84,18 +79,21 @@ If you're new to Formation, here's how to get started:
 
 2. **Initialize your environment:**
    ```bash
-   form kit init
+   sudo form kit init
    ```
 
-3. **Create a new project from a template:**
+3. **Join Formnet:**
    ```bash
-   form kit templates create --template web-server --name my-first-app
+   sudo form manage join
+   sudo form manage formnet-up
    ```
 
-4. **Deploy your application:**
+4. **Create your first Formfile and deploy:**
    ```bash
-   cd my-first-app
-   form deploy
+   # Create a Formfile
+   # Deploy your application
+   sudo form pack build
+   form pack ship
    ```
 
 For a more detailed walkthrough, visit the [Getting Started](./getting-started/index.md) section.
@@ -104,35 +102,35 @@ For a more detailed walkthrough, visit the [Getting Started](./getting-started/i
 
 - [Writing Formfiles](./guides/writing-formfiles.md)
 - [Managing Instances](./guides/managing-instances.md)
+- [Networking in Formation](./guides/networking.md)
 - [Using Ethereum Wallets](./guides/using-ethereum-wallets.md)
-- [Networking](./guides/networking.md)
 - [Troubleshooting](./guides/troubleshooting.md)
 
 ## Popular References
 
 - [Formfile Reference](./reference/formfile-reference.md)
 - [CLI Reference](./reference/cli-reference.md)
-- [API & SDK Reference](./reference/api-sdk-reference.md)
+- [API Reference](./reference/api-reference.md)
+- [Configuration Reference](./reference/configuration-reference.md)
 
-## Use Cases
+## Application Types
 
-Formation is ideal for a wide range of applications:
+Formation supports various application types and architectures:
 
-- **Web Applications**: Deploy full-stack web applications with persistence
-- **API Servers**: Run backend services with guaranteed resources
-- **Databases**: Deploy database servers with persistent storage
-- **Blockchain Nodes**: Run validators and blockchain infrastructure
-- **AI/ML Workloads**: Leverage GPU resources for machine learning tasks
-- **Development Environments**: Create reproducible development environments
-- **Microservices**: Deploy and connect distributed services
+- **Web Applications**: Frontend and backend web services
+- **APIs and Microservices**: Distributed service architectures
+- **Databases**: Relational and NoSQL databases
+- **AI/ML Workloads**: Machine learning model training and inference
+- **Content Delivery**: Static site hosting and media delivery
+- **Background Jobs**: Scheduled and event-driven processing
 
 ## Getting Help
 
-If you need assistance with Formation:
+If you need assistance developing on Formation:
 
 - Check the [Troubleshooting](./guides/troubleshooting.md) guide
-- Search or ask questions in the [Formation Forums](https://forum.formation.cloud)
-- Join the [Formation Discord](https://discord.gg/formation) community
-- Contact support at support@formation.cloud
+- Search or ask questions in the [Formation Developer Forums](https://forum.formation.cloud/c/developers)
+- Join the [Formation Discord](https://discord.gg/formation) developer channel
+- Contact developer support at developers@formation.cloud
 
 We're continuously improving our documentation based on developer feedback. If you have suggestions for improvements, please let us know! 

@@ -1,0 +1,1 @@
+---\nid: staking\ntitle: Staking and Economics Guide\nsidebar_label: Staking and Economics\n---\n\n# Staking and Economics Guide\n\nComing Soon\n\nThis document will provide information on understanding staking requirements and economic incentives for Formation operators.
