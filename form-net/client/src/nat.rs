@@ -12,7 +12,7 @@ use shared::{
 };
 use wireguard_control::{Backend, Device, DeviceUpdate, InterfaceName, Key, PeerConfigBuilder};
 
-pub const STEP_INTERVAL: Duration = Duration::from_secs(5);
+pub const STEP_INTERVAL: Duration = Duration::from_secs(1);
 
 pub struct NatTraverse<'a, T: Display + Clone + PartialEq> {
     interface: &'a InterfaceName,
