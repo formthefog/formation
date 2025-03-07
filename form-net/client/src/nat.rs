@@ -30,8 +30,8 @@ impl<'a, T: Display + Clone + PartialEq> NatTraverse<'a, T> {
         let mut remaining: Vec<_> = diffs.iter().filter_map(|diff| diff.new).cloned().collect();
 
         for peer in &mut remaining {
-            // Limit reported alternative candidates to 10.
-            peer.candidates.truncate(10);
+            // Limit reported alternative candidates to 30.
+            peer.candidates.truncate(30);
 
             // Remove server-reported endpoint from elsewhere in the list if it existed.
             let endpoint = peer.endpoint.clone();

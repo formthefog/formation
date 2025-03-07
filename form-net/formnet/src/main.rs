@@ -156,7 +156,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     });
 
-                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    tokio::time::sleep(Duration::from_secs(1)).await;
                     log::info!("reverting existing resolver for formnet interface");
                     #[cfg(target_os = "linux")]
                     if let Ok(()) = revert_formnet_resolver().await {
