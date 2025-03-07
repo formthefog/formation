@@ -18,7 +18,7 @@ pub use protocol::{
     RELAY_CAP_IPV4, RELAY_CAP_IPV6, RELAY_CAP_TCP_FALLBACK, RELAY_CAP_HIGH_BANDWIDTH, RELAY_CAP_LOW_LATENCY
 };
 pub use discovery::{RelayRegistry, SharedRelayRegistry, BootstrapConfig, BootstrapRelay};
-// pub use manager::{RelayManager, RelayConnection};
+pub use manager::{RelayManager, ConnectionAttemptStatus};
 // pub use service::{RelayService, RelayNode};
 
 /// Error type for relay operations

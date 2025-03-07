@@ -49,7 +49,7 @@ This document tracks the implementation progress of the decentralized TURN serve
 
 ## Phase 3: Connection Management
 
-- [ ] **9. Create basic RelayManager (manager.rs)**
+- [x] **9. Create basic RelayManager (manager.rs)**
   - Implement RelayManager structure
   - Add relay connection tracking
   - Implement relay connection lifecycle management
