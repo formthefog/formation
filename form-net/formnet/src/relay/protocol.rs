@@ -4,9 +4,8 @@
 //! for relay-based communication.
 
 use crate::relay::{RelayError, Result};
-use bincode::{deserialize, serialize};
+use bincode;
 use serde::{Deserialize, Serialize};
-use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The RelayHeader contains routing information for a relayed packet
@@ -278,6 +277,247 @@ impl Heartbeat {
     }
 }
 
+/// Relay capabilities flags
+pub const RELAY_CAP_IPV4: u32 = 1 << 0;
+pub const RELAY_CAP_IPV6: u32 = 1 << 1;
+pub const RELAY_CAP_TCP_FALLBACK: u32 = 1 << 2;
+pub const RELAY_CAP_HIGH_BANDWIDTH: u32 = 1 << 3;
+pub const RELAY_CAP_LOW_LATENCY: u32 = 1 << 4;
+
+/// A query to discover relay nodes in the network
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoveryQuery {
+    /// Public key of the querying peer
+    pub peer_pubkey: [u8; 32],
+    
+    /// Timestamp for replay protection
+    pub timestamp: u64,
+    
+    /// Random nonce for request uniqueness
+    pub nonce: u64,
+    
+    /// Optional geographic region to filter relays
+    pub region: Option<String>,
+    
+    /// Minimum capabilities required (bitmask)
+    pub min_capabilities: u32,
+    
+    /// Maximum number of relays to return
+    pub max_results: u32,
+}
+
+impl DiscoveryQuery {
+    /// Create a new discovery query
+    pub fn new(peer_pubkey: [u8; 32], max_results: u32) -> Self {
+        Self {
+            peer_pubkey,
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            nonce: rand::random::<u64>(),
+            region: None,
+            min_capabilities: 0, // No specific capabilities required
+            max_results,
+        }
+    }
+    
+    /// Check if the query is valid
+    pub fn is_valid(&self) -> bool {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        
+        // Query should not be older than 30 seconds
+        if now > self.timestamp && now - self.timestamp > 30 {
+            return false;
+        }
+        
+        // Query should not be from the future
+        if self.timestamp > now && self.timestamp - now > 5 {
+            return false;
+        }
+        
+        true
+    }
+    
+    /// Set required region for filtering
+    pub fn with_region(mut self, region: impl Into<String>) -> Self {
+        self.region = Some(region.into());
+        self
+    }
+    
+    /// Set minimum capabilities required
+    pub fn with_capabilities(mut self, capabilities: u32) -> Self {
+        self.min_capabilities = capabilities;
+        self
+    }
+}
+
+/// Information about a relay node
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelayNodeInfo {
+    /// Public key of the relay
+    pub pubkey: [u8; 32],
+    
+    /// Endpoints (addresses) where the relay can be reached
+    pub endpoints: Vec<String>,
+    
+    /// Geographic region of the relay
+    pub region: Option<String>,
+    
+    /// Capabilities offered by this relay (bitmask)
+    pub capabilities: u32,
+    
+    /// Current load factor (0-100, where 0 is idle and 100 is fully loaded)
+    pub load: u8,
+    
+    /// Estimated latency in milliseconds
+    pub latency: Option<u32>,
+    
+    /// Maximum concurrent sessions supported
+    pub max_sessions: u32,
+    
+    /// Protocol version supported
+    pub protocol_version: u16,
+}
+
+impl RelayNodeInfo {
+    /// Create new relay node info with minimal information
+    pub fn new(pubkey: [u8; 32], endpoints: Vec<String>, max_sessions: u32) -> Self {
+        Self {
+            pubkey,
+            endpoints,
+            region: None,
+            capabilities: RELAY_CAP_IPV4, // Default to IPv4 only
+            load: 0,
+            latency: None,
+            max_sessions,
+            protocol_version: 1, // Current version
+        }
+    }
+    
+    /// Check if the relay has a specific capability
+    pub fn has_capability(&self, capability: u32) -> bool {
+        (self.capabilities & capability) != 0
+    }
+    
+    /// Add a capability to the relay
+    pub fn add_capability(&mut self, capability: u32) {
+        self.capabilities |= capability;
+    }
+    
+    /// Set the geographic region
+    pub fn with_region(mut self, region: impl Into<String>) -> Self {
+        self.region = Some(region.into());
+        self
+    }
+    
+    /// Set the current load factor
+    pub fn with_load(mut self, load: u8) -> Self {
+        self.load = std::cmp::min(load, 100);
+        self
+    }
+    
+    /// Set the estimated latency
+    pub fn with_latency(mut self, latency: u32) -> Self {
+        self.latency = Some(latency);
+        self
+    }
+}
+
+/// Response to a discovery query
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoveryResponse {
+    /// Nonce from the original query
+    pub request_nonce: u64,
+    
+    /// Timestamp for replay protection
+    pub timestamp: u64,
+    
+    /// List of relays matching the query
+    pub relays: Vec<RelayNodeInfo>,
+    
+    /// Whether more relays are available
+    pub more_available: bool,
+}
+
+impl DiscoveryResponse {
+    /// Create a new discovery response
+    pub fn new(request_nonce: u64, relays: Vec<RelayNodeInfo>, more_available: bool) -> Self {
+        Self {
+            request_nonce,
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            relays,
+            more_available,
+        }
+    }
+}
+
+/// Announcement of a relay's availability
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelayAnnouncement {
+    /// Information about the relay
+    pub relay_info: RelayNodeInfo,
+    
+    /// Timestamp for freshness and replay protection
+    pub timestamp: u64,
+    
+    /// Expiration time (seconds since UNIX epoch), or 0 for no expiration
+    pub expires: u64,
+    
+    /// Digital signature of the announcement
+    pub signature: Option<Vec<u8>>,
+}
+
+impl RelayAnnouncement {
+    /// Create a new relay announcement
+    pub fn new(relay_info: RelayNodeInfo, ttl_secs: u64) -> Self {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        
+        let expires = if ttl_secs > 0 { now + ttl_secs } else { 0 };
+        
+        Self {
+            relay_info,
+            timestamp: now,
+            expires,
+            signature: None,
+        }
+    }
+    
+    /// Check if the announcement is valid and not expired
+    pub fn is_valid(&self) -> bool {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        
+        // Check if expired
+        if self.expires > 0 && now > self.expires {
+            return false;
+        }
+        
+        // Announcement should not be older than 24 hours
+        if now > self.timestamp && now - self.timestamp > 86400 {
+            return false;
+        }
+        
+        // Announcement should not be from the future
+        if self.timestamp > now && self.timestamp - now > 300 {
+            return false;
+        }
+        
+        true
+    }
+}
+
 /// Relay protocol message types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RelayMessage {
@@ -292,6 +532,15 @@ pub enum RelayMessage {
     
     /// Keep-alive message
     Heartbeat(Heartbeat),
+    
+    /// Query to discover relays
+    DiscoveryQuery(DiscoveryQuery),
+    
+    /// Response to a discovery query
+    DiscoveryResponse(DiscoveryResponse),
+    
+    /// Announcement of relay availability
+    RelayAnnouncement(RelayAnnouncement),
 }
 
 impl RelayMessage {
@@ -314,6 +563,9 @@ impl RelayMessage {
             RelayMessage::ConnectionResponse(resp) => resp.timestamp,
             RelayMessage::ForwardPacket(packet) => packet.header.timestamp,
             RelayMessage::Heartbeat(heartbeat) => heartbeat.timestamp,
+            RelayMessage::DiscoveryQuery(query) => query.timestamp,
+            RelayMessage::DiscoveryResponse(resp) => resp.timestamp,
+            RelayMessage::RelayAnnouncement(announcement) => announcement.timestamp,
         }
     }
     
@@ -324,6 +576,9 @@ impl RelayMessage {
             RelayMessage::ConnectionResponse(_) => true, // Responses are always considered valid
             RelayMessage::ForwardPacket(packet) => packet.header.is_valid(),
             RelayMessage::Heartbeat(_) => true, // Heartbeats are always considered valid
+            RelayMessage::DiscoveryQuery(query) => query.is_valid(),
+            RelayMessage::DiscoveryResponse(_) => true, // Responses are always considered valid
+            RelayMessage::RelayAnnouncement(announcement) => announcement.is_valid(),
         }
     }
 }
@@ -451,6 +706,95 @@ mod tests {
     }
     
     #[test]
+    fn test_discovery_query_validity() {
+        let query = DiscoveryQuery::new([5; 32], 10);
+        
+        // A fresh query should be valid
+        assert!(query.is_valid());
+        
+        // Create an old query
+        let mut old_query = query.clone();
+        old_query.timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() - 60; // 1 minute in the past
+        
+        assert!(!old_query.is_valid());
+        
+        // Query with region and capabilities
+        let query_with_region = query.clone().with_region("us-west");
+        assert_eq!(query_with_region.region, Some("us-west".to_string()));
+        
+        let query_with_caps = query.with_capabilities(RELAY_CAP_IPV4 | RELAY_CAP_LOW_LATENCY);
+        assert_eq!(query_with_caps.min_capabilities, RELAY_CAP_IPV4 | RELAY_CAP_LOW_LATENCY);
+    }
+    
+    #[test]
+    fn test_relay_node_info() {
+        let mut relay_info = RelayNodeInfo::new(
+            [6; 32], 
+            vec!["1.2.3.4:12345".to_string(), "example.com:8000".to_string()],
+            100
+        );
+        
+        // Test default values
+        assert_eq!(relay_info.pubkey, [6; 32]);
+        assert_eq!(relay_info.endpoints.len(), 2);
+        assert_eq!(relay_info.capabilities, RELAY_CAP_IPV4);
+        assert_eq!(relay_info.max_sessions, 100);
+        
+        // Test capability methods
+        assert!(relay_info.has_capability(RELAY_CAP_IPV4));
+        assert!(!relay_info.has_capability(RELAY_CAP_IPV6));
+        
+        relay_info.add_capability(RELAY_CAP_IPV6);
+        assert!(relay_info.has_capability(RELAY_CAP_IPV6));
+        
+        // Test builder methods
+        let relay_info = relay_info
+            .with_region("eu-central")
+            .with_load(75)
+            .with_latency(20);
+        
+        assert_eq!(relay_info.region, Some("eu-central".to_string()));
+        assert_eq!(relay_info.load, 75);
+        assert_eq!(relay_info.latency, Some(20));
+    }
+    
+    #[test]
+    fn test_relay_announcement_validity() {
+        let relay_info = RelayNodeInfo::new(
+            [7; 32],
+            vec!["192.168.1.1:8000".to_string()],
+            50
+        );
+        
+        // Create an announcement that expires in 1 hour
+        let announcement = RelayAnnouncement::new(relay_info, 3600);
+        
+        // A fresh announcement should be valid
+        assert!(announcement.is_valid());
+        
+        // Test expired announcement
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        
+        let mut expired_announcement = announcement.clone();
+        expired_announcement.expires = now - 100; // Expired 100 seconds ago
+        
+        assert!(!expired_announcement.is_valid());
+        
+        // Test old announcement
+        let mut old_announcement = announcement;
+        old_announcement.timestamp = now - 100000; // ~27 hours ago
+        old_announcement.expires = 0; // No expiration
+        
+        assert!(!old_announcement.is_valid());
+    }
+    
+    #[test]
     fn test_relay_message_serialization() {
         // Create a connection request message
         let request = ConnectionRequest::new([3; 32], [4; 32]);
@@ -469,5 +813,39 @@ mod tests {
         }
         
         assert_eq!(message.timestamp(), deserialized.timestamp());
+    }
+    
+    #[test]
+    fn test_discovery_message_serialization() {
+        // Create relay node info
+        let relay_info = RelayNodeInfo::new(
+            [8; 32],
+            vec!["10.0.0.1:9000".to_string()],
+            25
+        ).with_region("us-east");
+        
+        // Create a discovery response
+        let response = DiscoveryResponse::new(
+            12345678,
+            vec![relay_info],
+            false
+        );
+        
+        // Create a relay message from it
+        let message = RelayMessage::DiscoveryResponse(response);
+        
+        // Serialize and deserialize
+        let serialized = message.serialize().expect("Failed to serialize message");
+        let deserialized = RelayMessage::deserialize(&serialized).expect("Failed to deserialize message");
+        
+        // Verify the type and contents match
+        if let RelayMessage::DiscoveryResponse(resp) = &deserialized {
+            assert_eq!(resp.request_nonce, 12345678);
+            assert_eq!(resp.relays.len(), 1);
+            assert_eq!(resp.relays[0].pubkey, [8; 32]);
+            assert_eq!(resp.relays[0].region, Some("us-east".to_string()));
+        } else {
+            panic!("Deserialized message has wrong type");
+        }
     }
 } 

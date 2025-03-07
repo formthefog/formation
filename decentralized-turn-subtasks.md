@@ -20,7 +20,7 @@ This document tracks the implementation progress of the decentralized TURN serve
   - Implement Heartbeat message structure
   - Add message validation helpers
 
-- [ ] **4. Add relay discovery protocol messages (protocol.rs)**
+- [x] **4. Add relay discovery protocol messages (protocol.rs)**
   - Implement DiscoveryQuery/Response structures
   - Implement RelayAnnouncement structure
   - Add unit tests for discovery messages
