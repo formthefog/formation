@@ -1,14 +1,14 @@
 use std::{
     collections::HashMap,
     fs::{self, OpenOptions, File},
-    io::{Read, Write},
+    io::{self, Read, Write},
     net::{IpAddr, SocketAddr}, 
-    path::{PathBuf, Path}, 
+    path::PathBuf, 
     str::FromStr, 
-    time::{Instant, Duration, SystemTime}
+    time::{Duration, SystemTime}
 };
-use form_types::state::{Response as StateResponse, Success};
-use client::{data_store::DataStore, nat::{self, NatTraverse}, util};
+
+use client::{data_store::DataStore, nat::NatTraverse, util};
 use formnet_server::ConfigFile;
 use futures::{stream::FuturesUnordered, StreamExt};
 use hostsfile::HostsBuilder;
@@ -16,13 +16,42 @@ use reqwest::{Client, Response as ServerResponse};
 use serde::{Deserialize, Serialize};
 use shared::{get_local_addrs, wg::{self, DeviceExt, PeerInfoExt}, Endpoint, IoErrorContext, NatOpts, NetworkOpts, Peer, PeerDiff};
 use wireguard_control::{Backend, Device, DeviceUpdate, InterfaceName, PeerConfigBuilder};
+use form_types::state::{Response as StateResponse, Success};
 
 use crate::{api::{BootstrapInfo, Response}, CONFIG_DIR, DATA_DIR, NETWORK_NAME};
+
+// Define endpoint types for classification
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+enum EndpointType {
+    PublicIpv4,     // Public IPv4 address
+    PublicIpv6,     // Public IPv6 address
+    PrivateIpv4,    // Private IPv4 (10.x.x.x, 192.168.x.x, 172.16-31.x.x)
+    PrivateIpv6,    // Private IPv6 (fc00::/7)
+    LinkLocal,      // Link-local addresses (169.254.x.x or fe80::/10)
+    Loopback,       // Loopback (127.x.x.x or ::1)
+    Unknown         // Unknown or unclassifiable
+}
+
+impl EndpointType {
+    // Get a base score for this endpoint type (higher is better)
+    fn base_score(&self) -> u32 {
+        match self {
+            EndpointType::PublicIpv4 => 90,    // Highest priority for remote connections
+            EndpointType::PublicIpv6 => 85,    // Slightly lower than IPv4 due to compatibility
+            EndpointType::PrivateIpv4 => 70,   // Good for local network
+            EndpointType::PrivateIpv6 => 65,   // Slightly lower than IPv4
+            EndpointType::LinkLocal => 30,     // Low priority, only works in local segment
+            EndpointType::Loopback => 10,      // Lowest priority, only works on same machine
+            EndpointType::Unknown => 50,       // Middle priority when we're not sure
+        }
+    }
+}
 
 // Simple struct to track successful connections to endpoints
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedEndpoint {
     endpoint: Endpoint,
+    endpoint_type: EndpointType,  // New field for classification
     last_success: SystemTime,
     success_count: u32,
 }
@@ -43,9 +72,54 @@ impl ConnectionCache {
                 Ok(mut file) => {
                     let mut json = String::new();
                     if file.read_to_string(&mut json).is_ok() {
-                        if let Ok(cache) = serde_json::from_str(&json) {
-                            log::info!("Loaded connection cache from {}", cache_path.display());
-                            return cache;
+                        // Try to parse the JSON
+                        match serde_json::from_str::<Self>(&json) {
+                            Ok(cache) => {
+                                log::info!("Loaded connection cache from {}", cache_path.display());
+                                
+                                // Return the parsed cache
+                                return cache;
+                            },
+                            Err(e) => {
+                                // It might be an old format without endpoint_type
+                                log::warn!("Error parsing cache file (may be older version): {}", e);
+                                
+                                // Try to parse as older version without endpoint_type
+                                #[derive(Debug, Clone, Serialize, Deserialize)]
+                                struct OldCachedEndpoint {
+                                    endpoint: Endpoint,
+                                    last_success: SystemTime,
+                                    success_count: u32,
+                                }
+                                
+                                #[derive(Debug, Default, Serialize, Deserialize)]
+                                struct OldConnectionCache {
+                                    endpoints: HashMap<String, Vec<OldCachedEndpoint>>,
+                                }
+                                
+                                if let Ok(old_cache) = serde_json::from_str::<OldConnectionCache>(&json) {
+                                    // Convert old format to new format
+                                    let mut new_cache = Self::default();
+                                    
+                                    for (pubkey, old_entries) in old_cache.endpoints {
+                                        let mut new_entries = Vec::new();
+                                        
+                                        for old_entry in old_entries {
+                                            new_entries.push(CachedEndpoint {
+                                                endpoint: old_entry.endpoint.clone(),
+                                                endpoint_type: Self::classify_endpoint(&old_entry.endpoint),
+                                                last_success: old_entry.last_success,
+                                                success_count: old_entry.success_count,
+                                            });
+                                        }
+                                        
+                                        new_cache.endpoints.insert(pubkey, new_entries);
+                                    }
+                                    
+                                    log::info!("Successfully converted old cache format to new format");
+                                    return new_cache;
+                                }
+                            }
                         }
                     }
                 },
@@ -89,9 +163,65 @@ impl ConnectionCache {
             }
     }
     
+    // Classify an IP address into an endpoint type
+    fn classify_endpoint(endpoint: &Endpoint) -> EndpointType {
+        if let Ok(socket_addr) = endpoint.resolve() {
+            match socket_addr.ip() {
+                IpAddr::V4(ip) => {
+                    let octets = ip.octets();
+                    
+                    // Check for loopback (127.x.x.x)
+                    if octets[0] == 127 {
+                        return EndpointType::Loopback;
+                    }
+                    
+                    // Check for link-local (169.254.x.x)
+                    if octets[0] == 169 && octets[1] == 254 {
+                        return EndpointType::LinkLocal;
+                    }
+                    
+                    // Check for private IP ranges
+                    if (octets[0] == 10) ||                                         // 10.0.0.0/8
+                       (octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31) ||  // 172.16.0.0/12
+                       (octets[0] == 192 && octets[1] == 168) {                     // 192.168.0.0/16
+                        return EndpointType::PrivateIpv4;
+                    }
+                    
+                    // If none of the above, it's a public IP
+                    return EndpointType::PublicIpv4;
+                },
+                IpAddr::V6(ip) => {
+                    let segments = ip.segments();
+                    
+                    // Check for loopback (::1)
+                    if segments == [0, 0, 0, 0, 0, 0, 0, 1] {
+                        return EndpointType::Loopback;
+                    }
+                    
+                    // Check for link-local (fe80::/10)
+                    if segments[0] & 0xffc0 == 0xfe80 {
+                        return EndpointType::LinkLocal;
+                    }
+                    
+                    // Check for unique local addresses (fc00::/7)
+                    if segments[0] & 0xfe00 == 0xfc00 {
+                        return EndpointType::PrivateIpv6;
+                    }
+                    
+                    // If none of the above, it's a public IP
+                    return EndpointType::PublicIpv6;
+                }
+            }
+        }
+        
+        // Default to unknown if we couldn't resolve the endpoint
+        EndpointType::Unknown
+    }
+    
     // Record a successful connection to an endpoint
     fn record_success(&mut self, pubkey: &str, endpoint: Endpoint) {
         let now = SystemTime::now();
+        let endpoint_type = Self::classify_endpoint(&endpoint);
         let entries = self.endpoints.entry(pubkey.to_string()).or_insert_with(Vec::new);
         
         // Check if we already have this endpoint
@@ -103,17 +233,45 @@ impl ConnectionCache {
             // Add new entry
             entries.push(CachedEndpoint {
                 endpoint,
+                endpoint_type,
                 last_success: now,
                 success_count: 1,
             });
         }
         
-        // Sort by success count (descending) and then by recency
-        entries.sort_by(|a, b| {
-            b.success_count
-                .cmp(&a.success_count)
-                .then_with(|| b.last_success.cmp(&a.last_success))
-        });
+        // Pre-calculate scores to avoid borrow checker issues
+        let mut scored_entries: Vec<(usize, u32)> = entries.iter()
+            .enumerate()
+            .map(|(idx, entry)| {
+                // Calculate score without borrowing self
+                let type_score = entry.endpoint_type.base_score();
+                let success_factor = entry.success_count;
+                let recency_factor = match SystemTime::now().duration_since(entry.last_success) {
+                    Ok(elapsed) => {
+                        // Gradually reduce score for older connections, with a minimum
+                        let days_old = elapsed.as_secs() / (24 * 60 * 60);
+                        if days_old > 5 {
+                            1 // Minimum recency factor
+                        } else {
+                            10 - (days_old as u32 * 2) // Linear decrease
+                        }
+                    },
+                    Err(_) => 5, // Default if time went backwards
+                };
+                let score = type_score * 100 + recency_factor * 10 + success_factor.min(10);
+                (idx, score)
+            })
+            .collect();
+        
+        // Sort by score (higher is better)
+        scored_entries.sort_by(|(_, score_a), (_, score_b)| score_b.cmp(score_a));
+        
+        // Reorder entries based on scores
+        let mut new_entries = Vec::with_capacity(entries.len());
+        for (idx, _) in scored_entries {
+            new_entries.push(entries[idx].clone());
+        }
+        *entries = new_entries;
         
         // Limit to 5 entries per peer
         if entries.len() > 5 {
@@ -123,27 +281,81 @@ impl ConnectionCache {
     
     // Prioritize endpoints based on previous successful connections
     fn prioritize_candidates(&self, pubkey: &str, candidates: &mut Vec<Endpoint>) {
+        // First, classify all candidates
+        let mut classified_candidates: Vec<(Endpoint, EndpointType)> = candidates
+            .iter()
+            .map(|e| (e.clone(), Self::classify_endpoint(e)))
+            .collect();
+        
         if let Some(cached_endpoints) = self.endpoints.get(pubkey) {
-            // Create a new vector with prioritized endpoints first
+            // Use cached information for prioritization
             let mut prioritized = Vec::new();
             
-            // Add cached endpoints that are in the candidate list
+            // Create tuples of (endpoint, score) for sorting
+            let mut scored_cached_endpoints: Vec<(Endpoint, u32)> = Vec::new();
+            
+            // Calculate score for each cached endpoint
             for cached in cached_endpoints {
                 if candidates.contains(&cached.endpoint) {
-                    prioritized.push(cached.endpoint.clone());
-                    log::info!("Prioritizing cached endpoint {} for peer {}", cached.endpoint, pubkey);
+                    // Calculate score directly
+                    let type_score = cached.endpoint_type.base_score();
+                    let success_factor = cached.success_count;
+                    let recency_factor = match SystemTime::now().duration_since(cached.last_success) {
+                        Ok(elapsed) => {
+                            let days_old = elapsed.as_secs() / (24 * 60 * 60);
+                            if days_old > 5 {
+                                1
+                            } else {
+                                10 - (days_old as u32 * 2)
+                            }
+                        },
+                        Err(_) => 5,
+                    };
+                    let score = type_score * 100 + recency_factor * 10 + success_factor.min(10);
+                    
+                    scored_cached_endpoints.push((cached.endpoint.clone(), score));
+                    
+                    log::info!("Scoring cached endpoint {} (type: {:?}, score: {}) for peer {}", 
+                        cached.endpoint, cached.endpoint_type, score, pubkey);
                 }
             }
             
-            // Add remaining candidates
-            for endpoint in candidates.iter() {
-                if !prioritized.contains(endpoint) {
-                    prioritized.push(endpoint.clone());
+            // Sort cached endpoints by score
+            scored_cached_endpoints.sort_by(|(_, score_a), (_, score_b)| score_b.cmp(score_a));
+            
+            // Add cached endpoints in order of score
+            for (endpoint, _) in scored_cached_endpoints {
+                prioritized.push(endpoint);
+            }
+            
+            // Now add remaining candidates based on endpoint type
+            classified_candidates.sort_by(|(_, type_a), (_, type_b)| {
+                type_b.base_score().cmp(&type_a.base_score())
+            });
+            
+            for (endpoint, endpoint_type) in classified_candidates {
+                if !prioritized.contains(&endpoint) {
+                    log::info!("Adding non-cached endpoint {} (type: {:?}, score: {}) for peer {}", 
+                        endpoint, endpoint_type, endpoint_type.base_score(), pubkey);
+                    prioritized.push(endpoint);
                 }
             }
             
-            // Replace original candidates with prioritized list
+            // Replace the original candidates list
             *candidates = prioritized;
+        } else {
+            // No cache for this peer, just sort by endpoint type
+            classified_candidates.sort_by(|(_, type_a), (_, type_b)| {
+                type_b.base_score().cmp(&type_a.base_score())
+            });
+            
+            *candidates = classified_candidates.into_iter()
+                .map(|(endpoint, endpoint_type)| {
+                    log::info!("Sorting endpoint {} by type: {:?}, score: {}", 
+                        endpoint, endpoint_type, endpoint_type.base_score());
+                    endpoint
+                })
+                .collect();
         }
     }
 }
@@ -324,7 +536,7 @@ async fn handle_server_response(
 }
 
 async fn handle_peer_updates(
-    peers: Vec<Peer<String>>,
+    mut peers: Vec<Peer<String>>,
     interface: &InterfaceName,
     network: NetworkOpts,
     data_dir: PathBuf,
@@ -355,48 +567,47 @@ async fn handle_peer_updates(
     
     // Create owned versions that can be used with 'static
     let peers_clone = peers.clone();
-    let device_clone = device.clone();
+    let _device_clone = device.clone();
     
-    // Use the clones for diff to avoid lifetime issues
-    let modifications = device.diff(&peers);
-    let mut store = DataStore::open_or_create(&data_dir, &interface)?;
-    
-    // For each peer that's new or modified, prioritize its candidates based on connection history
-    for diff in &modifications {
-        if let Some(peer) = diff.new {
-            // If we have cached endpoints for this peer, prioritize them
-            let pubkey = &peer.public_key;
-            if let Some(cached_endpoints) = connection_cache.endpoints.get(pubkey) {
-                // Clone the current candidates
-                let candidates = peer.candidates.clone();
-                
-                // Create a prioritized list
-                let mut prioritized = Vec::new();
-                
-                // Add cached endpoints first (if they're in the candidate list)
-                for cached in cached_endpoints {
-                    if candidates.contains(&cached.endpoint) {
-                        prioritized.push(cached.endpoint.clone());
-                        log::info!("Prioritizing cached endpoint {} for peer {}", cached.endpoint, pubkey);
-                    }
-                }
-                
-                // Add remaining candidates
-                for endpoint in &candidates {
-                    if !prioritized.contains(endpoint) {
-                        prioritized.push(endpoint.clone());
-                    }
-                }
-                
-                // Replace candidates with prioritized list
-                let idx = peers.iter().position(|p| p.public_key == *pubkey);
-                if let Some(_idx) = idx {
-                    // Since we can't modify peers directly (it's a parameter), log the prioritization
-                    log::info!("Would prioritize {} endpoints for peer {}", prioritized.len(), pubkey);
-                }
+    // First, apply endpoint prioritization to our peers before diffing
+    for peer in &mut peers {
+        // Get a copy of the public key for the borrow checker
+        let public_key = peer.public_key.clone();
+        
+        // Apply endpoint classification and prioritization
+        connection_cache.prioritize_candidates(&public_key, &mut peer.candidates);
+        
+        // If we have candidates for this peer, log the prioritized order
+        if !peer.candidates.is_empty() {
+            let classified_type = ConnectionCache::classify_endpoint(
+                &peer.candidates.first().unwrap()
+            );
+            
+            log::info!(
+                "Prioritized endpoints for peer {} ({}). Primary endpoint type: {:?}",
+                peer.name,
+                peer.public_key,
+                classified_type
+            );
+            
+            // Only log first 3 to avoid too much noise
+            for (i, endpoint) in peer.candidates.iter().take(3).enumerate() {
+                log::info!(
+                    "  [{}] {}",
+                    i + 1,
+                    endpoint
+                );
+            }
+            
+            if peer.candidates.len() > 3 {
+                log::info!("  ... and {} more", peer.candidates.len() - 3);
             }
         }
     }
+    
+    // Now use the prioritized peers for diffing
+    let modifications = device.diff(&peers);
+    let mut store = DataStore::open_or_create(&data_dir, &interface)?;
     
     let updates = modifications
         .iter()
@@ -470,7 +681,7 @@ async fn try_server_nat_traversal(
     interface: &InterfaceName,
     network: NetworkOpts,
     my_ip: String,
-    connection_cache: &mut ConnectionCache,
+    _connection_cache: &mut ConnectionCache,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Get current device info
     let device = Device::get(interface, network.backend)?;
@@ -544,7 +755,7 @@ pub async fn fetch_server(
         .collect::<Vec<_>>();
 
     let interface_up = interface_up(interface.clone()).await;
-    let interface_updated_time = std::time::Instant::now();
+    let _interface_updated_time = std::time::Instant::now();
     if !updates.is_empty() || !interface_up {
         DeviceUpdate::new()
             .add_peers(&updates)
