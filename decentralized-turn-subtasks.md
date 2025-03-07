@@ -42,7 +42,7 @@ This document tracks the implementation progress of the decentralized TURN serve
   - Add configuration loading/saving for bootstrap relays
   - Add methods to refresh registry from bootstrap nodes
 
-- [ ] **8. Implement relay selection algorithm (discovery.rs)**
+- [x] **8. Implement relay selection algorithm (discovery.rs)**
   - Create scoring function for relay selection
   - Implement proximity-based selection logic
   - Add filtering based on relay capabilities and load

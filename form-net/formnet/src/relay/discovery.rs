@@ -18,6 +18,24 @@ const MAX_RELAY_AGE: Duration = Duration::from_secs(3600); // 1 hour
 /// Default bootstrap refresh interval
 const DEFAULT_REFRESH_INTERVAL: Duration = Duration::from_secs(600); // 10 minutes
 
+/// Default weight for latency in relay scoring
+const LATENCY_WEIGHT: f32 = 0.4;
+
+/// Default weight for load in relay scoring
+const LOAD_WEIGHT: f32 = 0.3;
+
+/// Default weight for capabilities in relay scoring
+const CAPABILITIES_WEIGHT: f32 = 0.2;
+
+/// Default weight for region proximity in relay scoring
+const REGION_WEIGHT: f32 = 0.1;
+
+/// Default high latency threshold (ms) for scoring
+const HIGH_LATENCY_THRESHOLD: u32 = 200;
+
+/// Default maximum acceptable load (0-100)
+const MAX_ACCEPTABLE_LOAD: u8 = 80;
+
 /// Configuration for bootstrap relay nodes
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BootstrapConfig {
@@ -383,6 +401,135 @@ impl RelayRegistry {
             Err(RelayError::Protocol(format!("Relay not found: {}", hex::encode(pubkey))))
         }
     }
+
+    /// Select the best relay for communicating with a specific peer
+    pub fn select_best_relay(
+        &self,
+        target_peer_pubkey: &[u8],
+        required_capabilities: u32,
+        preferred_region: Option<&str>
+    ) -> Option<RelayNodeInfo> {
+        if self.relays.is_empty() {
+            return None;
+        }
+
+        // Filter relays based on capabilities and load
+        let candidates: Vec<RelayNodeInfo> = self.relays.values()
+            .filter(|relay| {
+                // Filter by required capabilities
+                (relay.capabilities & required_capabilities) == required_capabilities &&
+                // Filter by load (avoid overloaded relays)
+                relay.load <= MAX_ACCEPTABLE_LOAD
+            })
+            .cloned()
+            .collect();
+
+        if candidates.is_empty() {
+            return None;
+        }
+
+        // Get target peer's region if available (for proximity calculation)
+        let target_region = if !target_peer_pubkey.is_empty() {
+            None // In a real implementation, we would look up the peer's region
+        } else {
+            None
+        };
+
+        // Score and select the best relay
+        candidates.into_iter()
+            .map(|relay| {
+                let score = self.score_relay(&relay, preferred_region, target_region);
+                (relay, score)
+            })
+            .max_by(|(_, score1), (_, score2)| {
+                score1.partial_cmp(score2).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(relay, _)| relay)
+    }
+
+    /// Score a relay based on multiple factors
+    fn score_relay(
+        &self,
+        relay: &RelayNodeInfo,
+        local_region: Option<&str>,
+        target_region: Option<&str>
+    ) -> f32 {
+        let mut score = 0.0;
+
+        // Score based on latency (lower is better)
+        if let Some(latency) = relay.latency {
+            let latency_score = if latency >= HIGH_LATENCY_THRESHOLD {
+                0.0
+            } else {
+                1.0 - (latency as f32 / HIGH_LATENCY_THRESHOLD as f32)
+            };
+            score += latency_score * LATENCY_WEIGHT;
+        }
+
+        // Score based on load (lower is better)
+        let load_score = 1.0 - (relay.load as f32 / 100.0);
+        score += load_score * LOAD_WEIGHT;
+
+        // Score based on capabilities (more is better)
+        let capabilities_count = (0..32).filter(|i| (relay.capabilities & (1 << i)) != 0).count();
+        let capabilities_score = capabilities_count as f32 / 32.0;
+        score += capabilities_score * CAPABILITIES_WEIGHT;
+
+        // Score based on region proximity
+        if let Some(relay_region) = &relay.region {
+            // Check if the relay is in our local region
+            if let Some(local) = local_region {
+                if relay_region == local {
+                    score += REGION_WEIGHT;
+                }
+            }
+            
+            // Check if the relay is in the target peer's region
+            if let Some(target) = target_region {
+                if relay_region == target {
+                    score += REGION_WEIGHT * 0.5;
+                }
+            }
+        }
+
+        score
+    }
+
+    /// Filter relays based on specific criteria and return scored list
+    pub fn get_scored_relays(
+        &self,
+        required_capabilities: u32,
+        preferred_region: Option<&str>,
+        max_count: usize
+    ) -> Vec<(RelayNodeInfo, f32)> {
+        if self.relays.is_empty() {
+            return Vec::new();
+        }
+
+        // Filter and score relays
+        let mut scored_relays: Vec<(RelayNodeInfo, f32)> = self.relays.values()
+            .filter(|relay| {
+                // Must have required capabilities
+                (relay.capabilities & required_capabilities) == required_capabilities
+            })
+            .map(|relay| {
+                let score = self.score_relay(relay, preferred_region, None);
+                (relay.clone(), score)
+            })
+            .collect();
+
+        // Sort by score (highest first)
+        scored_relays.sort_by(|(_, score1), (_, score2)| {
+            score2.partial_cmp(score1).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // Limit to max_count
+        if scored_relays.len() > max_count && max_count > 0 {
+            scored_relays.truncate(max_count);
+        }
+
+        scored_relays
+    }
 }
 
 /// A thread-safe relay registry that can be shared between threads
@@ -514,12 +661,41 @@ impl SharedRelayRegistry {
             Err(_) => Err(RelayError::Protocol("Failed to acquire write lock on relay registry".into())),
         }
     }
+
+    /// Select the best relay for communicating with a specific peer
+    pub fn select_best_relay(
+        &self,
+        target_peer_pubkey: &[u8],
+        required_capabilities: u32,
+        preferred_region: Option<&str>
+    ) -> Result<Option<RelayNodeInfo>> {
+        let registry = self.inner.read().map_err(|_| 
+            RelayError::Protocol("Failed to acquire read lock on relay registry".into()))?;
+            
+        Ok(registry.select_best_relay(target_peer_pubkey, required_capabilities, preferred_region))
+    }
+    
+    /// Get a scored list of relays matching criteria
+    pub fn get_scored_relays(
+        &self,
+        required_capabilities: u32,
+        preferred_region: Option<&str>,
+        max_count: usize
+    ) -> Result<Vec<(RelayNodeInfo, f32)>> {
+        let registry = self.inner.read().map_err(|_| 
+            RelayError::Protocol("Failed to acquire read lock on relay registry".into()))?;
+            
+        Ok(registry.get_scored_relays(required_capabilities, preferred_region, max_count))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::relay::{RELAY_CAP_IPV4, RELAY_CAP_IPV6};
+    use crate::relay::{
+        RelayNodeInfo, RELAY_CAP_IPV4, RELAY_CAP_IPV6, 
+        RELAY_CAP_HIGH_BANDWIDTH, RELAY_CAP_LOW_LATENCY
+    };
     use tempfile::tempdir;
     
     // Helper to create a test relay node
@@ -576,6 +752,7 @@ mod tests {
         let mut relay1 = create_test_relay(1, vec!["192.168.1.1:8080"], 10);
         relay1 = relay1.with_region("us-east");
         relay1.add_capability(RELAY_CAP_IPV6);
+        relay1.load = 20; // Lower load
         registry.register_relay(relay1);
         
         let mut relay2 = create_test_relay(2, vec!["192.168.1.2:8080"], 20);
@@ -737,5 +914,101 @@ mod tests {
         let added = registry.refresh_from_bootstrap().unwrap();
         assert_eq!(added, 1); // It's 1 because we're re-registering the same relay (the implementation doesn't detect duplicates)
         assert_eq!(registry.count(), 1); // But the count should still be 1
+    }
+
+    #[test]
+    fn test_relay_selection() {
+        let mut registry = RelayRegistry::new();
+        
+        // Add some test relays with different characteristics
+        let mut relay1 = create_test_relay(1, vec!["192.168.1.1:8080"], 10);
+        relay1.region = Some("us-west".to_string());
+        relay1.capabilities = RELAY_CAP_IPV4;
+        relay1.latency = Some(50);
+        relay1.load = 20;
+        
+        let mut relay2 = create_test_relay(2, vec!["192.168.1.2:8080"], 20);
+        relay2.region = Some("us-east".to_string());
+        relay2.capabilities = RELAY_CAP_IPV4 | RELAY_CAP_IPV6;
+        relay2.latency = Some(100);
+        relay2.load = 10;
+        
+        let mut relay3 = create_test_relay(3, vec!["192.168.1.3:8080"], 5);
+        relay3.region = Some("eu-west".to_string());
+        relay3.capabilities = RELAY_CAP_IPV4 | RELAY_CAP_HIGH_BANDWIDTH;
+        relay3.latency = Some(150);
+        relay3.load = 50;
+        
+        let mut relay4 = create_test_relay(4, vec!["192.168.1.4:8080"], 15);
+        relay4.region = Some("us-west".to_string());
+        relay4.capabilities = RELAY_CAP_IPV4 | RELAY_CAP_IPV6 | RELAY_CAP_HIGH_BANDWIDTH;
+        relay4.latency = Some(75);
+        relay4.load = 90; // High load
+        
+        registry.register_relay(relay1.clone());
+        registry.register_relay(relay2.clone());
+        registry.register_relay(relay3.clone());
+        registry.register_relay(relay4.clone());
+        
+        // Test selection based on capabilities
+        let selected = registry.select_best_relay(&[0; 32], RELAY_CAP_IPV6, None);
+        assert!(selected.is_some());
+        let selected = selected.unwrap();
+        assert!(selected.has_capability(RELAY_CAP_IPV6));
+        
+        // Test selection with region preference
+        let selected = registry.select_best_relay(&[0; 32], RELAY_CAP_IPV4, Some("us-west"));
+        assert!(selected.is_some());
+        let selected = selected.unwrap();
+        assert_eq!(selected.region, Some("us-west".to_string()));
+        
+        // Test that overloaded relay isn't selected
+        assert_ne!(selected.load, 90);
+        
+        // Test getting scored relays
+        let scored = registry.get_scored_relays(RELAY_CAP_IPV4, None, 10);
+        assert_eq!(scored.len(), 4);
+        
+        // The highest scored relay should be first
+        assert!(scored[0].1 > scored[3].1);
+    }
+    
+    #[test]
+    fn test_relay_scoring() {
+        let registry = RelayRegistry::new();
+        
+        // Create relays with different characteristics to test scoring
+        let mut low_latency_relay = create_test_relay(1, vec!["192.168.1.1:8080"], 10);
+        low_latency_relay.latency = Some(10); // Very low latency
+        low_latency_relay.load = 20;
+        low_latency_relay.capabilities = RELAY_CAP_IPV4;
+        low_latency_relay.region = Some("us-west".to_string());
+        
+        let mut high_capabilities_relay = create_test_relay(2, vec!["192.168.1.2:8080"], 10);
+        high_capabilities_relay.latency = Some(100);
+        high_capabilities_relay.load = 20;
+        high_capabilities_relay.capabilities = RELAY_CAP_IPV4 | RELAY_CAP_IPV6 | RELAY_CAP_HIGH_BANDWIDTH | RELAY_CAP_LOW_LATENCY;
+        high_capabilities_relay.region = Some("eu-west".to_string());
+        
+        let mut low_load_relay = create_test_relay(3, vec!["192.168.1.3:8080"], 10);
+        low_load_relay.latency = Some(100);
+        low_load_relay.load = 5; // Very low load
+        low_load_relay.capabilities = RELAY_CAP_IPV4;
+        low_load_relay.region = Some("asia-east".to_string());
+        
+        // Score relays
+        let score1 = registry.score_relay(&low_latency_relay, Some("us-west"), None);
+        let score2 = registry.score_relay(&high_capabilities_relay, Some("us-west"), None);
+        let score3 = registry.score_relay(&low_load_relay, Some("us-west"), None);
+        
+        // Verify our scoring logic works as expected
+        assert!(score1 > 0.0);
+        assert!(score2 > 0.0);
+        assert!(score3 > 0.0);
+        
+        // Test region matching
+        let score_region_match = registry.score_relay(&low_latency_relay, Some("us-west"), None);
+        let score_region_mismatch = registry.score_relay(&low_latency_relay, Some("eu-west"), None);
+        assert!(score_region_match > score_region_mismatch);
     }
 } 
