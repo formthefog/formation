@@ -48,8 +48,8 @@ Address critical networking issues to improve reliability, connection speed, and
 - [x] Increase endpoint refresher frequency from 10 seconds to 3 seconds
 - [x] Implement parallel endpoint testing (3 endpoints per peer simultaneously)
 - [x] Add connection success caching for faster reconnection
-- [ ] Implement smart endpoint prioritization for remote connections
-- [ ] Add connection health checks and automatic retry
+- [x] Implement smart endpoint prioritization for remote connections
+- [x] Add connection health checks and automatic retry
 - [ ] Implement IPv6 support for all networking components
 - [ ] Research and implement decentralized TURN server approach
 - [ ] Consider private wireguard mesh per org/user vs global mesh
