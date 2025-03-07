@@ -25,7 +25,7 @@ This document tracks the implementation progress of the decentralized TURN serve
   - Implement RelayAnnouncement structure
   - Add unit tests for discovery messages
 
-- [ ] **5. Update CachedEndpoint for relay support (connection_cache.rs)**
+- [x] **5. Update CachedEndpoint for relay support (connection_cache.rs)**
   - Add relay-specific fields to CachedEndpoint
   - Ensure backward compatibility with existing cache
   - Add unit tests for CachedEndpoint with relay fields

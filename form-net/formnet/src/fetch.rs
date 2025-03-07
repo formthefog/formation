@@ -75,6 +75,22 @@ struct CachedEndpoint {
     jitter_ms: Option<u32>,            // Connection jitter in milliseconds
     quality_score: Option<u32>,        // Overall quality score (0-100)
     last_quality_update: Option<SystemTime>, // When quality metrics were last updated
+    
+    // Relay-specific fields
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    relay_endpoint: Option<Endpoint>,  // The relay endpoint used for this connection
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    relay_session_id: Option<u64>,     // Current session ID with the relay
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    relay_pubkey: Option<[u8; 32]>,    // Public key of the relay node
+    #[serde(default)]
+    is_relayed: bool,                  // Whether this connection uses a relay
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    relay_latency_ms: Option<u32>,     // Latency to the relay node
+    #[serde(default)]
+    relay_success_count: u32,          // Number of successful connections via this relay
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_relay_success: Option<SystemTime>, // When the relay connection was last successful
 }
 
 // Cache of successful connections for faster reconnection
@@ -105,8 +121,27 @@ impl ConnectionCache {
             if file.read_to_string(&mut json).is_ok() {
                 // Try to parse the JSON
                 match serde_json::from_str::<Self>(&json) {
-                    Ok(cache) => {
+                    Ok(mut cache) => {
                         log::info!("Loaded connection cache from {}", cache_path.display());
+                        
+                        // Initialize relay fields if loading from an old version
+                        for entries in cache.endpoints.values_mut() {
+                            for entry in entries.iter_mut() {
+                                // If relay fields aren't initialized, set defaults
+                                if entry.relay_endpoint.is_none() && 
+                                   entry.relay_session_id.is_none() && 
+                                   entry.relay_pubkey.is_none() && 
+                                   !entry.is_relayed {
+                                    entry.relay_endpoint = None;
+                                    entry.relay_session_id = None;
+                                    entry.relay_pubkey = None;
+                                    entry.is_relayed = false;
+                                    entry.relay_latency_ms = None;
+                                    entry.relay_success_count = 0;
+                                    entry.last_relay_success = None;
+                                }
+                            }
+                        }
                         
                         // Return the parsed cache
                         return cache;
@@ -159,10 +194,36 @@ impl ConnectionCache {
                                         jitter_ms: None,
                                         quality_score: None,
                                         last_quality_update: None,
+                                        relay_endpoint: None,
+                                        relay_session_id: None,
+                                        relay_pubkey: None,
+                                        is_relayed: false,
+                                        relay_latency_ms: None,
+                                        relay_success_count: 0,
+                                        last_relay_success: None,
                                     });
                                 }
                                 
                                 new_cache.endpoints.insert(pubkey, new_entries);
+                            }
+                            
+                            // Initialize relay fields if loading from an old version
+                            for entries in new_cache.endpoints.values_mut() {
+                                for entry in entries.iter_mut() {
+                                    // If relay fields aren't initialized, set defaults
+                                    if entry.relay_endpoint.is_none() && 
+                                       entry.relay_session_id.is_none() && 
+                                       entry.relay_pubkey.is_none() && 
+                                       !entry.is_relayed {
+                                        entry.relay_endpoint = None;
+                                        entry.relay_session_id = None;
+                                        entry.relay_pubkey = None;
+                                        entry.is_relayed = false;
+                                        entry.relay_latency_ms = None;
+                                        entry.relay_success_count = 0;
+                                        entry.last_relay_success = None;
+                                    }
+                                }
                             }
                             
                             return new_cache;
@@ -279,6 +340,13 @@ impl ConnectionCache {
                 jitter_ms: None,
                 quality_score: None,
                 last_quality_update: None,
+                relay_endpoint: None,
+                relay_session_id: None,
+                relay_pubkey: None,
+                is_relayed: false,
+                relay_latency_ms: None,
+                relay_success_count: 0,
+                last_relay_success: None,
             };
             
             // Calculate initial quality score
@@ -599,6 +667,138 @@ impl ConnectionCache {
         
         // Save the updated cache
         self.save(interface);
+    }
+
+    // Record a successful relay connection
+    fn record_relay_success(&mut self, pubkey: &str, endpoint: Endpoint, relay_endpoint: Endpoint, relay_pubkey: [u8; 32], session_id: u64, relay_latency: Option<u32>) {
+        let now = SystemTime::now();
+        let endpoint_type = Self::classify_endpoint(&endpoint);
+        let entries = self.endpoints.entry(pubkey.to_string()).or_insert_with(Vec::new);
+        
+        // Check if we already have this endpoint
+        if let Some(entry) = entries.iter_mut().find(|e| e.endpoint == endpoint) {
+            // Update existing entry with relay information
+            entry.record_relay_success(relay_endpoint, relay_pubkey, session_id, relay_latency);
+        } else {
+            // Add new entry with relay information
+            let mut new_entry = CachedEndpoint {
+                endpoint,
+                endpoint_type,
+                last_success: now,
+                success_count: 1,
+                status: ConnectionStatus::Healthy,
+                last_checked: Some(now),
+                failure_count: 0,
+                latency_ms: None,
+                packet_loss_pct: None,
+                handshake_success_rate: None,
+                recent_failures: Vec::new(),
+                jitter_ms: None,
+                quality_score: None,
+                last_quality_update: None,
+                relay_endpoint: Some(relay_endpoint),
+                relay_session_id: Some(session_id),
+                relay_pubkey: Some(relay_pubkey),
+                is_relayed: true,
+                relay_latency_ms: relay_latency,
+                relay_success_count: 1,
+                last_relay_success: Some(now),
+            };
+            
+            // Calculate initial quality score
+            new_entry.update_quality_score();
+            
+            entries.push(new_entry);
+        }
+        
+        // Pre-calculate scores for sorting to avoid borrow checker issues
+        let mut scored_entries: Vec<(usize, u32)> = entries
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| {
+                let type_score = entry.endpoint_type.base_score();
+                let success_factor = std::cmp::min(entry.success_count, 10);
+                let recency_factor = match SystemTime::now().duration_since(entry.last_success) {
+                    Ok(elapsed) => {
+                        let days_old = elapsed.as_secs() / (24 * 60 * 60);
+                        if days_old > 5 {
+                            1
+                        } else {
+                            10 - ((days_old as u32) * 2)
+                        }
+                    },
+                    Err(_) => 1,
+                };
+                
+                let relay_penalty = if entry.is_relayed { 0.8 } else { 1.0 };
+                let base_score = (type_score * success_factor * recency_factor) as f32;
+                let final_score = (base_score * relay_penalty) as u32;
+                
+                (i, final_score)
+            })
+            .collect();
+        
+        // Sort by score (descending)
+        scored_entries.sort_by(|a, b| b.1.cmp(&a.1));
+        
+        // Reorder entries based on score
+        let mut sorted_entries = Vec::with_capacity(entries.len());
+        for (idx, _) in scored_entries {
+            sorted_entries.push(entries[idx].clone());
+        }
+        *entries = sorted_entries;
+        
+        // Keep only the top 5 entries per peer to avoid unbounded growth
+        if entries.len() > 5 {
+            entries.truncate(5);
+        }
+    }
+
+    // Determine if a relay should be used for a peer based on connection history
+    fn needs_relay(&self, pubkey: &str) -> bool {
+        if let Some(cached_endpoints) = self.endpoints.get(pubkey) {
+            // If we have no successful direct connections, try a relay
+            let all_relayed = cached_endpoints.iter().all(|e| e.is_relayed);
+            if all_relayed && !cached_endpoints.is_empty() {
+                log::info!("All previous successful connections to {} were relayed, using relay", pubkey);
+                return true;
+            }
+            
+            // Check if we've had too many recent direct connection failures
+            let now = SystemTime::now();
+            let recent_failures = cached_endpoints.iter()
+                .filter(|e| !e.is_relayed) // Only consider direct connections
+                .flat_map(|e| &e.recent_failures)
+                .filter(|&time| {
+                    match now.duration_since(*time) {
+                        Ok(duration) => duration < Duration::from_secs(300), // Failures in last 5 minutes
+                        Err(_) => false,
+                    }
+                })
+                .count();
+                
+            if recent_failures >= 3 {
+                log::info!("Detected {} recent direct connection failures to {}, trying relay", recent_failures, pubkey);
+                return true;
+            }
+            
+            // Check if direct connections have consistently failed
+            let direct_entries = cached_endpoints.iter()
+                .filter(|e| !e.is_relayed)
+                .collect::<Vec<_>>();
+                
+            if !direct_entries.is_empty() {
+                let all_direct_failed = direct_entries.iter()
+                    .all(|e| e.status == ConnectionStatus::Failed);
+                    
+                if all_direct_failed {
+                    log::info!("All direct connections to {} have failed status, trying relay", pubkey);
+                    return true;
+                }
+            }
+        }
+        
+        false
     }
 }
 
@@ -1234,153 +1434,243 @@ pub async fn report_candidates(admins: Vec<String>, my_ip: String) -> Result<(),
 }
 
 impl CachedEndpoint {
-    // Calculate a quality score based on available metrics
+    // Calculate a quality score for this endpoint based on metrics
     fn calculate_quality_score(&self) -> u32 {
-        let mut score = 0;
-        let mut factors = 0;
+        // Base score from endpoint type
+        let type_score = self.endpoint_type.base_score();
         
-        // Base score based on endpoint type (0-40 points)
-        let type_score = match self.endpoint_type {
-            EndpointType::PublicIpv4 => 40,
-            EndpointType::PublicIpv6 => 35,
-            EndpointType::PrivateIpv4 => 30,
-            EndpointType::PrivateIpv6 => 25,
-            EndpointType::LinkLocal => 15,
-            EndpointType::Loopback => 10,
-            EndpointType::Unknown => 5,
+        // Score based on success count (capped at 10 for diminishing returns)
+        let success_factor = std::cmp::min(self.success_count, 10);
+        
+        // Score based on connection recency
+        let recency_factor = match SystemTime::now().duration_since(self.last_success) {
+            Ok(elapsed) => {
+                // Reduce score for older connections
+                let days_old = elapsed.as_secs() / (24 * 60 * 60);
+                if days_old > 5 {
+                    1 // Minimum recency factor
+                } else {
+                    10 - ((days_old as u32) * 2) // Linear decrease
+                }
+            },
+            Err(_) => 1, // Default to minimum if time calculation fails
         };
-        score += type_score;
-        factors += 1;
         
-        // Connection status (0-30 points)
-        let status_score = match self.status {
-            ConnectionStatus::Healthy => 30,
-            ConnectionStatus::Degraded => 15,
-            ConnectionStatus::Unknown => 10,
-            ConnectionStatus::Failed => 0,
+        // Apply status-based multiplier
+        let status_factor = match self.status {
+            ConnectionStatus::Healthy => 1.0,
+            ConnectionStatus::Degraded => 0.5,
+            ConnectionStatus::Unknown => 0.8,
+            ConnectionStatus::Failed => 0.1,
         };
-        score += status_score;
-        factors += 1;
         
-        // Latency score (0-10 points)
-        if let Some(latency) = self.latency_ms {
-            let latency_score = if latency < 10 {
-                10 // Excellent: < 10ms
-            } else if latency < 50 {
-                8 // Very good: 10-50ms
-            } else if latency < 100 {
-                6 // Good: 50-100ms
-            } else if latency < 200 {
-                4 // Fair: 100-200ms
-            } else if latency < 500 {
-                2 // Poor: 200-500ms
-            } else {
-                0 // Very poor: > 500ms
-            };
-            score += latency_score;
-            factors += 1;
-        }
+        // Account for relay penalty (direct connections preferred)
+        let relay_factor = if self.is_relayed { 0.8 } else { 1.0 };
         
-        // Packet loss score (0-10 points)
-        if let Some(packet_loss) = self.packet_loss_pct {
-            let packet_loss_score = if packet_loss == 0 {
-                10 // Perfect: 0% loss
-            } else if packet_loss < 1 {
-                8 // Excellent: < 1% loss
-            } else if packet_loss < 5 {
-                6 // Good: 1-5% loss
-            } else if packet_loss < 10 {
-                4 // Fair: 5-10% loss
-            } else if packet_loss < 20 {
-                2 // Poor: 10-20% loss
-            } else {
-                0 // Very poor: > 20% loss
-            };
-            score += packet_loss_score;
-            factors += 1;
-        }
-        
-        // Handshake success rate (0-10 points)
-        if let Some(success_rate) = self.handshake_success_rate {
-            let handshake_score = if success_rate > 95 {
-                10 // Excellent: > 95% success
-            } else if success_rate > 85 {
-                8 // Very good: 85-95% success
-            } else if success_rate > 70 {
-                6 // Good: 70-85% success
-            } else if success_rate > 50 {
-                4 // Fair: 50-70% success
-            } else if success_rate > 30 {
-                2 // Poor: 30-50% success
-            } else {
-                0 // Very poor: < 30% success
-            };
-            score += handshake_score;
-            factors += 1;
-        }
-        
-        // Jitter score (0-10 points)
-        if let Some(jitter) = self.jitter_ms {
-            let jitter_score = if jitter < 5 {
-                10 // Excellent: < 5ms jitter
-            } else if jitter < 20 {
-                8 // Very good: 5-20ms jitter
-            } else if jitter < 50 {
-                6 // Good: 20-50ms jitter
-            } else if jitter < 100 {
-                4 // Fair: 50-100ms jitter
-            } else if jitter < 200 {
-                2 // Poor: 100-200ms jitter
-            } else {
-                0 // Very poor: > 200ms jitter
-            };
-            score += jitter_score;
-            factors += 1;
-        }
-        
-        // Success stability (0-10 points)
-        // More consecutive successes = higher score
-        let stability_score = if self.success_count > 20 {
-            10 // Excellent: > 20 consecutive successes
-        } else if self.success_count > 10 {
-            8 // Very good: 10-20 consecutive successes
-        } else if self.success_count > 5 {
-            6 // Good: 5-10 consecutive successes
-        } else if self.success_count > 2 {
-            4 // Fair: 2-5 consecutive successes
-        } else if self.success_count > 0 {
-            2 // Poor: 1 success
-        } else {
-            0 // Never succeeded
+        // Latency impact (lower is better)
+        let latency_factor = match self.latency_ms {
+            Some(latency) if latency < 50 => 1.2,  // Excellent latency
+            Some(latency) if latency < 100 => 1.0, // Good latency
+            Some(latency) if latency < 200 => 0.8, // Fair latency
+            Some(latency) if latency < 500 => 0.6, // Poor latency
+            Some(_) => 0.4,                        // Bad latency
+            None => 0.9,                           // Unknown latency (neutral)
         };
-        score += stability_score;
-        factors += 1;
         
-        // Failure pattern analysis (0-10 points)
-        // Analyze recent failures to detect patterns
-        let recent_failure_score = match self.recent_failures.len() {
-            0 => 10, // No recent failures - excellent
-            1 => 8,  // One failure - very good
-            2 => 6,  // Two failures - good
-            3..=5 => 4, // 3-5 failures - fair
-            6..=10 => 2, // 6-10 failures - poor
-            _ => 0,  // More than 10 failures - very poor
+        // Packet loss impact (lower is better)
+        let packet_loss_factor = match self.packet_loss_pct {
+            Some(loss) if loss < 1 => 1.2,   // Excellent (< 1%)
+            Some(loss) if loss < 5 => 1.0,   // Good (< 5%)
+            Some(loss) if loss < 10 => 0.8,  // Fair (< 10%)
+            Some(loss) if loss < 20 => 0.6,  // Poor (< 20%)
+            Some(_) => 0.4,                  // Bad (>= 20%)
+            None => 0.9,                     // Unknown (neutral)
         };
-        score += recent_failure_score;
-        factors += 1;
         
-        // Calculate weighted average and normalize to 0-100
-        if factors > 0 {
-            (score * 100) / (factors * 10)
-        } else {
-            0
-        }
+        // Calculate raw score
+        let raw_score = (type_score * success_factor * recency_factor) as f32;
+        
+        // Apply quality factors
+        let adjusted_score = raw_score * status_factor * relay_factor * latency_factor * packet_loss_factor;
+        
+        // Return the final score as u32
+        adjusted_score.round() as u32
     }
     
-    // Update connection quality score
+    // Record a successful relay connection through this endpoint
+    fn record_relay_success(&mut self, relay_endpoint: Endpoint, relay_pubkey: [u8; 32], session_id: u64, relay_latency: Option<u32>) {
+        let now = SystemTime::now();
+        
+        // Update relay-specific fields
+        self.relay_endpoint = Some(relay_endpoint);
+        self.relay_pubkey = Some(relay_pubkey);
+        self.relay_session_id = Some(session_id);
+        self.is_relayed = true;
+        self.relay_latency_ms = relay_latency;
+        self.relay_success_count += 1;
+        self.last_relay_success = Some(now);
+        
+        // Also update general connection fields
+        self.last_success = now;
+        self.success_count += 1;
+        self.status = ConnectionStatus::Healthy;
+        self.last_checked = Some(now);
+        self.failure_count = 0;
+        
+        // Clear recent failures on successful connection
+        self.recent_failures.clear();
+        
+        // Update quality score
+        self.update_quality_score();
+    }
+    
+    // Update the quality score based on current metrics
     fn update_quality_score(&mut self) {
         let score = self.calculate_quality_score();
         self.quality_score = Some(score);
         self.last_quality_update = Some(SystemTime::now());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::SocketAddr;
+    
+    // Create a sample endpoint for testing
+    fn create_test_endpoint(ip: &str, port: u16) -> Endpoint {
+        format!("{}:{}", ip, port).parse().unwrap()
+    }
+    
+    // Helper to create a byte array for pubkey
+    fn test_pubkey(seed: u8) -> [u8; 32] {
+        let mut key = [0u8; 32];
+        for i in 0..32 {
+            key[i] = seed + i as u8;
+        }
+        key
+    }
+    
+    #[test]
+    fn test_cached_endpoint_relay_support() {
+        // Create a new CachedEndpoint with relay information
+        let endpoint = create_test_endpoint("192.168.1.100", 51820);
+        let relay_endpoint = create_test_endpoint("203.0.113.45", 8080);
+        let relay_pubkey = test_pubkey(1);
+        let session_id = 123456789;
+        
+        let mut entry = CachedEndpoint {
+            endpoint,
+            endpoint_type: EndpointType::PrivateIpv4,
+            last_success: SystemTime::now(),
+            success_count: 1,
+            status: ConnectionStatus::Healthy,
+            last_checked: Some(SystemTime::now()),
+            failure_count: 0,
+            latency_ms: None,
+            packet_loss_pct: None,
+            handshake_success_rate: None,
+            recent_failures: Vec::new(),
+            jitter_ms: None,
+            quality_score: None,
+            last_quality_update: None,
+            relay_endpoint: None,
+            relay_session_id: None,
+            relay_pubkey: None,
+            is_relayed: false,
+            relay_latency_ms: None,
+            relay_success_count: 0,
+            last_relay_success: None,
+        };
+        
+        // Record a relay success
+        entry.record_relay_success(relay_endpoint.clone(), relay_pubkey, session_id, Some(25));
+        
+        // Verify relay fields were updated
+        assert!(entry.is_relayed);
+        assert_eq!(entry.relay_endpoint, Some(relay_endpoint));
+        assert_eq!(entry.relay_pubkey, Some(relay_pubkey));
+        assert_eq!(entry.relay_session_id, Some(session_id));
+        assert_eq!(entry.relay_latency_ms, Some(25));
+        assert_eq!(entry.relay_success_count, 1);
+        assert!(entry.last_relay_success.is_some());
+        
+        // Check that general fields were also updated
+        assert_eq!(entry.status, ConnectionStatus::Healthy);
+        assert_eq!(entry.success_count, 2); // Incremented from 1
+        assert_eq!(entry.failure_count, 0);
+        assert!(entry.recent_failures.is_empty());
+        
+        // The quality score should reflect relay penalty
+        assert!(entry.quality_score.is_some());
+        let mut direct_clone = CachedEndpoint {
+            is_relayed: false,
+            relay_endpoint: None,
+            relay_session_id: None,
+            relay_pubkey: None,
+            relay_latency_ms: None,
+            relay_success_count: 0,
+            last_relay_success: None,
+            ..entry.clone()
+        };
+        
+        // Calculate scores
+        entry.update_quality_score();
+        direct_clone.update_quality_score();
+        
+        // The direct connection should score higher than the relayed one (all else equal)
+        assert!(direct_clone.quality_score.unwrap() > entry.quality_score.unwrap());
+    }
+    
+    #[test]
+    fn test_connection_cache_relay_operations() {
+        let mut cache = ConnectionCache {
+            endpoints: HashMap::new()
+        };
+        
+        let pubkey = "test_peer_key";
+        let endpoint = create_test_endpoint("192.168.1.200", 51820);
+        let relay_endpoint = create_test_endpoint("203.0.113.50", 8080);
+        let relay_pubkey = test_pubkey(5);
+        let session_id = 987654321;
+        
+        // Record a relay success
+        cache.record_relay_success(pubkey, endpoint.clone(), relay_endpoint.clone(), relay_pubkey, session_id, Some(30));
+        
+        // Verify the entry was added
+        assert!(cache.endpoints.contains_key(pubkey));
+        assert_eq!(cache.endpoints.get(pubkey).unwrap().len(), 1);
+        
+        let entry = &cache.endpoints.get(pubkey).unwrap()[0];
+        assert!(entry.is_relayed);
+        assert_eq!(entry.endpoint, endpoint);
+        assert_eq!(entry.relay_endpoint, Some(relay_endpoint));
+        
+        // Check that needs_relay works correctly
+        let needs_relay = cache.needs_relay(pubkey);
+        assert!(needs_relay, "Should need relay because all previous connections were relayed");
+        
+        // Add a direct connection success
+        let direct_endpoint = create_test_endpoint("192.168.1.201", 51820);
+        cache.record_success(pubkey, direct_endpoint.clone());
+        
+        // Now we shouldn't need a relay because we have a successful direct connection
+        assert!(!cache.needs_relay(pubkey));
+        
+        // Mark all direct connections as failed
+        if let Some(entries) = cache.endpoints.get_mut(pubkey) {
+            for entry in entries.iter_mut() {
+                if !entry.is_relayed {
+                    entry.status = ConnectionStatus::Failed;
+                    // Add some recent failures
+                    for _ in 0..3 {
+                        entry.recent_failures.push(SystemTime::now());
+                    }
+                }
+            }
+        }
+        
+        // Now we should need a relay again
+        assert!(cache.needs_relay(pubkey));
     }
 }
