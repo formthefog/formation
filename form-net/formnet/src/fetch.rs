@@ -1,4 +1,4 @@
-use std::{net::{IpAddr, SocketAddr}, path::PathBuf, str::FromStr, time::Instant};
+use std::{net::{IpAddr, SocketAddr}, path::PathBuf, str::FromStr, time::{Instant, Duration}};
 use form_types::state::{Response as StateResponse, Success};
 use client::{data_store::DataStore, nat::{self, NatTraverse}, util};
 use formnet_server::ConfigFile;
@@ -256,17 +256,19 @@ async fn handle_peer_updates(
 
         // Give time for handshakes with recently changed endpoints to complete before attempting traversal.
         if !nat_traverse.is_finished() {
-            std::thread::sleep(nat::STEP_INTERVAL - interface_updated_time.elapsed());
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
+        
+        // Use the parallel endpoint testing for faster connection establishment
         loop {
             if nat_traverse.is_finished() {
                 break;
             }
             log::info!(
-                "Attempting to establish connection with {} remaining unconnected peers...",
+                "Attempting to establish connection with {} remaining unconnected peers (parallel mode)...",
                 nat_traverse.remaining()
             );
-            nat_traverse.step()?;
+            nat_traverse.step_parallel_sync()?;
         }
     }
 
@@ -341,17 +343,19 @@ async fn try_nat_traversal_server(
 
         // Give time for handshakes with recently changed endpoints to complete before attempting traversal.
         if !nat_traverse.is_finished() {
-            std::thread::sleep(nat::STEP_INTERVAL - interface_updated_time.elapsed());
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
+        
+        // Use the parallel endpoint testing for faster connection establishment
         loop {
             if nat_traverse.is_finished() {
                 break;
             }
             log::info!(
-                "Attempting to establish connection with {} remaining unconnected peers...",
+                "Attempting to establish connection with {} remaining unconnected peers (parallel mode)...",
                 nat_traverse.remaining()
             );
-            nat_traverse.step()?;
+            nat_traverse.step_parallel_sync()?;
         }
     }
 
@@ -461,17 +465,19 @@ pub async fn fetch_server(
         let mut nat_traverse = NatTraverse::new(&interface, NetworkOpts::default().backend, &modifications)?;
         // Give time for handshakes with recently changed endpoints to complete before attempting traversal.
         if !nat_traverse.is_finished() {
-            std::thread::sleep(nat::STEP_INTERVAL - interface_updated_time.elapsed());
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
+        
+        // Use the parallel endpoint testing for faster connection establishment
         loop {
             if nat_traverse.is_finished() {
                 break;
             }
             log::info!(
-                "Attempting to establish connection with {} remaining unconnected peers...",
+                "Attempting to establish connection with {} remaining unconnected peers (parallel mode)...",
                 nat_traverse.remaining()
             );
-            nat_traverse.step()?;
+            nat_traverse.step_parallel_sync()?;
         }
     }
 
