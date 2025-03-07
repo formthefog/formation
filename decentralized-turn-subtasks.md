@@ -32,7 +32,7 @@ This document tracks the implementation progress of the decentralized TURN serve
 
 ## Phase 2: Discovery and Registry
 
-- [ ] **6. Implement basic RelayRegistry (discovery.rs)**
+- [x] **6. Implement basic RelayRegistry (discovery.rs)**
   - Create RelayRegistry and RelayNodeInfo structures
   - Implement basic relay registration and lookup
   - Add unit tests for registry operations
