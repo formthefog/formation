@@ -11,7 +11,7 @@ pub mod manager;
 pub mod service;
 
 // Re-export key structures
-pub use protocol::{RelayHeader, RelayPacket};
+pub use protocol::{RelayHeader, RelayPacket, RelayMessage, ConnectionRequest, ConnectionResponse, ConnectionStatus, Heartbeat};
 // pub use discovery::{RelayRegistry, RelayNodeInfo};
 // pub use manager::{RelayManager, RelayConnection};
 // pub use service::{RelayService, RelayNode};

@@ -14,7 +14,7 @@ This document tracks the implementation progress of the decentralized TURN serve
   - Implement basic serialization/deserialization
   - Add unit tests for serialization
 
-- [ ] **3. Implement relay message types (protocol.rs)**
+- [x] **3. Implement relay message types (protocol.rs)**
   - Define RelayMessage enum with all message variants
   - Implement ConnectionRequest/Response structures
   - Implement Heartbeat message structure
