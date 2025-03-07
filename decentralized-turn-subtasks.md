@@ -37,7 +37,7 @@ This document tracks the implementation progress of the decentralized TURN serve
   - Implement basic relay registration and lookup
   - Add unit tests for registry operations
 
-- [ ] **7. Add bootstrap relay configuration (discovery.rs)**
+- [x] **7. Add bootstrap relay configuration (discovery.rs)**
   - Implement bootstrap relay list management
   - Add configuration loading/saving for bootstrap relays
   - Add methods to refresh registry from bootstrap nodes

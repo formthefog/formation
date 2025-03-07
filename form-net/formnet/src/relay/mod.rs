@@ -17,7 +17,7 @@ pub use protocol::{
     DiscoveryQuery, DiscoveryResponse, RelayNodeInfo, RelayAnnouncement,
     RELAY_CAP_IPV4, RELAY_CAP_IPV6, RELAY_CAP_TCP_FALLBACK, RELAY_CAP_HIGH_BANDWIDTH, RELAY_CAP_LOW_LATENCY
 };
-pub use discovery::{RelayRegistry, SharedRelayRegistry};
+pub use discovery::{RelayRegistry, SharedRelayRegistry, BootstrapConfig, BootstrapRelay};
 // pub use manager::{RelayManager, RelayConnection};
 // pub use service::{RelayService, RelayNode};
 
