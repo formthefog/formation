@@ -54,7 +54,7 @@ This document tracks the implementation progress of the decentralized TURN serve
   - Add relay connection tracking
   - Implement relay connection lifecycle management
 
-- [ ] **10. Implement relay connection establishment (manager.rs)**
+- [x] **10. Implement relay connection establishment (manager.rs)**
   - Create connect_via_relay method
   - Implement relay handshake protocol
   - Add connection error handling and retry logic

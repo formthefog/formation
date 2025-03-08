@@ -37,7 +37,7 @@ formnet-server = { path = "../server" }
 client = { path = "../client" }
 wireguard-control = { path = "../wireguard-control" }
 form-types = { path = "../../form-types" }
-tokio = { version = "1", features=["full"] }
+tokio = { version = "1", features=["full", "time"] }
 futures = "0.3"
 clap = { version = "4.5.23", features=["derive"] }
 conductor = { git = "https://github.com/versatus/conductor.git" }

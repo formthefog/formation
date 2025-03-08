@@ -3,12 +3,16 @@
 //! This module handles establishing and managing relay connections.
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::sync::{Arc, Mutex, RwLock};
+use std::net::ToSocketAddrs;
+use std::sync::{Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime};
+use std::mem::MaybeUninit;
+
+use rand::Rng;
+use socket2::{Domain, Socket, Type, SockAddr};
 
 use crate::relay::{
-    ConnectionRequest, ConnectionResponse, ConnectionStatus, RelayError, RelayMessage,
+    ConnectionRequest, ConnectionStatus, RelayError, RelayMessage,
     RelayNodeInfo, Result, SharedRelayRegistry
 };
 
@@ -27,6 +31,15 @@ const TEST_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(1);
 
 /// Activity timeout - how long before a session is considered inactive
 const ACTIVITY_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Maximum number of connection retries
+const MAX_CONNECT_RETRIES: usize = 3;
+
+/// Delay between connection retries (in milliseconds)
+const RETRY_DELAY_MS: u64 = 1000;
+
+/// Duration to wait for a connection response
+const CONNECTION_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Connection attempt status
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -446,6 +459,237 @@ impl RelayManager {
         
         Err(RelayError::Protocol(format!("Session {} not found", session_id)))
     }
+    
+    /// Connect to a peer through a relay node
+    /// 
+    /// This method attempts to establish a connection to a peer through a relay node.
+    /// It will select the best relay based on the selection algorithm and attempt to
+    /// establish a connection. If the connection fails, it will retry with a different
+    /// relay up to MAX_CONNECT_RETRIES times.
+    pub async fn connect_via_relay(
+        &self,
+        target_pubkey: [u8; 32],
+        required_capabilities: u32,
+        preferred_region: Option<&str>
+    ) -> Result<u64> {
+        // Check if we already have an active session
+        if self.has_active_session(&target_pubkey)? {
+            return self.get_session_for_peer(&target_pubkey)?
+                .ok_or_else(|| RelayError::Protocol("Session lookup failed".into()));
+        }
+        
+        // Get available relays
+        let relays = self.relay_registry.get_scored_relays(
+            required_capabilities,
+            preferred_region,
+            MAX_CONNECT_RETRIES
+        )?;
+        
+        if relays.is_empty() {
+            return Err(RelayError::Protocol("No suitable relay nodes found".into()));
+        }
+        
+        // Try each relay in order of score
+        let mut last_error = None;
+        
+        for (relay_info, _score) in relays {
+            match self.try_connect_via_relay(&target_pubkey, &relay_info).await {
+                Ok(session_id) => {
+                    log::info!("Connection established via relay {} to peer {}", 
+                        hex::encode(&relay_info.pubkey),
+                        hex::encode(&target_pubkey));
+                    return Ok(session_id);
+                },
+                Err(e) => {
+                    log::warn!("Failed to connect via relay {} to peer {}: {}",
+                        hex::encode(&relay_info.pubkey),
+                        hex::encode(&target_pubkey),
+                        e);
+                    last_error = Some(e);
+                    
+                    // Add a small delay before trying the next relay
+                    tokio::time::sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
+                }
+            }
+        }
+        
+        Err(last_error.unwrap_or_else(|| RelayError::Protocol("Failed to connect via relay".into())))
+    }
+    
+    /// Try to connect via a specific relay
+    async fn try_connect_via_relay(
+        &self,
+        target_pubkey: &[u8; 32],
+        relay_info: &RelayNodeInfo
+    ) -> Result<u64> {
+        // Track the connection attempt
+        self.track_connection_attempt(*target_pubkey, relay_info.clone())?;
+        
+        // Generate a random nonce
+        let nonce = rand::thread_rng().gen::<u64>();
+        
+        // Create connection request
+        let request = ConnectionRequest::new(self.local_pubkey, *target_pubkey);
+        let message = RelayMessage::ConnectionRequest(request);
+        
+        // Send the request to the relay
+        let socket = self.create_udp_socket()?;
+        
+        // Connect to the first available endpoint
+        let mut relay_endpoint = None;
+        for endpoint_str in &relay_info.endpoints {
+            if let Ok(addrs) = endpoint_str.to_socket_addrs() {
+                for addr in addrs {
+                    // Convert SocketAddr to SockAddr
+                    let sock_addr = SockAddr::from(addr);
+                    if socket.connect(&sock_addr).is_ok() {
+                        relay_endpoint = Some(addr);
+                        break;
+                    }
+                }
+            }
+            
+            if relay_endpoint.is_some() {
+                break;
+            }
+        }
+        
+        let _relay_addr = relay_endpoint.ok_or_else(|| 
+            RelayError::Protocol(format!("Failed to resolve any relay endpoints")))?;
+        
+        // Serialize the message
+        let data = message.serialize()?;
+        
+        // Send the request
+        socket.set_nonblocking(true)?;
+        socket.send(&data)?;
+        
+        // Wait for response with timeout
+        let start_time = Instant::now();
+        let mut buffer = [MaybeUninit::<u8>::uninit(); 2048];
+        
+        while start_time.elapsed() < CONNECTION_RESPONSE_TIMEOUT {
+            match socket.recv(&mut buffer) {
+                Ok(size) => {
+                    // Convert from MaybeUninit<u8> to u8
+                    let received_data = unsafe {
+                        std::slice::from_raw_parts(
+                            buffer.as_ptr() as *const u8,
+                            size
+                        )
+                    };
+                    
+                    if let Ok(response_message) = RelayMessage::deserialize(received_data) {
+                        match response_message {
+                            RelayMessage::ConnectionResponse(response) => {
+                                // Check if the response is for our request
+                                if response.request_nonce != nonce {
+                                    continue;
+                                }
+                                
+                                match response.status {
+                                    ConnectionStatus::Success => {
+                                        // Connection was successful
+                                        let session_id = response.session_id.ok_or_else(|| 
+                                            RelayError::Protocol("No session ID in success response".into()))?;
+                                        
+                                        // Update the connection attempt
+                                        self.update_connection_attempt(
+                                            target_pubkey,
+                                            ConnectionAttemptStatus::Success,
+                                            Some(session_id)
+                                        )?;
+                                        
+                                        return Ok(session_id);
+                                    },
+                                    _ => {
+                                        // Connection failed
+                                        let error_msg = response.error.unwrap_or_else(|| 
+                                            format!("Connection failed with status: {:?}", response.status));
+                                        
+                                        self.update_connection_attempt(
+                                            target_pubkey,
+                                            ConnectionAttemptStatus::Failed(error_msg.clone()),
+                                            None
+                                        )?;
+                                        
+                                        return Err(RelayError::Protocol(error_msg));
+                                    }
+                                }
+                            },
+                            _ => {
+                                // Ignore other message types
+                                continue;
+                            }
+                        }
+                    }
+                },
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    // No data available yet, wait a bit
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    continue;
+                },
+                Err(e) => {
+                    // Error receiving data
+                    self.update_connection_attempt(
+                        target_pubkey,
+                        ConnectionAttemptStatus::Failed(format!("Receive error: {}", e)),
+                        None
+                    )?;
+                    
+                    return Err(RelayError::Io(e));
+                }
+            }
+        }
+        
+        // Timeout
+        self.update_connection_attempt(
+            target_pubkey,
+            ConnectionAttemptStatus::Timeout,
+            None
+        )?;
+        
+        Err(RelayError::Protocol("Connection request timed out".into()))
+    }
+    
+    /// Create a UDP socket for relay communication
+    fn create_udp_socket(&self) -> Result<Socket> {
+        let socket = Socket::new(Domain::IPV4, Type::DGRAM, None)?;
+        
+        // Set socket options
+        socket.set_nonblocking(true)?;
+        socket.set_read_timeout(Some(CONNECTION_RESPONSE_TIMEOUT))?;
+        socket.set_write_timeout(Some(Duration::from_secs(5)))?;
+        
+        Ok(socket)
+    }
+    
+    /// Retry a failed connection
+    pub async fn retry_connection(
+        &self,
+        target_pubkey: [u8; 32],
+        required_capabilities: u32,
+        preferred_region: Option<&str>
+    ) -> Result<u64> {
+        // Check if there's an active attempt for this peer and cancel it
+        self.cancel_connection_attempts(&target_pubkey)?;
+        
+        // Try a new connection
+        self.connect_via_relay(target_pubkey, required_capabilities, preferred_region).await
+    }
+    
+    /// Cancel all connection attempts for a peer
+    pub fn cancel_connection_attempts(&self, target_pubkey: &[u8; 32]) -> Result<usize> {
+        let mut attempts = self.connection_attempts.lock().map_err(|_| 
+            RelayError::Protocol("Failed to acquire lock on connection attempts".into()))?;
+        
+        let before_len = attempts.len();
+        
+        // Remove attempts for this peer
+        attempts.retain(|a| a.target_pubkey != *target_pubkey);
+        
+        Ok(before_len - attempts.len())
+    }
 }
 
 #[cfg(test)]
@@ -562,5 +806,40 @@ mod tests {
         // Session should be gone
         assert_eq!(manager.session_count().unwrap(), 0);
         assert!(!manager.has_active_session(&target_pubkey).unwrap());
+    }
+    
+    // Add a new test for connection establishment
+    #[tokio::test]
+    async fn test_relay_connection_establishment() {
+        // This is a mock test since we can't actually establish connections in unit tests
+        // In a real test, we would use a mock relay service
+        
+        // Create a registry with a mock relay
+        let registry = SharedRelayRegistry::new();
+        let mut relay_info = create_test_relay(1);
+        
+        // Add a mock endpoint that will intentionally fail to connect
+        // (this is just to test the error handling)
+        relay_info.endpoints = vec!["127.0.0.1:1".to_string()];
+        
+        registry.register_relay(relay_info).unwrap();
+        
+        // Create a manager
+        let local_pubkey = create_test_pubkey(99);
+        let manager = RelayManager::new(registry, local_pubkey);
+        
+        // Try to connect - this should fail because the endpoint is invalid
+        let target_pubkey = create_test_pubkey(2);
+        let result = manager.connect_via_relay(
+            target_pubkey,
+            0, // no required capabilities
+            None // no preferred region
+        ).await;
+        
+        // Verify that the connection failed as expected
+        assert!(result.is_err());
+        
+        // The connection attempt should be tracked and then removed when it fails
+        assert_eq!(manager.connection_attempt_count().unwrap(), 0);
     }
 } 
