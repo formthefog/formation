@@ -12,7 +12,7 @@ version = "0.1.0"
 
 [features]
 integration = []
-client = []
+# Removed client and relay features - all functionality is now always included
 
 [lib]
 path = "src/lib.rs"
@@ -74,7 +74,8 @@ form-config = { path = "../../form-config" }
 daemonize = "0.5"
 colored = "3"
 rand = "0.8"
-# Dependencies for relay functionality
+anyhow = "1.0"
+# Dependencies for relay functionality (formerly conditional, now always included)
 thiserror = "1.0"        # For better error handling
 once_cell = "1.17"       # For lazy static initialization
 ring = "0.16"            # For cryptographic operations

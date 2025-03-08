@@ -17,6 +17,7 @@ use wireguard_control::{Backend, Device, DeviceUpdate, InterfaceName, Key, PeerC
 
 pub const STEP_INTERVAL: Duration = Duration::from_secs(1);
 pub const PARALLEL_ENDPOINTS: usize = 3; // Test up to 3 endpoints per peer in parallel
+const MAX_DIRECT_ATTEMPTS: usize = 3; // Try direct connections for a peer at most 3 times
 
 pub struct NatTraverse<'a, T: Display + Clone + PartialEq> {
     interface: &'a InterfaceName,

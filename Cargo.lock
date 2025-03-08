@@ -3084,6 +3084,7 @@ name = "formnet"
 version = "0.1.0"
 dependencies = [
  "alloy-core",
+ "anyhow",
  "async-trait",
  "axum",
  "bincode",

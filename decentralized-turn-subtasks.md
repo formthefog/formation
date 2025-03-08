@@ -64,14 +64,14 @@ This document tracks the implementation progress of the decentralized TURN serve
   - Add packet receiving and processing
   - Implement session management for active connections
 
-- [ ] **12. Integrate with connection cache (manager.rs)**
+- [x] **12. Integrate with connection cache (manager.rs)**
   - Implement needs_relay method using connection history
   - Add relay success recording to connection cache
   - Implement relay prioritization based on past successes
 
 ## Phase 4: Integration with Existing System
 
-- [ ] **13. Update NAT traversal for relay support (nat.rs)**
+- [x] **13. Update NAT traversal for relay support (nat.rs)**
   - Add step_with_relay method to NatTraverse
   - Implement mark_connected helper
   - Add error handling for relay connection attempts

@@ -21,8 +21,7 @@ use crate::relay::{
     RelayNodeInfo, Result, SharedRelayRegistry, RelayPacket
 };
 
-// Add client and shared imports
-#[cfg(feature = "client")]
+// Import from client crate
 use client::connection_cache;
 use shared::{Endpoint, IoErrorContext, WrappedIoError};
 
@@ -254,7 +253,6 @@ impl PacketReceiver {
 }
 
 /// Connection cache integration
-#[cfg(feature = "client")]
 pub struct CacheIntegration {
     /// Interface name for the connection
     interface: InterfaceName,
@@ -269,7 +267,6 @@ pub struct CacheIntegration {
     relay_manager: Option<RelayManager>,
 }
 
-#[cfg(feature = "client")]
 impl CacheIntegration {
     /// Create a new cache integration
     pub fn new(interface: InterfaceName, data_dir: String) -> Self {
@@ -284,6 +281,11 @@ impl CacheIntegration {
     /// Set the relay manager
     pub fn set_relay_manager(&mut self, relay_manager: RelayManager) {
         self.relay_manager = Some(relay_manager);
+    }
+    
+    /// Get a reference to the relay manager if it exists
+    pub fn get_relay_manager(&self) -> Option<&RelayManager> {
+        self.relay_manager.as_ref()
     }
     
     /// Determine if a relay should be used for a peer based on connection history
@@ -479,97 +481,6 @@ impl CacheIntegration {
     }
 }
 
-#[cfg(feature = "client")]
-impl RelayManager {
-    /// Integrate with the connection cache
-    pub fn integrate_with_cache(
-        &self,
-        cache_integration: &CacheIntegration,
-        pubkey: &str,
-        session_id: u64,
-        relay_info: &RelayNodeInfo
-    ) -> Result<()> {
-        // Create relay endpoint
-        if let Some(relay_endpoint) = CacheIntegration::create_relay_endpoint(relay_info) {
-            // Record successful relay connection
-            cache_integration.record_relay_success(pubkey, relay_endpoint, relay_info.pubkey, session_id);
-        }
-        Ok(())
-    }
-    
-    /// Connect to a peer using the connection cache integration
-    pub async fn connect_with_cache(
-        &self,
-        cache_integration: &CacheIntegration,
-        target_pubkey_hex: &str,
-        required_capabilities: u32,
-        preferred_region: Option<&str>
-    ) -> Result<u64> {
-        // First check if we should use a relay
-        if !cache_integration.needs_relay(target_pubkey_hex) {
-            return Err(RelayError::Protocol("Direct connection should be attempted first".into()));
-        }
-        
-        // Decode the target pubkey
-        let target_pubkey = hex::decode(target_pubkey_hex)
-            .map_err(|_| RelayError::Protocol("Invalid target pubkey hex".into()))?;
-            
-        if target_pubkey.len() != 32 {
-            return Err(RelayError::Protocol("Target pubkey must be 32 bytes".into()));
-        }
-        
-        let mut target_pubkey_array = [0u8; 32];
-        target_pubkey_array.copy_from_slice(&target_pubkey);
-        
-        // Try to connect using a relay
-        let result = self.connect_via_relay(
-            target_pubkey_array,
-            required_capabilities,
-            preferred_region
-        ).await;
-        
-        // Record the result
-        match &result {
-            Ok(session_id) => {
-                // Get relay info for this session
-                let relay_info = {
-                    let sessions = self.sessions.read().map_err(|_| 
-                        RelayError::Protocol("Failed to acquire read lock on sessions".into()))?;
-                        
-                    let session = sessions.get(session_id)
-                        .ok_or_else(|| RelayError::Protocol(format!("Session {} not found", session_id)))?;
-                        
-                    session.relay_info.clone()
-                };
-                
-                // Record the success
-                self.integrate_with_cache(cache_integration, target_pubkey_hex, *session_id, &relay_info)?;
-            },
-            Err(_) => {
-                // Record the failure
-                cache_integration.record_failure(target_pubkey_hex);
-            }
-        }
-        
-        result
-    }
-    
-    /// Check if there's an active session for a peer
-    pub fn check_active_session(&self, peer_pubkey: &[u8]) -> Result<bool> {
-        let sessions = self.sessions.read().map_err(|_| 
-            RelayError::Protocol("Failed to acquire read lock on sessions".into()))?;
-            
-        // Check if any session matches this target pubkey
-        for session in sessions.values() {
-            if session.peer_pubkey.starts_with(peer_pubkey) {
-                return Ok(true);
-            }
-        }
-        
-        Ok(false)
-    }
-}
-
 impl RelayManager {
     /// Create a new relay manager
     pub fn new(relay_registry: SharedRelayRegistry, local_pubkey: [u8; 32]) -> Self {
@@ -606,8 +517,9 @@ impl RelayManager {
     
     /// Get peer public key for a session ID
     pub fn get_peer_for_session(&self, session_id: u64) -> Result<Option<[u8; 32]>> {
-        let session_to_peer = self.session_to_peer.read().map_err(|_| 
-            RelayError::Protocol("Failed to acquire read lock on session_to_peer".into()))?;
+        let session_to_peer = self.session_to_peer.read().map_err(|e| 
+            RelayError::Protocol(format!("Failed to acquire read lock on session_to_peer: {}", e))
+        )?;
         
         Ok(session_to_peer.get(&session_id).copied())
     }
@@ -886,76 +798,75 @@ impl RelayManager {
         Err(RelayError::Protocol(format!("Session {} not found", session_id)))
     }
     
-    /// Connect to a peer through a relay node
-    /// 
-    /// This method attempts to establish a connection to a peer through a relay node.
-    /// It will select the best relay based on the selection algorithm and attempt to
-    /// establish a connection. If the connection fails, it will retry with a different
-    /// relay up to MAX_CONNECT_RETRIES times.
+    /// Connect to a peer via a relay, automatically selecting an appropriate relay if none is specified.
+    /// This will try multiple relays if necessary, and will use the connection cache to determine
+    /// which relays have been successful in the past.
     pub async fn connect_via_relay(
         &self,
-        target_pubkey: [u8; 32],
+        target_pubkey: &[u8],
         required_capabilities: u32,
         preferred_region: Option<&str>
     ) -> Result<u64> {
+        // Convert target_pubkey to fixed-size array if needed
+        let target_pubkey = if target_pubkey.len() == 32 {
+            let mut array = [0u8; 32];
+            array.copy_from_slice(target_pubkey);
+            array
+        } else {
+            return Err(RelayError::Protocol(format!(
+                "Invalid target pubkey length: {}, expected 32 bytes", 
+                target_pubkey.len()
+            )));
+        };
+        
         // Check if we already have an active session
-        if self.check_active_session(&target_pubkey)? {
+        if self.check_active_session(target_pubkey.as_ref())? {
             return self.get_session_for_peer(&target_pubkey)?
                 .ok_or_else(|| RelayError::Protocol("Session lookup failed".into()));
         }
         
-        // Get available relays
-        let relays = self.relay_registry.get_scored_relays(
+        // Get a relay node from the registry
+        let relay_info = match self.relay_registry.select_best_relay(
+            &target_pubkey,
             required_capabilities,
-            preferred_region,
-            MAX_CONNECT_RETRIES
-        )?;
+            preferred_region
+        )? {
+            Some(relay) => relay,
+            None => return Err(RelayError::Protocol(
+                "No suitable relay nodes found".to_string()
+            )),
+        };
         
-        if relays.is_empty() {
-            return Err(RelayError::Protocol("No suitable relay nodes found".into()));
-        }
-        
-        // Try each relay in order of score
-        let mut last_error = None;
-        
-        for (relay_info, _score) in relays {
-            match self.try_connect_via_relay(&target_pubkey, &relay_info).await {
-                Ok(session_id) => {
-                    log::info!("Connection established via relay {} to peer {}", 
-                        hex::encode(&relay_info.pubkey),
-                        hex::encode(&target_pubkey));
-                    return Ok(session_id);
-                },
-                Err(e) => {
-                    log::warn!("Failed to connect via relay {} to peer {}: {}",
-                        hex::encode(&relay_info.pubkey),
-                        hex::encode(&target_pubkey),
-                        e);
-                    last_error = Some(e);
-                    
-                    // Add a small delay before trying the next relay
-                    tokio::time::sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
-                }
-            }
-        }
-        
-        Err(last_error.unwrap_or_else(|| RelayError::Protocol("Failed to connect via relay".into())))
+        // Try to connect through this relay
+        self.try_connect_via_relay(target_pubkey.as_ref(), &relay_info).await
     }
     
     /// Try to connect via a specific relay
     async fn try_connect_via_relay(
         &self,
-        target_pubkey: &[u8; 32],
+        target_pubkey: &[u8],
         relay_info: &RelayNodeInfo
     ) -> Result<u64> {
+        // Convert target_pubkey to fixed-size array if needed
+        let target_pubkey = if target_pubkey.len() == 32 {
+            let mut array = [0u8; 32];
+            array.copy_from_slice(target_pubkey);
+            array
+        } else {
+            return Err(RelayError::Protocol(format!(
+                "Invalid target pubkey length: {}, expected 32 bytes", 
+                target_pubkey.len()
+            )));
+        };
+        
         // Track the connection attempt
-        self.track_connection_attempt(*target_pubkey, relay_info.clone())?;
+        self.track_connection_attempt(target_pubkey, relay_info.clone())?;
         
         // Generate a random nonce
         let nonce = rand::thread_rng().gen::<u64>();
         
         // Create connection request
-        let request = ConnectionRequest::new(self.local_pubkey, *target_pubkey);
+        let request = ConnectionRequest::new(self.local_pubkey, target_pubkey);
         let message = RelayMessage::ConnectionRequest(request);
         
         // Send the request to the relay
@@ -1021,7 +932,7 @@ impl RelayManager {
                                         
                                         // Update the connection attempt
                                         self.update_connection_attempt(
-                                            target_pubkey,
+                                            &target_pubkey,
                                             ConnectionAttemptStatus::Success,
                                             Some(session_id)
                                         )?;
@@ -1034,7 +945,7 @@ impl RelayManager {
                                             format!("Connection failed with status: {:?}", response.status));
                                         
                                         self.update_connection_attempt(
-                                            target_pubkey,
+                                            &target_pubkey,
                                             ConnectionAttemptStatus::Failed(error_msg.clone()),
                                             None
                                         )?;
@@ -1058,7 +969,7 @@ impl RelayManager {
                 Err(e) => {
                     // Error receiving data
                     self.update_connection_attempt(
-                        target_pubkey,
+                        &target_pubkey,
                         ConnectionAttemptStatus::Failed(format!("Receive error: {}", e)),
                         None
                     )?;
@@ -1070,7 +981,7 @@ impl RelayManager {
         
         // Timeout
         self.update_connection_attempt(
-            target_pubkey,
+            &target_pubkey,
             ConnectionAttemptStatus::Timeout,
             None
         )?;
@@ -1101,7 +1012,7 @@ impl RelayManager {
         self.cancel_connection_attempts(&target_pubkey)?;
         
         // Try a new connection
-        self.connect_via_relay(target_pubkey, required_capabilities, preferred_region).await
+        self.connect_via_relay(target_pubkey.as_ref(), required_capabilities, preferred_region).await
     }
     
     /// Cancel all connection attempts for a peer
@@ -1300,6 +1211,108 @@ impl RelayManager {
         // No valid packet processed
         Ok(None)
     }
+    
+    /// Check if there's an active session for a peer
+    pub fn check_active_session(&self, peer_pubkey: &[u8]) -> Result<bool> {
+        // Check if we have a session mapping for this peer
+        let sessions = self.sessions.read().map_err(|e| 
+            RelayError::Protocol(format!("Failed to acquire read lock on sessions: {}", e))
+        )?;
+        
+        // Get peer public key in hex format for lookups
+        let peer_pubkey_hex = if peer_pubkey.len() == 32 {
+            hex::encode(peer_pubkey)
+        } else {
+            // If the pubkey isn't 32 bytes, we can't have a valid session
+            return Ok(false);
+        };
+        
+        // Look up the session ID for this peer
+        let peer_to_session = self.peer_to_session.read().map_err(|e| 
+            RelayError::Protocol(format!("Failed to acquire read lock on peer_to_session: {}", e))
+        )?;
+        
+        if let Some(session_id) = peer_to_session.get(&peer_pubkey_hex) {
+            // Check if the session exists in the sessions map
+            Ok(sessions.contains_key(session_id))
+        } else {
+            // No session mapped to this peer
+            Ok(false)
+        }
+    }
+
+    /// Integrate with the connection cache
+    pub fn integrate_with_cache(
+        &self,
+        cache_integration: &CacheIntegration,
+        pubkey: &str,
+        session_id: u64,
+        relay_info: &RelayNodeInfo
+    ) -> Result<()> {
+        // Create relay endpoint
+        if let Some(relay_endpoint) = CacheIntegration::create_relay_endpoint(relay_info) {
+            // Record successful relay connection
+            cache_integration.record_relay_success(pubkey, relay_endpoint, relay_info.pubkey, session_id);
+        }
+        Ok(())
+    }
+    
+    /// Connect to a peer using the connection cache integration
+    pub async fn connect_with_cache(
+        &self,
+        cache_integration: &CacheIntegration,
+        target_pubkey_hex: &str,
+        required_capabilities: u32,
+        preferred_region: Option<&str>
+    ) -> Result<u64> {
+        // First check if we should use a relay
+        if !cache_integration.needs_relay(target_pubkey_hex) {
+            return Err(RelayError::Protocol("Direct connection should be attempted first".into()));
+        }
+        
+        // Decode the target pubkey
+        let target_pubkey = hex::decode(target_pubkey_hex)
+            .map_err(|_| RelayError::Protocol("Invalid target pubkey hex".into()))?;
+            
+        if target_pubkey.len() != 32 {
+            return Err(RelayError::Protocol("Target pubkey must be 32 bytes".into()));
+        }
+        
+        let mut target_pubkey_array = [0u8; 32];
+        target_pubkey_array.copy_from_slice(&target_pubkey);
+        
+        // Try to connect using a relay
+        let result = self.connect_via_relay(
+            target_pubkey_array.as_ref(),
+            required_capabilities,
+            preferred_region
+        ).await;
+        
+        // Record the result
+        match &result {
+            Ok(session_id) => {
+                // Get relay info for this session
+                let relay_info = {
+                    let sessions = self.sessions.read().map_err(|_| 
+                        RelayError::Protocol("Failed to acquire read lock on sessions".into()))?;
+                        
+                    let session = sessions.get(session_id)
+                        .ok_or_else(|| RelayError::Protocol(format!("Session {} not found", session_id)))?;
+                        
+                    session.relay_info.clone()
+                };
+                
+                // Record the success
+                self.integrate_with_cache(cache_integration, target_pubkey_hex, *session_id, &relay_info)?;
+            },
+            Err(_) => {
+                // Record the failure
+                cache_integration.record_failure(target_pubkey_hex);
+            }
+        }
+        
+        result
+    }
 }
 
 #[cfg(test)]
@@ -1441,7 +1454,7 @@ mod tests {
         // Try to connect - this should fail because the endpoint is invalid
         let target_pubkey = create_test_pubkey(2);
         let result = manager.connect_via_relay(
-            target_pubkey,
+            target_pubkey.as_ref(),
             0, // no required capabilities
             None // no preferred region
         ).await;
@@ -1495,7 +1508,6 @@ mod tests {
     }
     
     // Test relay cache integration
-    #[cfg(feature = "client")]
     #[test]
     fn test_relay_cache_integration() {
         // Create a registry with a mock relay
