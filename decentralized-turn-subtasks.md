@@ -59,7 +59,7 @@ This document tracks the implementation progress of the decentralized TURN serve
   - Implement relay handshake protocol
   - Add connection error handling and retry logic
 
-- [ ] **11. Add relay packet forwarding logic (manager.rs)**
+- [x] **11. Add relay packet forwarding logic (manager.rs)**
   - Implement send_packet method for relay forwarding
   - Add packet receiving and processing
   - Implement session management for active connections

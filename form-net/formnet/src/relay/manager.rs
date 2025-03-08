@@ -3,6 +3,7 @@
 //! This module handles establishing and managing relay connections.
 
 use std::collections::HashMap;
+use std::io;
 use std::net::ToSocketAddrs;
 use std::sync::{Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime};
@@ -13,7 +14,7 @@ use socket2::{Domain, Socket, Type, SockAddr};
 
 use crate::relay::{
     ConnectionRequest, ConnectionStatus, RelayError, RelayMessage,
-    RelayNodeInfo, Result, SharedRelayRegistry
+    RelayNodeInfo, Result, SharedRelayRegistry, RelayPacket
 };
 
 /// Default timeout for relay connection attempts
@@ -40,6 +41,12 @@ const RETRY_DELAY_MS: u64 = 1000;
 
 /// Duration to wait for a connection response
 const CONNECTION_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Maximum size for relay packet payloads
+const MAX_PAYLOAD_SIZE: usize = 1500;
+
+/// Maximum number of send retries
+const MAX_SEND_RETRIES: usize = 3;
 
 /// Connection attempt status
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,6 +140,99 @@ pub struct RelayManager {
     
     /// Our local public key
     local_pubkey: [u8; 32],
+}
+
+/// Relay packet receiver
+pub struct PacketReceiver {
+    /// Socket for receiving packets
+    socket: Socket,
+    
+    /// Buffer for receiving data
+    buffer: Box<[MaybeUninit<u8>; 2048]>,
+    
+    /// Session ID for this connection
+    session_id: u64,
+    
+    /// Whether the receiver is active
+    active: bool,
+}
+
+impl PacketReceiver {
+    /// Create a new packet receiver
+    fn new(socket: Socket, session_id: u64) -> Self {
+        // Create a large buffer on the heap to avoid stack overflow
+        let buffer = Box::new([MaybeUninit::uninit(); 2048]);
+        
+        Self {
+            socket,
+            buffer,
+            session_id,
+            active: true,
+        }
+    }
+    
+    /// Receive a packet from the relay
+    pub fn receive(&mut self) -> Result<Option<Vec<u8>>> {
+        if !self.active {
+            return Ok(None);
+        }
+        
+        // Try to receive data
+        match self.socket.recv(&mut self.buffer[..]) {
+            Ok(size) => {
+                // Convert from MaybeUninit<u8> to u8
+                let received_data = unsafe {
+                    std::slice::from_raw_parts(
+                        self.buffer.as_ptr() as *const u8,
+                        size
+                    )
+                };
+                
+                // Try to deserialize as a relay message
+                if let Ok(message) = RelayMessage::deserialize(received_data) {
+                    match message {
+                        RelayMessage::ForwardPacket(packet) => {
+                            // Check if this packet is for this session
+                            if packet.header.session_id == self.session_id {
+                                // Check packet validity
+                                if packet.header.is_valid() {
+                                    return Ok(Some(packet.payload));
+                                } else {
+                                    log::warn!("Received invalid relay packet");
+                                }
+                            }
+                        },
+                        // We can handle other message types here if needed
+                        _ => {
+                            // Ignore other message types
+                        }
+                    }
+                }
+                
+                // Try again
+                Ok(None)
+            },
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                // No data available yet
+                Ok(None)
+            },
+            Err(e) => {
+                // Error receiving data
+                self.active = false;
+                Err(RelayError::Io(e))
+            }
+        }
+    }
+    
+    /// Close the receiver
+    pub fn close(&mut self) {
+        self.active = false;
+    }
+    
+    /// Check if the receiver is active
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
 }
 
 impl RelayManager {
@@ -690,6 +790,190 @@ impl RelayManager {
         
         Ok(before_len - attempts.len())
     }
+    
+    /// Send a packet through a relay to a peer
+    pub async fn send_packet(
+        &self,
+        target_pubkey: &[u8; 32],
+        payload: &[u8],
+    ) -> Result<()> {
+        // Check if we have an active session
+        let session_id = match self.get_session_for_peer(target_pubkey)? {
+            Some(id) => id,
+            None => return Err(RelayError::Protocol("No active session for peer".into())),
+        };
+        
+        // Create a relay packet
+        let packet = RelayPacket::new(*target_pubkey, session_id, payload.to_vec());
+        let message = RelayMessage::ForwardPacket(packet);
+        
+        // Serialize the message
+        let data = message.serialize()?;
+        
+        // Get the relay info for this session
+        let relay_info = {
+            let sessions = self.sessions.read().map_err(|_| 
+                RelayError::Protocol("Failed to acquire read lock on sessions".into()))?;
+            
+            let session = sessions.get(&session_id)
+                .ok_or_else(|| RelayError::Protocol(format!("Session {} not found", session_id)))?;
+            
+            session.relay_info.clone()
+        };
+        
+        // Create a socket and connect to the relay
+        let socket = self.create_udp_socket()?;
+        
+        // Connect to the first available endpoint
+        let mut connected = false;
+        for endpoint_str in &relay_info.endpoints {
+            if let Ok(addrs) = endpoint_str.to_socket_addrs() {
+                for addr in addrs {
+                    // Convert SocketAddr to SockAddr
+                    let sock_addr = SockAddr::from(addr);
+                    if socket.connect(&sock_addr).is_ok() {
+                        connected = true;
+                        break;
+                    }
+                }
+            }
+            
+            if connected {
+                break;
+            }
+        }
+        
+        if !connected {
+            return Err(RelayError::Protocol("Failed to connect to any relay endpoint".into()));
+        }
+        
+        // Set non-blocking mode
+        socket.set_nonblocking(true)?;
+        
+        // Send the data with retries
+        let mut retries = 0;
+        let mut last_error = None;
+        
+        while retries < MAX_SEND_RETRIES {
+            match socket.send(&data) {
+                Ok(_) => {
+                    // Record the successful packet send
+                    self.record_packet_sent(session_id)?;
+                    return Ok(());
+                },
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    // Socket not ready, wait a bit and retry
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    retries += 1;
+                    last_error = Some(e.kind());
+                },
+                Err(e) => {
+                    // Other error, retry immediately
+                    retries += 1;
+                    last_error = Some(e.kind());
+                }
+            }
+        }
+        
+        // If we get here, all retries failed
+        Err(RelayError::Protocol(format!("Failed to send packet after {} retries. Last error: {:?}", 
+            MAX_SEND_RETRIES, last_error)))
+    }
+    
+    /// Create a packet receiver for a peer connection
+    pub fn create_packet_receiver(
+        &self,
+        target_pubkey: &[u8; 32],
+    ) -> Result<PacketReceiver> {
+        // Check if we have an active session
+        let session_id = match self.get_session_for_peer(target_pubkey)? {
+            Some(id) => id,
+            None => return Err(RelayError::Protocol("No active session for peer".into())),
+        };
+        
+        // Get the relay info for this session
+        let relay_info = {
+            let sessions = self.sessions.read().map_err(|_| 
+                RelayError::Protocol("Failed to acquire read lock on sessions".into()))?;
+            
+            let session = sessions.get(&session_id)
+                .ok_or_else(|| RelayError::Protocol(format!("Session {} not found", session_id)))?;
+            
+            session.relay_info.clone()
+        };
+        
+        // Create a socket and connect to the relay
+        let socket = self.create_udp_socket()?;
+        
+        // Connect to the first available endpoint
+        let mut connected = false;
+        for endpoint_str in &relay_info.endpoints {
+            if let Ok(addrs) = endpoint_str.to_socket_addrs() {
+                for addr in addrs {
+                    // Convert SocketAddr to SockAddr
+                    let sock_addr = SockAddr::from(addr);
+                    if socket.connect(&sock_addr).is_ok() {
+                        connected = true;
+                        break;
+                    }
+                }
+            }
+            
+            if connected {
+                break;
+            }
+        }
+        
+        if !connected {
+            return Err(RelayError::Protocol("Failed to connect to any relay endpoint".into()));
+        }
+        
+        // Set non-blocking mode
+        socket.set_nonblocking(true)?;
+        
+        // Create and return the packet receiver
+        Ok(PacketReceiver::new(socket, session_id))
+    }
+    
+    /// Check if a packet is too large to be relayed
+    pub fn is_packet_too_large(&self, payload: &[u8]) -> bool {
+        payload.len() > MAX_PAYLOAD_SIZE
+    }
+    
+    /// Process a received relay packet
+    pub fn process_relay_packet(&self, packet_data: &[u8]) -> Result<Option<Vec<u8>>> {
+        // Try to deserialize as a relay message
+        if let Ok(message) = RelayMessage::deserialize(packet_data) {
+            match message {
+                RelayMessage::ForwardPacket(packet) => {
+                    // Check if this packet is for a session we know about
+                    if let Some(_peer_pubkey) = self.get_peer_for_session(packet.header.session_id)? {
+                        // Check packet validity
+                        if packet.header.is_valid() {
+                            // Record the received packet
+                            self.record_packet_received(packet.header.session_id)?;
+                            
+                            // Return the payload
+                            return Ok(Some(packet.payload));
+                        } else {
+                            log::warn!("Received invalid relay packet for session {}", 
+                                packet.header.session_id);
+                        }
+                    } else {
+                        log::warn!("Received relay packet for unknown session {}", 
+                            packet.header.session_id);
+                    }
+                },
+                // Handle other message types if needed
+                _ => {
+                    // Ignore other message types for now
+                }
+            }
+        }
+        
+        // No valid packet processed
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
@@ -841,5 +1125,46 @@ mod tests {
         
         // The connection attempt should be tracked and then removed when it fails
         assert_eq!(manager.connection_attempt_count().unwrap(), 0);
+    }
+    
+    // Test relay packet forwarding
+    #[test]
+    fn test_relay_packet_forwarding() {
+        // Create a registry with a mock relay
+        let registry = SharedRelayRegistry::new();
+        
+        // Create a manager
+        let local_pubkey = create_test_pubkey(99);
+        let manager = RelayManager::new(registry, local_pubkey);
+        
+        // Set up a mock session for testing
+        let target_pubkey = create_test_pubkey(2);
+        let relay_info = create_test_relay(3);
+        let session_id = 12345;
+        
+        // Manually create a session since we can't establish a real connection in unit tests
+        manager.create_session(session_id, target_pubkey, relay_info).unwrap();
+        
+        // Check if we have an active session
+        assert!(manager.has_active_session(&target_pubkey).unwrap());
+        
+        // Test packet size checking
+        let small_packet = vec![0; 100];
+        let large_packet = vec![0; MAX_PAYLOAD_SIZE + 100];
+        
+        assert!(!manager.is_packet_too_large(&small_packet));
+        assert!(manager.is_packet_too_large(&large_packet));
+        
+        // Create a relay packet and test processing it
+        let packet = RelayPacket::new(target_pubkey, session_id, vec![1, 2, 3, 4]);
+        let message = RelayMessage::ForwardPacket(packet);
+        let data = message.serialize().unwrap();
+        
+        // Process the packet
+        let result = manager.process_relay_packet(&data).unwrap();
+        
+        // We should get back the payload
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), vec![1, 2, 3, 4]);
     }
 } 
