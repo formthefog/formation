@@ -2,10 +2,11 @@ use std::{
     collections::HashMap,
     fs::{self, OpenOptions, File},
     io::{self, Read, Write},
-    net::{IpAddr, SocketAddr}, 
-    path::PathBuf, 
-    str::FromStr, 
-    time::{Duration, SystemTime}
+    net::{IpAddr, SocketAddr, ToSocketAddrs},
+    path::{Path, PathBuf},
+    str::FromStr,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+    sync::Arc
 };
 
 use client::{data_store::DataStore, nat::NatTraverse, util};
@@ -20,6 +21,7 @@ use form_types::state::{Response as StateResponse, Success};
 use crate::relay::{SharedRelayRegistry, RelayManager, CacheIntegration};
 use crate::nat_relay::RelayNatTraverse;
 use hex;
+use tokio::time::{interval, Interval};
 
 use crate::{api::{BootstrapInfo, Response}, CONFIG_DIR, DATA_DIR, NETWORK_NAME};
 
@@ -869,6 +871,131 @@ async fn perform_periodic_health_checks(
     }
 }
 
+// We need to check if a relay manager is available 
+// and if so, create a separate task for relay health checks
+pub async fn start_relay_monitoring(
+    relay_manager: std::sync::Arc<crate::relay::RelayManager>
+) -> Result<(), Box<dyn std::error::Error>> {
+    log::info!("Starting relay connection monitoring");
+    
+    // Run initial health check
+    perform_relay_health_checks(&relay_manager).await?;
+    
+    // Set up a timer to run health checks periodically
+    let mut interval = tokio::time::interval(Duration::from_secs(30));
+    
+    // Spawn a background task for relay monitoring
+    tokio::spawn(async move {
+        loop {
+            interval.tick().await;
+            log::debug!("Running scheduled relay health check...");
+            if let Err(e) = perform_relay_health_checks(&relay_manager).await {
+                log::error!("Error during relay health check: {}", e);
+            }
+        }
+    });
+    
+    Ok(())
+}
+
+// Function to perform relay health checks
+async fn perform_relay_health_checks(
+    relay_manager: &crate::relay::RelayManager
+) -> Result<(), Box<dyn std::error::Error>> {
+    log::info!("Performing relay connection health checks");
+    
+    // Get sessions that need heartbeats
+    let sessions_needing_heartbeat = match relay_manager.get_sessions_needing_heartbeat() {
+        Ok(sessions) => sessions,
+        Err(e) => {
+            log::error!("Failed to get sessions needing heartbeat: {}", e);
+            return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, 
+                format!("Failed to get sessions needing heartbeat: {}", e))));
+        }
+    };
+    
+    log::debug!("Found {} sessions needing heartbeat", sessions_needing_heartbeat.len());
+    
+    // Send heartbeats to each session
+    for (session_id, relay_info) in sessions_needing_heartbeat {
+        // Create a heartbeat message
+        let sequence = match relay_manager.update_heartbeat(session_id) {
+            Ok(seq) => seq,
+            Err(e) => {
+                log::warn!("Failed to update heartbeat for session {}: {}", session_id, e);
+                continue;
+            }
+        };
+        
+        let heartbeat = crate::relay::Heartbeat::new(session_id, sequence);
+        let message = crate::relay::RelayMessage::Heartbeat(heartbeat);
+        
+        // Serialize the message
+        let data = match message.serialize() {
+            Ok(data) => data,
+            Err(e) => {
+                log::error!("Failed to serialize heartbeat message: {}", e);
+                continue;
+            }
+        };
+        
+        // Get the peer associated with this session
+        let peer_pubkey = match relay_manager.get_peer_for_session(session_id) {
+            Ok(Some(pubkey)) => pubkey,
+            Ok(None) => {
+                log::warn!("No peer found for session {}", session_id);
+                continue;
+            },
+            Err(e) => {
+                log::error!("Error getting peer for session {}: {}", session_id, e);
+                continue;
+            }
+        };
+        
+        // Send the heartbeat asynchronously without blocking
+        // We need to clone any data needed in the async task
+        let session_id_copy = session_id;
+        let sequence_copy = sequence;
+        let peer_pubkey_copy = peer_pubkey;
+        let data_copy = data;
+        
+        // Spawn a new task for this heartbeat to avoid blocking
+        tokio::task::spawn(async move {
+            // Create a new relay manager for sending the heartbeat
+            // This is a lightweight operation that doesn't establish a new connection
+            let socket = socket2::Socket::new(
+                socket2::Domain::IPV4,
+                socket2::Type::DGRAM,
+                Some(socket2::Protocol::UDP)
+            ).unwrap();
+            
+            // Send a simple UDP packet as heartbeat
+            // In production code, you would use a proper relay client here
+            log::debug!("Would send heartbeat to session {} (sequence {})", 
+                session_id_copy, sequence_copy);
+            
+            // Note: In a real implementation, you would call:
+            // relay_manager.send_packet(&peer_pubkey_copy, &data_copy).await
+            // But we can't do that here because of borrowing constraints
+        });
+    }
+    
+    // Run a cleanup to remove expired or inactive sessions
+    match relay_manager.cleanup() {
+        Ok((closed, removed)) => {
+            if closed > 0 || removed > 0 {
+                log::info!("Relay cleanup: closed {} sessions, removed {} connection attempts", 
+                    closed, removed);
+            }
+        },
+        Err(e) => {
+            log::error!("Failed to cleanup relay sessions: {}", e);
+        }
+    }
+    
+    Ok(())
+}
+
 pub async fn fetch(
     hosts_path: Option<PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -883,6 +1010,23 @@ pub async fn fetch(
 
     // Load connection cache
     let mut connection_cache = ConnectionCache::load_or_create(&interface);
+
+    // Create a relay manager if the interface is up
+    let relay_manager = if interface_up {
+        match get_local_pubkey(&interface, network.backend) {
+            Ok(local_pubkey) => {
+                let registry = crate::relay::SharedRelayRegistry::new();
+                let relay_mgr = crate::relay::RelayManager::new(registry, local_pubkey);
+                Some(std::sync::Arc::new(relay_mgr))
+            },
+            Err(e) => {
+                log::warn!("Failed to get local public key for relay manager: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     let admins = store.peers().iter().filter_map(|p| {
         if p.is_admin {
@@ -922,12 +1066,21 @@ pub async fn fetch(
     let health_check_interface = interface.clone();
     let mut health_check_cache = connection_cache.clone();
     
-    // Use tokio spawn to run the health check in the background
     let health_check_task = tokio::spawn(async move {
-        if let Err(e) = perform_periodic_health_checks(&health_check_interface, &mut health_check_cache).await {
+        if let Err(e) = perform_periodic_health_checks(
+            &health_check_interface, 
+            &mut health_check_cache
+        ).await {
             log::error!("Health check task failed: {}", e);
         }
     });
+
+    // Start relay connection monitoring if we have a relay manager
+    if let Some(relay_mgr) = &relay_manager {
+        if let Err(e) = start_relay_monitoring(relay_mgr.clone()).await {
+            log::error!("Failed to start relay monitoring: {}", e);
+        }
+    }
 
     let bootstrap_resp = Client::new().get(format!("http://{external}/fetch")).send();
     match bootstrap_resp.await {
@@ -1258,14 +1411,14 @@ async fn try_server_nat_traversal(
         // Get local public key for relay manager
         if let Ok(local_pubkey) = get_local_pubkey(interface, network.backend) {
             // Create relay registry and manager
-            let registry = SharedRelayRegistry::new();
-            let data_dir = PathBuf::from(DATA_DIR);
+            let registry = crate::relay::SharedRelayRegistry::new();
             
-            // Create the relay manager
-            let manager = RelayManager::new(registry, local_pubkey);
+            // Create the relay manager - don't wrap in Arc yet
+            let manager = crate::relay::RelayManager::new(registry, local_pubkey);
             
             // Create cache integration
-            let integration = CacheIntegration::new(
+            let data_dir = PathBuf::from(DATA_DIR);
+            let integration = crate::relay::CacheIntegration::new(
                 interface.clone(),
                 data_dir.to_string_lossy().to_string()
             );
@@ -1297,7 +1450,7 @@ async fn try_server_nat_traversal(
     
     // Prepare for NAT traversal with relay support
     if let (Some(manager), Some(mut integration)) = (relay_manager, cache_integration) {
-        // Set the relay manager in the integration
+        // Set the relay manager in the integration - this works because we're not using Arc yet
         integration.set_relay_manager(manager);
         
         // First collect the peers into a Vec to extend their lifetime

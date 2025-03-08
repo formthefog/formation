@@ -137,7 +137,7 @@ struct RelaySession {
     pub marked_for_cleanup: bool,
 }
 
-/// Manages relay connections and sessions
+/// Manager for relay connections
 #[derive(Debug)]
 pub struct RelayManager {
     /// Registry of available relay nodes
