@@ -76,7 +76,7 @@ This document tracks the implementation progress of the decentralized TURN serve
   - Implement mark_connected helper
   - Add error handling for relay connection attempts
 
-- [ ] **14. Update fetch.rs for relay integration**
+- [x] **14. Update fetch.rs for relay integration**
   - Add relay_manager creation in try_server_nat_traversal
   - Implement relay fallback when direct connection fails
   - Add helper to obtain local public key
