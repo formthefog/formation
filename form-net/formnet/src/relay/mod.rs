@@ -19,6 +19,10 @@ pub use protocol::{
 };
 pub use discovery::{RelayRegistry, SharedRelayRegistry, BootstrapConfig, BootstrapRelay};
 pub use manager::{RelayManager, ConnectionAttemptStatus, PacketReceiver};
+
+// Re-export the CacheIntegration struct when client feature is enabled
+#[cfg(feature = "client")]
+pub use manager::CacheIntegration;
 // pub use service::{RelayService, RelayNode};
 
 /// Error type for relay operations

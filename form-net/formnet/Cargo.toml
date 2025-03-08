@@ -12,6 +12,7 @@ version = "0.1.0"
 
 [features]
 integration = []
+client = []
 
 [lib]
 path = "src/lib.rs"
