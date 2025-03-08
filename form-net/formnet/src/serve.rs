@@ -164,7 +164,7 @@ pub async fn serve(
     });
 
     tokio::spawn(async move {
-        let mut interval = interval(Duration::from_secs(10)); 
+        let mut interval = interval(Duration::from_secs(3)); 
         loop {
             interval.tick().await;
             if let Ok(peers) = DatabasePeer::<String, CrdtMap>::list().await {
@@ -205,7 +205,7 @@ async fn spawn_endpoint_refresher(interface: InterfaceName, network: NetworkOpts
         log::info!("Spawning endpoint refresher");
         let endpoints = endpoints.clone();
         async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(10));
+            let mut interval = tokio::time::interval(Duration::from_secs(3));
             loop {
                 interval.tick().await;
                 if let Ok(info) = Device::get(&interface, network.backend) {
@@ -228,7 +228,7 @@ async fn spawn_endpoint_refresher(interface: InterfaceName, network: NetworkOpts
 
 async fn spawn_expired_invite_sweeper() {
     tokio::task::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(10));
+        let mut interval = tokio::time::interval(Duration::from_secs(3));
         loop {
             interval.tick().await;
             match DatabasePeer::<String, CrdtMap>::delete_expired_invites().await {

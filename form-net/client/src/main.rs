@@ -1227,7 +1227,6 @@ fn print_peer<T: Display + Clone + PartialEq + Serialize + DeserializeOwned>(
         }
     }
 }
-
 fn main() {
     let opts = Opts::parse();
     util::init_logger(opts.verbose);
@@ -1359,3 +1358,4 @@ fn run<T: Default + Display + Clone + PartialEq + Serialize + DeserializeOwned +
 
     Ok(())
 }
+

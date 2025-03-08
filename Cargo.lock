@@ -1672,6 +1672,7 @@ dependencies = [
  "clap_complete",
  "colored 2.2.0",
  "dialoguer 0.10.4",
+ "futures",
  "hostsfile",
  "indoc",
  "ipnet",
@@ -1682,6 +1683,7 @@ dependencies = [
  "serde_json",
  "shared",
  "tempfile",
+ "tokio",
  "ureq 2.12.1",
  "wireguard-control",
 ]
@@ -1790,7 +1792,7 @@ dependencies = [
 [[package]]
 name = "conductor"
 version = "0.1.0"
-source = "git+https://github.com/versatus/conductor#187f52c26f1fe1075217a7245463f7bdb4644624"
+source = "git+https://github.com/versatus/conductor.git#187f52c26f1fe1075217a7245463f7bdb4644624"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3103,17 +3105,21 @@ dependencies = [
  "k256",
  "log",
  "log4rs",
+ "once_cell",
  "parking_lot",
  "publicip",
  "rand 0.8.5",
  "rand_core 0.6.4",
  "random_word",
  "reqwest 0.12.12",
+ "ring 0.16.20",
  "serde",
  "serde_json",
  "shared",
  "simple_logger 5.0.0",
  "socket2",
+ "tempfile",
+ "thiserror 1.0.69",
  "tokio",
  "ureq 2.12.1",
  "url 2.5.4",

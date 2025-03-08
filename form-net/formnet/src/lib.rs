@@ -10,6 +10,7 @@ pub mod add_assoc;
 pub mod leave;
 pub mod resolve;
 pub mod api;
+pub mod relay;
 
 pub use init::*;
 pub use add_peer::*;
@@ -22,6 +23,8 @@ pub use redeem::*;
 pub use add_cidr::*;
 pub use add_assoc::*;
 pub use resolve::*;
+// Don't use relay::* to avoid polluting the namespace,
+// users should access relay functionality through the relay module
 
 pub const CONFIG_DIR: &'static str = "/etc/formnet";
 pub const DATA_DIR: &'static str = "/var/lib/formnet";
