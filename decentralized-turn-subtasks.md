@@ -81,14 +81,14 @@ This document tracks the implementation progress of the decentralized TURN serve
   - Implement relay fallback when direct connection fails
   - Add helper to obtain local public key
 
-- [ ] **15. Add relay connection monitoring (fetch.rs)**
+- [x] **15. Add relay connection monitoring (fetch.rs)**
   - Implement relay connection health checking
   - Add relay connection statistics collection
   - Create periodic relay connection refresh logic
 
 ## Phase 5: Relay Service Implementation
 
-- [ ] **16. Implement basic RelayNode (service.rs)**
+- [x] **16. Implement basic RelayNode (service.rs)**
   - Create RelayNode structure with basic properties
   - Implement resource limitation logic
   - Add statistics tracking for node performance
