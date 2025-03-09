@@ -19,7 +19,7 @@ pub use protocol::{
 };
 pub use discovery::{RelayRegistry, SharedRelayRegistry, BootstrapConfig, BootstrapRelay};
 pub use manager::{RelayManager, ConnectionAttemptStatus, PacketReceiver};
-pub use service::{RelayService, RelayNode, RelayStats, ResourceLimits, RelayConfig};
+pub use service::{RelayService, RelayNode, RelayStats, ResourceLimits, RelayConfig, RelaySession};
 
 // Re-export CacheIntegration
 pub use manager::CacheIntegration;

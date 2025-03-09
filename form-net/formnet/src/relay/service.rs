@@ -10,7 +10,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::thread;
 
 use log::{debug, error, info, warn};
-use socket2::{Domain, Socket, Type};
+use socket2;
 use tokio::sync::mpsc;
 use rand::Rng;
 
@@ -44,47 +44,48 @@ const DEFAULT_MAX_PACKETS_PER_SECOND: usize = 100;
 const DEFAULT_MAX_PACKET_SIZE: usize = 1500;
 
 /// Session information for a relay connection
-struct RelaySession {
+#[derive(Clone)]
+pub struct RelaySession {
     /// Unique session ID
-    id: u64,
+    pub id: u64,
     
     /// Public key of the initiating peer
-    initiator_pubkey: [u8; 32],
+    pub initiator_pubkey: [u8; 32],
     
     /// Public key of the target peer
-    target_pubkey: [u8; 32],
+    pub target_pubkey: [u8; 32],
     
     /// When the session was created
-    created_at: SystemTime,
+    pub created_at: SystemTime,
     
     /// When the session expires
-    expires_at: SystemTime,
+    pub expires_at: SystemTime,
     
     /// Last activity time
-    last_activity: Instant,
+    pub last_activity: Instant,
     
     /// Number of packets forwarded from initiator to target
-    packets_forwarded_initiator_to_target: u64,
+    pub packets_forwarded_initiator_to_target: u64,
     
     /// Number of packets forwarded from target to initiator
-    packets_forwarded_target_to_initiator: u64,
+    pub packets_forwarded_target_to_initiator: u64,
     
     /// Total bytes forwarded from initiator to target
-    bytes_forwarded_initiator_to_target: u64,
+    pub bytes_forwarded_initiator_to_target: u64,
     
     /// Total bytes forwarded from target to initiator
-    bytes_forwarded_target_to_initiator: u64,
+    pub bytes_forwarded_target_to_initiator: u64,
     
     /// Last known address of the initiator
-    initiator_addr: Option<SocketAddr>,
+    pub initiator_addr: Option<SocketAddr>,
     
     /// Last known address of the target
-    target_addr: Option<SocketAddr>,
+    pub target_addr: Option<SocketAddr>,
 }
 
 impl RelaySession {
     /// Create a new relay session
-    fn new(id: u64, initiator_pubkey: [u8; 32], target_pubkey: [u8; 32]) -> Self {
+    pub fn new(id: u64, initiator_pubkey: [u8; 32], target_pubkey: [u8; 32]) -> Self {
         let now = SystemTime::now();
         let expires_at = now + DEFAULT_SESSION_EXPIRATION;
         
@@ -105,46 +106,46 @@ impl RelaySession {
     }
     
     /// Check if the session is expired
-    fn is_expired(&self) -> bool {
+    pub fn is_expired(&self) -> bool {
         SystemTime::now() > self.expires_at
     }
     
     /// Check if the session is inactive (no activity for a while)
-    fn is_inactive(&self, inactivity_threshold: Duration) -> bool {
+    pub fn is_inactive(&self, inactivity_threshold: Duration) -> bool {
         self.last_activity.elapsed() > inactivity_threshold
     }
     
     /// Update activity timestamp
-    fn update_activity(&mut self) {
+    pub fn update_activity(&mut self) {
         self.last_activity = Instant::now();
     }
     
     /// Extend session expiration
-    fn extend_expiration(&mut self, duration: Duration) {
+    pub fn extend_expiration(&mut self, duration: Duration) {
         self.expires_at = SystemTime::now() + duration;
     }
     
     /// Record packet forwarding from initiator to target
-    fn record_initiator_to_target(&mut self, bytes: usize) {
+    pub fn record_initiator_to_target(&mut self, bytes: usize) {
         self.packets_forwarded_initiator_to_target += 1;
         self.bytes_forwarded_initiator_to_target += bytes as u64;
         self.update_activity();
     }
     
     /// Record packet forwarding from target to initiator
-    fn record_target_to_initiator(&mut self, bytes: usize) {
+    pub fn record_target_to_initiator(&mut self, bytes: usize) {
         self.packets_forwarded_target_to_initiator += 1;
         self.bytes_forwarded_target_to_initiator += bytes as u64;
         self.update_activity();
     }
     
     /// Update the address of the initiator
-    fn update_initiator_addr(&mut self, addr: SocketAddr) {
+    pub fn update_initiator_addr(&mut self, addr: SocketAddr) {
         self.initiator_addr = Some(addr);
     }
     
     /// Update the address of the target
-    fn update_target_addr(&mut self, addr: SocketAddr) {
+    pub fn update_target_addr(&mut self, addr: SocketAddr) {
         self.target_addr = Some(addr);
     }
     
@@ -502,8 +503,13 @@ impl RelayNode {
         }
     }
     
-    /// Start the relay service
+    /// Start the relay service in a dedicated thread
     pub fn start(&mut self) -> Result<()> {
+        // If already running, just return
+        if self.shutdown_sender.is_some() {
+            return Ok(());
+        }
+        
         info!("Starting relay service on {}", self.config.listen_addr);
         
         // Create and bind UDP socket
@@ -835,31 +841,25 @@ impl RelayNode {
                     }
                 };
                 
+                // Clone the session for modification
+                let mut session = session.clone();
+                
                 // Record statistics
                 let size = packet.payload.len();
                 if is_from_initiator {
-                    let mut session = session.clone();
                     session.record_initiator_to_target(size);
-                    
                     // Update source address if changed
                     session.update_initiator_addr(src_addr);
-                    
-                    // Update session in map
-                    drop(sessions_guard);
-                    let mut sessions_write = sessions.write().unwrap();
-                    sessions_write.insert(packet.header.session_id, session);
                 } else {
-                    let mut session = session.clone();
                     session.record_target_to_initiator(size);
-                    
                     // Update source address if changed
                     session.update_target_addr(src_addr);
-                    
-                    // Update session in map
-                    drop(sessions_guard);
-                    let mut sessions_write = sessions.write().unwrap();
-                    sessions_write.insert(packet.header.session_id, session);
                 }
+                
+                // Update session in map
+                drop(sessions_guard);
+                let mut sessions_write = sessions.write().unwrap();
+                sessions_write.insert(packet.header.session_id, session);
                 
                 // Forward the packet
                 Ok((dest_addr, packet.payload.clone()))
@@ -1470,12 +1470,21 @@ mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
     
-    /// Create a test relay config
+    /// Create a test configuration for the relay
     fn create_test_config() -> RelayConfig {
         let listen_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 0);
         let pubkey = [0u8; 32]; // All zeros for testing
         
-        RelayConfig::new(listen_addr, pubkey)
+        RelayConfig {
+            listen_addr,
+            pubkey,
+            region: None,
+            capabilities: RELAY_CAP_IPV4,
+            limits: ResourceLimits::default(),
+            maintenance_interval: Duration::from_secs(30),
+            announce_to_network: false,
+            bootstrap_relays: Vec::new(),
+        }
     }
     
     #[test]
@@ -1522,7 +1531,7 @@ mod tests {
         let payload = vec![1, 2, 3, 4];
         let packet = RelayPacket {
             header,
-            payload,
+            payload: payload.clone(),
         };
         
         // Test authentication for valid packet
@@ -1576,7 +1585,6 @@ mod tests {
     fn test_relay_session_management() {
         use super::*;
         use std::thread;
-        use std::net::{IpAddr, Ipv4Addr};
         
         // Create a test config
         let config = create_test_config();
@@ -1591,6 +1599,9 @@ mod tests {
         // Create a session
         let session_id = relay.create_session(initiator_pubkey, target_pubkey).unwrap();
         assert!(session_id > 0, "Session ID should be positive");
+        
+        // Keep the first session active by updating it
+        relay.update_session_stats(session_id, 100, true).unwrap();
         
         // Verify session exists
         let session = relay.get_session(session_id);
@@ -1614,9 +1625,9 @@ mod tests {
         
         // Check statistics were updated
         let updated_session = relay.get_session(session_id).unwrap();
-        assert_eq!(updated_session.packets_forwarded_initiator_to_target, 1, 
-            "Should have recorded one forwarded packet");
-        assert_eq!(updated_session.bytes_forwarded_initiator_to_target, bytes as u64, 
+        assert_eq!(updated_session.packets_forwarded_initiator_to_target, 2, 
+            "Should have recorded two forwarded packets");
+        assert_eq!(updated_session.bytes_forwarded_initiator_to_target, 100 + bytes as u64, 
             "Should have recorded correct byte count");
         
         // Test session expiration
@@ -1626,14 +1637,24 @@ mod tests {
         // Set a short inactivity timeout in the config
         relay.config.limits.session_inactivity_timeout = Duration::from_millis(10);
         
-        // Wait for the session to become inactive
+        // Wait for the session to become inactive - but keep the original session active
         thread::sleep(Duration::from_millis(20));
+        relay.update_session_stats(session_id, 50, false).unwrap(); // Keep the first session active
+        
+        // Count initial sessions
+        let initial_session_count = {
+            let sessions = relay.sessions.read().unwrap();
+            sessions.len()
+        };
+        assert_eq!(initial_session_count, 2, "Should have two sessions before cleanup");
         
         // Cleanup expired sessions
         let cleaned = relay.cleanup_expired_sessions();
+        
+        // The test expects only one cleaned session (temp_session_id)
         assert_eq!(cleaned, 1, "Should have cleaned up one session");
         
-        // Verify the session is gone
+        // Verify the temporary session is gone
         let temp_session = relay.get_session(temp_session_id);
         assert!(temp_session.is_none(), "Temporary session should be removed");
         

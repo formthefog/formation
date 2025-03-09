@@ -10,6 +10,7 @@ use std::time::{Duration, Instant, SystemTime};
 use std::mem::MaybeUninit;
 use std::path::Path;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use rand::Rng;
 use socket2::{Domain, Socket, Type, SockAddr};
@@ -138,22 +139,22 @@ struct RelaySession {
 }
 
 /// Manager for relay connections
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RelayManager {
     /// Registry of available relay nodes
     relay_registry: SharedRelayRegistry,
     
     /// Currently active sessions
-    sessions: RwLock<HashMap<u64, RelaySession>>,
+    sessions: Arc<RwLock<HashMap<u64, RelaySession>>>,
     
     /// Ongoing connection attempts
-    connection_attempts: Mutex<Vec<ConnectionAttempt>>,
+    connection_attempts: Arc<Mutex<Vec<ConnectionAttempt>>>,
     
     /// Session ID to peer public key mapping for fast lookups
-    session_to_peer: RwLock<HashMap<u64, [u8; 32]>>,
+    session_to_peer: Arc<RwLock<HashMap<u64, [u8; 32]>>>,
     
     /// Peer public key to session ID mapping for fast lookups
-    peer_to_session: RwLock<HashMap<String, u64>>,
+    peer_to_session: Arc<RwLock<HashMap<String, u64>>>,
     
     /// Our local public key
     local_pubkey: [u8; 32],
@@ -486,10 +487,10 @@ impl RelayManager {
     pub fn new(relay_registry: SharedRelayRegistry, local_pubkey: [u8; 32]) -> Self {
         Self {
             relay_registry,
-            sessions: RwLock::new(HashMap::new()),
-            connection_attempts: Mutex::new(Vec::new()),
-            session_to_peer: RwLock::new(HashMap::new()),
-            peer_to_session: RwLock::new(HashMap::new()),
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+            connection_attempts: Arc::new(Mutex::new(Vec::new())),
+            session_to_peer: Arc::new(RwLock::new(HashMap::new())),
+            peer_to_session: Arc::new(RwLock::new(HashMap::new())),
             local_pubkey,
         }
     }
@@ -1516,7 +1517,7 @@ mod tests {
         // Add a test relay
         let mut relay = create_test_relay(1);
         relay.endpoints = vec!["192.168.1.1:12345".to_string()];
-        registry.write().unwrap().register_relay(relay.clone());
+        registry.register_relay(relay.clone()).unwrap();
         
         // Create a manager
         let local_pubkey = create_test_pubkey(99);
