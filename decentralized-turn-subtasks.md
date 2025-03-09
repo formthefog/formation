@@ -93,7 +93,7 @@ This document tracks the implementation progress of the decentralized TURN serve
   - Implement resource limitation logic
   - Add statistics tracking for node performance
 
-- [ ] **17. Create RelayService (service.rs)**
+- [x] **17. Create RelayService (service.rs)**
   - Implement UDP socket handling
   - Add message parsing and routing logic
   - Implement basic packet forwarding

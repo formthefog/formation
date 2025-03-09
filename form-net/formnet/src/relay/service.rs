@@ -1133,6 +1133,13 @@ impl RelayNode {
     }
 }
 
+/// RelayService is a thin wrapper around RelayNode
+/// 
+/// This type exists to maintain API consistency while using the RelayNode implementation
+/// for the actual relay service functionality. A separate service wrapper was considered
+/// in the implementation plan, but RelayNode already implements all necessary functionality.
+pub type RelayService = RelayNode;
+
 #[cfg(test)]
 mod tests {
     use super::*;
