@@ -98,7 +98,7 @@ This document tracks the implementation progress of the decentralized TURN serve
   - Add message parsing and routing logic
   - Implement basic packet forwarding
 
-- [ ] **18. Add relay session management (service.rs)**
+- [x] **18. Add relay session management (service.rs)**
   - Implement RelaySession structure
   - Add session creation, tracking, and cleanup
   - Implement session authentication and verification

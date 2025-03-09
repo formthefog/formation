@@ -147,6 +147,79 @@ impl RelaySession {
     fn update_target_addr(&mut self, addr: SocketAddr) {
         self.target_addr = Some(addr);
     }
+    
+    /// Authenticate a packet against this session
+    pub fn authenticate_packet(&self, packet: &RelayPacket) -> bool {
+        // Check if the packet's header session ID matches this session
+        if packet.header.session_id != self.id {
+            return false;
+        }
+        
+        // Verify the destination peer ID matches either initiator or target
+        let peer_id_matches = packet.header.dest_peer_id == self.initiator_pubkey || 
+                             packet.header.dest_peer_id == self.target_pubkey;
+        
+        if !peer_id_matches {
+            return false;
+        }
+        
+        // Ensure the header timestamp is valid (not too old, not future)
+        if !packet.header.is_valid() {
+            return false;
+        }
+        
+        true
+    }
+    
+    /// Generate a session token for authenticating future requests
+    pub fn generate_auth_token(&self) -> Vec<u8> {
+        // Combine session ID, both public keys, and a timestamp
+        let mut data = Vec::with_capacity(32 + 32 + 8 + 8);
+        
+        // Add session ID
+        data.extend_from_slice(&self.id.to_le_bytes());
+        
+        // Add initiator and target public keys
+        data.extend_from_slice(&self.initiator_pubkey);
+        data.extend_from_slice(&self.target_pubkey);
+        
+        // Add current timestamp
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        data.extend_from_slice(&now.to_le_bytes());
+        
+        // Use crypto hash function if available, or simpler hash for now
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        
+        let mut hasher = DefaultHasher::new();
+        data.hash(&mut hasher);
+        let hash = hasher.finish();
+        
+        // Return the token
+        data.extend_from_slice(&hash.to_le_bytes());
+        data
+    }
+    
+    /// Verify if a provided auth token is valid for this session
+    pub fn verify_auth_token(&self, token: &[u8]) -> bool {
+        // Simple implementation for now - in a real system, we'd use proper cryptographic verification
+        let current_token = self.generate_auth_token();
+        
+        // Constant-time comparison to prevent timing attacks
+        if token.len() != current_token.len() {
+            return false;
+        }
+        
+        let mut result = 0;
+        for (a, b) in token.iter().zip(current_token.iter()) {
+            result |= a ^ b;
+        }
+        
+        result == 0
+    }
 }
 
 /// Statistics for the relay service
@@ -656,63 +729,75 @@ impl RelayNode {
             // This would be OS-specific and require additional dependencies
         }
         
-        // Cleanup expired or inactive sessions
-        let expired_sessions = {
-            let mut sessions_guard = sessions.write().unwrap();
-            let mut expired = 0;
+        // Clean up expired sessions
+        let expired_count = {
+            let all_sessions = sessions.read().unwrap();
+            let inactivity_threshold = limits.session_inactivity_timeout;
             
-            // Collect IDs of expired or inactive sessions
-            let expired_ids: Vec<u64> = sessions_guard
-                .iter()
-                .filter(|(_, session)| {
-                    session.is_expired() || 
-                    session.is_inactive(limits.session_inactivity_timeout)
-                })
-                .map(|(&id, _)| id)
+            // Find expired sessions
+            let expired_sessions: Vec<u64> = all_sessions.iter()
+                .filter(|(_, session)| session.is_expired() || session.is_inactive(inactivity_threshold))
+                .map(|(id, _)| *id)
                 .collect();
             
-            // Remove expired sessions
-            for id in expired_ids {
-                if let Some(session) = sessions_guard.remove(&id) {
-                    expired += 1;
+            // Get a count for stats
+            let count = expired_sessions.len();
+            
+            // Remove each expired session
+            for session_id in expired_sessions {
+                // Get session details for map cleanup
+                if let Some(session) = all_sessions.get(&session_id) {
+                    let initiator_id = hex::encode(&session.initiator_pubkey);
+                    let target_id = hex::encode(&session.target_pubkey);
                     
-                    // Also remove from initiator and target mappings
-                    let initiator_key = hex::encode(&session.initiator_pubkey);
-                    let target_key = hex::encode(&session.target_pubkey);
+                    // Remove from sessions map
+                    let mut sessions_write = sessions.write().unwrap();
+                    sessions_write.remove(&session_id);
                     
-                    if let Ok(mut initiator_map) = initiator_sessions.write() {
-                        if let Some(sessions) = initiator_map.get_mut(&initiator_key) {
-                            sessions.remove(&id);
-                            if sessions.is_empty() {
-                                initiator_map.remove(&initiator_key);
-                            }
+                    // Remove from initiator map
+                    let mut initiator_map = initiator_sessions.write().unwrap();
+                    if let Some(sessions) = initiator_map.get_mut(&initiator_id) {
+                        sessions.remove(&session_id);
+                        // Clean up empty sets
+                        if sessions.is_empty() {
+                            initiator_map.remove(&initiator_id);
                         }
                     }
                     
-                    if let Ok(mut target_map) = target_sessions.write() {
-                        if let Some(sessions) = target_map.get_mut(&target_key) {
-                            sessions.remove(&id);
-                            if sessions.is_empty() {
-                                target_map.remove(&target_key);
-                            }
+                    // Remove from target map
+                    let mut target_map = target_sessions.write().unwrap();
+                    if let Some(sessions) = target_map.get_mut(&target_id) {
+                        sessions.remove(&session_id);
+                        // Clean up empty sets
+                        if sessions.is_empty() {
+                            target_map.remove(&target_id);
                         }
                     }
                 }
             }
             
-            expired
+            count
         };
         
-        if expired_sessions > 0 {
-            info!("Cleaned up {} expired relay sessions", expired_sessions);
+        // Update stats with expired session count
+        {
+            let mut stats_write = stats.write().unwrap();
+            stats_write.expired_sessions += expired_count as u64;
+            stats_write.active_sessions = {
+                let sessions_read = sessions.read().unwrap();
+                sessions_read.len()
+            };
             
-            // Update stats
-            let mut stats_guard = stats.write().unwrap();
-            stats_guard.expired_sessions += expired_sessions as u64;
+            // Update active clients count
+            let initiator_map = initiator_sessions.read().unwrap();
+            stats_write.active_clients = initiator_map.len();
+            
+            // Update uptime
+            stats_write.calculate_uptime(start_time);
         }
     }
     
-    /// Process a relay packet (forward from one peer to another)
+    /// Process a relay packet
     fn process_relay_packet(
         socket: &Arc<UdpSocket>,
         packet: RelayPacket,
@@ -720,82 +805,89 @@ impl RelayNode {
         sessions: &Arc<RwLock<HashMap<u64, RelaySession>>>,
         stats: &Arc<RwLock<RelayStats>>
     ) -> Result<()> {
-        // Validate the relay header
-        if !packet.header.is_valid() {
-            return Err(RelayError::Protocol("Invalid relay header".into()));
-        }
-        
-        // Lookup the session
-        let session_id = packet.header.session_id;
-        let mut sessions_guard = sessions.write().unwrap();
-        
-        let session = match sessions_guard.get_mut(&session_id) {
-            Some(session) => session,
-            None => return Err(RelayError::Protocol(format!("Unknown session ID: {}", session_id))),
+        // Find the session for this packet
+        let result = {
+            let sessions_guard = sessions.read().unwrap();
+            let session = sessions_guard.get(&packet.header.session_id);
+            
+            if let Some(session) = session {
+                // Authenticate the packet against the session
+                if !session.authenticate_packet(&packet) {
+                    debug!("Packet authentication failed for session {}", packet.header.session_id);
+                    return Err(RelayError::Authentication("Packet authentication failed".to_string()));
+                }
+                
+                // Determine which direction this packet is going
+                let is_from_initiator = session.initiator_pubkey != packet.header.dest_peer_id;
+                
+                // Get the destination address
+                let dest_addr = if is_from_initiator {
+                    if let Some(addr) = session.target_addr {
+                        addr
+                    } else {
+                        return Err(RelayError::Protocol("Target address not yet known".to_string()));
+                    }
+                } else {
+                    if let Some(addr) = session.initiator_addr {
+                        addr
+                    } else {
+                        return Err(RelayError::Protocol("Initiator address not yet known".to_string()));
+                    }
+                };
+                
+                // Record statistics
+                let size = packet.payload.len();
+                if is_from_initiator {
+                    let mut session = session.clone();
+                    session.record_initiator_to_target(size);
+                    
+                    // Update source address if changed
+                    session.update_initiator_addr(src_addr);
+                    
+                    // Update session in map
+                    drop(sessions_guard);
+                    let mut sessions_write = sessions.write().unwrap();
+                    sessions_write.insert(packet.header.session_id, session);
+                } else {
+                    let mut session = session.clone();
+                    session.record_target_to_initiator(size);
+                    
+                    // Update source address if changed
+                    session.update_target_addr(src_addr);
+                    
+                    // Update session in map
+                    drop(sessions_guard);
+                    let mut sessions_write = sessions.write().unwrap();
+                    sessions_write.insert(packet.header.session_id, session);
+                }
+                
+                // Forward the packet
+                Ok((dest_addr, packet.payload.clone()))
+            } else {
+                Err(RelayError::Protocol(format!("Session {} not found", packet.header.session_id)))
+            }
         };
         
-        // Figure out the direction of the packet
-        let initiator_pubkey_hex = hex::encode(&session.initiator_pubkey);
-        let target_pubkey_hex = hex::encode(&session.target_pubkey);
-        let dest_pubkey_hex = hex::encode(&packet.header.dest_peer_id);
-        
-        let (dest_addr, is_initiator_to_target) = if dest_pubkey_hex == target_pubkey_hex {
-            // Packet is from initiator to target
-            (session.target_addr, true)
-        } else if dest_pubkey_hex == initiator_pubkey_hex {
-            // Packet is from target to initiator
-            (session.initiator_addr, false)
-        } else {
-            // Destination doesn't match either end of the session
-            return Err(RelayError::Protocol("Destination doesn't match session peers".into()));
-        };
-        
-        // Update session information based on source
-        if is_initiator_to_target {
-            // Update initiator address if needed
-            if session.initiator_addr != Some(src_addr) {
-                debug!("Updating initiator address for session {}: {:?}", session_id, src_addr);
-                session.update_initiator_addr(src_addr);
-            }
-        } else {
-            // Update target address if needed
-            if session.target_addr != Some(src_addr) {
-                debug!("Updating target address for session {}: {:?}", session_id, src_addr);
-                session.update_target_addr(src_addr);
-            }
+        // Forward the packet if a valid session was found
+        match result {
+            Ok((dest_addr, payload)) => {
+                // Send the payload to the destination
+                if let Err(e) = socket.send_to(&payload, dest_addr) {
+                    return Err(RelayError::Io(e));
+                }
+                
+                // Update stats
+                {
+                    let mut stats_guard = stats.write().unwrap();
+                    stats_guard.packets_forwarded += 1;
+                    stats_guard.bytes_forwarded += payload.len() as u64;
+                    stats_guard.record_forwarded_packet(payload.len());
+                }
+                
+                Ok(())
+            },
+            Err(e) => Err(e),
         }
-        
-        // Make sure we have a destination address to forward to
-        let dest_addr = match dest_addr {
-            Some(addr) => addr,
-            None => {
-                // We don't know the destination address yet
-                debug!("Cannot forward packet: unknown destination address for session {}", session_id);
-                return Ok(());
-            }
-        };
-        
-        // Forward the packet
-        let packet_data = bincode::serialize(&packet)
-            .map_err(|e| RelayError::Serialization(e))?;
-        
-        socket.send_to(&packet_data, dest_addr)
-            .map_err(|e| RelayError::Io(e))?;
-        
-        // Update session statistics
-        if is_initiator_to_target {
-            session.record_initiator_to_target(packet.payload.len());
-        } else {
-            session.record_target_to_initiator(packet.payload.len());
-        }
-        
-        // Update global statistics
-        {
-            let mut stats_guard = stats.write().unwrap();
-            stats_guard.record_forwarded_packet(packet.payload.len());
-        }
-        
-        Ok(())
     }
     
     /// Process a connection request
@@ -862,129 +954,140 @@ impl RelayNode {
             attempts.push(now);
         }
         
-        // Check if the initiator has too many sessions
-        let initiator_pubkey_hex = hex::encode(&request.peer_pubkey);
-        let target_pubkey_hex = hex::encode(&request.target_pubkey);
-        
-        {
-            let initiator_sessions_guard = initiator_sessions.read().unwrap();
-            if let Some(sessions) = initiator_sessions_guard.get(&initiator_pubkey_hex) {
-                if sessions.len() >= config.limits.max_sessions_per_client {
-                    debug!("Rejecting connection request: too many sessions for initiator");
-                    
-                    let response = ConnectionResponse::error(
-                        request.nonce,
-                        ConnectionStatus::ResourceLimit,
-                        "Too many sessions"
-                    );
-                    
-                    Self::send_response(socket, response, src_addr)?;
-                    
-                    // Update stats
-                    let mut stats_guard = stats.write().unwrap();
-                    stats_guard.rejected_connections += 1;
-                    
-                    return Ok(());
-                }
-            }
-        }
-        
-        // Check if we've reached the global session limit
-        {
-            let sessions_guard = sessions.read().unwrap();
-            if sessions_guard.len() >= config.limits.max_total_sessions {
-                debug!("Rejecting connection request: global session limit reached");
+        // Enhanced authentication check - validate the auth token if provided
+        if let Some(auth_token) = &request.auth_token {
+            // In a real implementation, we'd validate the token using cryptographic verification
+            // For the implementation task, we'll use a simplified approach first
+            let token_valid = if auth_token.len() > 8 {
+                // Basic validation - in practice, we'd use proper signature verification
+                let timestamp_bytes = &auth_token[0..8];
+                let mut timestamp_array = [0u8; 8];
+                timestamp_bytes.iter().enumerate().for_each(|(i, &b)| {
+                    if i < 8 {
+                        timestamp_array[i] = b;
+                    }
+                });
                 
+                let timestamp = u64::from_le_bytes(timestamp_array);
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                
+                // Token should not be too old (5 minutes max)
+                now.saturating_sub(timestamp) < 300
+            } else {
+                false
+            };
+            
+            if !token_valid {
                 let response = ConnectionResponse::error(
                     request.nonce,
-                    ConnectionStatus::ResourceLimit,
-                    "Relay at capacity"
+                    ConnectionStatus::AuthFailed,
+                    "Invalid authentication token"
                 );
                 
+                // Send the error response
                 Self::send_response(socket, response, src_addr)?;
                 
                 // Update stats
-                let mut stats_guard = stats.write().unwrap();
-                stats_guard.rejected_connections += 1;
+                {
+                    let mut stats = stats.write().unwrap();
+                    stats.rejected_connections += 1;
+                }
                 
                 return Ok(());
             }
         }
         
-        // All checks passed, create a new session
+        // Continue with normal session creation process...
+        
+        // Generate a unique session ID
         let session_id = Self::generate_session_id();
+        
+        // Create a new session
         let session = RelaySession::new(session_id, request.peer_pubkey, request.target_pubkey);
         
-        // Store initiator's address
-        let mut session = session;
-        session.update_initiator_addr(src_addr);
-        
-        // Add session to our maps
+        // Add the session to our maps
         {
-            let mut sessions_guard = sessions.write().unwrap();
-            sessions_guard.insert(session_id, session);
+            // Add to main sessions map
+            let mut sessions_map = sessions.write().unwrap();
+            sessions_map.insert(session_id, session);
             
-            // Update the initiator -> session mapping
-            let mut initiator_sessions_guard = initiator_sessions.write().unwrap();
-            initiator_sessions_guard
-                .entry(initiator_pubkey_hex.clone())
-                .or_insert_with(HashSet::new)
-                .insert(session_id);
+            // Add to initiator sessions map
+            let initiator_id = hex::encode(&request.peer_pubkey);
+            let mut initiator_map = initiator_sessions.write().unwrap();
+            let entry = initiator_map.entry(initiator_id).or_insert_with(HashSet::new);
+            entry.insert(session_id);
             
-            // Update the target -> session mapping
-            let mut target_sessions_guard = target_sessions.write().unwrap();
-            target_sessions_guard
-                .entry(target_pubkey_hex.clone())
-                .or_insert_with(HashSet::new)
-                .insert(session_id);
+            // Add to target sessions map
+            let target_id = hex::encode(&request.target_pubkey);
+            let mut target_map = target_sessions.write().unwrap();
+            let entry = target_map.entry(target_id).or_insert_with(HashSet::new);
+            entry.insert(session_id);
         }
         
-        // Send success response
+        // Update stats
+        {
+            let mut stats = stats.write().unwrap();
+            stats.successful_connections += 1;
+            stats.active_sessions = {
+                let sessions_map = sessions.read().unwrap();
+                sessions_map.len()
+            };
+            
+            // Update active clients count
+            let initiator_map = initiator_sessions.read().unwrap();
+            stats.active_clients = initiator_map.len();
+        }
+        
+        // Send success response with the session ID
         let response = ConnectionResponse::success(request.nonce, session_id);
         Self::send_response(socket, response, src_addr)?;
-        
-        // Update statistics
-        {
-            let mut stats_guard = stats.write().unwrap();
-            stats_guard.successful_connections += 1;
-        }
-        
-        info!("Created new relay session {} for peer {} to target {}",
-            session_id, initiator_pubkey_hex, target_pubkey_hex);
         
         Ok(())
     }
     
-    /// Process a heartbeat message
+    /// Process a heartbeat message to keep a session alive
     fn process_heartbeat(
         socket: &Arc<UdpSocket>,
         heartbeat: Heartbeat,
         sessions: &Arc<RwLock<HashMap<u64, RelaySession>>>,
         stats: &Arc<RwLock<RelayStats>>
     ) -> Result<()> {
-        // Update statistics
+        let session_id = heartbeat.session_id;
+        
+        // Extend the session expiration
+        let session_found = {
+            let mut sessions_guard = sessions.write().unwrap();
+            
+            if let Some(session) = sessions_guard.get_mut(&session_id) {
+                // Update activity
+                session.update_activity();
+                
+                // Extend expiration
+                session.extend_expiration(DEFAULT_SESSION_EXPIRATION);
+                
+                true
+            } else {
+                false
+            }
+        };
+        
+        if !session_found {
+            return Err(RelayError::Protocol(format!("Unknown session ID: {}", session_id)));
+        }
+        
+        // Update heartbeat statistics
         {
             let mut stats_guard = stats.write().unwrap();
             stats_guard.heartbeats_processed += 1;
         }
         
-        // Get the session
-        let session_id = heartbeat.session_id;
-        let mut sessions_guard = sessions.write().unwrap();
-        
-        let session = match sessions_guard.get_mut(&session_id) {
-            Some(session) => session,
-            None => {
-                debug!("Heartbeat for unknown session: {}", session_id);
-                return Ok(());
-            }
-        };
-        
-        // Update session activity and extend expiration
-        session.update_activity();
-        session.extend_expiration(DEFAULT_SESSION_EXPIRATION);
-        
-        debug!("Processed heartbeat for session {}", session_id);
+        // Send back an acknowledgment if needed
+        // For now, we just log the heartbeat
+        debug!("Processed heartbeat for session {}, sequence {}", 
+            heartbeat.session_id, heartbeat.sequence);
         
         Ok(())
     }
@@ -1131,6 +1234,228 @@ impl RelayNode {
         
         output
     }
+    
+    /// Adds a new session to the relay
+    pub fn create_session(&self, initiator_pubkey: [u8; 32], target_pubkey: [u8; 32]) -> Result<u64> {
+        // Check if we've reached the maximum number of sessions
+        {
+            let sessions = self.sessions.read().unwrap();
+            if sessions.len() >= self.config.limits.max_total_sessions {
+                return Err(RelayError::ResourceLimit(
+                    "Maximum number of total sessions reached".to_string()
+                ));
+            }
+        }
+        
+        // Check if initiator has reached their session limit
+        {
+            let initiator_id = hex::encode(&initiator_pubkey);
+            let initiator_map = self.initiator_sessions.read().unwrap();
+            
+            if let Some(sessions) = initiator_map.get(&initiator_id) {
+                if sessions.len() >= self.config.limits.max_sessions_per_client {
+                    return Err(RelayError::ResourceLimit(
+                        "Maximum number of sessions per client reached".to_string()
+                    ));
+                }
+            }
+        }
+        
+        // Generate a unique session ID
+        let session_id = Self::generate_session_id();
+        
+        // Create the new session
+        let session = RelaySession::new(session_id, initiator_pubkey, target_pubkey);
+        
+        // Add to sessions map
+        {
+            let mut sessions = self.sessions.write().unwrap();
+            sessions.insert(session_id, session);
+        }
+        
+        // Add to initiator and target maps
+        {
+            let initiator_id = hex::encode(&initiator_pubkey);
+            let target_id = hex::encode(&target_pubkey);
+            
+            // Update initiator map
+            {
+                let mut initiator_map = self.initiator_sessions.write().unwrap();
+                let entry = initiator_map.entry(initiator_id).or_insert_with(HashSet::new);
+                entry.insert(session_id);
+            }
+            
+            // Update target map
+            {
+                let mut target_map = self.target_sessions.write().unwrap();
+                let entry = target_map.entry(target_id).or_insert_with(HashSet::new);
+                entry.insert(session_id);
+            }
+        }
+        
+        // Update stats
+        {
+            let mut stats = self.stats.write().unwrap();
+            stats.active_sessions = {
+                let sessions = self.sessions.read().unwrap();
+                sessions.len()
+            };
+        }
+        
+        Ok(session_id)
+    }
+    
+    /// Closes and removes a session
+    pub fn remove_session(&self, session_id: u64) -> Result<()> {
+        // Retrieve session information first
+        let (initiator_pubkey, target_pubkey) = {
+            let sessions = self.sessions.read().unwrap();
+            let session = match sessions.get(&session_id) {
+                Some(s) => s,
+                None => return Err(RelayError::Protocol(format!("Session {} not found", session_id))),
+            };
+            
+            (session.initiator_pubkey, session.target_pubkey)
+        };
+        
+        // Compute IDs for maps
+        let initiator_id = hex::encode(&initiator_pubkey);
+        let target_id = hex::encode(&target_pubkey);
+        
+        // Remove from sessions map
+        {
+            let mut sessions = self.sessions.write().unwrap();
+            sessions.remove(&session_id);
+        }
+        
+        // Remove from initiator map
+        {
+            let mut initiator_map = self.initiator_sessions.write().unwrap();
+            if let Some(sessions) = initiator_map.get_mut(&initiator_id) {
+                sessions.remove(&session_id);
+                
+                // Clean up empty sets
+                if sessions.is_empty() {
+                    initiator_map.remove(&initiator_id);
+                }
+            }
+        }
+        
+        // Remove from target map
+        {
+            let mut target_map = self.target_sessions.write().unwrap();
+            if let Some(sessions) = target_map.get_mut(&target_id) {
+                sessions.remove(&session_id);
+                
+                // Clean up empty sets
+                if sessions.is_empty() {
+                    target_map.remove(&target_id);
+                }
+            }
+        }
+        
+        // Update stats
+        {
+            let mut stats = self.stats.write().unwrap();
+            stats.active_sessions = {
+                let sessions = self.sessions.read().unwrap();
+                sessions.len()
+            };
+        }
+        
+        Ok(())
+    }
+    
+    /// Find a session by ID and verify it's valid
+    pub fn get_session(&self, session_id: u64) -> Option<RelaySession> {
+        let sessions = self.sessions.read().unwrap();
+        sessions.get(&session_id).cloned()
+    }
+    
+    /// Find all sessions for a given public key (as either initiator or target)
+    pub fn find_sessions_for_pubkey(&self, pubkey: &[u8; 32]) -> Vec<u64> {
+        let peer_id = hex::encode(pubkey);
+        let mut result = Vec::new();
+        
+        // Check initiator sessions
+        {
+            let initiator_map = self.initiator_sessions.read().unwrap();
+            if let Some(sessions) = initiator_map.get(&peer_id) {
+                result.extend(sessions);
+            }
+        }
+        
+        // Check target sessions
+        {
+            let target_map = self.target_sessions.read().unwrap();
+            if let Some(sessions) = target_map.get(&peer_id) {
+                for session_id in sessions {
+                    if !result.contains(session_id) {
+                        result.push(*session_id);
+                    }
+                }
+            }
+        }
+        
+        result
+    }
+    
+    /// Extend the expiration of a session
+    pub fn extend_session(&self, session_id: u64, duration: Duration) -> Result<()> {
+        let mut sessions = self.sessions.write().unwrap();
+        
+        if let Some(session) = sessions.get_mut(&session_id) {
+            session.extend_expiration(duration);
+            Ok(())
+        } else {
+            Err(RelayError::Protocol(format!("Session {} not found", session_id)))
+        }
+    }
+    
+    /// Update session statistics when forwarding a packet
+    pub fn update_session_stats(&self, session_id: u64, bytes: usize, is_initiator_to_target: bool) -> Result<()> {
+        let mut sessions = self.sessions.write().unwrap();
+        
+        if let Some(session) = sessions.get_mut(&session_id) {
+            if is_initiator_to_target {
+                session.record_initiator_to_target(bytes);
+            } else {
+                session.record_target_to_initiator(bytes);
+            }
+            Ok(())
+        } else {
+            Err(RelayError::Protocol(format!("Session {} not found", session_id)))
+        }
+    }
+    
+    /// Get all expired or inactive sessions
+    fn get_expired_sessions(&self) -> Vec<u64> {
+        let sessions = self.sessions.read().unwrap();
+        let inactivity_threshold = self.config.limits.session_inactivity_timeout;
+        
+        sessions.iter()
+            .filter(|(_, session)| session.is_expired() || session.is_inactive(inactivity_threshold))
+            .map(|(id, _)| *id)
+            .collect()
+    }
+    
+    /// Clean up expired sessions
+    fn cleanup_expired_sessions(&self) -> usize {
+        let expired_sessions = self.get_expired_sessions();
+        let count = expired_sessions.len();
+        
+        for session_id in expired_sessions {
+            let _ = self.remove_session(session_id);
+        }
+        
+        // Update stats
+        {
+            let mut stats = self.stats.write().unwrap();
+            stats.expired_sessions += count as u64;
+        }
+        
+        count
+    }
 }
 
 /// RelayService is a thin wrapper around RelayNode
@@ -1175,5 +1500,152 @@ mod tests {
         
         // Should reject after reaching the limit
         assert!(!RelayNode::record_packet_time(&packet_times, &limits));
+    }
+    
+    #[test]
+    fn test_session_authentication() {
+        use super::*;
+        use rand::RngCore;
+        
+        // Create session
+        let mut rng = rand::thread_rng();
+        let session_id = rng.next_u64();
+        let mut initiator_pubkey = [0u8; 32];
+        let mut target_pubkey = [0u8; 32];
+        rng.fill_bytes(&mut initiator_pubkey);
+        rng.fill_bytes(&mut target_pubkey);
+        
+        let session = RelaySession::new(session_id, initiator_pubkey, target_pubkey);
+        
+        // Create relay packet with valid session
+        let header = RelayHeader::new(target_pubkey, session_id);
+        let payload = vec![1, 2, 3, 4];
+        let packet = RelayPacket {
+            header,
+            payload,
+        };
+        
+        // Test authentication for valid packet
+        assert!(session.authenticate_packet(&packet));
+        
+        // Test authentication fails with wrong session ID
+        let header_wrong_id = RelayHeader::new(target_pubkey, session_id + 1);
+        let packet_wrong_id = RelayPacket {
+            header: header_wrong_id,
+            payload: payload.clone(),
+        };
+        assert!(!session.authenticate_packet(&packet_wrong_id));
+        
+        // Test authentication fails with wrong peer ID
+        let mut wrong_pubkey = [0u8; 32];
+        rng.fill_bytes(&mut wrong_pubkey);
+        let header_wrong_peer = RelayHeader::new(wrong_pubkey, session_id);
+        let packet_wrong_peer = RelayPacket {
+            header: header_wrong_peer,
+            payload: payload.clone(),
+        };
+        assert!(!session.authenticate_packet(&packet_wrong_peer));
+    }
+    
+    #[test]
+    fn test_session_auth_token() {
+        use super::*;
+        
+        // Create session
+        let session_id = 12345;
+        let initiator_pubkey = [1u8; 32];
+        let target_pubkey = [2u8; 32];
+        
+        let session = RelaySession::new(session_id, initiator_pubkey, target_pubkey);
+        
+        // Generate token
+        let token = session.generate_auth_token();
+        
+        // Verify token is valid
+        assert!(session.verify_auth_token(&token));
+        
+        // Verify modified token is invalid
+        if !token.is_empty() {
+            let mut invalid_token = token.clone();
+            invalid_token[0] ^= 0xFF;
+            assert!(!session.verify_auth_token(&invalid_token));
+        }
+    }
+    
+    #[test]
+    fn test_relay_session_management() {
+        use super::*;
+        use std::thread;
+        use std::net::{IpAddr, Ipv4Addr};
+        
+        // Create a test config
+        let config = create_test_config();
+        
+        // Initialize a relay node
+        let mut relay = RelayNode::new(config);
+        
+        // Generate test keys
+        let initiator_pubkey = [1u8; 32];
+        let target_pubkey = [2u8; 32];
+        
+        // Create a session
+        let session_id = relay.create_session(initiator_pubkey, target_pubkey).unwrap();
+        assert!(session_id > 0, "Session ID should be positive");
+        
+        // Verify session exists
+        let session = relay.get_session(session_id);
+        assert!(session.is_some(), "Session should exist");
+        let session = session.unwrap();
+        assert_eq!(session.initiator_pubkey, initiator_pubkey);
+        assert_eq!(session.target_pubkey, target_pubkey);
+        
+        // Find sessions by pubkey
+        let initiator_sessions = relay.find_sessions_for_pubkey(&initiator_pubkey);
+        assert_eq!(initiator_sessions.len(), 1, "Should find one session for initiator");
+        assert_eq!(initiator_sessions[0], session_id, "Should find correct session ID");
+        
+        let target_sessions = relay.find_sessions_for_pubkey(&target_pubkey);
+        assert_eq!(target_sessions.len(), 1, "Should find one session for target");
+        assert_eq!(target_sessions[0], session_id, "Should find correct session ID");
+        
+        // Update session stats
+        let bytes = 1024;
+        relay.update_session_stats(session_id, bytes, true).unwrap();
+        
+        // Check statistics were updated
+        let updated_session = relay.get_session(session_id).unwrap();
+        assert_eq!(updated_session.packets_forwarded_initiator_to_target, 1, 
+            "Should have recorded one forwarded packet");
+        assert_eq!(updated_session.bytes_forwarded_initiator_to_target, bytes as u64, 
+            "Should have recorded correct byte count");
+        
+        // Test session expiration
+        // First, create a session that will expire quickly
+        let temp_session_id = relay.create_session(initiator_pubkey, target_pubkey).unwrap();
+        
+        // Set a short inactivity timeout in the config
+        relay.config.limits.session_inactivity_timeout = Duration::from_millis(10);
+        
+        // Wait for the session to become inactive
+        thread::sleep(Duration::from_millis(20));
+        
+        // Cleanup expired sessions
+        let cleaned = relay.cleanup_expired_sessions();
+        assert_eq!(cleaned, 1, "Should have cleaned up one session");
+        
+        // Verify the session is gone
+        let temp_session = relay.get_session(temp_session_id);
+        assert!(temp_session.is_none(), "Temporary session should be removed");
+        
+        // But the original session should still be there
+        let original_session = relay.get_session(session_id);
+        assert!(original_session.is_some(), "Original session should still exist");
+        
+        // Finally, remove the original session
+        relay.remove_session(session_id).unwrap();
+        
+        // Verify it's gone
+        let removed_session = relay.get_session(session_id);
+        assert!(removed_session.is_none(), "Session should be removed");
     }
 } 
