@@ -8,18 +8,23 @@ use std::net::{SocketAddr, UdpSocket};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::thread;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use log::{debug, error, info, warn};
 use socket2;
 use tokio::sync::mpsc;
 use rand::Rng;
+use serde_json;
+use serde::{Serialize, Deserialize};
 
 use crate::relay::{
     ConnectionRequest, ConnectionResponse, ConnectionStatus, 
     DiscoveryQuery, DiscoveryResponse, Heartbeat, RelayAnnouncement,
-    RelayError, RelayHeader, RelayMessage, RelayNodeInfo, RelayPacket,
+    RelayHeader, RelayMessage, RelayNodeInfo, RelayPacket,
     RELAY_CAP_IPV4, RELAY_CAP_IPV6, RELAY_CAP_HIGH_BANDWIDTH, RELAY_CAP_LOW_LATENCY,
-    Result
+    Result, RelayError
 };
 
 /// Default interval for maintenance tasks
@@ -342,7 +347,7 @@ impl RelayStats {
 }
 
 /// Resource usage limits for the relay node
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceLimits {
     /// Maximum number of total concurrent sessions
     pub max_total_sessions: usize,
@@ -393,12 +398,13 @@ impl Default for ResourceLimits {
 }
 
 /// Configuration for the relay node
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelayConfig {
     /// Listen address for the relay service
     pub listen_addr: SocketAddr,
     
     /// Public key of the relay node
+    #[serde(with = "serde_array_32")]
     pub pubkey: [u8; 32],
     
     /// Geographic region of the relay (optional)
@@ -418,6 +424,80 @@ pub struct RelayConfig {
     
     /// List of bootstrap relay nodes to announce to
     pub bootstrap_relays: Vec<String>,
+    
+    /// Path to save configuration to, if automatic persistence is enabled
+    #[serde(skip)]
+    pub config_path: Option<PathBuf>,
+    
+    /// Whether to automatically save configuration changes
+    #[serde(skip)]
+    pub auto_persist: bool,
+    
+    /// Whether to enable background relay discovery
+    #[serde(default)]
+    pub enable_background_discovery: bool,
+    
+    /// Interval for background relay discovery (if enabled)
+    #[serde(default = "default_discovery_interval")]
+    pub discovery_interval: Duration,
+    
+    /// Whether to enable adaptive timeout calculations
+    #[serde(default)]
+    pub enable_adaptive_timeouts: bool,
+    
+    /// Multiplier for adaptive timeout calculations (timeout = avg_latency * multiplier)
+    #[serde(default = "default_adaptive_timeout_multiplier")]
+    pub adaptive_timeout_multiplier: f64,
+    
+    /// Minimum latency samples required before applying adaptive timeouts
+    #[serde(default = "default_min_latency_samples")]
+    pub min_latency_samples: usize,
+    
+    /// Maximum number of latency samples to store per relay
+    #[serde(default = "default_max_latency_samples")]
+    pub max_latency_samples: usize,
+    
+    /// Minimum adaptive timeout duration
+    #[serde(default = "default_min_adaptive_timeout")]
+    pub min_adaptive_timeout: Duration,
+    
+    /// Maximum adaptive timeout duration
+    #[serde(default = "default_max_adaptive_timeout")]
+    pub max_adaptive_timeout: Duration,
+    
+    /// Registry for relay discovery
+    #[serde(skip)]
+    pub relay_registry: Option<Arc<RwLock<crate::relay::RelayRegistry>>>,
+}
+
+/// Default discovery interval (10 minutes)
+fn default_discovery_interval() -> Duration {
+    Duration::from_secs(600)
+}
+
+/// Default adaptive timeout multiplier (1.5)
+fn default_adaptive_timeout_multiplier() -> f64 {
+    1.5
+}
+
+/// Default minimum latency samples (5)
+fn default_min_latency_samples() -> usize {
+    5
+}
+
+/// Default maximum latency samples (10)
+fn default_max_latency_samples() -> usize {
+    10
+}
+
+/// Default minimum adaptive timeout (1 second)
+fn default_min_adaptive_timeout() -> Duration {
+    Duration::from_secs(1)
+}
+
+/// Default maximum adaptive timeout (5 seconds)
+fn default_max_adaptive_timeout() -> Duration {
+    Duration::from_secs(5)
 }
 
 impl RelayConfig {
@@ -432,6 +512,17 @@ impl RelayConfig {
             maintenance_interval: MAINTENANCE_INTERVAL,
             announce_to_network: false,
             bootstrap_relays: Vec::new(),
+            config_path: None,
+            auto_persist: false,
+            enable_background_discovery: false,
+            discovery_interval: default_discovery_interval(),
+            enable_adaptive_timeouts: false,
+            adaptive_timeout_multiplier: default_adaptive_timeout_multiplier(),
+            min_latency_samples: default_min_latency_samples(),
+            max_latency_samples: default_max_latency_samples(),
+            min_adaptive_timeout: default_min_adaptive_timeout(),
+            max_adaptive_timeout: default_max_adaptive_timeout(),
+            relay_registry: None,
         }
     }
     
@@ -445,6 +536,62 @@ impl RelayConfig {
     pub fn with_capabilities(mut self, capabilities: u32) -> Self {
         self.capabilities = capabilities;
         self
+    }
+    
+    /// Enable automatic configuration persistence
+    pub fn with_persistence(mut self, path: impl Into<PathBuf>) -> Self {
+        self.config_path = Some(path.into());
+        self.auto_persist = true;
+        self
+    }
+    
+    /// Save the configuration to the specified path or the configured path
+    pub fn save(&self, custom_path: Option<impl AsRef<Path>>) -> Result<()> {
+        let path = if let Some(custom_path) = custom_path {
+            custom_path.as_ref().to_path_buf()
+        } else if let Some(path) = &self.config_path {
+            path.clone()
+        } else {
+            return Err(RelayError::Protocol("No configuration path specified".into()));
+        };
+        
+        // Create parent directory if it doesn't exist
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| RelayError::Io(e))?;
+        }
+        
+        // Serialize and write to file
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| RelayError::Protocol(format!("Failed to serialize relay config: {}", e)))?;
+            
+        fs::write(&path, json)
+            .map_err(|e| RelayError::Io(e))?;
+            
+        debug!("Saved relay configuration to {:?}", path);
+        Ok(())
+    }
+    
+    /// Load configuration from the specified path
+    pub fn load(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        
+        if !path.exists() {
+            return Err(RelayError::Protocol(format!("Configuration file does not exist: {:?}", path)));
+        }
+        
+        // Read and parse the file
+        let json = fs::read_to_string(path)
+            .map_err(|e| RelayError::Io(e))?;
+            
+        let mut config: Self = serde_json::from_str(&json)
+            .map_err(|e| RelayError::Protocol(format!("Failed to parse relay config: {}", e)))?;
+            
+        // Update the config path to the path we loaded from
+        config.config_path = Some(path.to_path_buf());
+        
+        debug!("Loaded relay configuration from {:?}", path);
+        Ok(config)
     }
     
     /// Set resource limits
@@ -463,6 +610,86 @@ impl RelayConfig {
     pub fn with_bootstrap_relays(mut self, relays: Vec<String>) -> Self {
         self.bootstrap_relays = relays;
         self
+    }
+    
+    /// Enable or disable background relay discovery
+    pub fn with_background_discovery(mut self, enabled: bool, interval: Option<Duration>) -> Self {
+        self.enable_background_discovery = enabled;
+        if let Some(interval) = interval {
+            self.discovery_interval = interval;
+        }
+        self
+    }
+    
+    /// Set the relay registry for discovery
+    pub fn with_relay_registry(mut self, registry: Arc<RwLock<crate::relay::RelayRegistry>>) -> Self {
+        self.relay_registry = Some(registry);
+        self
+    }
+    
+    /// Configure adaptive timeout settings
+    pub fn with_adaptive_timeouts(
+        mut self,
+        enabled: bool,
+        multiplier: Option<f64>,
+        min_samples: Option<usize>,
+        max_samples: Option<usize>,
+        min_timeout: Option<Duration>,
+        max_timeout: Option<Duration>
+    ) -> Self {
+        self.enable_adaptive_timeouts = enabled;
+        
+        if let Some(multiplier) = multiplier {
+            self.adaptive_timeout_multiplier = multiplier;
+        }
+        
+        if let Some(min_samples) = min_samples {
+            self.min_latency_samples = min_samples;
+        }
+        
+        if let Some(max_samples) = max_samples {
+            self.max_latency_samples = max_samples;
+        }
+        
+        if let Some(min_timeout) = min_timeout {
+            self.min_adaptive_timeout = min_timeout;
+        }
+        
+        if let Some(max_timeout) = max_timeout {
+            self.max_adaptive_timeout = max_timeout;
+        }
+        
+        self
+    }
+}
+
+// Helper module for serializing [u8; 32] arrays
+mod serde_array_32 {
+    use serde::{Deserialize, Deserializer, Serializer, Serialize};
+    use serde::de::Error;
+    
+    pub fn serialize<S>(array: &[u8; 32], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let hex = hex::encode(array);
+        hex.serialize(serializer)
+    }
+    
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 32], D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let hex = String::deserialize(deserializer)?;
+        let bytes = hex::decode(&hex).map_err(|e| D::Error::custom(format!("Invalid hex: {}", e)))?;
+        
+        if bytes.len() != 32 {
+            return Err(D::Error::custom(format!("Expected 32 bytes, got {}", bytes.len())));
+        }
+        
+        let mut array = [0u8; 32];
+        array.copy_from_slice(&bytes);
+        Ok(array)
     }
 }
 
@@ -504,6 +731,12 @@ pub struct RelayNode {
     
     /// Socket for UDP communication
     socket: Option<Arc<UdpSocket>>,
+    
+    /// Background discovery task handle
+    discovery_handle: Option<std::thread::JoinHandle<()>>,
+    
+    /// Shutdown signal for discovery task
+    discovery_shutdown: Option<Arc<AtomicBool>>,
 }
 
 impl RelayNode {
@@ -522,6 +755,8 @@ impl RelayNode {
             shutdown_sender: None,
             packet_times: Arc::new(Mutex::new(Vec::new())),
             socket: None,
+            discovery_handle: None,
+            discovery_shutdown: None,
         }
     }
     
@@ -622,6 +857,9 @@ impl RelayNode {
             }
         });
         
+        // Start background discovery if enabled
+        self.start_background_discovery()?;
+        
         Ok(())
     }
     
@@ -634,6 +872,18 @@ impl RelayNode {
         }
         
         self.socket = None;
+        
+        // Stop the background discovery task
+        if let Some(shutdown) = &self.discovery_shutdown {
+            shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        
+        // Wait for the discovery task to finish
+        if let Some(handle) = self.discovery_handle.take() {
+            let _ = handle.join();
+        }
+        
+        info!("Relay service stopped");
     }
     
     /// Get relay node information
@@ -1762,6 +2012,119 @@ impl RelayNode {
         
         result
     }
+    
+    /// Start the background relay discovery task
+    fn start_background_discovery(&mut self) -> Result<()> {
+        // Only start if enabled and not already running
+        if !self.config.enable_background_discovery || self.discovery_handle.is_some() {
+            return Ok(());
+        }
+        
+        // Make sure we have a registry to work with
+        if self.config.relay_registry.is_none() {
+            debug!("Background discovery enabled but no relay registry provided");
+            return Ok(());
+        }
+        
+        info!("Starting background relay discovery, interval: {:?}", self.config.discovery_interval);
+        
+        // Create a shutdown signal
+        let shutdown = Arc::new(AtomicBool::new(false));
+        self.discovery_shutdown = Some(shutdown.clone());
+        
+        // Get a clone of the registry and discovery interval
+        let registry = self.config.relay_registry.as_ref().unwrap().clone();
+        let interval = self.config.discovery_interval;
+        
+        // Start the discovery thread
+        let handle = std::thread::spawn(move || {
+            let mut last_discovery = Instant::now();
+            
+            loop {
+                // Check if we need to shut down
+                if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+                    debug!("Background discovery task shutting down");
+                    break;
+                }
+                
+                // Check if it's time to refresh
+                if last_discovery.elapsed() >= interval {
+                    debug!("Performing background relay discovery");
+                    
+                    // Attempt to refresh the registry
+                    let refresh_result = registry.write().map_err(|_| {
+                        warn!("Failed to acquire write lock on relay registry");
+                        RelayError::Protocol("Failed to acquire write lock on relay registry".into())
+                    }).and_then(|mut reg| {
+                        reg.refresh_from_bootstrap()
+                    });
+                    
+                    match refresh_result {
+                        Ok(count) => {
+                            if count > 0 {
+                                info!("Background discovery found {} new relays", count);
+                            } else {
+                                debug!("Background discovery completed, no new relays found");
+                            }
+                        },
+                        Err(e) => {
+                            warn!("Error during background relay discovery: {}", e);
+                        }
+                    }
+                    
+                    // Prune old entries
+                    if let Err(e) = registry.write().map_err(|_| {
+                        warn!("Failed to acquire write lock on relay registry for pruning");
+                        RelayError::Protocol("Failed to acquire write lock on relay registry".into())
+                    }).map(|mut reg| {
+                        reg.prune();
+                    }) {
+                        warn!("Error pruning relay registry: {}", e);
+                    }
+                    
+                    last_discovery = Instant::now();
+                }
+                
+                // Sleep a bit to avoid busy-waiting
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        });
+        
+        self.discovery_handle = Some(handle);
+        Ok(())
+    }
+    
+    /// Set the relay registry for discovery
+    pub fn set_relay_registry(&mut self, registry: Arc<RwLock<crate::relay::RelayRegistry>>) {
+        self.config.relay_registry = Some(registry);
+    }
+    
+    /// Enable or disable background discovery
+    pub fn set_background_discovery(&mut self, enabled: bool, interval: Option<Duration>) -> Result<()> {
+        // Stop existing discovery task if running
+        if let Some(shutdown) = &self.discovery_shutdown {
+            shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        
+        if let Some(handle) = self.discovery_handle.take() {
+            let _ = handle.join();
+        }
+        
+        self.discovery_shutdown = None;
+        
+        // Update configuration
+        self.config.enable_background_discovery = enabled;
+        if let Some(interval) = interval {
+            self.config.discovery_interval = interval;
+        }
+        
+        // Start discovery if enabled and service is running
+        if enabled && self.shutdown_sender.is_some() {
+            self.start_background_discovery()?;
+        }
+        
+        Ok(())
+    }
 }
 
 /// RelayService is a thin wrapper around RelayNode
@@ -1790,6 +2153,17 @@ mod tests {
             maintenance_interval: Duration::from_secs(30),
             announce_to_network: false,
             bootstrap_relays: Vec::new(),
+            config_path: None,
+            auto_persist: false,
+            enable_background_discovery: false,
+            discovery_interval: default_discovery_interval(),
+            enable_adaptive_timeouts: false,
+            adaptive_timeout_multiplier: default_adaptive_timeout_multiplier(),
+            min_latency_samples: default_min_latency_samples(),
+            max_latency_samples: default_max_latency_samples(),
+            min_adaptive_timeout: default_min_adaptive_timeout(),
+            max_adaptive_timeout: default_max_adaptive_timeout(),
+            relay_registry: None,
         }
     }
     

@@ -115,10 +115,10 @@ This document tracks the implementation progress of the decentralized TURN serve
   - Sort relays by reliability for faster connection establishment
   - Add reliability tracking with weighted averaging for stability
 
-- [ ] **21. Implement smart relay configuration**
-  - Add automatic configuration persistence
-  - Implement background relay discovery and registration
-  - Create adaptive timeout settings based on network conditions
+- [x] **21. Implement smart relay configuration**
+  - [x] Add automatic configuration persistence
+  - [x] Implement background relay discovery and registration
+  - [x] Create adaptive timeout settings based on network conditions
 
 - [ ] **22. Add relay telemetry and observability**
   - Implement transparent performance monitoring

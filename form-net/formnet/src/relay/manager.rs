@@ -4,18 +4,17 @@
 
 use std::collections::HashMap;
 use std::io;
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::{Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime};
-use std::mem::MaybeUninit;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use rand::Rng;
-use socket2::{Domain, Socket, Type, SockAddr};
 use wireguard_control::InterfaceName;
 use url::Host;
+use log::{debug, info, warn};
 
 use crate::relay::{
     ConnectionRequest, ConnectionStatus, RelayError, RelayMessage,
@@ -28,6 +27,12 @@ use shared::{Endpoint, IoErrorContext, WrappedIoError};
 
 /// Default timeout for relay connection attempts
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Maximum timeout for relay connection attempts (used for adaptive timeouts)
+const MAX_CONNECTION_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Minimum timeout for relay connection attempts (used for adaptive timeouts)
+const MIN_CONNECTION_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Default session expiration time
 const SESSION_EXPIRATION: Duration = Duration::from_secs(3600); // 1 hour
@@ -51,6 +56,12 @@ const RETRY_DELAY_MS: u64 = 1000;
 /// Duration to wait for a connection response
 const CONNECTION_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Maximum duration to wait for a connection response (used for adaptive timeouts)
+const MAX_CONNECTION_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Minimum duration to wait for a connection response (used for adaptive timeouts)
+const MIN_CONNECTION_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Maximum size for relay packet payloads
 const MAX_PAYLOAD_SIZE: usize = 1500;
 
@@ -65,6 +76,12 @@ const RECENT_FAILURE_WINDOW: u64 = 300; // 5 minutes
 
 /// Maximum number of relay connection attempts before giving up
 const MAX_RELAY_ATTEMPTS: usize = 5;
+
+/// Number of latency samples to keep for adaptive timeout calculations
+const LATENCY_SAMPLE_COUNT: usize = 20;
+
+/// Latency multiplier for timeout calculations (timeout = avg_latency * multiplier)
+const LATENCY_TIMEOUT_MULTIPLIER: f64 = 2.5;
 
 /// Connection attempt status
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -138,6 +155,124 @@ struct RelaySession {
     pub marked_for_cleanup: bool,
 }
 
+/// Structure to track network latency measurements
+#[derive(Debug, Clone)]
+struct LatencyTracker {
+    /// Recent latency measurements (in milliseconds)
+    samples: Vec<u64>,
+    
+    /// Maximum number of samples to keep
+    max_samples: usize,
+    
+    /// Average latency (in milliseconds)
+    average_latency: u64,
+    
+    /// Last updated time
+    last_updated: Instant,
+    
+    /// Calculated timeout duration
+    adaptive_timeout: Duration,
+}
+
+impl LatencyTracker {
+    /// Create a new latency tracker with config settings
+    fn new_with_config(config: &crate::relay::service::RelayConfig) -> Self {
+        Self {
+            samples: Vec::with_capacity(config.max_latency_samples),
+            max_samples: config.max_latency_samples,
+            average_latency: 0,
+            last_updated: Instant::now(),
+            adaptive_timeout: CONNECTION_RESPONSE_TIMEOUT,
+        }
+    }
+    
+    /// Create a new latency tracker
+    fn new(max_samples: usize, initial_timeout: Duration) -> Self {
+        Self {
+            samples: Vec::with_capacity(max_samples),
+            max_samples,
+            average_latency: 0,
+            last_updated: Instant::now(),
+            adaptive_timeout: initial_timeout,
+        }
+    }
+    
+    /// Add a new latency sample (in milliseconds)
+    fn add_sample(&mut self, latency_ms: u64) {
+        self.samples.push(latency_ms);
+        self.last_updated = Instant::now();
+        
+        // Keep only the most recent samples
+        if self.samples.len() > self.max_samples {
+            self.samples.remove(0);
+        }
+        
+        // Recalculate average
+        self.update_average();
+    }
+    
+    /// Update the average latency
+    fn update_average(&mut self) {
+        if self.samples.is_empty() {
+            self.average_latency = 0;
+            return;
+        }
+        
+        let sum: u64 = self.samples.iter().sum();
+        self.average_latency = sum / self.samples.len() as u64;
+        
+        // Update the adaptive timeout
+        self.update_timeout();
+    }
+    
+    /// Update the adaptive timeout based on the average latency and config
+    fn update_timeout_with_config(&mut self, config: &crate::relay::service::RelayConfig) {
+        if self.samples.len() < config.min_latency_samples {
+            // Not enough samples yet, use the current timeout
+            return;
+        }
+        
+        // Calculate new timeout based on average latency and config multiplier
+        let timeout_ms = (self.average_latency as f64 * config.adaptive_timeout_multiplier) as u64;
+        
+        // Apply min/max bounds from config
+        let bounded_timeout_ms = timeout_ms
+            .max(config.min_adaptive_timeout.as_millis() as u64)
+            .min(config.max_adaptive_timeout.as_millis() as u64);
+        
+        self.adaptive_timeout = Duration::from_millis(bounded_timeout_ms);
+    }
+    
+    /// Update the adaptive timeout based on the average latency
+    fn update_timeout(&mut self) {
+        if self.samples.len() < 3 {
+            // Not enough samples yet, use the current timeout
+            return;
+        }
+        
+        // Calculate new timeout based on average latency
+        // timeout = average_latency * multiplier
+        let timeout_ms = (self.average_latency as f64 * LATENCY_TIMEOUT_MULTIPLIER) as u64;
+        
+        // Apply min/max bounds
+        let bounded_timeout_ms = timeout_ms
+            .max(MIN_CONNECTION_RESPONSE_TIMEOUT.as_millis() as u64)
+            .min(MAX_CONNECTION_RESPONSE_TIMEOUT.as_millis() as u64);
+        
+        self.adaptive_timeout = Duration::from_millis(bounded_timeout_ms);
+    }
+    
+    /// Get the current adaptive timeout
+    fn get_timeout(&self) -> Duration {
+        self.adaptive_timeout
+    }
+    
+    /// Get the average latency (in milliseconds)
+    fn get_average_latency(&self) -> u64 {
+        self.average_latency
+    }
+}
+
 /// Manager for relay connections
 #[derive(Debug, Clone)]
 pub struct RelayManager {
@@ -158,15 +293,21 @@ pub struct RelayManager {
     
     /// Our local public key
     local_pubkey: [u8; 32],
+    
+    /// Latency trackers by relay public key (for adaptive timeouts)
+    latency_trackers: Arc<RwLock<HashMap<String, LatencyTracker>>>,
+    
+    /// Adaptive timeout configuration
+    config: crate::relay::service::RelayConfig,
 }
 
 /// Relay packet receiver
 pub struct PacketReceiver {
     /// Socket for receiving packets
-    socket: Socket,
+    socket: UdpSocket,
     
     /// Buffer for receiving data
-    buffer: Box<[MaybeUninit<u8>; 2048]>,
+    buffer: [u8; 2048],
     
     /// Session ID for this connection
     session_id: u64,
@@ -177,66 +318,39 @@ pub struct PacketReceiver {
 
 impl PacketReceiver {
     /// Create a new packet receiver
-    fn new(socket: Socket, session_id: u64) -> Self {
-        // Create a large buffer on the heap to avoid stack overflow
-        let buffer = Box::new([MaybeUninit::uninit(); 2048]);
-        
+    fn new(socket: UdpSocket, session_id: u64) -> Self {
         Self {
             socket,
-            buffer,
+            buffer: [0u8; 2048],
             session_id,
             active: true,
         }
     }
     
-    /// Receive a packet from the relay
+    /// Receive a packet, returning None if no packet is available
     pub fn receive(&mut self) -> Result<Option<Vec<u8>>> {
         if !self.active {
             return Ok(None);
         }
         
-        // Try to receive data
-        match self.socket.recv(&mut self.buffer[..]) {
+        // Set non-blocking mode for the socket
+        self.socket.set_nonblocking(true).map_err(RelayError::Io)?;
+        
+        match self.socket.recv(&mut self.buffer) {
             Ok(size) => {
-                // Convert from MaybeUninit<u8> to u8
-                let received_data = unsafe {
-                    std::slice::from_raw_parts(
-                        self.buffer.as_ptr() as *const u8,
-                        size
-                    )
-                };
-                
-                // Try to deserialize as a relay message
-                if let Ok(message) = RelayMessage::deserialize(received_data) {
-                    match message {
-                        RelayMessage::ForwardPacket(packet) => {
-                            // Check if this packet is for this session
-                            if packet.header.session_id == self.session_id {
-                                // Check packet validity
-                                if packet.header.is_valid() {
-                                    return Ok(Some(packet.payload));
-                                } else {
-                                    log::warn!("Received invalid relay packet");
-                                }
-                            }
-                        },
-                        // We can handle other message types here if needed
-                        _ => {
-                            // Ignore other message types
-                        }
-                    }
+                if size == 0 {
+                    return Ok(None);
                 }
                 
-                // Try again
-                Ok(None)
+                // Copy the data to return
+                let data = self.buffer[..size].to_vec();
+                Ok(Some(data))
             },
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 // No data available yet
                 Ok(None)
             },
             Err(e) => {
-                // Error receiving data
-                self.active = false;
                 Err(RelayError::Io(e))
             }
         }
@@ -518,8 +632,24 @@ impl CacheIntegration {
 }
 
 impl RelayManager {
-    /// Create a new relay manager
+    /// Create a new relay manager with default config
     pub fn new(relay_registry: SharedRelayRegistry, local_pubkey: [u8; 32]) -> Self {
+        // Create a default config
+        let mut config = crate::relay::service::RelayConfig::new(
+            "0.0.0.0:0".parse().unwrap(),  // Dummy value, not used here
+            [0u8; 32],                     // Dummy value, not used here
+        );
+        
+        // Enable adaptive timeouts by default
+        config = config.with_adaptive_timeouts(
+            true,
+            Some(LATENCY_TIMEOUT_MULTIPLIER),
+            Some(3),  // Minimum samples
+            Some(LATENCY_SAMPLE_COUNT),
+            Some(MIN_CONNECTION_RESPONSE_TIMEOUT),
+            Some(MAX_CONNECTION_RESPONSE_TIMEOUT)
+        );
+        
         Self {
             relay_registry,
             sessions: Arc::new(RwLock::new(HashMap::new())),
@@ -527,7 +657,48 @@ impl RelayManager {
             session_to_peer: Arc::new(RwLock::new(HashMap::new())),
             peer_to_session: Arc::new(RwLock::new(HashMap::new())),
             local_pubkey,
+            latency_trackers: Arc::new(RwLock::new(HashMap::new())),
+            config,
         }
+    }
+    
+    /// Create a new relay manager with custom config
+    pub fn new_with_config(relay_registry: SharedRelayRegistry, local_pubkey: [u8; 32], config: crate::relay::service::RelayConfig) -> Self {
+        Self {
+            relay_registry,
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+            connection_attempts: Arc::new(Mutex::new(Vec::new())),
+            session_to_peer: Arc::new(RwLock::new(HashMap::new())),
+            peer_to_session: Arc::new(RwLock::new(HashMap::new())),
+            local_pubkey,
+            latency_trackers: Arc::new(RwLock::new(HashMap::new())),
+            config,
+        }
+    }
+    
+    /// Set or update the relay configuration
+    pub fn set_config(&mut self, config: crate::relay::service::RelayConfig) {
+        self.config = config;
+    }
+    
+    /// Update the adaptive timeout settings
+    pub fn set_adaptive_timeout_settings(
+        &mut self,
+        enabled: bool,
+        multiplier: Option<f64>,
+        min_samples: Option<usize>,
+        max_samples: Option<usize>,
+        min_timeout: Option<Duration>,
+        max_timeout: Option<Duration>
+    ) {
+        self.config = self.config.clone().with_adaptive_timeouts(
+            enabled,
+            multiplier,
+            min_samples,
+            max_samples,
+            min_timeout,
+            max_timeout
+        );
     }
     
     /// Get the number of active sessions
@@ -877,7 +1048,89 @@ impl RelayManager {
         self.try_connect_via_relay(target_pubkey.as_ref(), &relay_info).await
     }
     
-    /// Try to connect via a specific relay
+    /// Get adaptive timeout based on relay public key and config settings
+    fn get_adaptive_timeout(&self, relay_pubkey: &[u8; 32]) -> Duration {
+        // If adaptive timeouts are disabled, use the fixed timeout
+        if !self.config.enable_adaptive_timeouts {
+            return CONNECTION_RESPONSE_TIMEOUT;
+        }
+        
+        let relay_key = hex::encode(relay_pubkey);
+        
+        let trackers = match self.latency_trackers.read() {
+            Ok(trackers) => trackers,
+            Err(_) => {
+                warn!("Failed to acquire read lock on latency trackers");
+                return CONNECTION_RESPONSE_TIMEOUT;
+            }
+        };
+        
+        if let Some(tracker) = trackers.get(&relay_key) {
+            // Only use adaptive timeout if we have enough samples
+            if tracker.samples.len() >= self.config.min_latency_samples {
+                tracker.get_timeout()
+            } else {
+                CONNECTION_RESPONSE_TIMEOUT
+            }
+        } else {
+            // No tracker for this relay yet, use default
+            CONNECTION_RESPONSE_TIMEOUT
+        }
+    }
+    
+    /// Record connection latency for a relay, using config settings
+    fn record_connection_latency(&self, relay_pubkey: &[u8; 32], latency_ms: u64) {
+        let relay_key = hex::encode(relay_pubkey);
+        
+        let mut trackers = match self.latency_trackers.write() {
+            Ok(trackers) => trackers,
+            Err(_) => {
+                warn!("Failed to acquire write lock on latency trackers");
+                return;
+            }
+        };
+        
+        // Get or create tracker for this relay
+        if !trackers.contains_key(&relay_key) {
+            // Use config settings if adaptive timeouts are enabled
+            if self.config.enable_adaptive_timeouts {
+                trackers.insert(
+                    relay_key.clone(),
+                    LatencyTracker::new(self.config.max_latency_samples, CONNECTION_RESPONSE_TIMEOUT)
+                );
+            } else {
+                trackers.insert(
+                    relay_key.clone(),
+                    LatencyTracker::new(LATENCY_SAMPLE_COUNT, CONNECTION_RESPONSE_TIMEOUT)
+                );
+            }
+        }
+        
+        // Add the latency sample
+        if let Some(tracker) = trackers.get_mut(&relay_key) {
+            tracker.add_sample(latency_ms);
+            
+            // Update timeout using config settings if adaptive timeouts are enabled
+            if self.config.enable_adaptive_timeouts {
+                tracker.update_timeout_with_config(&self.config);
+            }
+            
+            debug!("Updated latency for relay {}: {} ms, adaptive timeout: {:?}",
+                  relay_key, tracker.get_average_latency(), tracker.get_timeout());
+        }
+        
+        // Update the reliability in the relay registry
+        if let Ok(relay_reg) = self.relay_registry.get_relay(relay_pubkey) {
+            if let Some(relay_info) = relay_reg {
+                // Update relay info in registry
+                let _ = self.relay_registry.update_relay(relay_pubkey, move |r| {
+                    r.latency = Some(latency_ms as u32);
+                });
+            }
+        }
+    }
+    
+    /// Try to connect to a peer through a relay
     async fn try_connect_via_relay(
         &self,
         target_pubkey: &[u8],
@@ -898,82 +1151,95 @@ impl RelayManager {
         // Track the connection attempt
         self.track_connection_attempt(target_pubkey, relay_info.clone())?;
         
-        // Generate a random nonce
+        // Generate a random nonce for the request
         let nonce = rand::thread_rng().gen::<u64>();
         
-        // Create connection request
+        // Create a UDP socket
+        let socket = UdpSocket::bind("0.0.0.0:0")
+            .map_err(RelayError::Io)?;
+        
+        // Set non-blocking mode
+        socket.set_nonblocking(true)
+            .map_err(RelayError::Io)?;
+        
+        // Get the adaptive timeout for this relay
+        let timeout = self.get_adaptive_timeout(&relay_info.pubkey);
+        
+        // Set timeouts
+        socket.set_read_timeout(Some(timeout))
+            .map_err(RelayError::Io)?;
+        socket.set_write_timeout(Some(Duration::from_secs(5)))
+            .map_err(RelayError::Io)?;
+        
+        // Resolve endpoint
+        let endpoint: SocketAddr = relay_info.endpoints[0].parse()
+            .map_err(|_| RelayError::Protocol(format!("Invalid endpoint: {}", relay_info.endpoints[0])))?;
+        
+        // Connect to relay
+        socket.connect(endpoint)
+            .map_err(|e| RelayError::Io(e))?;
+        
+        // Create the connection request
         let request = ConnectionRequest::new(self.local_pubkey, target_pubkey);
         let message = RelayMessage::ConnectionRequest(request);
-        
-        // Send the request to the relay
-        let socket = self.create_udp_socket()?;
-        
-        // Connect to the first available endpoint
-        let mut relay_endpoint = None;
-        for endpoint_str in &relay_info.endpoints {
-            if let Ok(addrs) = endpoint_str.to_socket_addrs() {
-                for addr in addrs {
-                    // Convert SocketAddr to SockAddr
-                    let sock_addr = SockAddr::from(addr);
-                    if socket.connect(&sock_addr).is_ok() {
-                        relay_endpoint = Some(addr);
-                        break;
-                    }
-                }
-            }
-            
-            if relay_endpoint.is_some() {
-                break;
-            }
-        }
-        
-        let _relay_addr = relay_endpoint.ok_or_else(|| 
-            RelayError::Protocol(format!("Failed to resolve any relay endpoints")))?;
         
         // Serialize the message
         let data = message.serialize()?;
         
         // Send the request
-        socket.set_nonblocking(true)?;
-        socket.send(&data)?;
+        let connection_start = Instant::now();
         
-        // Wait for response with timeout
+        // Wait for response with adaptive timeout
         let start_time = Instant::now();
-        let mut buffer = [MaybeUninit::<u8>::uninit(); 2048];
+        let mut buffer = [0u8; 2048];
         
-        while start_time.elapsed() < CONNECTION_RESPONSE_TIMEOUT {
+        while start_time.elapsed() < timeout {
             match socket.recv(&mut buffer) {
                 Ok(size) => {
-                    // Convert from MaybeUninit<u8> to u8
-                    let received_data = unsafe {
-                        std::slice::from_raw_parts(
-                            buffer.as_ptr() as *const u8,
-                            size
-                        )
-                    };
+                    if size == 0 {
+                        continue;
+                    }
+                    
+                    // Process the received data
+                    let received_data = &buffer[..size];
                     
                     if let Ok(response_message) = RelayMessage::deserialize(received_data) {
                         match response_message {
                             RelayMessage::ConnectionResponse(response) => {
-                                // Check if the response is for our request
+                                debug!("Received connection response: {:?}", response.status);
+                                
+                                // Verify nonce to prevent replay attacks
                                 if response.request_nonce != nonce {
+                                    debug!("Invalid nonce in response");
                                     continue;
                                 }
                                 
+                                // Handle based on status
                                 match response.status {
                                     ConnectionStatus::Success => {
-                                        // Connection was successful
-                                        let session_id = response.session_id.ok_or_else(|| 
-                                            RelayError::Protocol("No session ID in success response".into()))?;
-                                        
-                                        // Update the connection attempt
-                                        self.update_connection_attempt(
-                                            &target_pubkey,
-                                            ConnectionAttemptStatus::Success,
-                                            Some(session_id)
-                                        )?;
-                                        
-                                        return Ok(session_id);
+                                        if let Some(session_id) = response.session_id {
+                                            debug!("Connection successful, session ID: {}", session_id);
+                                            
+                                            // Update connection attempt status
+                                            self.update_connection_attempt(
+                                                &target_pubkey,
+                                                ConnectionAttemptStatus::Success,
+                                                Some(session_id)
+                                            )?;
+                                            
+                                            // Create a session for this connection
+                                            self.create_session(
+                                                session_id,
+                                                target_pubkey,
+                                                relay_info.clone()
+                                            )?;
+                                            
+                                            // Record successful connection latency
+                                            let latency = connection_start.elapsed().as_millis() as u64;
+                                            self.record_connection_latency(&relay_info.pubkey, latency);
+                                            
+                                            return Ok(session_id);
+                                        }
                                     },
                                     _ => {
                                         // Connection failed
@@ -1015,6 +1281,17 @@ impl RelayManager {
             }
         }
         
+        // Timeout case
+        // Record timeout as maximum latency to penalize this relay
+        self.record_connection_latency(
+            &relay_info.pubkey, 
+            if self.config.enable_adaptive_timeouts {
+                self.config.max_adaptive_timeout.as_millis() as u64
+            } else {
+                MAX_CONNECTION_RESPONSE_TIMEOUT.as_millis() as u64
+            }
+        );
+        
         // Timeout
         self.update_connection_attempt(
             &target_pubkey,
@@ -1026,13 +1303,25 @@ impl RelayManager {
     }
     
     /// Create a UDP socket for relay communication
-    fn create_udp_socket(&self) -> Result<Socket> {
-        let socket = Socket::new(Domain::IPV4, Type::DGRAM, None)?;
+    fn create_udp_socket(&self) -> Result<UdpSocket> {
+        let socket = UdpSocket::bind("0.0.0.0:0")
+            .map_err(RelayError::Io)?;
         
         // Set socket options
-        socket.set_nonblocking(true)?;
-        socket.set_read_timeout(Some(CONNECTION_RESPONSE_TIMEOUT))?;
-        socket.set_write_timeout(Some(Duration::from_secs(5)))?;
+        socket.set_nonblocking(true)
+            .map_err(RelayError::Io)?;
+        
+        // Use default timeout, as we don't have a specific relay to get adaptive timeout for
+        let timeout = if self.config.enable_adaptive_timeouts {
+            self.config.min_adaptive_timeout
+        } else {
+            CONNECTION_RESPONSE_TIMEOUT
+        };
+        
+        socket.set_read_timeout(Some(timeout))
+            .map_err(RelayError::Io)?;
+        socket.set_write_timeout(Some(Duration::from_secs(5)))
+            .map_err(RelayError::Io)?;
         
         Ok(socket)
     }
@@ -1070,49 +1359,54 @@ impl RelayManager {
         target_pubkey: &[u8; 32],
         payload: &[u8],
     ) -> Result<()> {
-        // Check if we have an active session
+        // Check if we have a session for this peer
         let session_id = match self.get_session_for_peer(target_pubkey)? {
             Some(id) => id,
-            None => return Err(RelayError::Protocol("No active session for peer".into())),
+            None => return Err(RelayError::Protocol(format!("No active session for peer {}", hex::encode(target_pubkey)))),
         };
         
-        // Create a relay packet
-        let packet = RelayPacket::new(*target_pubkey, session_id, payload.to_vec());
-        let message = RelayMessage::ForwardPacket(packet);
-        
-        // Serialize the message
-        let data = message.serialize()?;
-        
-        // Get the relay info for this session
-        let relay_info = {
+        // Get the relay info and peer pubkey
+        let (relay_info, peer_pubkey) = {
             let sessions = self.sessions.read().map_err(|_| 
                 RelayError::Protocol("Failed to acquire read lock on sessions".into()))?;
             
-            let session = sessions.get(&session_id)
-                .ok_or_else(|| RelayError::Protocol(format!("Session {} not found", session_id)))?;
-            
-            session.relay_info.clone()
+            match sessions.get(&session_id) {
+                Some(s) => (s.relay_info.clone(), s.peer_pubkey),
+                None => return Err(RelayError::Protocol(format!("Session {} not found", session_id))),
+            }
         };
         
-        // Create a socket and connect to the relay
-        let socket = self.create_udp_socket()?;
+        // Check if payload is too large
+        if self.is_packet_too_large(payload) {
+            return Err(RelayError::ResourceLimit("Payload too large".into()));
+        }
         
-        // Connect to the first available endpoint
+        // Create the relay packet
+        let packet = RelayPacket::new(
+            peer_pubkey,
+            session_id,
+            payload.to_vec()
+        );
+        
+        // Serialize the packet
+        let message = RelayMessage::ForwardPacket(packet);
+        let data = message.serialize()?;
+        
+        // Create a UDP socket
+        let socket = UdpSocket::bind("0.0.0.0:0").map_err(RelayError::Io)?;
+        
+        // Set non-blocking mode
+        socket.set_nonblocking(true).map_err(RelayError::Io)?;
+        
+        // Connect to the relay
         let mut connected = false;
+        
         for endpoint_str in &relay_info.endpoints {
-            if let Ok(addrs) = endpoint_str.to_socket_addrs() {
-                for addr in addrs {
-                    // Convert SocketAddr to SockAddr
-                    let sock_addr = SockAddr::from(addr);
-                    if socket.connect(&sock_addr).is_ok() {
-                        connected = true;
-                        break;
-                    }
+            if let Ok(addr) = endpoint_str.parse::<SocketAddr>() {
+                if socket.connect(addr).is_ok() {
+                    connected = true;
+                    break;
                 }
-            }
-            
-            if connected {
-                break;
             }
         }
         
@@ -1120,80 +1414,67 @@ impl RelayManager {
             return Err(RelayError::Protocol("Failed to connect to any relay endpoint".into()));
         }
         
-        // Set non-blocking mode
-        socket.set_nonblocking(true)?;
-        
-        // Send the data with retries
+        // Send the packet
         let mut retries = 0;
         let mut last_error = None;
         
         while retries < MAX_SEND_RETRIES {
             match socket.send(&data) {
                 Ok(_) => {
-                    // Record the successful packet send
-                    self.record_packet_sent(session_id)?;
+                    // Mark session as active
+                    let _ = self.mark_session_active(session_id);
+                    let _ = self.record_packet_sent(session_id);
                     return Ok(());
                 },
-                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    // Socket not ready, wait a bit and retry
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                    retries += 1;
-                    last_error = Some(e.kind());
-                },
                 Err(e) => {
-                    // Other error, retry immediately
                     retries += 1;
-                    last_error = Some(e.kind());
+                    last_error = Some(e);
+                    tokio::time::sleep(Duration::from_millis(50)).await;
                 }
             }
         }
         
-        // If we get here, all retries failed
-        Err(RelayError::Protocol(format!("Failed to send packet after {} retries. Last error: {:?}", 
-            MAX_SEND_RETRIES, last_error)))
+        // Failed after retries
+        Err(RelayError::Io(last_error.unwrap_or_else(|| io::Error::new(io::ErrorKind::Other, "Unknown error"))))
     }
     
-    /// Create a packet receiver for a peer connection
+    /// Create a packet receiver for a specific peer
     pub fn create_packet_receiver(
         &self,
         target_pubkey: &[u8; 32],
     ) -> Result<PacketReceiver> {
-        // Check if we have an active session
+        // Check if we have an active session for this peer
         let session_id = match self.get_session_for_peer(target_pubkey)? {
             Some(id) => id,
-            None => return Err(RelayError::Protocol("No active session for peer".into())),
+            None => return Err(RelayError::Protocol(format!("No active session for peer {}", hex::encode(target_pubkey)))),
         };
         
-        // Get the relay info for this session
+        // Get the relay info
         let relay_info = {
             let sessions = self.sessions.read().map_err(|_| 
                 RelayError::Protocol("Failed to acquire read lock on sessions".into()))?;
             
-            let session = sessions.get(&session_id)
-                .ok_or_else(|| RelayError::Protocol(format!("Session {} not found", session_id)))?;
-            
-            session.relay_info.clone()
+            match sessions.get(&session_id) {
+                Some(s) => s.relay_info.clone(),
+                None => return Err(RelayError::Protocol(format!("Session {} not found", session_id))),
+            }
         };
         
-        // Create a socket and connect to the relay
-        let socket = self.create_udp_socket()?;
+        // Create a UDP socket
+        let socket = UdpSocket::bind("0.0.0.0:0").map_err(RelayError::Io)?;
         
-        // Connect to the first available endpoint
+        // Set non-blocking mode
+        socket.set_nonblocking(true).map_err(RelayError::Io)?;
+        
+        // Connect to the relay
         let mut connected = false;
+        
         for endpoint_str in &relay_info.endpoints {
-            if let Ok(addrs) = endpoint_str.to_socket_addrs() {
-                for addr in addrs {
-                    // Convert SocketAddr to SockAddr
-                    let sock_addr = SockAddr::from(addr);
-                    if socket.connect(&sock_addr).is_ok() {
-                        connected = true;
-                        break;
-                    }
+            if let Ok(addr) = endpoint_str.parse::<SocketAddr>() {
+                if socket.connect(addr).is_ok() {
+                    connected = true;
+                    break;
                 }
-            }
-            
-            if connected {
-                break;
             }
         }
         
@@ -1201,10 +1482,6 @@ impl RelayManager {
             return Err(RelayError::Protocol("Failed to connect to any relay endpoint".into()));
         }
         
-        // Set non-blocking mode
-        socket.set_nonblocking(true)?;
-        
-        // Create and return the packet receiver
         Ok(PacketReceiver::new(socket, session_id))
     }
     
