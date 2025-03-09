@@ -103,7 +103,7 @@ This document tracks the implementation progress of the decentralized TURN serve
   - Add session creation, tracking, and cleanup
   - Implement session authentication and verification
 
-- [ ] **19. Add security features to relay service**
+- [x] **19. Add security features to relay service**
   - Implement denial-of-service protection
   - Add rate limiting for relay requests
   - Implement authentication for relay control messages

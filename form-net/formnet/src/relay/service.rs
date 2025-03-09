@@ -43,6 +43,12 @@ const DEFAULT_MAX_PACKETS_PER_SECOND: usize = 100;
 /// Default maximum packet size (bytes)
 const DEFAULT_MAX_PACKET_SIZE: usize = 1500;
 
+/// Default maximum rate of connection requests per minute per IP address
+const DEFAULT_MAX_CONNECTION_RATE_PER_IP: usize = 60;
+
+/// Default maximum packets per second per IP address
+const DEFAULT_MAX_PACKETS_PER_SECOND_PER_IP: usize = 100;
+
 /// Session information for a relay connection
 #[derive(Clone)]
 pub struct RelaySession {
@@ -347,6 +353,9 @@ pub struct ResourceLimits {
     /// Maximum rate of connection requests per minute
     pub max_connection_rate: usize,
     
+    /// Maximum rate of connection requests per minute per IP address
+    pub max_connection_rate_per_ip: usize,
+    
     /// Maximum bandwidth in bytes per second
     pub max_bandwidth_bps: Option<u64>,
     
@@ -355,6 +364,9 @@ pub struct ResourceLimits {
     
     /// Maximum packets per second
     pub max_packets_per_second: usize,
+    
+    /// Maximum packets per second per IP address
+    pub max_packets_per_second_per_ip: usize,
     
     /// Session inactivity timeout
     pub session_inactivity_timeout: Duration,
@@ -369,9 +381,11 @@ impl Default for ResourceLimits {
             max_total_sessions: DEFAULT_MAX_TOTAL_SESSIONS,
             max_sessions_per_client: DEFAULT_MAX_SESSIONS_PER_CLIENT,
             max_connection_rate: DEFAULT_MAX_CONNECTION_RATE,
+            max_connection_rate_per_ip: DEFAULT_MAX_CONNECTION_RATE_PER_IP,
             max_bandwidth_bps: None, // No bandwidth limit by default
             max_packet_size: DEFAULT_MAX_PACKET_SIZE,
             max_packets_per_second: DEFAULT_MAX_PACKETS_PER_SECOND,
+            max_packets_per_second_per_ip: DEFAULT_MAX_PACKETS_PER_SECOND_PER_IP,
             session_inactivity_timeout: Duration::from_secs(300), // 5 minutes
             default_session_expiration: DEFAULT_SESSION_EXPIRATION,
         }
@@ -470,6 +484,12 @@ pub struct RelayNode {
     /// Connection rate tracking
     connection_attempts: Arc<Mutex<Vec<Instant>>>,
     
+    /// Per-IP connection rate tracking (IP string -> timestamps)
+    ip_connection_attempts: Arc<RwLock<HashMap<String, Vec<Instant>>>>,
+    
+    /// Per-IP packet rate tracking (IP string -> timestamps)
+    ip_packet_times: Arc<RwLock<HashMap<String, Vec<Instant>>>>,
+    
     /// Statistics for the relay service
     stats: Arc<RwLock<RelayStats>>,
     
@@ -495,6 +515,8 @@ impl RelayNode {
             initiator_sessions: Arc::new(RwLock::new(HashMap::new())),
             target_sessions: Arc::new(RwLock::new(HashMap::new())),
             connection_attempts: Arc::new(Mutex::new(Vec::new())),
+            ip_connection_attempts: Arc::new(RwLock::new(HashMap::new())),
+            ip_packet_times: Arc::new(RwLock::new(HashMap::new())),
             stats: Arc::new(RwLock::new(RelayStats::default())),
             start_time: SystemTime::now(),
             shutdown_sender: None,
@@ -532,6 +554,8 @@ impl RelayNode {
         let initiator_sessions = self.initiator_sessions.clone();
         let target_sessions = self.target_sessions.clone();
         let connection_attempts = self.connection_attempts.clone();
+        let ip_connection_attempts = self.ip_connection_attempts.clone();
+        let ip_packet_times = self.ip_packet_times.clone();
         let stats = self.stats.clone();
         let packet_times = self.packet_times.clone();
         let start_time = self.start_time;
@@ -577,7 +601,10 @@ impl RelayNode {
                             &initiator_sessions,
                             &target_sessions,
                             &connection_attempts,
+                            &ip_connection_attempts,
+                            &ip_packet_times,
                             &stats,
+                            &packet_times,
                             &config
                         ) {
                             warn!("Error processing packet: {}", e);
@@ -662,12 +689,28 @@ impl RelayNode {
         initiator_sessions: &Arc<RwLock<HashMap<String, HashSet<u64>>>>,
         target_sessions: &Arc<RwLock<HashMap<String, HashSet<u64>>>>,
         connection_attempts: &Arc<Mutex<Vec<Instant>>>,
+        ip_connection_attempts: &Arc<RwLock<HashMap<String, Vec<Instant>>>>,
+        ip_packet_times: &Arc<RwLock<HashMap<String, Vec<Instant>>>>,
         stats: &Arc<RwLock<RelayStats>>,
+        packet_times: &Arc<Mutex<Vec<Instant>>>,
         config: &RelayConfig
     ) -> Result<()> {
-        // Ensure packet is not too large
+        // Check packet size
         if data.len() > config.limits.max_packet_size {
-            return Err(RelayError::Protocol("Packet too large".into()));
+            debug!("Packet exceeds maximum size: {} bytes", data.len());
+            return Err(RelayError::ResourceLimit("Packet too large".into()));
+        }
+        
+        // Check IP-based packet rate limits
+        if !Self::check_ip_packet_rate_limit(ip_packet_times, &src_addr, &config.limits) {
+            debug!("Packet rate limit exceeded for IP: {}", src_addr.ip());
+            return Err(RelayError::ResourceLimit("Packet rate limit exceeded for your IP".into()));
+        }
+        
+        // Check global packet rate limits
+        if !Self::record_packet_time(packet_times, &config.limits) {
+            debug!("Global packet rate limit exceeded");
+            return Err(RelayError::ResourceLimit("Packet rate limit exceeded".into()));
         }
         
         // Try to deserialize as a relay packet
@@ -685,6 +728,8 @@ impl RelayNode {
                 initiator_sessions,
                 target_sessions,
                 connection_attempts,
+                ip_connection_attempts,
+                ip_packet_times,
                 stats,
                 config
             );
@@ -731,6 +776,15 @@ impl RelayNode {
             let initiator_count = initiator_sessions.read().unwrap().len();
             stats_guard.active_clients = initiator_count;
             
+            // Monitor session count against limits
+            if session_count > limits.max_total_sessions * 9 / 10 {
+                warn!(
+                    "Session count approaching limit: {}/{}", 
+                    session_count, 
+                    limits.max_total_sessions
+                );
+            }
+            
             // TODO: Add CPU/memory usage tracking
             // This would be OS-specific and require additional dependencies
         }
@@ -749,34 +803,52 @@ impl RelayNode {
             // Get a count for stats
             let count = expired_sessions.len();
             
+            if count > 0 {
+                debug!("Found {} expired sessions to clean up", count);
+            }
+            
+            // Drop the read lock before we attempt to remove sessions
+            drop(all_sessions);
+            
             // Remove each expired session
             for session_id in expired_sessions {
                 // Get session details for map cleanup
-                if let Some(session) = all_sessions.get(&session_id) {
+                let session_opt = {
+                    let sessions_read = sessions.read().unwrap();
+                    sessions_read.get(&session_id).cloned()
+                };
+                
+                if let Some(session) = session_opt {
                     let initiator_id = hex::encode(&session.initiator_pubkey);
                     let target_id = hex::encode(&session.target_pubkey);
                     
                     // Remove from sessions map
-                    let mut sessions_write = sessions.write().unwrap();
-                    sessions_write.remove(&session_id);
+                    {
+                        let mut sessions_write = sessions.write().unwrap();
+                        sessions_write.remove(&session_id);
+                    }
                     
                     // Remove from initiator map
-                    let mut initiator_map = initiator_sessions.write().unwrap();
-                    if let Some(sessions) = initiator_map.get_mut(&initiator_id) {
-                        sessions.remove(&session_id);
-                        // Clean up empty sets
-                        if sessions.is_empty() {
-                            initiator_map.remove(&initiator_id);
+                    {
+                        let mut initiator_map = initiator_sessions.write().unwrap();
+                        if let Some(sessions) = initiator_map.get_mut(&initiator_id) {
+                            sessions.remove(&session_id);
+                            // Clean up empty sets
+                            if sessions.is_empty() {
+                                initiator_map.remove(&initiator_id);
+                            }
                         }
                     }
                     
                     // Remove from target map
-                    let mut target_map = target_sessions.write().unwrap();
-                    if let Some(sessions) = target_map.get_mut(&target_id) {
-                        sessions.remove(&session_id);
-                        // Clean up empty sets
-                        if sessions.is_empty() {
-                            target_map.remove(&target_id);
+                    {
+                        let mut target_map = target_sessions.write().unwrap();
+                        if let Some(sessions) = target_map.get_mut(&target_id) {
+                            sessions.remove(&session_id);
+                            // Clean up empty sets
+                            if sessions.is_empty() {
+                                target_map.remove(&target_id);
+                            }
                         }
                     }
                 }
@@ -800,6 +872,16 @@ impl RelayNode {
             
             // Update uptime
             stats_write.calculate_uptime(start_time);
+            
+            // Log cleanup results if sessions were expired
+            if expired_count > 0 {
+                info!(
+                    "Cleaned up {} expired sessions. Active sessions: {}, active clients: {}", 
+                    expired_count, 
+                    stats_write.active_sessions, 
+                    stats_write.active_clients
+                );
+            }
         }
     }
     
@@ -900,97 +982,135 @@ impl RelayNode {
         initiator_sessions: &Arc<RwLock<HashMap<String, HashSet<u64>>>>,
         target_sessions: &Arc<RwLock<HashMap<String, HashSet<u64>>>>,
         connection_attempts: &Arc<Mutex<Vec<Instant>>>,
+        ip_connection_attempts: &Arc<RwLock<HashMap<String, Vec<Instant>>>>,
+        ip_packet_times: &Arc<RwLock<HashMap<String, Vec<Instant>>>>,
         stats: &Arc<RwLock<RelayStats>>,
         config: &RelayConfig
     ) -> Result<()> {
-        // Update statistics
+        // Update stats for connection requests
         {
-            let mut stats_guard = stats.write().unwrap();
-            stats_guard.connection_requests += 1;
+            let mut stats = stats.write().unwrap();
+            stats.connection_requests += 1;
         }
         
-        // Validate the request
-        if !request.is_valid() {
-            debug!("Rejecting invalid connection request");
+        // Validate request
+        if request.target_pubkey.iter().all(|&b| b == 0) {
+            debug!("Invalid connection request: target pubkey is all zeros");
             
+            // Send error response
             let response = ConnectionResponse::error(
                 request.nonce,
                 ConnectionStatus::Rejected,
-                "Invalid request"
+                "Invalid target pubkey"
             );
-            
             Self::send_response(socket, response, src_addr)?;
+            
             return Ok(());
         }
         
-        // Check rate limits for connection attempts
+        // Check IP-based rate limits
+        if !Self::check_ip_connection_rate_limit(ip_connection_attempts, &src_addr, &config.limits) {
+            debug!("Connection rate limit exceeded for IP: {}", src_addr.ip());
+            
+            // Send error response
+            let response = ConnectionResponse::error(
+                request.nonce,
+                ConnectionStatus::ResourceLimit,
+                "Connection rate limit exceeded for your IP"
+            );
+            Self::send_response(socket, response, src_addr)?;
+            
+            // Update stats for rejected connections
+            {
+                let mut stats = stats.write().unwrap();
+                stats.rejected_connections += 1;
+            }
+            
+            return Ok(());
+        }
+        
+        // Check global connection rate limits
         {
             let mut attempts = connection_attempts.lock().unwrap();
-            let now = Instant::now();
             
             // Remove attempts older than 1 minute
-            attempts.retain(|time| now.duration_since(*time) < Duration::from_secs(60));
+            let one_minute_ago = Instant::now() - Duration::from_secs(60);
+            attempts.retain(|time| *time > one_minute_ago);
             
-            // Check if we're exceeding the rate limit
+            // Check if we're over the limit
             if attempts.len() >= config.limits.max_connection_rate {
-                debug!("Rejecting connection request due to rate limiting");
+                debug!("Global connection rate limit exceeded");
                 
+                // Send error response
                 let response = ConnectionResponse::error(
                     request.nonce,
                     ConnectionStatus::ResourceLimit,
-                    "Rate limit exceeded"
+                    "Connection rate limit exceeded"
                 );
-                
                 Self::send_response(socket, response, src_addr)?;
                 
-                // Update stats
-                let mut stats_guard = stats.write().unwrap();
-                stats_guard.rejected_connections += 1;
+                // Update stats for rejected connections
+                {
+                    let mut stats = stats.write().unwrap();
+                    stats.rejected_connections += 1;
+                }
                 
                 return Ok(());
             }
             
             // Record this attempt
-            attempts.push(now);
+            attempts.push(Instant::now());
         }
         
-        // Enhanced authentication check - validate the auth token if provided
-        if let Some(auth_token) = &request.auth_token {
-            // In a real implementation, we'd validate the token using cryptographic verification
-            // For the implementation task, we'll use a simplified approach first
-            let token_valid = if auth_token.len() > 8 {
-                // Basic validation - in practice, we'd use proper signature verification
-                let timestamp_bytes = &auth_token[0..8];
-                let mut timestamp_array = [0u8; 8];
-                timestamp_bytes.iter().enumerate().for_each(|(i, &b)| {
-                    if i < 8 {
-                        timestamp_array[i] = b;
+        // Check if initiator has reached their session limit
+        let initiator_pubkey_hex = hex::encode(&request.peer_pubkey);
+        {
+            let initiator_map = initiator_sessions.read().unwrap();
+            if let Some(existing_sessions) = initiator_map.get(&initiator_pubkey_hex) {
+                if existing_sessions.len() >= config.limits.max_sessions_per_client {
+                    debug!(
+                        "Client {} has reached maximum session limit of {}", 
+                        initiator_pubkey_hex, 
+                        config.limits.max_sessions_per_client
+                    );
+                    
+                    // Send error response
+                    let response = ConnectionResponse::error(
+                        request.nonce,
+                        ConnectionStatus::ResourceLimit,
+                        "Maximum session limit reached"
+                    );
+                    Self::send_response(socket, response, src_addr)?;
+                    
+                    // Update stats for rejected connections
+                    {
+                        let mut stats = stats.write().unwrap();
+                        stats.rejected_connections += 1;
                     }
-                });
-                
-                let timestamp = u64::from_le_bytes(timestamp_array);
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-                
-                // Token should not be too old (5 minutes max)
-                now.saturating_sub(timestamp) < 300
-            } else {
-                false
-            };
-            
-            if !token_valid {
-                let response = ConnectionResponse::error(
-                    request.nonce,
-                    ConnectionStatus::AuthFailed,
-                    "Invalid authentication token"
+                    
+                    return Ok(());
+                }
+            }
+        }
+        
+        // Check if we've reached the maximum total sessions
+        {
+            let current_sessions = sessions.read().unwrap();
+            if current_sessions.len() >= config.limits.max_total_sessions {
+                debug!(
+                    "Relay has reached maximum total session limit of {}", 
+                    config.limits.max_total_sessions
                 );
                 
-                // Send the error response
+                // Send error response
+                let response = ConnectionResponse::error(
+                    request.nonce,
+                    ConnectionStatus::ResourceLimit,
+                    "Relay maximum session limit reached"
+                );
                 Self::send_response(socket, response, src_addr)?;
                 
-                // Update stats
+                // Update stats for rejected connections
                 {
                     let mut stats = stats.write().unwrap();
                     stats.rejected_connections += 1;
@@ -1000,50 +1120,60 @@ impl RelayNode {
             }
         }
         
-        // Continue with normal session creation process...
-        
-        // Generate a unique session ID
+        // Generate a new session ID
         let session_id = Self::generate_session_id();
         
         // Create a new session
-        let session = RelaySession::new(session_id, request.peer_pubkey, request.target_pubkey);
+        let session = RelaySession::new(
+            session_id, 
+            request.peer_pubkey, 
+            request.target_pubkey
+        );
         
-        // Add the session to our maps
+        // Store the session
         {
-            // Add to main sessions map
-            let mut sessions_map = sessions.write().unwrap();
-            sessions_map.insert(session_id, session);
-            
-            // Add to initiator sessions map
-            let initiator_id = hex::encode(&request.peer_pubkey);
-            let mut initiator_map = initiator_sessions.write().unwrap();
-            let entry = initiator_map.entry(initiator_id).or_insert_with(HashSet::new);
-            entry.insert(session_id);
-            
-            // Add to target sessions map
-            let target_id = hex::encode(&request.target_pubkey);
-            let mut target_map = target_sessions.write().unwrap();
-            let entry = target_map.entry(target_id).or_insert_with(HashSet::new);
-            entry.insert(session_id);
+            let mut sessions_write = sessions.write().unwrap();
+            sessions_write.insert(session_id, session.clone());
         }
         
-        // Update stats
+        // Update initiator sessions map
+        {
+            let mut initiator_map = initiator_sessions.write().unwrap();
+            initiator_map
+                .entry(initiator_pubkey_hex.clone())
+                .or_insert_with(HashSet::new)
+                .insert(session_id);
+        }
+        
+        // Update target sessions map
+        let target_pubkey_hex = hex::encode(&request.target_pubkey);
+        {
+            let mut target_map = target_sessions.write().unwrap();
+            target_map
+                .entry(target_pubkey_hex.clone())
+                .or_insert_with(HashSet::new)
+                .insert(session_id);
+        }
+        
+        // Update session with initiator address
+        {
+            let mut sessions_write = sessions.write().unwrap();
+            if let Some(session) = sessions_write.get_mut(&session_id) {
+                session.update_initiator_addr(src_addr);
+            }
+        }
+        
+        // Update stats for successful connections
         {
             let mut stats = stats.write().unwrap();
             stats.successful_connections += 1;
-            stats.active_sessions = {
-                let sessions_map = sessions.read().unwrap();
-                sessions_map.len()
-            };
-            
-            // Update active clients count
-            let initiator_map = initiator_sessions.read().unwrap();
-            stats.active_clients = initiator_map.len();
+            stats.active_sessions = sessions.read().unwrap().len();
         }
         
-        // Send success response with the session ID
+        // Create and send the success response
         let response = ConnectionResponse::success(request.nonce, session_id);
         Self::send_response(socket, response, src_addr)?;
+        debug!("Created new relay session {} for {} -> {}", session_id, initiator_pubkey_hex, target_pubkey_hex);
         
         Ok(())
     }
@@ -1455,6 +1585,167 @@ impl RelayNode {
         }
         
         count
+    }
+    
+    /// Check IP-based connection rate limit
+    fn check_ip_connection_rate_limit(
+        ip_connection_attempts: &Arc<RwLock<HashMap<String, Vec<Instant>>>>,
+        src_addr: &SocketAddr,
+        limits: &ResourceLimits
+    ) -> bool {
+        let ip = src_addr.ip().to_string();
+        let now = Instant::now();
+        let mut result = true;
+        
+        // Update the attempts map
+        {
+            let mut attempts_map = ip_connection_attempts.write().unwrap();
+            
+            // Get or create the entry for this IP
+            let attempts = attempts_map.entry(ip.clone()).or_insert_with(Vec::new);
+            
+            // Remove attempts older than 1 minute
+            let one_minute_ago = now - Duration::from_secs(60);
+            attempts.retain(|time| *time > one_minute_ago);
+            
+            // Check if we're over the limit
+            if attempts.len() >= limits.max_connection_rate_per_ip {
+                debug!("IP {} exceeded connection rate limit ({} attempts in last minute)", 
+                       ip, attempts.len());
+                
+                // Log suspicious activity if significantly over the limit
+                if attempts.len() >= limits.max_connection_rate_per_ip * 2 {
+                    warn!("SECURITY: Possible DoS attempt from IP {}: {} connection attempts in 1 minute", 
+                          ip, attempts.len());
+                }
+                
+                result = false;
+            }
+            
+            // Record this attempt regardless of whether we're over the limit
+            attempts.push(now);
+            
+            // Prevent memory growth by capping the number of IPs we track
+            if attempts_map.len() > 10000 {
+                warn!("SECURITY: IP tracking map has grown too large ({} entries), clearing oldest entries", 
+                     attempts_map.len());
+                
+                // Get IPs with no recent activity
+                let inactive_ips: Vec<String> = attempts_map.iter()
+                    .filter(|(_, timestamps)| {
+                        timestamps.is_empty() || 
+                        timestamps.iter().all(|t| t.elapsed() > Duration::from_secs(300))
+                    })
+                    .map(|(ip, _)| ip.clone())
+                    .collect();
+                
+                // Remove inactive IPs
+                for ip in inactive_ips {
+                    attempts_map.remove(&ip);
+                }
+                
+                // If we still have too many entries, remove the oldest ones
+                if attempts_map.len() > 5000 {
+                    // Sort IPs by most recent activity
+                    let mut ips_by_activity: Vec<(String, Instant)> = attempts_map.iter()
+                        .filter_map(|(ip, timestamps)| {
+                            timestamps.iter().max().map(|t| (ip.clone(), *t))
+                        })
+                        .collect();
+                    
+                    // Sort by oldest first
+                    ips_by_activity.sort_by(|a, b| a.1.cmp(&b.1));
+                    
+                    // Remove oldest entries to get back to a reasonable size
+                    for (ip, _) in ips_by_activity.iter().take(attempts_map.len() - 5000) {
+                        attempts_map.remove(ip);
+                    }
+                }
+            }
+        }
+        
+        result
+    }
+    
+    /// Check IP-based packet rate limit
+    fn check_ip_packet_rate_limit(
+        ip_packet_times: &Arc<RwLock<HashMap<String, Vec<Instant>>>>,
+        src_addr: &SocketAddr,
+        limits: &ResourceLimits
+    ) -> bool {
+        let ip = src_addr.ip().to_string();
+        let now = Instant::now();
+        let mut result = true;
+        
+        // Update the packet times map
+        {
+            let mut packet_times_map = ip_packet_times.write().unwrap();
+            
+            // Get or create the entry for this IP
+            let packet_times = packet_times_map.entry(ip.clone()).or_insert_with(Vec::new);
+            
+            // Remove packet times older than 1 second
+            let one_second_ago = now - Duration::from_secs(1);
+            packet_times.retain(|time| *time > one_second_ago);
+            
+            // Check if we're over the limit
+            if packet_times.len() >= limits.max_packets_per_second_per_ip {
+                debug!("IP {} exceeded packet rate limit ({} packets in last second)",
+                       ip, packet_times.len());
+                
+                // Log suspicious activity if significantly over the limit
+                if packet_times.len() >= limits.max_packets_per_second_per_ip * 2 {
+                    warn!("SECURITY: Possible flood attack from IP {}: {} packets in 1 second", 
+                          ip, packet_times.len());
+                }
+                
+                result = false;
+            }
+            
+            // Record this packet regardless of whether we're over the limit
+            packet_times.push(now);
+            
+            // Apply the same memory management as in the connection rate limiter
+            if packet_times_map.len() > 10000 {
+                // We'll use the same approach as with connection tracking to prevent memory growth
+                warn!("SECURITY: Packet tracking map has grown too large ({} entries), clearing oldest entries", 
+                      packet_times_map.len());
+                
+                // Get IPs with no recent activity
+                let inactive_ips: Vec<String> = packet_times_map.iter()
+                    .filter(|(_, timestamps)| {
+                        timestamps.is_empty() || 
+                        timestamps.iter().all(|t| t.elapsed() > Duration::from_secs(60))
+                    })
+                    .map(|(ip, _)| ip.clone())
+                    .collect();
+                
+                // Remove inactive IPs
+                for ip in inactive_ips {
+                    packet_times_map.remove(&ip);
+                }
+                
+                // If we still have too many entries, remove the oldest ones
+                if packet_times_map.len() > 5000 {
+                    // Sort IPs by most recent activity
+                    let mut ips_by_activity: Vec<(String, Instant)> = packet_times_map.iter()
+                        .filter_map(|(ip, timestamps)| {
+                            timestamps.iter().max().map(|t| (ip.clone(), *t))
+                        })
+                        .collect();
+                    
+                    // Sort by oldest first
+                    ips_by_activity.sort_by(|a, b| a.1.cmp(&b.1));
+                    
+                    // Remove oldest entries to get back to a reasonable size
+                    for (ip, _) in ips_by_activity.iter().take(packet_times_map.len() - 5000) {
+                        packet_times_map.remove(ip);
+                    }
+                }
+            }
+        }
+        
+        result
     }
 }
 
