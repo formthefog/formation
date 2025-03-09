@@ -381,6 +381,18 @@ pub struct RelayNodeInfo {
     
     /// Protocol version supported
     pub protocol_version: u16,
+    
+    /// Connection success rate (0-100, where 100 is perfect reliability)
+    #[serde(default)]
+    pub reliability: u8,
+    
+    /// Last connection success/failure timestamp
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_result_time: Option<u64>,
+    
+    /// Last measured packet loss percentage (0-100)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub packet_loss: Option<u8>,
 }
 
 impl RelayNodeInfo {
@@ -395,6 +407,9 @@ impl RelayNodeInfo {
             latency: None,
             max_sessions,
             protocol_version: 1, // Current version
+            reliability: 100, // Start with perfect reliability until proven otherwise
+            last_result_time: None,
+            packet_loss: None,
         }
     }
     
@@ -424,6 +439,43 @@ impl RelayNodeInfo {
     pub fn with_latency(mut self, latency: u32) -> Self {
         self.latency = Some(latency);
         self
+    }
+    
+    /// Update relay reliability based on connection success or failure
+    pub fn update_reliability(&mut self, success: bool) {
+        // Get current timestamp
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+            
+        // Record the time of this result
+        self.last_result_time = Some(now);
+        
+        // Update reliability with exponential weighted average
+        // (more weight to recent results, but don't change too drastically)
+        let current = self.reliability as f32;
+        let new_value = if success { 100.0 } else { 0.0 };
+        
+        // Use 80/20 weighted average (80% existing, 20% new result)
+        let updated = (current * 0.8) + (new_value * 0.2);
+        self.reliability = updated.round() as u8;
+    }
+    
+    /// Update packet loss information
+    pub fn update_packet_loss(&mut self, loss_percentage: u8) {
+        // Ensure the value is in valid range
+        let loss = loss_percentage.min(100);
+        
+        // If we already have a packet loss value, use weighted average
+        if let Some(current_loss) = self.packet_loss {
+            // 70/30 weighted average (70% existing, 30% new measurement)
+            let updated = (current_loss as f32 * 0.7) + (loss as f32 * 0.3);
+            self.packet_loss = Some(updated.round() as u8);
+        } else {
+            // First measurement
+            self.packet_loss = Some(loss);
+        }
     }
 }
 

@@ -19,16 +19,19 @@ const MAX_RELAY_AGE: Duration = Duration::from_secs(3600); // 1 hour
 const DEFAULT_REFRESH_INTERVAL: Duration = Duration::from_secs(600); // 10 minutes
 
 /// Default weight for latency in relay scoring
-const LATENCY_WEIGHT: f32 = 0.4;
+const LATENCY_WEIGHT: f32 = 0.3;
 
 /// Default weight for load in relay scoring
-const LOAD_WEIGHT: f32 = 0.3;
+const LOAD_WEIGHT: f32 = 0.2;
 
 /// Default weight for capabilities in relay scoring
-const CAPABILITIES_WEIGHT: f32 = 0.2;
+const CAPABILITIES_WEIGHT: f32 = 0.1;
 
 /// Default weight for region proximity in relay scoring
 const REGION_WEIGHT: f32 = 0.1;
+
+/// Default weight for reliability in relay scoring
+const RELIABILITY_WEIGHT: f32 = 0.3;
 
 /// Default high latency threshold (ms) for scoring
 const HIGH_LATENCY_THRESHOLD: u32 = 200;
@@ -490,6 +493,18 @@ impl RelayRegistry {
                     score += REGION_WEIGHT * 0.5;
                 }
             }
+        }
+        
+        // Score based on reliability (higher is better)
+        let reliability_score = relay.reliability as f32 / 100.0;
+        score += reliability_score * RELIABILITY_WEIGHT;
+        
+        // Apply penalty for packet loss if available
+        if let Some(packet_loss) = relay.packet_loss {
+            // Packet loss penalizes the score proportionally
+            // A loss of 0% doesn't change anything, a loss of 100% would zero out the score
+            let packet_loss_factor = 1.0 - (packet_loss as f32 / 100.0);
+            score *= packet_loss_factor;
         }
 
         score

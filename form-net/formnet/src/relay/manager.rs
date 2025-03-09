@@ -362,21 +362,56 @@ impl CacheIntegration {
     }
     
     /// Record a successful relay connection
-    pub fn record_relay_success(&self, pubkey: &str, relay_endpoint: Endpoint, _relay_pubkey: [u8; 32], _session_id: u64) {
-        // Record the success in the connection cache
+    pub fn record_relay_success(&self, pubkey: &str, relay_endpoint: Endpoint, relay_pubkey: [u8; 32], session_id: u64) {
+        // First, update the relay node's reliability in the registry if available
+        if let Some(ref relay_manager) = self.relay_manager {
+            let pubkey_hex = hex::encode(&relay_pubkey);
+            
+            // Use update_relay method to modify the relay info
+            if let Err(e) = relay_manager.relay_registry.update_relay(&relay_pubkey, |relay_info| {
+                // Update the reliability metric
+                relay_info.update_reliability(true);
+                
+                // We can't get latency from the endpoint type directly
+                // If latency measurement is needed in the future, it would need to be passed separately
+                
+                log::info!("Updated reliability for relay {}: {}", 
+                    pubkey_hex, relay_info.reliability);
+            }) {
+                log::warn!("Failed to update relay reliability: {}", e);
+            }
+        }
+        
+        // Then update the connection cache
         if let Ok(mut connection_cache) = connection_cache::ConnectionCache::open_or_create(
             &Path::new(&self.data_dir).join("cache"), 
             &self.interface
         ) {
-            // Record the success - assume zero latency since we don't measure it
+            // Record the success but mark the endpoint as relayed
             connection_cache.record_success(pubkey, relay_endpoint);
             
             // Save the cache
-            if let Err(e) = connection_cache.save(
-                &Path::new(&self.data_dir).join("cache"), 
-                &self.interface
-            ) {
+            if let Err(e) = connection_cache.save(&Path::new(&self.data_dir).join("cache"), &self.interface) {
                 log::warn!("Failed to save connection cache: {}", e);
+            }
+        }
+    }
+    
+    /// Record a relay connection failure
+    pub fn record_relay_failure(&self, relay_pubkey: [u8; 32]) {
+        // Update the relay node's reliability in the registry if available
+        if let Some(ref relay_manager) = self.relay_manager {
+            let pubkey_hex = hex::encode(&relay_pubkey);
+            
+            // Use update_relay method to modify the relay info
+            if let Err(e) = relay_manager.relay_registry.update_relay(&relay_pubkey, |relay_info| {
+                // Update the reliability metric
+                relay_info.update_reliability(false);
+                
+                log::info!("Updated reliability for relay {} after failure: {}", 
+                    pubkey_hex, relay_info.reliability);
+            }) {
+                log::warn!("Failed to update relay reliability after failure: {}", e);
             }
         }
     }

@@ -638,22 +638,34 @@ impl RelayNode {
     
     /// Get relay node information
     pub fn get_node_info(&self) -> RelayNodeInfo {
-        let stats = self.stats.read().unwrap();
-        let load = std::cmp::min(
-            ((stats.active_sessions as f32 / self.config.limits.max_total_sessions as f32) * 100.0) as u8,
-            100
-        );
-        
-        RelayNodeInfo {
+        let mut node_info = RelayNodeInfo {
             pubkey: self.config.pubkey,
             endpoints: vec![self.config.listen_addr.to_string()],
             region: self.config.region.clone(),
             capabilities: self.config.capabilities,
-            load,
-            latency: None, // We don't know our latency from the client perspective
+            load: {
+                let sessions = self.sessions.read().unwrap();
+                let load_percentage = (sessions.len() as f32 / self.config.limits.max_total_sessions as f32) * 100.0;
+                load_percentage.min(100.0) as u8
+            },
+            latency: None, // No latency measurement for a node reporting about itself
             max_sessions: self.config.limits.max_total_sessions as u32,
             protocol_version: 1, // Current protocol version
+            reliability: 100, // Default to full reliability
+            last_result_time: None,
+            packet_loss: None,
+        };
+        
+        // Update with real stats if available
+        let stats = self.stats.read().unwrap();
+        if stats.active_sessions > 0 {
+            // Calculate actual load based on stats
+            let active_sessions = stats.active_sessions as u8;
+            let max_sessions = self.config.limits.max_total_sessions.min(255) as u8;
+            node_info.load = (active_sessions as f32 / max_sessions as f32 * 100.0) as u8;
         }
+        
+        node_info
     }
     
     /// Get current statistics
@@ -1271,6 +1283,9 @@ impl RelayNode {
             latency: None,
             max_sessions: config.limits.max_total_sessions as u32,
             protocol_version: 1,
+            reliability: 100,
+            last_result_time: None,
+            packet_loss: None,
         };
         
         drop(stats_guard);

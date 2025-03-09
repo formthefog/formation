@@ -161,58 +161,84 @@ impl<'a, T: Display + Clone + PartialEq> RelayNatTraverse<'a, T> {
     }
     
     /// Attempt to connect to a peer through relays
-    async fn try_relay_connections(&mut self, peer: &Peer<T>, relays: Vec<RelayNodeInfo>) -> Result<(), Error> {
+    async fn try_relay_connections(&mut self, peer: &Peer<T>, mut relays: Vec<RelayNodeInfo>) -> Result<(), Error> {
         info!("Attempting relay connection for peer {}", peer.name);
         
         // Use get_relay_manager method instead of directly accessing the field
         if let Some(relay_manager) = self.cache_integration.get_relay_manager() {
+            // Sort relays by reliability first (higher reliability first)
+            relays.sort_by(|a, b| b.reliability.cmp(&a.reliability));
+            
+            info!("Selected {} relays for peer {}, sorted by reliability", relays.len(), peer.name);
+            
+            // Convert the string public key to byte array once
+            let pubkey_bytes = match hex::decode(&peer.public_key) {
+                Ok(bytes) => {
+                    if bytes.len() != 32 {
+                        warn!("Invalid public key length for {}: {}", peer.name, bytes.len());
+                        return Ok(());
+                    }
+                    let mut array = [0u8; 32];
+                    array.copy_from_slice(&bytes);
+                    array
+                },
+                Err(e) => {
+                    warn!("Failed to decode public key for {}: {}", peer.name, e);
+                    return Ok(());
+                }
+            };
+            
             // Try to connect through each relay until we succeed
             for relay in relays {
-                // Convert the string public key to byte array
-                let pubkey_bytes = match hex::decode(&peer.public_key) {
-                    Ok(bytes) => {
-                        if bytes.len() != 32 {
-                            warn!("Invalid public key length for {}: {}", peer.name, bytes.len());
-                            continue;
-                        }
-                        let mut array = [0u8; 32];
-                        array.copy_from_slice(&bytes);
-                        array
-                    },
-                    Err(e) => {
-                        warn!("Failed to decode public key for {}: {}", peer.name, e);
-                        continue;
-                    }
-                };
-                
-                match relay_manager.connect_via_relay(
+                info!("Trying relay {} (reliability: {}) for peer {}", 
+                      hex::encode(&relay.pubkey), relay.reliability, peer.name);
+                      
+                // No need to track connection start time since we can't measure latency directly
+                let connection_result = relay_manager.connect_via_relay(
                     &pubkey_bytes,
                     0, // No specific capabilities required
-                    None, // No preferred region
-                ).await {
+                    relay.region.as_deref()
+                ).await;
+                
+                match connection_result {
                     Ok(session_id) => {
-                        info!("Successfully connected to {} via relay, session ID: {}", 
-                            peer.name, session_id);
-                            
-                        // Mark the peer as connected in our tracking
+                        // Record success
+                        info!("Successfully connected to {} through relay {} (session {})",
+                              peer.name, hex::encode(&relay.pubkey), session_id);
+                              
+                        // Create a relay endpoint for caching
+                        if let Some(endpoint) = CacheIntegration::create_relay_endpoint(&relay) {
+                            self.cache_integration.record_relay_success(
+                                &peer.public_key, 
+                                endpoint, 
+                                relay.pubkey, 
+                                session_id
+                            );
+                        }
+                        
+                        // Mark this peer as connected
                         self.mark_connected(&peer.public_key);
-                            
-                        // Reset direct attempts for this peer since we've connected
-                        self.direct_attempts.remove(&peer.public_key);
                         
-                        // Remove from remaining peers by forcing another NatTraverse refresh
-                        // This will trigger another full step to refresh the remaining peers
-                        self.nat_traverse.step()?;
-                        
+                        // Return after first successful connection
                         return Ok(());
                     },
                     Err(e) => {
-                        warn!("Failed to connect to {} via relay {}: {}", 
-                             peer.name, hex::encode(&relay.pubkey[0..8]), e);
-                        // Continue to next relay
+                        // Record failure
+                        warn!("Failed to connect to {} through relay {}: {}",
+                              peer.name, hex::encode(&relay.pubkey), e);
+                              
+                        // Update relay reliability
+                        self.cache_integration.record_relay_failure(relay.pubkey);
+                        
+                        // Continue trying with next relay
+                        continue;
                     }
                 }
             }
+            
+            info!("Tried all relays for peer {}, none succeeded", peer.name);
+        } else {
+            warn!("No relay manager available");
         }
         
         Ok(())
