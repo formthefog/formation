@@ -35,7 +35,7 @@ impl NetworkLink {
             is_up: true,
         }
     }
-    
+
     /// Set the latency for this link
     fn with_latency(mut self, latency_ms: u32, jitter_percent: u8) -> Self {
         self.latency_ms = latency_ms;
@@ -129,6 +129,21 @@ impl SimulatedNetwork {
     pub fn register_endpoint(&self, addr: SocketAddr) {
         let mut queues = self.message_queues.write().unwrap();
         queues.entry(addr).or_insert_with(VecDeque::new);
+    }
+    
+    /// Remove an endpoint from the network
+    pub fn remove_endpoint(&self, addr: SocketAddr) {
+        let mut queues = self.message_queues.write().unwrap();
+        queues.remove(&addr);
+        
+        // Also remove any pending messages for this endpoint
+        for (_addr, queue) in queues.iter_mut() {
+            queue.retain(|(_, from, _)| *from != addr);
+        }
+        
+        // Remove any link configurations involving this endpoint
+        let mut links = self.links.write().unwrap();
+        links.retain(|&(src, dst), _| src != addr && dst != addr);
     }
     
     /// Send a message from one endpoint to another

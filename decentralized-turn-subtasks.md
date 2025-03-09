@@ -138,10 +138,15 @@ This document tracks the implementation progress of the decentralized TURN serve
   - Implement tests for failure cases and recovery
 
 - [x] **25. Add network simulation tests**
-  - Create NAT simulation environment
-  - Implement tests for various network conditions including latency, packet loss, and jitter
-  - Add network partition and relay failover tests
-  - Test large packet handling under challenging network conditions
+  - [x] Created NAT simulation environment
+  - [x] Implemented network_conditions.rs with simulated network capabilities
+  - [x] Added relay tests with latency, packet loss, and jitter
+  - [x] Added network partition and relay failover tests
+  - [x] Implemented high latency large packet handling tests
+  - [x] Added data throughput tests for different packet sizes and network conditions
+  - [x] Implemented direct connection tests for peer-to-peer scenarios
+  - [x] Added security and edge case tests (message flood, oversized messages, etc.)
+  - [x] Implemented scalability tests for large peer networks and concurrent connections
 
 ## Phase 8: Documentation and Deployment
 
