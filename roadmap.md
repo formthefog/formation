@@ -37,7 +37,6 @@ Address critical networking issues to improve reliability, connection speed, and
 
 **User Stories:**
 - As a user, I want peer discovery to happen within seconds, not minutes
-- As a user, I want to access the network on my IPv6-only connection
 - As a user, I want reliable reconnection if I temporarily disconnect
 - As a node operator, I want efficient NAT traversal for my nodes
 
@@ -50,11 +49,14 @@ Address critical networking issues to improve reliability, connection speed, and
 - [x] Add connection success caching for faster reconnection
 - [x] Implement smart endpoint prioritization for remote connections
 - [x] Add connection health checks and automatic retry
-- [ ] Implement IPv6 support for all networking components
-- [ ] Research and implement decentralized TURN server approach
-- [ ] Consider private wireguard mesh per org/user vs global mesh
+- [x] Research and implement decentralized TURN server approach
 - [x] Add connection quality metrics and automated retry logic
-- [ ] Create comprehensive network testing suite
+- [x] Relay tests
+- [x] Endpoint collection and prioritization tests
+- [x] Data throughput tests
+- [x] Direct connection tests
+- [x] Security and edge case tests
+- [x] Scalability tests (concurrent connections, large peer networks)
 
 ### 3. Vanity Domain Provisioning
 
@@ -193,7 +195,24 @@ Implement management control plane to enable agents and AI to manage workload li
 
 ## NICE TO HAVE
 
-### 1. Node Metrics Verifiability
+### 1. IPv6 Support for Networking Components
+
+Implement IPv6 support to ensure compatibility with modern networks and IPv6-only environments.
+
+**User Stories:**
+- As a user, I want to access the network on my IPv6-only connection
+- As an operator, I want to future-proof my network with IPv6 support
+- As a developer, I want to ensure my services work in all network environments
+
+**Implementation Tasks:**
+- [ ] Update socket binding code to support IPv6
+- [ ] Enhance endpoint collection and discovery for IPv6
+- [ ] Implement dual-stack operation where appropriate
+- [ ] Update NAT traversal logic for IPv6 networks
+- [ ] Create testing infrastructure for IPv6 verification
+- [ ] Update the relay system to support IPv6 endpoints
+
+### 2. Node Metrics Verifiability
 
 Implement cryptographic verification of reported node metrics for trust and transparency.
 
@@ -212,7 +231,7 @@ Implement cryptographic verification of reported node metrics for trust and tran
 - [ ] Design penalties for dishonest reporting
 - [ ] Build monitoring dashboard for network-wide metrics
 
-### 2. VM & Node Liveness & Availability Verifiability
+### 3. VM & Node Liveness & Availability Verifiability
 
 Implement systems to verify and prove VM and node uptime and availability.
 
@@ -253,7 +272,17 @@ Implement systems to verify and prove VM and node uptime and availability.
 - [ ] Implement guest OS metrics validation through TPM
 - [ ] Create secure reporting channel from guest to verification service
 
-### 3. Eventually Consistent State Root & Message Queue Verifiability
+### 3. Private Wireguard Mesh Networks
+
+**Implementation Tasks:**
+- [ ] Design architecture for per-organization or per-user mesh networks
+- [ ] Implement network isolation between different mesh networks
+- [ ] Create resource sharing mechanisms across mesh boundaries
+- [ ] Build network policy framework for cross-mesh communication
+- [ ] Implement management tools for private mesh networks
+- [ ] Design authentication and authorization for mesh access
+
+### 4. Eventually Consistent State Root & Message Queue Verifiability
 
 **Implementation Tasks:**
 - [ ] Design state root calculation protocol
@@ -262,7 +291,7 @@ Implement systems to verify and prove VM and node uptime and availability.
 - [ ] Build reconciliation mechanism for state inconsistencies
 - [ ] Implement optimistic verification with challenge periods
 
-### 4. Operator Registration and Staking
+### 5. Operator Registration and Staking
 
 **Implementation Tasks:**
 - [ ] Design operator staking mechanism
