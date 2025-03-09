@@ -145,17 +145,17 @@ This document tracks the implementation progress of the decentralized TURN serve
 
 ## Phase 8: Documentation and Deployment
 
-- [ ] **26. Add comprehensive documentation**
-  - Document all relay components and APIs
-  - Create usage examples and guides
-  - Add diagram of relay architecture
+- [x] **26. Add comprehensive documentation**
+  - Document all relay components and APIs with detailed README
+  - Create usage examples and guides based on actual implementation
+  - Add architecture diagram with component interactions
 
-- [ ] **27. Prepare for deployment**
+- [x] **27. Prepare for deployment**
   - Finalize configuration options
   - Create deployment documentation
   - Implement monitoring for production use
 
-- [ ] **28. Final system testing**
+- [x] **28. Final system testing**
   - Perform end-to-end testing in real-world scenarios
   - Verify performance metrics
   - Confirm security measures are effective 
