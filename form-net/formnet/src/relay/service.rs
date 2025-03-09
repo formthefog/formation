@@ -2137,6 +2137,8 @@ pub type RelayService = RelayNode;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::relay::{BootstrapConfig, RelayRegistry};
+    use std::{collections::HashMap, time::{Duration, Instant, SystemTime}};
     use std::net::{IpAddr, Ipv4Addr};
     
     /// Create a test configuration for the relay
@@ -2348,5 +2350,275 @@ mod tests {
         // Verify it's gone
         let removed_session = relay.get_session(session_id);
         assert!(removed_session.is_none(), "Session should be removed");
+    }
+    
+    #[test]
+    fn test_background_discovery() {
+        use super::*;
+        use std::thread;
+        use std::sync::atomic::Ordering;
+        
+        // Create a test registry
+        let registry = Arc::new(RwLock::new(RelayRegistry::new()));
+        
+        // Set up bootstrap config with some test relays
+        let mut bootstrap_config = BootstrapConfig::new();
+        bootstrap_config.add_relay(
+            "127.0.0.1:8080".to_string(),
+            "0101010101010101010101010101010101010101010101010101010101010101".to_string(),
+            Some("test-region".to_string())
+        );
+        
+        // Set the bootstrap config in the registry
+        registry.write().unwrap().set_bootstrap_config(bootstrap_config);
+        
+        // Create a relay node config with background discovery enabled
+        // Use a very short interval for testing
+        let mut config = create_test_config();
+        config = config.with_relay_registry(registry.clone())
+                      .with_background_discovery(true, Some(Duration::from_millis(100)));
+        
+        // Create and start the relay node
+        let mut relay_node = RelayNode::new(config);
+        
+        // Start the service, which should start background discovery
+        relay_node.start().unwrap();
+        
+        // Wait a bit to allow discovery to run
+        thread::sleep(Duration::from_millis(250)); // Should allow for at least 2 discovery cycles
+        
+        // Verify the discovery handle exists
+        assert!(relay_node.discovery_handle.is_some(), "Discovery thread should be running");
+        
+        // Check that the shutdown signal is initialized
+        assert!(relay_node.discovery_shutdown.is_some(), "Shutdown signal should be initialized");
+        
+        // Now disable background discovery
+        relay_node.set_background_discovery(false, None).unwrap();
+        
+        // Verify the discovery thread is shut down
+        thread::sleep(Duration::from_millis(100)); // Give it time to shut down
+        assert!(relay_node.discovery_handle.is_none(), "Discovery thread should be shut down after disabling");
+        
+        // Now test with a modified registry to verify the refresh functionality
+        let registry = Arc::new(RwLock::new(RelayRegistry::new()));
+        
+        // Set up bootstrap config with some test relays
+        let mut bootstrap_config = BootstrapConfig::new();
+        bootstrap_config.add_relay(
+            "127.0.0.1:8080".to_string(),
+            "0101010101010101010101010101010101010101010101010101010101010101".to_string(),
+            Some("test-region".to_string())
+        );
+        
+        // Make a modified registry that tracks refresh calls
+        let refresh_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let refresh_count_clone = refresh_count.clone();
+        
+        // Implement a registry with a modified bootstrap method to track calls
+        #[derive(Clone)]
+        struct TestRegistry {
+            inner: RelayRegistry,
+            refresh_count: Arc<std::sync::atomic::AtomicUsize>,
+        }
+        
+        impl TestRegistry {
+            fn new(registry: RelayRegistry, counter: Arc<std::sync::atomic::AtomicUsize>) -> Self {
+                Self {
+                    inner: registry,
+                    refresh_count: counter,
+                }
+            }
+            
+            fn refresh_from_bootstrap(&mut self) -> Result<usize> {
+                // Increment the counter
+                self.refresh_count.fetch_add(1, Ordering::SeqCst);
+                
+                // Call the real implementation
+                self.inner.refresh_from_bootstrap()
+            }
+            
+            fn set_bootstrap_config(&mut self, config: BootstrapConfig) {
+                self.inner.set_bootstrap_config(config);
+            }
+            
+            fn prune(&mut self) {
+                self.inner.prune();
+            }
+        }
+        
+        let mut test_registry = TestRegistry::new(RelayRegistry::new(), refresh_count_clone);
+        test_registry.set_bootstrap_config(bootstrap_config);
+        
+        // Create a custom lock for the test registry
+        struct TestRegistryLock {
+            registry: std::sync::Mutex<TestRegistry>,
+            refresh_count: Arc<std::sync::atomic::AtomicUsize>,
+        }
+        
+        impl TestRegistryLock {
+            fn new(registry: TestRegistry) -> Self {
+                let refresh_count = registry.refresh_count.clone();
+                Self {
+                    registry: std::sync::Mutex::new(registry),
+                    refresh_count,
+                }
+            }
+            
+            fn write(&self) -> Result<std::sync::MutexGuard<TestRegistry>> {
+                self.registry.lock().map_err(|_| RelayError::Protocol("Lock error".into()))
+            }
+        }
+        
+        let test_registry_lock = Arc::new(TestRegistryLock::new(test_registry));
+        
+        // Now create a relay node with our test registry
+        struct TestRelayNode {
+            inner: RelayNode,
+            registry: Arc<TestRegistryLock>,
+        }
+        
+        impl TestRelayNode {
+            fn new(config: RelayConfig, registry: Arc<TestRegistryLock>) -> Self {
+                let mut node = RelayNode::new(config);
+                
+                // We need to provide a registry for the background discovery
+                // This is a bit of a hack, but we'll replace the registry after creation
+                node.config.relay_registry = Some(Arc::new(RwLock::new(RelayRegistry::new())));
+                
+                Self {
+                    inner: node,
+                    registry: registry,
+                }
+            }
+            
+            fn start_test_discovery(&mut self) -> Result<()> {
+                // Only start if enabled and not already running
+                if !self.inner.config.enable_background_discovery || self.inner.discovery_handle.is_some() {
+                    return Ok(());
+                }
+                
+                info!("Starting test background relay discovery");
+                
+                // Create a shutdown signal
+                let shutdown = Arc::new(AtomicBool::new(false));
+                self.inner.discovery_shutdown = Some(shutdown.clone());
+                
+                // Get a clone of the registry and discovery interval
+                let registry = self.registry.clone();
+                let interval = self.inner.config.discovery_interval;
+                
+                // Start the discovery thread
+                let handle = std::thread::spawn(move || {
+                    let mut last_discovery = Instant::now();
+                    
+                    loop {
+                        // Check if we need to shut down
+                        if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+                            debug!("Background discovery task shutting down");
+                            break;
+                        }
+                        
+                        // Check if it's time to refresh
+                        if last_discovery.elapsed() >= interval {
+                            debug!("Performing background relay discovery");
+                            
+                            // Attempt to refresh the registry
+                            let refresh_result = registry.write().map(|mut reg| {
+                                reg.refresh_from_bootstrap()
+                            }).unwrap_or_else(|e| Err(e));
+                            
+                            match refresh_result {
+                                Ok(count) => {
+                                    if count > 0 {
+                                        info!("Background discovery found {} new relays", count);
+                                    } else {
+                                        debug!("Background discovery completed, no new relays found");
+                                    }
+                                },
+                                Err(e) => {
+                                    warn!("Error during background relay discovery: {}", e);
+                                }
+                            }
+                            
+                            // Prune old entries
+                            if let Ok(mut reg) = registry.write() {
+                                reg.prune();
+                            }
+                            
+                            last_discovery = Instant::now();
+                        }
+                        
+                        // Sleep a bit to avoid busy-waiting
+                        std::thread::sleep(Duration::from_millis(10)); // Shorter sleep for testing
+                    }
+                });
+                
+                self.inner.discovery_handle = Some(handle);
+                Ok(())
+            }
+            
+            fn stop(&mut self) {
+                self.inner.stop();
+            }
+            
+            fn set_background_discovery(&mut self, enabled: bool, interval: Option<Duration>) -> Result<()> {
+                // Update config
+                self.inner.config.enable_background_discovery = enabled;
+                if let Some(i) = interval {
+                    self.inner.config.discovery_interval = i;
+                }
+                
+                // If we're turning discovery off and it's running, stop it
+                if !enabled && self.inner.discovery_handle.is_some() {
+                    // Set shutdown signal
+                    if let Some(signal) = &self.inner.discovery_shutdown {
+                        signal.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    
+                    // Join the thread if possible
+                    if let Some(handle) = self.inner.discovery_handle.take() {
+                        let _ = handle.join();
+                    }
+                    
+                    // Clear shutdown signal
+                    self.inner.discovery_shutdown = None;
+                }
+                
+                // If we're turning discovery on and it's not running, start it
+                if enabled && self.inner.discovery_handle.is_none() {
+                    self.start_test_discovery()?;
+                }
+                
+                Ok(())
+            }
+        }
+        
+        // Create the test relay node
+        let mut config = create_test_config();
+        config = config.with_background_discovery(true, Some(Duration::from_millis(50))); // Very short interval
+        
+        let mut test_node = TestRelayNode::new(config, test_registry_lock);
+        
+        // Start the discovery
+        test_node.start_test_discovery().unwrap();
+        
+        // Wait for discovery to run several times
+        thread::sleep(Duration::from_millis(250)); // Should be enough for ~5 discovery cycles
+        
+        // Check that refresh was called at least 3 times
+        let refresh_calls = refresh_count.load(Ordering::SeqCst);
+        assert!(refresh_calls >= 3, "Refresh should have been called at least 3 times, was called {} times", refresh_calls);
+        
+        // Stop the test node
+        test_node.set_background_discovery(false, None).unwrap();
+        
+        // Verify the counter doesn't keep increasing
+        let refresh_calls_before = refresh_count.load(Ordering::SeqCst);
+        thread::sleep(Duration::from_millis(250));
+        let refresh_calls_after = refresh_count.load(Ordering::SeqCst);
+        
+        assert_eq!(refresh_calls_before, refresh_calls_after, 
+                  "Refresh count should not increase after discovery is disabled");
     }
 } 

@@ -29,6 +29,7 @@ use once_cell::sync::Lazy;
 use std::net::{UdpSocket, SocketAddr};
 use std::time::Duration;
 use log::{info, debug};
+use serde_json;
 
 // Global flag to track if relay functionality should be enabled
 static RELAY_ENABLED: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
@@ -164,8 +165,14 @@ pub enum RelayError {
     Io(#[from] std::io::Error),
     
     /// Serialization error
+    /// Note: We prefer serde_json for serialization due to its reliability,
+    /// but bincode is kept for backward compatibility
     #[error("Serialization error: {0}")]
     Serialization(#[from] bincode::Error),
+    
+    /// JSON serialization error
+    #[error("JSON serialization error: {0}")]
+    JsonSerialization(#[from] serde_json::Error),
     
     /// Protocol error
     #[error("Protocol error: {0}")]
