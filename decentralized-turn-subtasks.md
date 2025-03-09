@@ -108,22 +108,22 @@ This document tracks the implementation progress of the decentralized TURN serve
   - Add rate limiting for relay requests
   - Implement authentication for relay control messages
 
-## Phase 6: CLI and Configuration
+## Phase 6: Automatic Relay Management and Monitoring
 
-- [ ] **20. Add CLI commands for relay management**
-  - Implement ListRelays command
-  - Add StartRelay command with configuration options
-  - Create AddBootstrapRelay command
+- [x] **20. Enhance automatic relay selection and fallback**
+  - Improve relay selection algorithm to consider reliability metrics
+  - Sort relays by reliability for faster connection establishment
+  - Add reliability tracking with weighted averaging for stability
 
-- [ ] **21. Implement relay configuration storage**
-  - Create configuration file for relay settings
-  - Add methods to load/save relay configuration
-  - Implement configuration validation
+- [ ] **21. Implement smart relay configuration**
+  - Add automatic configuration persistence
+  - Implement background relay discovery and registration
+  - Create adaptive timeout settings based on network conditions
 
-- [ ] **22. Add relay status reporting**
-  - Create command to show relay statistics
-  - Implement relay performance monitoring
-  - Add logging for relay events and status changes
+- [ ] **22. Add relay telemetry and observability**
+  - Implement transparent performance monitoring
+  - Add detailed logging for diagnostic purposes
+  - Create relay health metrics for system administrators
 
 ## Phase 7: Testing and Refinement
 
