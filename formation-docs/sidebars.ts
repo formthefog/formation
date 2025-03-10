@@ -113,6 +113,7 @@ const sidebars: SidebarsConfig = {
             'developer/guides/writing-formfiles',
             'developer/guides/managing-instances',
             'developer/guides/networking',
+            'developer/guides/domain-configuration',
             'developer/guides/using-form-kit',
             'developer/guides/using-ethereum-wallets',
             'developer/guides/troubleshooting',
@@ -165,7 +166,9 @@ const sidebars: SidebarsConfig = {
         title: 'Architecture Documentation',
         slug: '/architecture',
       },
-      items: [],
+      items: [
+        'architecture/dns-architecture',
+      ],
     },
     {
       type: 'category',

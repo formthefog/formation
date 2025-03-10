@@ -10,7 +10,7 @@ use trust_dns_proto::rr::{
     RecordType, RData, Record, RecordSet, LowerName, Name
 };
 use trust_dns_server::authority::LookupObject;
-use crate::store::{FormDnsRecord, SharedStore};
+use crate::store::{FormDnsRecord, SharedStore, VerificationStatus};
 use anyhow::Result;
 use trust_dns_client::client::ClientHandle;
 
@@ -219,14 +219,16 @@ impl FormAuthority {
                                 } else {
                                     vec![]
                                 },
-                                public_ip: if !v4.octets()[0] == 10 {
+                                public_ip: if v4.octets()[0] != 10 {
                                     vec![SocketAddr::V4(SocketAddrV4::new(v4.into(), 80))]
                                 } else {
                                     vec![]
                                 },
                                 cname_target: None,
-                                ssl_cert: true,
-                                ttl: 0
+                                ssl_cert: false,
+                                ttl: 3600,
+                                verification_status: Some(VerificationStatus::NotVerified),
+                                verification_timestamp: None,
                             };
                             store_guard.insert(&domain, record).await;
                             changed = true;
@@ -241,7 +243,7 @@ impl FormAuthority {
                                 } else { 
                                     record.formnet_ip.clone()
                                 },
-                                public_ip: if !v4.octets()[0] == 10 {
+                                public_ip: if v4.octets()[0] != 10 {
                                     record.public_ip.push(SocketAddr::V4(SocketAddrV4::new(v4.into(), 80)));
                                     record.public_ip.clone()
                                 } else {
@@ -261,14 +263,16 @@ impl FormAuthority {
                                 } else {
                                     vec![]
                                 },
-                                public_ip: if !v4.octets()[0] == 10 {
+                                public_ip: if v4.octets()[0] != 10 {
                                     vec![SocketAddr::V4(SocketAddrV4::new(v4.into(), 80))]
                                 } else {
                                     vec![]
                                 },
-                                ssl_cert: true,
+                                ssl_cert: false,
                                 cname_target: None,
-                                ttl
+                                ttl: 3600,
+                                verification_status: Some(VerificationStatus::NotVerified),
+                                verification_timestamp: None,
                             };
                             store_guard.insert(&domain, record).await;
                             changed = true;
@@ -286,8 +290,10 @@ impl FormAuthority {
                                 formnet_ip: vec![],
                                 public_ip: vec![SocketAddr::V6(SocketAddrV6::new(v6.into(), 80, 0, 0))],
                                 cname_target: None,
-                                ssl_cert: true,
-                                ttl: 0
+                                ssl_cert: false,
+                                ttl: 3600,
+                                verification_status: Some(VerificationStatus::NotVerified),
+                                verification_timestamp: None,
                             };
                             store_guard.insert(&domain, record).await;
                             changed = true;
@@ -313,8 +319,10 @@ impl FormAuthority {
                                 formnet_ip: vec![],
                                 public_ip: vec![SocketAddr::V6(SocketAddrV6::new(v6.into(), 80, 0, 0))],
                                 cname_target: None,
-                                ssl_cert: true,
-                                ttl
+                                ssl_cert: false,
+                                ttl: 3600,
+                                verification_status: Some(VerificationStatus::NotVerified),
+                                verification_timestamp: None,
                             };
                             store_guard.insert(&domain, record).await;
                             changed = true;
@@ -332,8 +340,10 @@ impl FormAuthority {
                                 formnet_ip: vec![],
                                 public_ip: vec![],
                                 cname_target: Some(target.0.to_string()),
-                                ssl_cert: true,
-                                ttl
+                                ssl_cert: false,
+                                ttl: 3600,
+                                verification_status: Some(VerificationStatus::NotVerified),
+                                verification_timestamp: None,
                             };
                             store_guard.insert(&domain, record).await;
                         }
@@ -354,8 +364,10 @@ impl FormAuthority {
                                 formnet_ip: vec![],
                                 public_ip: vec![],
                                 cname_target: Some(target.0.to_string()),
-                                ssl_cert: true,
-                                ttl
+                                ssl_cert: false,
+                                ttl: 3600,
+                                verification_status: Some(VerificationStatus::NotVerified),
+                                verification_timestamp: None,
                             };
                             store_guard.insert(&domain, record).await;
                             changed = true;

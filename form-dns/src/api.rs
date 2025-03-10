@@ -1,6 +1,6 @@
 use std::{collections::hash_map::Entry, net::{IpAddr, Ipv4Addr, SocketAddr}};
 
-use crate::store::{FormDnsRecord, SharedStore};
+use crate::store::{FormDnsRecord, SharedStore, VerificationResult, VerificationStatus};
 use serde::{Serialize, Deserialize};
 use axum::{extract::{Path, State}, routing::{delete, get, post}, Json, Router};
 use tokio::net::TcpListener;
@@ -14,6 +14,8 @@ pub fn build_routes(state: SharedStore) -> Router {
         .route("/record/:domain/get", get(get_record))
         .route("/record/list", get(list_records))
         .route("/server/create", post(new_server))
+        .route("/record/:domain/initiate_verification", post(initiate_verification))
+        .route("/record/:domain/check_verification", post(check_verification))
         .with_state(state)
 }
 
@@ -39,6 +41,8 @@ pub enum DomainRequest {
 pub enum DomainResponse {
     Success(Success),
     Failure(Option<String>),
+    VerificationSuccess(VerificationResult),
+    VerificationFailure(String),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -87,7 +91,9 @@ async fn create_record(
                         public_ip,
                         cname_target: None,
                         ssl_cert,
-                        ttl: 3600
+                        ttl: 3600,
+                        verification_status: Some(VerificationStatus::NotVerified),
+                        verification_timestamp: None,
                     }
                 }
                 RecordType::AAAA => {
@@ -115,7 +121,9 @@ async fn create_record(
                         public_ip,
                         cname_target: None,
                         ssl_cert,
-                        ttl: 3600
+                        ttl: 3600,
+                        verification_status: Some(VerificationStatus::NotVerified),
+                        verification_timestamp: None,
                     }
                 }
                 RecordType::CNAME => {
@@ -133,7 +141,9 @@ async fn create_record(
                         public_ip: vec![],
                         cname_target,
                         ssl_cert,
-                        ttl: 3600
+                        ttl: 3600,
+                        verification_status: Some(VerificationStatus::NotVerified),
+                        verification_timestamp: None,
                     }
                 }
                 _ => return Json(DomainResponse::Failure(Some(format!("Sorry, the record type {record_type} is not currently supported"))))
@@ -302,6 +312,44 @@ async fn new_server(
     }
 
     Json(())
+}
+
+/// Endpoint to initiate domain verification
+async fn initiate_verification(
+    State(state): State<SharedStore>,
+    Path(domain): Path<String>,
+) -> Json<DomainResponse> {
+    log::info!("Received initiate_verification request for domain: {}", domain);
+    
+    let mut store = state.write().await;
+    match store.initiate_verification(&domain).await {
+        Ok(result) => {
+            Json(DomainResponse::VerificationSuccess(result))
+        },
+        Err(err) => {
+            log::error!("Domain verification initiation failed: {}", err);
+            Json(DomainResponse::VerificationFailure(err))
+        }
+    }
+}
+
+/// Endpoint to check verification status
+async fn check_verification(
+    State(state): State<SharedStore>,
+    Path(domain): Path<String>,
+) -> Json<DomainResponse> {
+    log::info!("Received check_verification request for domain: {}", domain);
+    
+    let mut store = state.write().await;
+    match store.check_verification(&domain).await {
+        Ok(result) => {
+            Json(DomainResponse::VerificationSuccess(result))
+        },
+        Err(err) => {
+            log::error!("Domain verification check failed: {}", err);
+            Json(DomainResponse::VerificationFailure(err))
+        }
+    }
 }
 
 pub async fn serve_api(state: SharedStore) -> Result<(), Box<dyn std::error::Error>> {

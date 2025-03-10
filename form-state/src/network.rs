@@ -283,7 +283,9 @@ impl From<CrdtDnsRecord> for FormDnsRecord {
             public_ip: value.public_ip, 
             cname_target: value.cname_target, 
             ttl: value.ttl,
-            ssl_cert: value.ssl_cert
+            ssl_cert: value.ssl_cert,
+            verification_status: None,
+            verification_timestamp: None
         }
     }
 }
@@ -297,7 +299,9 @@ impl From<&CrdtDnsRecord> for FormDnsRecord {
             public_ip: value.public_ip.clone(), 
             cname_target: value.cname_target.clone(), 
             ttl: value.ttl,
-            ssl_cert: value.ssl_cert
+            ssl_cert: value.ssl_cert,
+            verification_status: None,
+            verification_timestamp: None
         }
     }
 }
