@@ -27,7 +27,7 @@
   --ifm-menu-color-active: var(--ifm-color-primary);
   --ifm-menu-link-padding-horizontal: 1rem;
 
---ifm-navbar-height: 1rem;
+--ifm-navbar-height: 3.5rem;
 }
 
 /* 🔹 Dark Mode Fixes */

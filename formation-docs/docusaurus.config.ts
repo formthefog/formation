@@ -42,8 +42,8 @@ const config: Config = {
     ],
   ],
   themeConfig: {
-    image: 'img/logo/Formation_Logo-1.png',
     navbar: {
+      hideOnScroll: true,
       title: '',
       logo: {
         alt: 'Formation Logo',
