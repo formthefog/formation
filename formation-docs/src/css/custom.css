@@ -59,6 +59,7 @@
 .theme-doc-sidebar-menu .menu__list {
   padding: 0;
   margin: 0;
+  padding-left: 20px;
 }
 
 .menu__link {
