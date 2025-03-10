@@ -1,10 +1,3 @@
-/**
- * Any CSS included here will be global. The classic template
- * bundles Infima by default. Infima is a CSS framework designed to
- * work well for content-centric websites.
- */
-
-/* You can override the default Infima variables here. */
 :root {
   /* Primary Blue */
   --ifm-color-primary: #1a365d;
@@ -14,155 +7,104 @@
   --ifm-color-primary-light: #1d3b66;
   --ifm-color-primary-lighter: #1e3e6b;
   --ifm-color-primary-lightest: #224679;
-  
-  /* Other Formation colors */
+
+  /* Additional Colors */
   --formation-deep-navy: #001F3F;
   --formation-sky-blue: #89CFFD;
-  --formation-gray: #4D4D4D;
+  --formation-gray: #333333; /* Darker for better readability in light mode */
   --formation-white: #F5F7FA;
+  --ifm-background-color: #ffffff;
+  --ifm-code-font-size: 90%;
 
-  --ifm-code-font-size: 95%;
-  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
-  
-  /* Customize the hero banner */
-  --ifm-hero-background-color: var(--formation-deep-navy);
-  --ifm-hero-text-color: var(--formation-white);
-  
-  /* Customize buttons */
-  --ifm-button-background-color: var(--ifm-color-primary);
+  /* Code Highlighting */
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.05);
+
+  /* Navbar & Menu */
   --ifm-navbar-background-color: var(--ifm-color-primary);
   --ifm-navbar-link-color: #ffffff;
   --ifm-navbar-link-hover-color: rgba(255, 255, 255, 0.8);
   --ifm-menu-color: var(--ifm-color-primary-darkest);
   --ifm-menu-color-active: var(--ifm-color-primary);
+  --ifm-menu-link-padding-horizontal: 1rem;
+
+--ifm-navbar-height: 1rem;
 }
 
-/* For readability concerns, you should choose a lighter palette in dark mode. */
+/* 🔹 Dark Mode Fixes */
 [data-theme='dark'] {
   --ifm-color-primary: #40a2ff;
   --ifm-color-primary-dark: #0975e6;
   --ifm-color-primary-darker: #0866cc;
   --ifm-color-primary-darkest: #065299;
-  
-  /* Keep the navbar dark blue with white text */
   --ifm-navbar-background-color: #1a365d;
-  --ifm-navbar-link-color: #ffffff;
-  --ifm-navbar-link-hover-color: rgba(255, 255, 255, 0.8);
-  
-  /* Fix sidebar text to be white on dark background */
   --ifm-menu-color: #ffffff;
   --ifm-menu-color-active: #40a2ff;
-  
-  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+  --ifm-background-color: #0d1117;
+  --docusaurus-highlighted-code-line-bg: rgba(255, 255, 255, 0.1);
+  --formation-gray: #c0c0c0; /* Bright text in dark mode */
 }
 
-/* Fix sidebar menu text color in dark mode */
-[data-theme='dark'] .menu__link {
-  color: #ffffff;
+/* 🔹 Sidebar Improvements */
+.theme-doc-sidebar-container {
+  padding-top: 0rem !important; /* Removes extra space at top */
 }
 
-[data-theme='dark'] .menu__link:hover {
-  color: #40a2ff;
+.theme-doc-sidebar-menu {
+  font-size: 0.8rem; /* Smaller font */
+  padding: 0.3rem;
+  margin-bottom: 0;
+  padding-bottom: 0;
 }
 
-[data-theme='dark'] .menu__link--active {
-  color: #40a2ff;
+.theme-doc-sidebar-menu .menu__list {
+  padding: 0;
+  margin: 0;
 }
 
-/* Custom styling for the hero section */
-.hero--primary {
-  background-color: var(--formation-deep-navy);
+.menu__link {
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  transition: background 0.2s ease-in-out;
+  color: inherit; /* Keeps original font color */
 }
 
-.hero__title, 
-.hero__subtitle {
-  color: var(--formation-white);
-}
-
-/* Custom styling for buttons */
-.button.button--secondary {
-  background-color: white;
-  color: var(--ifm-color-primary);
-  border: 2px solid white;
+.menu__link--active {
   font-weight: 600;
-  transition: background-color 0.2s ease;
+  background: var(--ifm-color-primary-darkest);
 }
 
-.button.button--secondary:hover {
-  background-color: rgba(255, 255, 255, 0.9);
-  color: var(--ifm-color-primary-darker);
-  border-color: white;
+.menu__link:hover {
+  background: rgba(255, 255, 255, 0.1);
 }
 
-/* Additional customizations for feature cards and spacing */
-.main-wrapper {
+/* 🔹 Fix Sidebar Scrollbar Issues */
+.theme-doc-sidebar-container,
+.menu {
   overflow-x: hidden;
-  display: flex;
-  flex-direction: column;
-  min-height: calc(100vh - 4rem);
 }
 
-/* Reduce spacing after hero section to make features more prominent */
-.hero--primary + div {
-  margin-top: -2rem;
-}
-
-/* Ensure text in buttons is readable */
-.button.button--secondary {
-  color: var(--ifm-color-primary-darker) !important;
-  font-weight: 600;
-}
-
-/* Make footer less prominent to keep focus on content */
-.footer {
-  background-color: #333333;
-  color: #ffffff;
-  padding: 2rem 0;
-}
-
-.footer a {
-  color: #ffffff;
-  opacity: 0.8;
-}
-
-.footer a:hover {
-  color: #ffffff;
-  opacity: 1;
-}
-
-/* Ensure proper spacing for content sections */
-.container {
-  padding: 0 1.5rem;
-}
-
-/* Reset the navbar to proper dimensions */
+/* 🔹 Navbar Refinements */
 .navbar {
   padding: 0 1rem;
-  box-shadow: none;
+  height: 3.5rem;
   display: flex;
   align-items: center;
-  height: 4rem;
-  background-color: var(--ifm-navbar-background-color);
+  background: var(--ifm-navbar-background-color);
+  box-shadow: none;
 }
 
 .navbar__logo {
-  height: 3.3rem;
+  height: 2.75rem;
   width: auto;
   margin-right: 1rem;
   display: flex;
   align-items: center;
 }
 
-.navbar__logo img {
-  max-height: 100%;
-  object-fit: contain;
-}
-
 .navbar__items {
-  font-size: 1.45rem;
+  font-size: 1rem;
   display: flex;
   align-items: center;
-  height: 100%;
 }
 
 .navbar__link {
@@ -170,93 +112,165 @@
   padding: 0.5rem 1rem;
   display: flex;
   align-items: center;
-  height: 100%;
   color: var(--ifm-navbar-link-color);
 }
 
 .navbar__link:hover {
   color: var(--ifm-navbar-link-hover-color);
-  text-decoration: none;
 }
 
-.navbar__brand {
-  color: var(--ifm-navbar-link-color);
-}
-
-.navbar-sidebar__brand {
-  color: var(--ifm-navbar-link-color);
-}
-
-/* Fix search icon color */
+/* 🔹 Search Bar Styling */
 .navbar__search-input {
-  color: var(--ifm-navbar-link-color);
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  color: white;
+  padding: 0.5rem 0.75rem;
 }
 
 .navbar__search-input::placeholder {
-  color: var(--ifm-navbar-link-hover-color);
+  color: rgba(255, 255, 255, 0.7);
 }
 
-/* Ensure mobile menu is accessible */
-@media (max-width: 996px) {
-  .navbar__items {
-    min-height: 4rem;
-  }
-}
-
-/* Direct approach to make the sidebar sticky */
+/* 🔹 Sidebar Sticky Position */
 @media (min-width: 997px) {
   .main-wrapper {
     display: flex;
   }
 
-  /* Target the sidebar container directly */
-  .main-wrapper > div:first-child,
-  aside.theme-doc-sidebar-container,
-  nav.theme-doc-sidebar-menu,
-  div[class*="docSidebarContainer"],
-  div[class*="docSidebar"],
-  div[class*="sidebarViewport"],
-  div[class*="sidebar"],
-  div[class*="sidebarWithHideableNavbar"],
-  div[class*="collapsedDocSidebar"] {
-    position: sticky !important;
-    top: 4rem !important;
-    height: calc(100vh - 4rem) !important;
-    max-height: calc(100vh - 4rem) !important;
-    overflow-y: auto !important;
+  .theme-doc-sidebar-container {
+    position: sticky;
+    top: 3.5rem;
+    height: calc(100vh - 3.5rem);
+    max-height: calc(100vh - 3.5rem);
+    overflow-y: auto;
   }
 }
 
-/* Link styling for dark mode */
-[data-theme='dark'] a {
-  color: #40a2ff;
+/* 🔹 Footer Optimization */
+.footer {
+  background: #222;
+  color: #fff;
+  padding: 2rem 0;
+  font-size: 0.9rem;
 }
 
-[data-theme='dark'] a:hover {
-  color: #5bb1ff;
+.footer a {
+  color: #89CFFD;
+  opacity: 0.9;
 }
 
-/* Fix menu styling in light mode */
-.menu {
-  padding: 1rem;
-  background-color: var(--ifm-background-color);
+.footer a:hover {
+  color: white;
+  opacity: 1;
 }
 
-[data-theme='dark'] .menu {
-  background-color: var(--ifm-background-color);
+/* 🔹 Hero Section */
+.hero--primary {
+  background: var(--formation-deep-navy);
+  color: var(--formation-white);
 }
 
-/* Add proper sticky positioning */
-.menu__list {
-  margin-bottom: 2rem;
+.hero__title,
+.hero__subtitle {
+  color: var(--formation-white);
 }
 
-/* Make the menu look nicer */
-.menu__link--active {
+/* 🔹 Buttons */
+.button {
   font-weight: 600;
+  border-radius: 4px;
+  padding: 0.6rem 1.2rem;
 }
 
-/* Additional fixes for the sidebar */
-.theme-doc-sidebar-menu {
-  font-size: 0.95rem;
+.button--secondary {
+  background: white;
+  color: var(--ifm-color-primary-darkest);
+  border: 2px solid white;
+}
+
+.button--secondary:hover {
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--ifm-color-primary-darker);
+}
+
+/* 🔹 Content Layout */
+.container {
+  padding: 0 1.5rem;
+  max-width: 1200px;
+}
+
+article {
+  line-height: 1.6;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-weight: 600;
+  margin-top: 1.5rem;
+  margin-bottom: 1rem;
+}
+
+p {
+  font-size: 1rem;
+  color: var(--formation-gray); /* Darker for light mode, brighter for dark mode */
+  margin-bottom: 1rem;
+}
+
+code {
+  background: rgba(0, 0, 0, 0.05);
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+  font-size: 90%;
+}
+
+/* 🔹 Improve Lists */
+ul {
+  padding-left: 1.5rem;
+}
+
+ul li {
+  margin-bottom: 0.5rem;
+}
+
+/* 🔹 Improve Code Blocks */
+pre {
+  border-radius: 4px;
+  padding: 1rem;
+  font-size: 0.9rem;
+  background: var(--ifm-background-color);
+}
+
+/* 🔹 Dark Mode Adjustments */
+[data-theme='dark'] pre {
+  background: #1e1e1e;
+}
+
+[data-theme='dark'] code {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* 🔹 Reduce Empty Space */
+.hero--primary + div {
+  margin-top: -2rem;
+}
+
+.markdown {
+  margin-top: -1rem;
+}
+
+/* 🔹 Remove Annoying Extra Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c0c0c0;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a0a0a0;
 }
