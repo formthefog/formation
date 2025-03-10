@@ -106,12 +106,14 @@ Once you've installed the necessary dependencies, you need to configure your For
 
 1. **Build the configuration wizard**:
    ```bash
+   git clone https://github.com/formthefog/formation
+   cd formation
    cargo build --release --bin form-config-wizard
    ```
 
 2. **Run the wizard**:
    ```bash
-   form-config-wizard
+   ./target/release/form-config-wizard
    ```
    
    This will guide you through the setup process, including:

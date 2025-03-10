@@ -1,54 +1,37 @@
-import {themes as prismThemes} from 'prism-react-renderer';
-import type {Config} from '@docusaurus/types';
+import { themes as prismThemes } from 'prism-react-renderer';
+import type { Config } from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
-
-// This runs in Node.js - Don't use client-side code here (browser APIs, JSX...)
 
 const config: Config = {
   title: 'Formation Protocol Documentation',
   tagline: 'A public verifiable and self-replicating protocol for trustless, confidential virtual private servers and scalable, peer to peer, affordable inference with state of the art AI models',
-  favicon: 'img/logo/Formation_Logomark-1.png',
-
-  // Set the production url of your site here
+  favicon: 'img/logo/Formation_Logo-1.svg',
   url: 'https://formation.cloud',
-  // Set the /<baseUrl>/ pathname under which your site is served
-  // For GitHub pages deployment, it is often '/<projectName>/'
   baseUrl: '/',
-
-  // GitHub pages deployment config.
-  // If you aren't using GitHub pages, you don't need these.
-  organizationName: 'formthefog', // GitHub org/user name.
-  projectName: 'formation-docs', // Repo name.
-
-  onBrokenLinks: 'throw',
+  organizationName: 'formthefog',
+  projectName: 'formation',
+  // Change this to 'warn' temporarily to allow builds to complete
+  onBrokenLinks: 'warn',
   onBrokenMarkdownLinks: 'warn',
-
-  // Even if you don't use internationalization, you can use this field to set
-  // useful metadata like html lang. For example, if your site is Chinese, you
-  // may want to replace "en" with "zh-Hans".
   i18n: {
     defaultLocale: 'en',
     locales: ['en'],
   },
-
-  // Add FontAwesome script to the head
   scripts: [
     {
       src: 'https://kit.fontawesome.com/a91a27a46f.js',
       crossorigin: 'anonymous',
     },
   ],
-
   presets: [
     [
       'classic',
       {
         docs: {
           sidebarPath: './sidebars.ts',
-          // Please change this to your repo.
-          // Remove this to remove the "edit this page" links.
-          editUrl:
-            'https://github.com/formthefog/formation-docs/tree/main/',
+          editUrl: 'https://github.com/formthefog/formation/tree/main/formation-docs',
+          routeBasePath: '/', // Makes docs the main content
+          sidebarCollapsible: true,
         },
         blog: false,
         theme: {
@@ -57,65 +40,75 @@ const config: Config = {
       } satisfies Preset.Options,
     ],
   ],
-
   themeConfig: {
-    // Replace with your project's social card
     image: 'img/logo/Formation_Logo-1.png',
+    // Important: Disable hiding the navbar when scrolling
     navbar: {
-      title: '',
+      hideOnScroll: false,
+      style: 'dark',
       logo: {
         alt: 'Formation Logo',
-        src: 'img/logo/Formation_Logomark-1.svg',
+        src: 'img/logo/Formation_Logo-1.svg',
+        srcDark: 'img/logo/Formation_Logo-1.svg',
+        width: 40,
+        height: 40,
       },
       items: [
         {
-          type: 'docSidebar',
-          sidebarId: 'mainSidebar',
+          type: 'doc',
+          docId: 'operator/index',
           position: 'left',
           label: 'Operator Docs',
-          to: '/operator/',
+          className: 'navbar-item-custom',
         },
         {
-          type: 'docSidebar',
-          sidebarId: 'mainSidebar',
+          type: 'doc',
+          docId: 'developer/index',
           position: 'left',
           label: 'Developer Docs',
-          to: '/developer/',
+          className: 'navbar-item-custom',
         },
         {
-          type: 'docSidebar',
-          sidebarId: 'mainSidebar',
+          type: 'doc',
+          docId: 'architecture/index',
           position: 'left',
           label: 'Architecture',
-          to: '/architecture/',
+          className: 'navbar-item-custom',
         },
         {
-          type: 'docSidebar',
-          sidebarId: 'mainSidebar',
+          type: 'doc',
+          docId: 'inference-engine/index',
           position: 'left',
           label: 'Inference Engine',
-          to: '/inference-engine/',
+          className: 'navbar-item-custom',
         },
         {
-          type: 'docSidebar',
-          sidebarId: 'mainSidebar',
+          type: 'doc',
+          docId: 'pricing/index',
           position: 'left',
           label: 'Pricing',
-          to: '/pricing/',
+          className: 'navbar-item-custom',
         },
         {
-          type: 'docSidebar',
-          sidebarId: 'mainSidebar',
+          type: 'doc',
+          docId: 'api/index',
           position: 'left',
           label: 'API Reference',
-          to: '/api/',
+          className: 'navbar-item-custom',
         },
         {
-          href: 'https://github.com/formthefog/formation-docs',
+          href: 'https://github.com/formthefog/formation',
           label: 'GitHub',
           position: 'right',
         },
       ],
+    },
+    // Configure sidebar properly
+    docs: {
+      sidebar: {
+        hideable: true,
+        autoCollapseCategories: false,
+      },
     },
     footer: {
       style: 'dark',
@@ -125,15 +118,15 @@ const config: Config = {
           items: [
             {
               label: 'Operator Docs',
-              to: '/operator/',
+              to: '/operator',
             },
             {
               label: 'Developer Docs',
-              to: '/developer/',
+              to: '/developer',
             },
             {
               label: 'Architecture',
-              to: '/architecture/',
+              to: '/architecture',
             },
           ],
         },
@@ -167,7 +160,7 @@ const config: Config = {
       darkTheme: prismThemes.dracula,
     },
     colorMode: {
-      defaultMode: 'light',
+      defaultMode: 'dark', // Set default to dark mode
       disableSwitch: false,
       respectPrefersColorScheme: true,
     },

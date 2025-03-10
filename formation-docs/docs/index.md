@@ -2,7 +2,7 @@
 id: index
 title: Formation Protocol
 sidebar_label: Introduction
-slug: /
+slug: /introduction
 ---
 
 # Formation Protocol
