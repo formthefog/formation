@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 // src/service/vmm.rs
 use std::{collections::HashMap, path::PathBuf};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use alloy_primitives::Address;
 use form_pack::formfile::Formfile;
 use form_state::datastore::InstanceRequest;
@@ -40,12 +40,16 @@ use futures::future::join_all;
 use crate::api::VmmApiChannel;
 use crate::{api::VmmApi, util::ensure_directory};
 use crate::util::add_tap_to_bridge;
-use crate::{ChError, IMAGE_DIR};
 use crate::{
     error::VmmError,
     config::create_vm_config,
     instance::config::VmInstanceConfig,
 };
+use std::io::{Cursor, Write};
+use std::convert::TryFrom;
+use std::error::Error;
+use crate::ChError;
+use crate::IMAGE_DIR;
 
 type VmmResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
 type ApiResult<T> = Result<ApiResponse<T>, Box<dyn std::error::Error + Send + Sync + 'static>>; 
@@ -877,6 +881,48 @@ Formpack for {name} doesn't exist:
                 instance.status = InstanceStatus::Started;
                 let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64; 
                 instance.updated_at = timestamp;
+                
+                // Automatic DNS Provisioning
+                log::info!("Starting automatic DNS provisioning for instance: {id}");
+                
+                // Create a vanity domain based on the build ID
+                let domain_name = format!("{}.fog", build_id);
+                log::info!("Generated vanity domain: {domain_name}");
+                
+                // Create the DNS record pointing to the instance
+                let parsed_formnet_ip = formnet_ip.parse::<IpAddr>()?;
+                let socket_addr = SocketAddr::new(parsed_formnet_ip, 22); // Default port for SSH
+                
+                // Construct request to the DNS API
+                let dns_provider = self.publisher_addr.clone().unwrap_or_else(|| "127.0.0.1".to_string());
+                let dns_endpoint = format!("http://{dns_provider}:3004/dns/{domain_name}/{build_id}/request_vanity");
+                
+                log::info!("Sending request to DNS API at: {dns_endpoint}");
+                
+                // Make the API call
+                match reqwest::Client::new()
+                    .post(&dns_endpoint)
+                    .send()
+                    .await {
+                        Ok(response) => {
+                            match response.status() {
+                                reqwest::StatusCode::OK => {
+                                    log::info!("Successfully provisioned vanity domain: {domain_name} for instance: {id}");
+                                    
+                                    // The DNS record will be stored automatically by the DNS service
+                                    // We just inform the user that the domain has been provisioned in the logs
+                                    log::info!("Instance {id} is now accessible at {domain_name}");
+                                },
+                                _ => {
+                                    let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                                    log::error!("Failed to provision vanity domain: {domain_name}. Error: {error_text}");
+                                }
+                            }
+                        },
+                        Err(e) => {
+                            log::error!("Failed to send request to DNS API for domain: {domain_name}. Error: {e}");
+                        }
+                    }
 
                 log::info!("Updating instance...");
                 let request = InstanceRequest::Update(instance);

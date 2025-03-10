@@ -287,6 +287,25 @@ ips_string.yellow(),
                 _ => {}
             }
         }
+        FormCommand::Dns(ref dns_command) => {
+            let (config, _) = load_config_and_keystore(&parser).await?;
+            let provider = config.hosts[0].clone();
+            
+            match dns_command {
+                DnsCommand::Add(add_command) => {
+                    add_command.handle_add_command(provider).await?;
+                },
+                DnsCommand::Update(update_command) => {
+                    update_command.handle_update_command(provider).await?;
+                },
+                DnsCommand::Remove(remove_command) => {
+                    remove_command.handle_remove_command(provider).await?;
+                },
+                DnsCommand::Verify(verify_command) => {
+                    verify_command.handle_verify_command(provider).await?;
+                }
+            }
+        }
         _ => {}
     }
 

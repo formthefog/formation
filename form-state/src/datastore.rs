@@ -2052,7 +2052,9 @@ async fn request_vanity(
         public_ip: vec![],
         cname_target: None,
         ssl_cert: false,
-        ttl: 3600
+        ttl: 3600,
+        verification_status: None,
+        verification_timestamp: None,
     };
 
     let request = DnsRequest::Create(dns_a_record.clone());
@@ -2197,7 +2199,9 @@ async fn request_public(
         }).collect(),
         cname_target,
         ssl_cert: false,
-        ttl: 3600
+        ttl: 3600,
+        verification_status: None,
+        verification_timestamp: None
     };
 
     let request = DnsRequest::Create(dns_a_record.clone());
@@ -2717,6 +2721,7 @@ async fn send_dns_create_request(r: DomainRequest) -> Option<Response<FormDnsRec
                 DomainResponse::Failure(reason) => {
                     return Some(Response::Failure { reason })
                 }
+                _ => unreachable!() 
             }
             Err(e) => return Some(Response::Failure { reason: Some(e.to_string())})
         }
@@ -2739,6 +2744,7 @@ async fn send_dns_update_request(r: DomainRequest, domain: &str) -> Option<Respo
                 DomainResponse::Failure(reason) => {
                     return Some(Response::Failure { reason })
                 }
+                _ => unreachable!() 
             }
             Err(e) => return Some(Response::Failure { reason: Some(e.to_string()) })
         }
@@ -2759,6 +2765,7 @@ async fn send_dns_delete_request(domain: &str) -> Response<FormDnsRecord> {
                 DomainResponse::Failure(reason) => {
                     return Response::Failure { reason }
                 }
+                _ => unreachable!() 
             }
             Err(e) => return Response::Failure { reason: Some(e.to_string()) }
         }
@@ -3897,5 +3904,3 @@ mod tests {
         Ok(())
     }
 }
-
-
