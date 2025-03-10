@@ -26,8 +26,7 @@
   --ifm-menu-color: var(--ifm-color-primary-darkest);
   --ifm-menu-color-active: var(--ifm-color-primary);
   --ifm-menu-link-padding-horizontal: 1rem;
-
---ifm-navbar-height: 3.5rem;
+  --ifm-navbar-height: 3.5rem;
 }
 
 /* 🔹 Dark Mode Fixes */
@@ -44,106 +43,106 @@
   --formation-gray: #c0c0c0; /* Bright text in dark mode */
 }
 
+/* 🔹 Fix sidebar logo duplication */
+.navbar-sidebar__brand .navbar__logo {
+  display: none; /* This removes the duplicated logo in mobile sidebar menu */
+}
+
+/* Make sure there's no logo duplication in sidebar */
+.menu > .menu__list > .menu__list-item:first-child .navbar__logo {
+  display: none;
+}
+
 /* 🔹 Sidebar Improvements */
 .theme-doc-sidebar-container {
-  padding-top: 0rem !important; /* Removes extra space at top */
+  padding-top: 0 !important; /* Removes extra space at top */
+  border-right: 1px solid var(--ifm-toc-border-color);
 }
 
 .theme-doc-sidebar-menu {
-  font-size: 0.8rem; /* Smaller font */
+  font-size: 0.85rem; /* Slightly larger font */
   padding: 0.3rem;
-  margin-bottom: 0;
-  padding-bottom: 0;
 }
 
-.theme-doc-sidebar-menu .menu__list {
-  padding: 0;
-  margin: 0;
-  padding-left: 20px;
+.menu__list {
+  margin-top: 0.5rem;
+  padding-left: 0.5rem !important;
 }
 
 .menu__link {
-  padding: 0.5rem 1rem;
+  padding: 0.5rem 0.75rem;
   border-radius: 4px;
-  transition: background 0.2s ease-in-out;
-  color: inherit; /* Keeps original font color */
+  transition: background 0.2s ease-in-out, color 0.2s ease-in-out;
 }
 
 .menu__link--active {
   font-weight: 600;
-  background: var(--ifm-color-primary-darkest);
-}
-
-.menu__link:hover {
-  background: rgba(255, 255, 255, 0.1);
-}
-
-/* 🔹 Fix Sidebar Scrollbar Issues */
-.theme-doc-sidebar-container,
-.menu {
-  overflow-x: hidden;
 }
 
 /* 🔹 Navbar Refinements */
 .navbar {
   padding: 0 1rem;
-  height: 3.5rem;
-  display: flex;
-  align-items: center;
-  background: var(--ifm-navbar-background-color);
-  box-shadow: none;
+  height: var(--ifm-navbar-height);
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.1);
 }
 
-.navbar__logo {
-  height: 2.75rem;
-  width: auto;
-  margin-right: 1rem;
-  display: flex;
-  align-items: center;
-}
-
-.navbar__items {
-  font-size: 1rem;
-  display: flex;
-  align-items: center;
-}
-
-.navbar__link {
-  font-weight: 500;
-  padding: 0.5rem 1rem;
-  display: flex;
-  align-items: center;
-  color: var(--ifm-navbar-link-color);
-}
-
-.navbar__link:hover {
-  color: var(--ifm-navbar-link-hover-color);
-}
-
-/* 🔹 Search Bar Styling */
-.navbar__search-input {
-  background: rgba(255, 255, 255, 0.1);
+/* Fix navbar item spacing and appearance */
+.navbar-item-custom {
+  margin: 0 0.25rem;
+  padding: 0.5rem 0.75rem !important;
   border-radius: 4px;
-  color: white;
-  padding: 0.5rem 0.75rem;
+  transition: background-color 0.2s;
 }
 
-.navbar__search-input::placeholder {
-  color: rgba(255, 255, 255, 0.7);
+.navbar-item-custom:hover {
+  background-color: rgba(255, 255, 255, 0.1);
 }
 
-/* 🔹 Sidebar Sticky Position */
-@media (min-width: 997px) {
-  .main-wrapper {
-    display: flex;
+/* Make sure logo is properly sized */
+.navbar__logo {
+  height: 2rem;
+  margin-right: 0.5rem;
+}
+
+.navbar__logo img {
+  height: 2rem;
+  width: auto;
+}
+
+/* 🔹 Fix sidebar spacing */
+.theme-doc-sidebar-menu .menu__list-item:not(:first-child) {
+  margin-top: 0.25rem;
+}
+
+.theme-doc-sidebar-menu .menu__list-item:last-child {
+  padding-bottom: 1rem;
+}
+
+/* 🔹 Content layout improvements */
+.container {
+  padding: 1.5rem;
+}
+
+article {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+/* 🔹 Fix mobile layout */
+@media (max-width: 996px) {
+  .navbar__items--right {
+    position: absolute;
+    right: 1rem;
   }
-
-  .theme-doc-sidebar-container {
-    position: sticky;
-    top: 3.5rem;
-    height: calc(100vh - 3.5rem);
-    max-height: calc(100vh - 3.5rem);
-    overflow-y: auto;
+  
+  /* Ensure mobile menu button is visible */
+  .navbar__toggle {
+    color: white;
+  }
+  
+  /* Better spacing in mobile menu */
+  .menu__list-item {
+    margin: 0.2rem 0;
   }
 }
 
@@ -195,15 +194,6 @@
 }
 
 /* 🔹 Content Layout */
-.container {
-  padding: 0 1.5rem;
-  max-width: 1200px;
-}
-
-article {
-  line-height: 1.6;
-}
-
 h1, h2, h3, h4, h5, h6 {
   font-weight: 600;
   margin-top: 1.5rem;
@@ -212,7 +202,7 @@ h1, h2, h3, h4, h5, h6 {
 
 p {
   font-size: 1rem;
-  color: var(--formation-gray); /* Darker for light mode, brighter for dark mode */
+  color: var(--formation-gray);
   margin-bottom: 1rem;
 }
 
@@ -249,16 +239,7 @@ pre {
   background: rgba(255, 255, 255, 0.1);
 }
 
-/* 🔹 Reduce Empty Space */
-.hero--primary + div {
-  margin-top: -2rem;
-}
-
-.markdown {
-  margin-top: -1rem;
-}
-
-/* 🔹 Remove Annoying Extra Scrollbars */
+/* 🔹 Clean scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
 }
@@ -274,4 +255,17 @@ pre {
 
 ::-webkit-scrollbar-thumb:hover {
   background: #a0a0a0;
+}
+
+/* Fixed styles for DocItem layout */
+.docPage {
+  display: flex;
+}
+
+article {
+  padding: 1rem 0;
+}
+
+.pagination-nav {
+  margin-top: 2rem;
 }

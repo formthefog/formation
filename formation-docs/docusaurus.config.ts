@@ -9,12 +9,10 @@ const config: Config = {
   url: 'https://formation.cloud',
   baseUrl: '/',
   organizationName: 'formthefog',
-  projectName: 'formation-docs',
-
+  projectName: 'formation',
   // Change this to 'warn' temporarily to allow builds to complete
   onBrokenLinks: 'warn',
   onBrokenMarkdownLinks: 'warn',
-
   i18n: {
     defaultLocale: 'en',
     locales: ['en'],
@@ -31,8 +29,9 @@ const config: Config = {
       {
         docs: {
           sidebarPath: './sidebars.ts',
-          editUrl: 'https://github.com/formthefog/formation-docs/tree/main/',
+          editUrl: 'https://github.com/formthefog/formation/tree/main/formation-docs',
           routeBasePath: '/', // Makes docs the main content
+          sidebarCollapsible: true,
         },
         blog: false,
         theme: {
@@ -42,12 +41,17 @@ const config: Config = {
     ],
   ],
   themeConfig: {
+    image: 'img/logo/Formation_Logo-1.png',
+    // Important: Disable hiding the navbar when scrolling
     navbar: {
-      hideOnScroll: true,
-      title: '',
+      hideOnScroll: false,
+      style: 'dark',
       logo: {
         alt: 'Formation Logo',
         src: 'img/logo/Formation_Logo-1.svg',
+        srcDark: 'img/logo/Formation_Logo-1.svg',
+        width: 40,
+        height: 40,
       },
       items: [
         {
@@ -55,36 +59,42 @@ const config: Config = {
           docId: 'operator/index',
           position: 'left',
           label: 'Operator Docs',
+          className: 'navbar-item-custom',
         },
         {
           type: 'doc',
           docId: 'developer/index',
           position: 'left',
           label: 'Developer Docs',
+          className: 'navbar-item-custom',
         },
         {
           type: 'doc',
           docId: 'architecture/index',
           position: 'left',
           label: 'Architecture',
+          className: 'navbar-item-custom',
         },
         {
           type: 'doc',
           docId: 'inference-engine/index',
           position: 'left',
           label: 'Inference Engine',
+          className: 'navbar-item-custom',
         },
         {
           type: 'doc',
           docId: 'pricing/index',
           position: 'left',
           label: 'Pricing',
+          className: 'navbar-item-custom',
         },
         {
           type: 'doc',
           docId: 'api/index',
           position: 'left',
           label: 'API Reference',
+          className: 'navbar-item-custom',
         },
         {
           href: 'https://github.com/formthefog/formation',
@@ -92,6 +102,13 @@ const config: Config = {
           position: 'right',
         },
       ],
+    },
+    // Configure sidebar properly
+    docs: {
+      sidebar: {
+        hideable: true,
+        autoCollapseCategories: false,
+      },
     },
     footer: {
       style: 'dark',
@@ -143,7 +160,7 @@ const config: Config = {
       darkTheme: prismThemes.dracula,
     },
     colorMode: {
-      defaultMode: 'light',
+      defaultMode: 'dark', // Set default to dark mode
       disableSwitch: false,
       respectPrefersColorScheme: true,
     },
