@@ -179,6 +179,7 @@ Implement advanced routing for seamless access to the network without requiring 
 - [x] Implement DNS-based routing with geolocation support
 - [x] Create health tracking for IP addresses
 - [x] Implement filtering of unhealthy IPs in DNS responses
+- [x] Enhance bootstrap process to use GeoDNS and health-aware DNS
 - [~] Implement BGP session management for nodes
   - [x] Create test environment with multiple virtual nodes for BGP testing
   - [ ] Evaluate and select BGP daemon

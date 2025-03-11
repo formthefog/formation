@@ -11,6 +11,14 @@ path = "src/lib.rs"
 name = "run_mock_server"
 path = "examples/run-mock-server.rs"
 
+[[example]]
+name = "bootstrap_domain"
+path = "examples/bootstrap_domain.rs"
+
+[[example]]
+name = "manage_bootstrap_nodes"
+path = "examples/manage_bootstrap_nodes.rs"
+
 [dependencies]
 trust-dns-server = { version = "0.23", features = ["dnssec"]}
 trust-dns-proto = { version = "0.23", features = ["dnssec", "openssl", "ring", "serde-config"]}

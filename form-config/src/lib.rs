@@ -25,6 +25,12 @@ pub struct OperatorConfig {
     pub address: Option<String>,
     #[clap(long="bootstrap-nodes", short='b', alias="to-dial")]
     pub bootstrap_nodes: Vec<String>,
+    #[clap(long="bootstrap-domain", short='B', aliases=["domain"])]
+    pub bootstrap_domain: Option<String>,
+    #[clap(long="is-bootstrap", short='I', help="Whether this node should serve as a bootstrap node")]
+    pub is_bootstrap_node: bool,
+    #[clap(long="region", short='R', help="Geographic region of this node (e.g., us-east, eu-west)")]
+    pub region: Option<String>,
     #[clap(long="datastore-port", short='d', default_value="3004")]
     pub datastore_port: u16,
     #[clap(long="formnet-join-port", short='j', default_value="3001")]
@@ -37,7 +43,7 @@ pub struct OperatorConfig {
     pub pack_manager_port: u16,
     #[clap(long="event-queue-port", short='e', aliases=["mempool-port", "event-pool-port", "mempool", "events"])]
     pub event_queue_port: u16,
-    #[clap(long="contract", short='e', aliases=["staking-contract", "avs-contract"])]
+    #[clap(long="contract", short='c', aliases=["staking-contract", "avs-contract"])]
     pub contract_address: Option<String>
 }
 
@@ -379,6 +385,83 @@ mod prompts {
         Ok(nodes)
     }
 
+    pub fn bootstrap_domain(theme: &ColorfulTheme) -> Result<Option<String>> {
+        println!("\n{}", "Bootstrap Domain Configuration".bold().green());
+        println!("A bootstrap domain allows you to connect to the nearest healthy bootstrap node automatically.");
+        
+        let use_domain = Confirm::with_theme(theme)
+            .with_prompt("Would you like to use a bootstrap domain for network discovery?")
+            .default(true)
+            .interact()?;
+            
+        if use_domain {
+            let domain: String = Input::with_theme(theme)
+                .with_prompt("Enter bootstrap domain")
+                .default("bootstrap.formation.cloud".to_string())
+                .interact_text()?;
+                
+            if domain.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(domain))
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn bootstrap_role(theme: &ColorfulTheme) -> Result<bool> {
+        println!("\n{}", "Bootstrap Node Role".bold().green());
+        println!("Bootstrap nodes help other nodes discover and join the network.");
+        println!("They need to be reliable and have good connectivity.");
+        
+        let is_bootstrap = Confirm::with_theme(theme)
+            .with_prompt("Should this node serve as a bootstrap node?")
+            .default(false)
+            .interact()?;
+            
+        if is_bootstrap {
+            println!("{}", "This node will be registered as a bootstrap node in the network.".bold().yellow());
+            println!("It will be added to the bootstrap domain and used by new nodes joining the network.");
+        }
+        
+        Ok(is_bootstrap)
+    }
+
+    pub fn region(theme: &ColorfulTheme) -> Result<Option<String>> {
+        println!("\n{}", "Node Region Configuration".bold().green());
+        println!("The geographic region helps optimize network connectivity.");
+        
+        let regions = vec![
+            "none",
+            "us-east", 
+            "us-west", 
+            "us-central",
+            "eu-west", 
+            "eu-central", 
+            "asia-east", 
+            "asia-southeast",
+            "custom"
+        ];
+        
+        let selection = Select::with_theme(theme)
+            .with_prompt("Select the geographic region of this node")
+            .default(0)
+            .items(&regions)
+            .interact()?;
+            
+        match selection {
+            0 => Ok(None),
+            n if n == regions.len() - 1 => {
+                let custom_region: String = Input::with_theme(theme)
+                    .with_prompt("Enter custom region")
+                    .interact_text()?;
+                Ok(Some(custom_region))
+            },
+            _ => Ok(Some(regions[selection].to_string()))
+        }
+    }
+
     pub fn service_port(theme: &ColorfulTheme, service_name: &str, default_port: u16) -> Result<u16> {
         println!("\n{}", format!("{} Port Configuration", service_name).bold().green());
         
@@ -417,7 +500,11 @@ pub fn run_config_wizard() -> Result<OperatorConfig> {
     // Handle key generation/import
     let (secret_key, mnemonic, public_key, address) = prompts::key_setup(&theme)?;
 
+    // Network configuration
     let bootstrap_nodes = prompts::bootstrap_nodes(&theme)?;
+    let bootstrap_domain = prompts::bootstrap_domain(&theme)?;
+    let is_bootstrap_node = prompts::bootstrap_role(&theme)?;
+    let region = prompts::region(&theme)?;
     
     // Service ports
     let datastore_port = prompts::service_port(&theme, "Datastore", 3004)?;
@@ -429,8 +516,8 @@ pub fn run_config_wizard() -> Result<OperatorConfig> {
     
     let contract_address = prompts::contract_address(&theme)?;
 
-    // Create and return the config
-    Ok(OperatorConfig {
+    // Create the config
+    let config = OperatorConfig {
         network_id,
         keyfile,
         secret_key,
@@ -438,6 +525,9 @@ pub fn run_config_wizard() -> Result<OperatorConfig> {
         public_key,
         address,
         bootstrap_nodes,
+        bootstrap_domain,
+        is_bootstrap_node,
+        region,
         datastore_port,
         formnet_join_server_port,
         formnet_service_port,
@@ -445,7 +535,9 @@ pub fn run_config_wizard() -> Result<OperatorConfig> {
         pack_manager_port,
         event_queue_port,
         contract_address,
-    })
+    };
+
+    Ok(config)
 }
 
 // Function to save the config while redacting sensitive information

@@ -12,6 +12,7 @@ pub mod resolve;
 pub mod api;
 pub mod relay;
 pub mod nat_relay;
+pub mod bootstrap;
 
 pub use init::*;
 pub use add_peer::*;

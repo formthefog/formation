@@ -2805,9 +2805,11 @@ dependencies = [
  "hex",
  "k256",
  "rand 0.8.5",
+ "reqwest 0.11.27",
  "scrypt",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

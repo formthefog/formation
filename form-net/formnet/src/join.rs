@@ -6,7 +6,9 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use shared::{interface_config::InterfaceConfig, wg, NetworkOpts};
 use wireguard_control::{Device, InterfaceName, KeyPair};
+use tokio::net::lookup_host;
 use crate::{api::{BootstrapInfo, JoinResponse as BootstrapResponse, Response}, fetch, report_initial_candidates, up, CONFIG_DIR, DATA_DIR, NETWORK_NAME};
+use crate::bootstrap::register_bootstrap_node;
 
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -338,31 +340,159 @@ fn build_join_request(
     }
 }
 
-pub async fn request_to_join(bootstrap: Vec<String>, address: String, peer_type: PeerType, public_ip: Option<String>) -> Result<IpAddr, Box<dyn std::error::Error>> {
-    if let Err(e) = std::fs::remove_file(PathBuf::from(DATA_DIR).join("formnet").with_extension("json")) {
-        log::error!("Pre-existing datastore did not exist: {e}"); 
-    }
-
-    if let Ok((true, Some(ip))) = check_already_joined(bootstrap.clone(), &address).await {
-        if !try_holepunch_fetch(bootstrap, ip.to_string()).await {
-            println!("initial attempt to fetch failed, you will need to call `form manage formnet-up`") 
+// New function to resolve bootstrap domains to IP addresses
+async fn resolve_bootstrap_domains(bootstrap: Vec<String>) -> Vec<String> {
+    let mut resolved_bootstrap = Vec::new();
+    
+    for bootstrap_entry in bootstrap {
+        // If the entry already contains a port or is an IP address, add it directly
+        if bootstrap_entry.contains(':') || bootstrap_entry.parse::<IpAddr>().is_ok() {
+            resolved_bootstrap.push(bootstrap_entry);
+            continue;
         }
-        return Ok(ip);
-    } 
+        
+        // Try to resolve the domain name
+        log::info!("Attempting to resolve bootstrap domain: {}", bootstrap_entry);
+        match tokio::net::lookup_host(format!("{}:51820", bootstrap_entry)).await {
+            Ok(addrs) => {
+                // Add the resolved IP addresses to the list
+                let mut found_addrs = false;
+                for addr in addrs {
+                    found_addrs = true;
+                    let ip_str = addr.ip().to_string();
+                    log::info!("Resolved {} to {}", bootstrap_entry, ip_str);
+                    resolved_bootstrap.push(ip_str);
+                }
+                
+                if !found_addrs {
+                    log::warn!("Domain '{}' resolved but returned no addresses", bootstrap_entry);
+                    // Keep the original domain in case it's resolvable by a system resolver later
+                    resolved_bootstrap.push(bootstrap_entry);
+                }
+            },
+            Err(e) => {
+                log::warn!("Failed to resolve bootstrap domain '{}': {}", bootstrap_entry, e);
+                // Keep the original domain in case it's resolvable by a system resolver later
+                resolved_bootstrap.push(bootstrap_entry);
+            }
+        }
+    }
+    
+    log::info!("Resolved bootstrap entries: {:?}", resolved_bootstrap);
+    resolved_bootstrap
+}
 
-    let bootstrap_info = try_get_bootstrap_info(bootstrap.clone()).await?;
-    log::info!("Acquired bootstrap info: {bootstrap_info:?}");
-    let keypair = KeyPair::generate();
-    log::info!("generated keypair");
-    let request = build_join_request(peer_type, keypair.clone(), address, public_ip)?;
-    log::info!("Built join request: {request:?}");
-
-    try_join_formnet(bootstrap_info, request, keypair).await
-
+// Modify request_to_join function to use domain resolution and register bootstrap nodes
+pub async fn request_to_join(
+    bootstrap: Vec<String>, 
+    address: String, 
+    peer_type: PeerType, 
+    public_ip: Option<String>,
+    is_bootstrap_node: Option<bool>,
+    region: Option<String>,
+) -> Result<IpAddr, Box<dyn std::error::Error>> {
+    // Resolve any domain names in the bootstrap list to IP addresses
+    let resolved_bootstrap = resolve_bootstrap_domains(bootstrap).await;
+    
+    // Check if we're already joined with this ID
+    let (already_joined, ip) = check_already_joined(resolved_bootstrap.clone(), &address).await?;
+    
+    if already_joined {
+        log::info!("Already joined as {address}, bringing up interface only");
+        
+        // If this is a bootstrap node, register it with the DNS service
+        if is_bootstrap_node == Some(true) {
+            if let Some(ip_addr) = ip {
+                // Try to get our public IP if not provided
+                let actual_public_ip = if let Some(public_ip_str) = public_ip {
+                    public_ip_str.parse()?
+                } else {
+                    // Try to detect public IP
+                    match publicip::get_any(publicip::Preference::Ipv4) {
+                        Some(detected_ip) => {
+                            log::info!("Detected public IP: {}", detected_ip);
+                            detected_ip
+                        },
+                        None => {
+                            log::warn!("Failed to detect public IP");
+                            // Fallback to the assigned IP (though this likely won't work for bootstrap purposes)
+                            ip_addr
+                        }
+                    }
+                };
+                
+                log::info!("Registering node as a bootstrap node with IP: {}", actual_public_ip);
+                
+                // Register the node as a bootstrap node
+                match register_bootstrap_node(&address, actual_public_ip, region.clone(), None, None).await {
+                    Ok(_) => {
+                        log::info!("Successfully registered as a bootstrap node");
+                    },
+                    Err(e) => {
+                        log::warn!("Failed to register as a bootstrap node: {}", e);
+                        // We don't want to fail the whole join process if registration fails
+                        // so we continue anyway
+                    }
+                }
+            }
+        }
+        
+        return Ok(ip.unwrap());
+    }
+    
+    // Generate a wireguard keypair
+    let keypair = wireguard_control::KeyPair::generate();
+    
+    // Retrieve bootstrap information
+    let bootstrap_info = try_get_bootstrap_info(resolved_bootstrap.clone()).await?;
+    
+    // Create join request
+    let request = build_join_request(peer_type, keypair.clone(), address.clone(), public_ip.clone())?;
+    
+    // Join the network
+    let result = try_join_formnet(bootstrap_info, request, keypair.clone()).await?;
+    log::info!("Successfully joined formnet, ip {:?}", result);
+    
+    // If this is a bootstrap node, register it with the DNS service
+    if is_bootstrap_node == Some(true) {
+        // Try to get our public IP if not provided
+        let actual_public_ip = if let Some(public_ip_str) = public_ip {
+            public_ip_str.parse()?
+        } else {
+            // Try to detect public IP
+            match publicip::get_any(publicip::Preference::Ipv4) {
+                Some(detected_ip) => {
+                    log::info!("Detected public IP: {}", detected_ip);
+                    detected_ip
+                },
+                None => {
+                    log::warn!("Failed to detect public IP");
+                    // Fallback to the assigned IP (though this likely won't work for bootstrap purposes)
+                    result
+                }
+            }
+        };
+        
+        log::info!("Registering node as a bootstrap node with IP: {}", actual_public_ip);
+        
+        // Register the node as a bootstrap node
+        match register_bootstrap_node(&address, actual_public_ip, region.clone(), None, None).await {
+            Ok(_) => {
+                log::info!("Successfully registered as a bootstrap node");
+            },
+            Err(e) => {
+                log::warn!("Failed to register as a bootstrap node: {}", e);
+                // We don't want to fail the whole join process if registration fails
+                // so we continue anyway
+            }
+        }
+    }
+    
+    Ok(result)
 }
 
 pub async fn user_join_formnet(address: String, provider: String, public_ip: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
-    request_to_join(vec![provider], address, PeerType::User, public_ip).await?;
+    request_to_join(vec![provider], address, PeerType::User, public_ip, None, None).await?;
     Ok(())
 }
 
@@ -372,7 +502,7 @@ pub async fn vm_join_formnet() -> Result<(), Box<dyn std::error::Error>> {
 
     let name = std::fs::read_to_string("/etc/vm_name")?;
     let build_id = std::fs::read_to_string("/etc/build_id")?;
-    match request_to_join(vec![host_public_ip.clone()], name.clone(), form_types::PeerType::Instance, None).await {
+    match request_to_join(vec![host_public_ip.clone()], name.clone(), form_types::PeerType::Instance, None, None, None).await {
         Ok(ip)=> {
             log::info!("Received invitation");
             let formnet_ip = ip; 

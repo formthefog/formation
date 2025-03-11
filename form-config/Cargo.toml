@@ -21,3 +21,5 @@ aes-gcm = "0.10"
 argon2 = "0.5"
 scrypt = "0.11"
 k256 = { version = "0.13", features = ["ecdsa", "ecdsa-core"]}
+reqwest = { version = "0.11", features = ["json", "blocking"] }
+tokio = { version = "1", features = ["full"] }

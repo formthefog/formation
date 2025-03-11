@@ -13,7 +13,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Get name
     let name = std::fs::read_to_string("/etc/vm_name")?;
     let build_id = std::fs::read_to_string("/etc/build_id")?;
-    match request_to_join(vec![host_public_ip.clone()], name.clone(), form_types::PeerType::Instance, None).await {
+    match request_to_join(vec![host_public_ip.clone()], name.clone(), form_types::PeerType::Instance, None, None, None).await {
         Ok(ip)=> {
             log::info!("Received invitation");
             let formnet_ip = ip; 

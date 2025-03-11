@@ -17,13 +17,14 @@ The Formation network currently uses a peer-to-peer architecture with the follow
 
 ### 1.3 Proposed Architecture with Virtual Anycast
 
-The proposed architecture will combine DNS-based routing with a private BGP/Anycast overlay:
+The proposed architecture will primarily use DNS-based routing with geographic awareness and health-based filtering:
 
 1. **DNS-Based Geographic Routing**: Use DNS with low TTL values to route users to geographically close entry points
-2. **Private BGP Overlay**: Implement BGP within our private network for internal routing optimization
-3. **Health-Based Routing**: Automatically update DNS and internal routing based on node health
-4. **Seamless Failover**: If a node fails, traffic will be automatically rerouted to another node
-5. **Improved Reliability**: No single point of failure for network entry 
+2. **Health-Based Routing**: Automatically update DNS based on node health information
+3. **Seamless Failover**: If a node fails, traffic will be automatically rerouted to another node
+4. **Improved Reliability**: No single point of failure for network entry 
+
+*Note: While a private BGP overlay was originally considered as part of this plan, our implementation focus is on the DNS-based approach which provides the core functionality needed.*
 
 *For a high-level overview of this architecture, see the [High-Level Architecture Diagram](diagrams/high_level_architecture.md).*
 
@@ -109,7 +110,9 @@ These diagrams can be viewed in any Markdown viewer that supports Mermaid diagra
   - Integrate DNS health metrics with form-node-metrics for unified observability
   - Create dashboard visualizations for DNS health filtering operations
 
-### 3.2 Private BGP Overlay Implementation
+### 3.2 Private BGP Overlay Implementation (Optional)
+
+*Note: This section is maintained for reference purposes only. Our current implementation focuses on the DNS-based approach described in section 3.1, which provides the necessary functionality without the complexity of a BGP overlay.*
 
 #### 3.2.1 BGP Daemon Selection and Integration
 
@@ -264,28 +267,31 @@ These diagrams can be viewed in any Markdown viewer that supports Mermaid diagra
 
 The implementation will proceed in logical phases, with each phase building on the previous one. There's no fixed timeline—each component will be developed, tested, and deployed as quickly as possible without compromising quality or stability.
 
-### 4.1 Phase 1: DNS-Based Routing
+### 4.1 Phase 1: DNS-Based Routing (Primary Focus)
 
-This foundational phase establishes the DNS infrastructure that will enable geographic routing and health-based failover.
+This phase establishes the DNS infrastructure that enables geographic routing and health-based failover, which is our primary approach for virtual Anycast functionality.
 
 #### 4.1.1 DNS Infrastructure Setup
-- Select and integrate DNS provider
-- Implement basic DNS record management
-- Create initial geographic routing configuration
+- [x] Extend the existing `form-dns` infrastructure with GeoDNS capabilities
+- [x] Implement IP geolocation database integration
+- [x] Create health status tracking for IP addresses
 
 #### 4.1.2 Health Monitoring for DNS
-- Implement basic health checks for entry nodes
-- Create DNS record update mechanism
-- Develop monitoring for DNS routing
+- [x] Implement basic health checks for entry nodes
+- [x] Create health-based DNS response filtering mechanism
+- [x] Implement health status repository
+- [ ] Implement variable TTL adjustment based on health status
+- [ ] Enhance regional health degradation handling
 
 #### 4.1.3 Testing and Validation
-- Test DNS-based routing
-- Validate health-based updates
-- Verify geographic routing accuracy
+- [x] Test geographic-based DNS routing
+- [x] Validate health-based updates
+- [x] Verify proximity-based routing accuracy
+- [ ] Test variable TTL adjustments
 
-### 4.2 Phase 2: Private BGP Overlay
+### 4.2 Phase 2: Private BGP Overlay (Optional)
 
-This phase implements the internal routing infrastructure that will optimize traffic flow within the private network.
+*Note: This phase is considered optional and may be implemented in the future if additional routing capabilities are needed. Our current implementation focuses on the DNS-based approach.*
 
 #### 4.2.1 BGP Infrastructure Setup
 - [x] Create test environment with multiple virtual nodes for BGP testing
@@ -305,12 +311,12 @@ This phase implements the internal routing infrastructure that will optimize tra
 
 ### 4.3 Phase 3: Integration and Optimization
 
-This phase connects the DNS and BGP components with the existing Formation network and adds security and performance enhancements.
+This phase connects the DNS components with the existing Formation network and adds security and performance enhancements.
 
 #### 4.3.1 Formation Network Integration
-- Enhance bootstrap process with DNS discovery
-- Update peer discovery with BGP information
-- Implement configuration management
+- [x] Enhance bootstrap process with DNS discovery
+- [ ] Update peer discovery to leverage health-aware DNS
+- [ ] Implement configuration management for DNS settings
 
 #### 4.3.2 Security Implementation
 - Implement BGP and DNS security measures
@@ -327,29 +333,31 @@ This phase connects the DNS and BGP components with the existing Formation netwo
 ### 5.1 Must-Have Features
 
 1. **Self-Hosted GeoDNS Implementation**
-   - Extend `form-dns` with geographic resolution capabilities
-   - Integrate health-based record filtering
-   - Implement low TTL configuration for quick failover
+   - [x] Extend `form-dns` with geographic resolution capabilities
+   - [x] Integrate health-based record filtering
+   - [ ] Implement variable TTL configuration for optimized failover
+   - [ ] Enhanced regional health handling
 
-2. **Private BGP Overlay**
-   - BGP daemon integration
-   - Virtual Anycast IP allocation
-   - Health-based route advertisement
+2. **Health Monitoring Integration**
+   - [x] Leverage existing `form-node-metrics` and `form-state` functionality
+   - [x] Implement health status tracking for IP addresses
+   - [x] Create threshold-based DNS filtering
+   - [ ] Implement advanced observability for DNS resolution decisions
 
-3. **Health Monitoring Integration**
-   - Leverage existing `form-node-metrics` and `form-state` functionality
-   - Extend health checks for routing-specific metrics
-   - Implement threshold-based route management
+3. **Bootstrap Process Enhancement**
+   - [x] Enhance bootstrap process to use GeoDNS through `form-dns`
+   - [x] Update the join process to leverage health-aware DNS
+   - [x] Create documentation for the new bootstrap approach
 
-4. **Bootstrap Process Enhancement**
-   - Enhance bootstrap process to use GeoDNS through `form-dns`
-   - Maintain backward compatibility with existing bootstrap methods
-   - Implement fallback mechanisms for reliability
+4. **Basic Security Measures**
+   - [ ] Access control for DNS configuration
+   - [ ] Secure communication between components
+   - [ ] Audit logging for changes
 
-5. **Basic Security Measures**
-   - Access control for configuration
-   - Secure communication between components
-   - Audit logging for changes
+5. **Private BGP Overlay** (Optional)
+   - [ ] BGP daemon integration
+   - [ ] Virtual Anycast IP allocation
+   - [ ] Health-based route advertisement
 
 ### 5.2 Future Enhancements
 
@@ -489,7 +497,7 @@ The modular approach to implementation allows for incremental development and te
 
 ## 9. Next Steps
 
-With the plan in place, we can begin immediate implementation with the following parallel work streams, focusing exclusively on the MUST-HAVE features:
+With the plan in place, we can proceed with implementation focusing exclusively on the DNS-based approach for virtual Anycast functionality:
 
 ### Form-DNS Enhancements
 - [x] Analyze the current DNS authority implementation
@@ -500,31 +508,30 @@ With the plan in place, we can begin immediate implementation with the following
   - [x] Create IP-level health status tracking system
   - [x] Modify DNS resolution to exclude unhealthy IPs
   - [x] Add observability for health-based DNS filtering decisions (basic logging implemented)
-  - Future enhancement: Implement health-based TTL adjustment
-  - Future enhancement: Integrate DNS health metrics with form-node-metrics
+  - [ ] Implement variable TTL adjustment based on health status
+  - [ ] Enhance regional health degradation handling
+  - [ ] Integrate DNS health metrics with form-node-metrics for unified observability
+  - [ ] Create dashboard visualizations for DNS health filtering operations
 
-### BGP Development Environment
+### Integration with Bootstrap Process
+- [x] Enhance bootstrap process to use GeoDNS through `form-dns`
+- [x] Update the join process to leverage health-aware DNS
+- [x] Create documentation for the new bootstrap approach
+
+### Enhanced Metrics and Observability
+- [ ] Improve logging for DNS resolution decisions
+- [ ] Add metrics collection for DNS resolution patterns
+- [ ] Create a dashboard for DNS health and performance
+
+### DNS Configuration Management
+- [ ] Implement a configuration framework for DNS settings
+- [ ] Create management API for DNS configuration
+- [ ] Develop validation and error checking for DNS settings
+
+### BGP Development Environment (Optional)
 - [x] Create test environment with multiple virtual nodes for BGP testing
-- Evaluate BGP daemon options (BIRD, FRRouting, GoBGP)
-- Set up initial BGP configuration templates
-- Develop the virtual Anycast IP allocation mechanism
-
-### Health Monitoring Extensions
-- Analyze existing metrics in `form-node-metrics` and `form-state`
-- Define routing-specific health metrics and thresholds
-- Implement BGP session monitoring
-- Create route advertisement/withdrawal logic based on health status
-
-### Integration with Existing Components
-- Enhance bootstrap process to use GeoDNS through `form-dns`
-- Integrate health monitoring with routing decisions
-- Extend `form-rplb` for Anycast-aware load balancing
-- Implement form-state extensions for BGP/Anycast state management
-
-### Codebase Structure
-- Create the `form-bgp-overlay` crate
-- Design the integration points with existing Formation code
-- Develop shared data structures for routing information
-- Implement secure communication channels for configuration
+- [ ] Evaluate BGP daemon options (BIRD, FRRouting, GoBGP)
+- [ ] Set up initial BGP configuration templates
+- [ ] Develop the virtual Anycast IP allocation mechanism
 
 These work streams can proceed in parallel, with regular integration points to ensure compatibility between components. The focus is on enhancing existing capabilities rather than building new systems from scratch or integrating with external services. 

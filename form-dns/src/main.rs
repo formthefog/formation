@@ -24,9 +24,9 @@ async fn main() -> anyhow::Result<()> {
     resolvectl_domain().map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
     let (tx, rx) = tokio::sync::mpsc::channel(1024);
-    let store: SharedStore = Arc::new(RwLock::new(DnsStore::new(tx.clone())));
-
-    log::info!("Set up shared DNS store");
+    let dns_store = DnsStore::new(tx.clone());
+    
+    log::info!("Set up DNS store");
 
     // Initialize health tracker service
     log::info!("Initializing health tracker service");
@@ -37,6 +37,38 @@ async fn main() -> anyhow::Result<()> {
         Some(Duration::from_secs(300)),       // Stale timeout
     ).await;
     log::info!("Health tracker service initialized");
+    
+    // Connect health repository to DNS store
+    let dns_store_with_health = dns_store.with_health_repository(health_repo.clone());
+    let store: SharedStore = Arc::new(RwLock::new(dns_store_with_health));
+    
+    log::info!("Connected health repository to DNS store");
+
+    // Add bootstrap domain configuration
+    {
+        log::info!("Configuring bootstrap domain...");
+        let mut guard = store.write().await;
+        
+        // Create the bootstrap domain record
+        let bootstrap_domain = "bootstrap.formation.cloud";
+        let bootstrap_record = form_dns::store::FormDnsRecord {
+            domain: bootstrap_domain.to_string(),
+            record_type: trust_dns_proto::rr::RecordType::A,
+            public_ip: vec![], // Will be populated later with actual bootstrap nodes
+            formnet_ip: vec![],
+            cname_target: None,
+            ssl_cert: false,
+            ttl: 60, // Lower TTL for bootstrap domain to allow faster failover
+            verification_status: Some(form_dns::store::VerificationStatus::Verified),
+            verification_timestamp: Some(std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs())),
+        };
+        
+        // Add the bootstrap domain to the DNS store
+        guard.insert(bootstrap_domain, bootstrap_record).await;
+        log::info!("Bootstrap domain configured successfully");
+    }
 
     let inner_store = store.clone();
     log::info!("Cloned DNS store for TLS Manager store");

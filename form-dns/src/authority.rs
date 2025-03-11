@@ -14,8 +14,6 @@ use crate::store::{FormDnsRecord, SharedStore, VerificationStatus};
 use anyhow::Result;
 use trust_dns_client::client::ClientHandle;
 use crate::health::SharedIpHealthRepository;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 
 #[derive(Clone)]
 pub struct SimpleLookup {

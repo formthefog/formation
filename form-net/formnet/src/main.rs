@@ -6,13 +6,18 @@ use k256::ecdsa::SigningKey;
 use clap::{Parser, Subcommand, Args};
 use form_config::OperatorConfig;
 use form_types::PeerType;
-use formnet::{init::init, serve::serve};
-use formnet::{ensure_crdt_datastore, leave, request_to_join, uninstall, user_join_formnet, vm_join_formnet, NETWORK_NAME};
+use formnet::{init, serve};
+use formnet::{leave, uninstall, user_join_formnet, vm_join_formnet, NETWORK_NAME};
 #[cfg(target_os = "linux")]
 use formnet::{revert_formnet_resolver, set_formnet_resolver};
 use reqwest::Client;
 use serde_json::Value; 
 use colored::Colorize;
+use formnet::bootstrap;
+use formnet::api;
+
+// Import the Shutdown struct from the correct location
+use std::net::Shutdown;
 
 #[derive(Clone, Debug, Parser)]
 struct Cli {
@@ -48,6 +53,10 @@ struct OperatorJoinOpts {
     /// Will eventually be replaced with a discovery service
     #[arg(short, long, alias="bootstrap")]
     bootstraps: Vec<String>,
+    /// A domain that resolves to one or more bootstrap nodes
+    /// This will be used instead of or in addition to the bootstrap nodes
+    #[arg(long="bootstrap-domain", alias="domain")]
+    bootstrap_domain: Option<String>,
     /// A 20 byte hex string that represents an ethereum address
     #[arg(short, long="signing-key", aliases=["private-key", "secret-key"])]
     signing_key: Option<String>,
@@ -55,6 +64,9 @@ struct OperatorJoinOpts {
     encrypted: bool,
     #[arg(short, long)]
     password: Option<String>,
+    /// Public IP address to use (if not automatically detected)
+    #[arg(long="public-ip", short='i')]
+    public_ip: Option<String>,
 }
 
 #[derive(Clone, Debug, Args)]
@@ -67,6 +79,10 @@ struct OperatorLeaveOpts {
     /// Will eventually be replaced with a discovery service
     #[arg(short, long, alias="bootstrap")]
     bootstraps: Vec<String>,
+    /// A domain that resolves to one or more bootstrap nodes
+    /// This will be used instead of or in addition to the bootstrap nodes
+    #[arg(long="bootstrap-domain", alias="domain")]
+    bootstrap_domain: Option<String>,
     /// A 20 byte hex string that represents an ethereum address
     #[arg(short, long="signing-key", aliases=["private-key", "secret-key"])]
     signing_key: Option<String>,
@@ -97,92 +113,127 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Membership::Operator(parser) => {
             match parser {
                 OperatorOpts::Join(parser) => {
-                    let operator_config = OperatorConfig::from_file(
+                    let op_config = match OperatorConfig::from_file(
                         parser.config_path,
                         parser.encrypted,
                         parser.password.as_deref(),
-                    ).ok();
-                    let signing_key = if parser.signing_key.is_none() {
-                        let config = operator_config.clone().expect("If signing key is not provided, a valid operator config file must be provided");
-                        config.secret_key.expect("Config is guaranteed to have a secret key at this point, if not something went terribly wrong")
-                    } else {
-                        parser.signing_key.unwrap()
-                    };
-                    let address = hex::encode(Address::from_private_key(&SigningKey::from_slice(&hex::decode(&signing_key)?)?));
-                    let my_ip = if !parser.bootstraps.is_empty() {
-                        log::info!("Found bootstrap in parser...");
-                        let my_ip = request_to_join(
-                            parser.bootstraps.clone(),
-                            address.clone(),
-                            PeerType::Operator,
-                            None,
-                        ).await?;
-                        ensure_crdt_datastore().await?;
-                        my_ip
-                    } else if !operator_config.clone().unwrap().bootstrap_nodes.is_empty() {
-                        log::info!("Found bootstrap in config...");
-                        let my_ip = request_to_join(
-                            operator_config.clone().unwrap().bootstrap_nodes.clone(),
-                            address.clone(),
-                            PeerType::Operator,
-                            None
-                        ).await?;
-                        ensure_crdt_datastore().await?;
-                        my_ip
-                    } else {
-                        init(address.clone()).await?
-                    };
-
-                    let (shutdown, _) = tokio::sync::broadcast::channel::<()>(2);
-                    let mut formnet_receiver = shutdown.subscribe();
-                    let inner_address = address.clone();
-                    let bootstraps = if !parser.bootstraps.is_empty() {
-                        parser.bootstraps.clone() 
-                    } else if let Some(config) = operator_config {
-                        config.bootstrap_nodes.clone()
-                    } else {
-                        vec![]
-                    };
-                    let formnet_server_handle = tokio::spawn(async move {
-                        tokio::select! {
-                            res = serve(NETWORK_NAME, inner_address, bootstraps) => {
-                                if let Err(e) = res {
-                                    eprintln!("Error trying to serve formnet server: {e}");
-                                }
-                            }
-                            _ = formnet_receiver.recv() => {
-                                eprintln!("Formnet Server: Received shutdown signal");
-                            }
+                    ).ok() {
+                        Some(c) => c,
+                        None => {
+                            log::error!("Could not retrieve operator configuration");
+                            return Ok(());
                         }
-                    });
+                    };
 
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-                    log::info!("reverting existing resolver for formnet interface");
-                    #[cfg(target_os = "linux")]
-                    if let Ok(()) = revert_formnet_resolver().await {
-                        #[cfg(target_os = "linux")]
-                        set_formnet_resolver(&my_ip.to_string(), "~fog").await?;
-                        log::info!("Setting up dns resolver");
+                    if op_config.secret_key.is_none() {
+                        log::error!("Operator config must contain a secret key");
+                        return Ok(());
                     }
 
-                    tokio::signal::ctrl_c().await?;
-                    shutdown.send(())?;
-                    formnet_server_handle.await?;
+                    // Build bootstrap list, combining user-provided bootstraps with the bootstrap domain
+                    let mut bootstraps = parser.bootstraps.clone();
+                    if bootstraps.is_empty() {
+                        bootstraps = op_config.bootstrap_nodes.clone();
+                        if bootstraps.is_empty() {
+                            if let Some(bootstrap_domain) = &op_config.bootstrap_domain {
+                                bootstraps = vec![bootstrap_domain.clone()];
+                            }
+                        }
+                    }
+
+                    // If no bootstraps are specified, initialize the node without joining
+                    if bootstraps.is_empty() {
+                        log::info!("No bootstraps specified, initializing node without joining");
+                        let address = op_config.address.clone().unwrap_or_default();
+                        formnet::init::init(address).await?;
+                        return Ok(());
+                    }
+
+                    // Log and join using bootstrap nodes
+                    log::info!("Using bootstrap nodes: {:?}", bootstraps);
+                    
+                    // Attempt to get our outbound IP
+                    let pub_ip = match publicip::get_any(publicip::Preference::Ipv4) {
+                        Some(ip) => {
+                            log::info!("Detected public IP: {}", ip);
+                            Some(ip.to_string())
+                        }
+                        None => {
+                            log::warn!("Failed to detect public IP");
+                            parser.public_ip.clone()
+                        }
+                    };
+
+                    // Join the network, passing the bootstrap node flag and region from the operator config
+                    match formnet::join::request_to_join(
+                        bootstraps,
+                        op_config.address.clone().unwrap_or_default(),
+                        PeerType::Operator,
+                        pub_ip,
+                        Some(op_config.is_bootstrap_node),
+                        op_config.region.clone(),
+                    ).await {
+                        Ok(ip) => {
+                            log::info!("Successfully joined with IP {}", ip);
+                        }
+                        Err(e) => {
+                            log::error!("Failed to join: {}", e);
+                            return Ok(());
+                        }
+                    }
                 }
                 OperatorOpts::Leave(parser) => {
-                    let operator_config = OperatorConfig::from_file(
+                    let op_config = match OperatorConfig::from_file(
                         parser.config_path,
                         parser.encrypted,
                         parser.password.as_deref(),
-                    ).ok();
-                    let signing_key = if parser.signing_key.is_none() {
-                        let config = operator_config.clone().expect("If signing key is not provided, a valid operator config file must be provided");
-                        config.secret_key.expect("Config is guaranteed to have a secret key at this point, if not something went terribly wrong")
-                    } else {
-                        parser.signing_key.unwrap()
+                    ).ok() {
+                        Some(c) => c,
+                        None => {
+                            log::error!("Could not retrieve operator configuration");
+                            return Ok(());
+                        }
                     };
-                    leave(parser.bootstraps.clone(), signing_key).await?; 
-                    uninstall().await?;
+
+                    if op_config.secret_key.is_none() {
+                        log::error!("Operator config must contain a secret key");
+                        return Ok(());
+                    }
+
+                    // If this node is a bootstrap node, unregister it from the DNS service
+                    if op_config.is_bootstrap_node {
+                        log::info!("Unregistering from bootstrap domain");
+                        
+                        // Attempt to unregister from bootstrap service
+                        match formnet::bootstrap::unregister_bootstrap_node(
+                            &op_config.address.clone().unwrap_or_default(),
+                            None, // We don't need to specify IP as we're using the node ID
+                            None  // Use default DNS API endpoint
+                        ).await {
+                            Ok(_) => {
+                                log::info!("Successfully unregistered from bootstrap domain");
+                            },
+                            Err(e) => {
+                                log::warn!("Failed to unregister from bootstrap domain: {}", e);
+                                // Continue with the leave process even if unregistration fails
+                            }
+                        }
+                    }
+
+                    // Proceed with the leave command
+                    let address = op_config.address.clone().unwrap_or_default();
+                    
+                    // Use the leave function directly instead of Shutdown
+                    match leave(vec![], address).await {
+                        Ok(_) => {
+                            log::info!("Node successfully shutdown");
+                            return Ok(());
+                        },
+                        Err(e) => {
+                            log::error!("Failed to shutdown node: {}", e);
+                            return Ok(());
+                        }
+                    }
                 }
             }
         }

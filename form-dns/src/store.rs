@@ -13,6 +13,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use crate::resolvectl_dns;
+use crate::health::SharedIpHealthRepository;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FormDnsRecord {
@@ -49,6 +50,8 @@ pub struct DnsStore {
     records: HashMap<String, FormDnsRecord>,
     #[serde(skip)]
     sender: Option<Sender<FormDnsRecord>>,
+    #[serde(skip)]
+    health_repository: Option<SharedIpHealthRepository>,
 }
 
 impl DnsStore {
@@ -57,7 +60,17 @@ impl DnsStore {
             servers: Vec::new(),
             records: HashMap::new(),
             sender: Some(sender),
+            health_repository: None,
         }
+    }
+
+    pub fn with_health_repository(mut self, health_repository: SharedIpHealthRepository) -> Self {
+        self.health_repository = Some(health_repository);
+        self
+    }
+
+    pub fn get_health_repository(&self) -> Option<SharedIpHealthRepository> {
+        self.health_repository.clone()
     }
 
     pub fn add_server(&mut self, server: Ipv4Addr) -> Result<(), Box<dyn std::error::Error>> {
