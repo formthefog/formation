@@ -175,8 +175,8 @@ Implement advanced routing for seamless access to the network without requiring 
 - As a user, I want reliable network connectivity even during node failures
 
 **Implementation Tasks:**
-- [ ] Design BGP/Anycast routing architecture
-- [ ] Implement BGP session management for nodes
+- [~] Design BGP/Anycast routing architecture
+- [~] Implement BGP session management for nodes
 - [ ] Create anycast IP allocation system
 - [ ] Build route advertisement and propagation system
 - [ ] Implement health checks for routing decisions

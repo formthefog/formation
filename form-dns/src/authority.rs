@@ -73,7 +73,7 @@ impl FormAuthority {
                 }
             };
             log::info!("Request is formnet? {is_formnet}");
-            let ips = if is_formnet {
+            let mut ips = if is_formnet {
                 if !record.formnet_ip.is_empty() {
                     let mut ips = record.formnet_ip.clone();
                     if !record.public_ip.is_empty() {
@@ -92,8 +92,38 @@ impl FormAuthority {
                     vec![]
                 }
             };
+            
+            // If we have a source IP and IPs to sort, use geolocation to sort them
+            if let Some(source_ip) = src {
+                if !ips.is_empty() {
+                    // Extract IPs without port
+                    let ip_addrs: Vec<IpAddr> = ips.iter().map(|addr| addr.ip()).collect();
+                    
+                    // Sort IPs by proximity to client
+                    let sorted_ips = crate::geo_util::sort_ips_by_client_location(
+                        &key, 
+                        rtype,
+                        Some(source_ip),
+                        ip_addrs.clone()
+                    );
+                    
+                    // If successfully sorted, reorder the original SocketAddrs based on sorted IPs
+                    if sorted_ips.len() == ip_addrs.len() {
+                        // Create a map of IP to original SocketAddr to preserve ports
+                        let addr_map: std::collections::HashMap<IpAddr, SocketAddr> = 
+                            ips.iter().map(|addr| (addr.ip(), *addr)).collect();
+                        
+                        // Rebuild socket addresses in the sorted order
+                        ips = sorted_ips.into_iter()
+                            .filter_map(|ip| addr_map.get(&ip).cloned())
+                            .collect();
+                        
+                        log::info!("IPs sorted by geolocation: {ips:?}");
+                    }
+                }
+            }
 
-            log::info!("IPS: {ips:?}");
+            log::info!("Final IPS: {ips:?}");
 
             if let Ok(rr_name) = Name::from_utf8(&key) {
                 let mut rrset = RecordSet::new(&rr_name, rtype, 300);
