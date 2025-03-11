@@ -113,26 +113,56 @@ Build a distributed AI inference engine with OpenAI/Anthropic compatible APIs fo
 
 ### 5. Economic Infrastructure
 
-Implement tokenization, billing, and payment systems while abstracting crypto complexity from end users.
+Implement event-driven resource usage tracking with frequent event emission and minimal state retention.
 
 **User Stories:**
-- As a user, I want to purchase credits without understanding cryptocurrency
+- As a user, I want my resource usage to be accurately measured and tracked
 - As a node provider, I want to be paid automatically for resources provided
-- As a business, I want simple invoicing and payment options
-- As a developer, I want programmatic access to billing and usage data
+- As a developer, I want programmatic access to usage data
+- As a platform operator, I want to integrate billing with external systems
 
-**Implementation Tasks:**
-- [ ] Design and implement credit token on Ethereum
-- [ ] Create fiat on-ramp for purchasing credits
-- [ ] Implement wallet abstraction layer for non-crypto users
-- [ ] Build automated billing system against tokenized credits
-- [ ] Create usage monitoring and metering system
-- [ ] Implement threshold notifications for low balances
-- [ ] Design deposit and withdrawal mechanisms
-- [ ] Create reporting and analytics for usage and billing
-- [ ] Implement resource pricing mechanism
-- [ ] Build invoice generation system
-- [ ] Create API for programmatic billing management
+**Implementation Tasks (Compute Backend):**
+- [x] Implement resource usage measurement system
+  - [x] Track CPU, memory, storage, network, and GPU usage per VM
+  - [x] Create efficient point-in-time metrics collection
+  - [x] Implement minimal short-term buffer for latest metrics only
+- [x] Create usage event emission system
+  - [x] Design lightweight usage event schema with essential properties
+  - [x] Implement reliable event emission every 30 seconds
+  - [x] Build retry mechanisms for reliability
+  - [x] Implement circuit breaker for destination outages
+- [x] Implement stateless threshold detection
+  - [x] Create configurable resource usage thresholds from external source
+  - [x] Build real-time threshold checking against current metrics
+  - [x] Implement notification event emission for threshold violations
+- [x] Develop minimal API layer
+  - [x] Implement RESTful API for current usage data (no history)
+  - [x] Build health check endpoints for monitoring system components
+  - [x] Create API documentation with examples and usage guidelines
+  - [x] Create webhook registration for real-time usage events
+- [ ] Future enhancements
+  - [ ] Testing and validation
+  - [ ] Deployment and operations
+  - [ ] Authentication and authorization
+  - [ ] Filtering parameters for VM-specific metrics
+  - [ ] Integration with account service
+  - [ ] Dead-letter queue for unprocessable events
+  - [ ] Batching for failed events
+  - [ ] Event emission monitoring dashboard
+  - [ ] Advanced data retention policies
+
+**Status: COMPLETED** - Core functionality implemented, with future enhancements planned for subsequent releases.
+
+**Integration Tasks (Other Teams):**
+- [ ] Implement Usage Database for historical data storage and aggregation
+- [ ] Design and implement credit token on Ethereum (Blockchain Team)
+- [ ] Create fiat on-ramp for purchasing credits (User Portal Team)
+- [ ] Implement wallet abstraction layer for non-crypto users (User Portal Team)
+- [ ] Build automated billing system against tokenized credits (Billing Service Team)
+- [ ] Design deposit and withdrawal mechanisms (Blockchain Team)
+- [ ] Create reporting and analytics for usage and billing (Admin Dashboard Team)
+- [ ] Implement resource pricing mechanism (Admin Dashboard Team)
+- [ ] Build invoice generation system (Billing Service Team)
 
 ### 6. BGP/Anycast Routing
 

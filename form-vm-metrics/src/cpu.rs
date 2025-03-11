@@ -7,6 +7,16 @@ pub struct CpuMetrics {
     process_count: usize
 }
 
+impl CpuMetrics {
+    pub fn usage_pct(&self) -> i64 {
+        self.usage_pct
+    }
+    
+    pub fn process_count(&self) -> usize {
+        self.process_count
+    }
+}
+
 pub async fn collect_cpu(sys: &mut System) -> CpuMetrics {
     sys.refresh_cpu_all();
     sys.refresh_processes(ProcessesToUpdate::All, true);

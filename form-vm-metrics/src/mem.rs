@@ -11,6 +11,32 @@ pub struct MemoryMetrics {
     used_swap: u64,
 }
 
+impl MemoryMetrics {
+    pub fn total(&self) -> u64 {
+        self.total
+    }
+    
+    pub fn free(&self) -> u64 {
+        self.free
+    }
+    
+    pub fn available(&self) -> u64 {
+        self.available
+    }
+    
+    pub fn used(&self) -> u64 {
+        self.used
+    }
+    
+    pub fn total_swap(&self) -> u64 {
+        self.total_swap
+    }
+    
+    pub fn used_swap(&self) -> u64 {
+        self.used_swap
+    }
+}
+
 pub async fn collect_memory(sys: &mut System) -> MemoryMetrics {
     sys.refresh_all();
     sys.refresh_memory();

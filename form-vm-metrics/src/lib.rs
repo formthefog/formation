@@ -5,3 +5,4 @@ pub mod network;
 pub mod gpu;
 pub mod load;
 pub mod system;
+pub mod events;

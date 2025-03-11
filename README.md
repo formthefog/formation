@@ -328,7 +328,6 @@ docker run --rm --privileged --network=host \
     -v /lib/modules:/lib/modules:ro \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v /path/to/operator/config \ 
-    -v /path/to/config:/path/to/secrets \
     -e SECRET_PATH=/path/to/config \
     -e PASSWORD=<your-encryption-password> \
     --mount type=tmpfs,destination=/dev/hugepages,tmpfs-mode=1770 \

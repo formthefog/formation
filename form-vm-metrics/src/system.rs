@@ -15,6 +15,8 @@ use crate::{
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SystemMetrics {
     pub timestamp: i64,
+    pub instance_id: Option<String>,
+    pub account_id: Option<String>,
     pub cpu: CpuMetrics,
     pub memory: MemoryMetrics,
     pub disks: Vec<DiskMetrics>,
@@ -44,8 +46,15 @@ pub async fn collect_system_metrics(
         .as_secs() as i64;
 
     let mut guard = system_metrics.lock().await;
+    
+    // Preserve the instance_id and account_id fields
+    let instance_id = guard.instance_id.clone();
+    let account_id = guard.account_id.clone();
+    
     *guard = SystemMetrics {
         timestamp,
+        instance_id,
+        account_id,
         cpu,
         memory,
         disks,
@@ -56,4 +65,30 @@ pub async fn collect_system_metrics(
     drop(guard);
 
     system_metrics
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_preserve_instance_and_account_id() {
+        let test_instance_id = "test-instance-123";
+        let test_account_id = "test-account-456";
+        
+        // Create metrics with initial instance and account IDs
+        let mut initial_metrics = SystemMetrics::default();
+        initial_metrics.instance_id = Some(test_instance_id.to_string());
+        initial_metrics.account_id = Some(test_account_id.to_string());
+        
+        let metrics = Arc::new(Mutex::new(initial_metrics));
+        
+        // Collect new metrics (which should preserve the IDs)
+        let updated_metrics = collect_system_metrics(metrics).await;
+        
+        // Verify the IDs were preserved
+        let guard = updated_metrics.lock().await;
+        assert_eq!(guard.instance_id.as_deref(), Some(test_instance_id));
+        assert_eq!(guard.account_id.as_deref(), Some(test_account_id));
+    }
 }
