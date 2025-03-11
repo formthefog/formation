@@ -3009,17 +3009,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "form-usage-events"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "form-p2p",
+ "futures",
+ "hex",
+ "rand 0.8.5",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tiny-keccak",
+ "tokio",
+]
+
+[[package]]
 name = "form-vm-metrics"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "chrono",
  "clap",
+ "form-usage-events",
+ "hex",
+ "hmac",
  "nvml-wrapper",
  "procfs",
+ "reqwest 0.11.27",
  "serde",
  "serde_json",
+ "sha2",
  "sysinfo",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
