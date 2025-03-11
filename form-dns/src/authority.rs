@@ -13,6 +13,9 @@ use trust_dns_server::authority::LookupObject;
 use crate::store::{FormDnsRecord, SharedStore, VerificationStatus};
 use anyhow::Result;
 use trust_dns_client::client::ClientHandle;
+use crate::health::SharedIpHealthRepository;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 #[derive(Clone)]
 pub struct SimpleLookup {
@@ -35,6 +38,7 @@ pub struct FormAuthority {
     zone_type: ZoneType,
     store: SharedStore,
     fallback_client: AsyncClient,
+    health_repository: Option<SharedIpHealthRepository>,
 }
 
 impl FormAuthority {
@@ -44,8 +48,15 @@ impl FormAuthority {
             origin: lower_origin,
             zone_type: ZoneType::Primary,
             store,
-            fallback_client
+            fallback_client,
+            health_repository: None,
         }
+    }
+
+    /// Configure the authority with a health repository for filtering unhealthy IPs
+    pub fn with_health_repository(mut self, repository: SharedIpHealthRepository) -> Self {
+        self.health_repository = Some(repository);
+        self
     }
 
     async fn lookup_local(
@@ -62,7 +73,7 @@ impl FormAuthority {
             let guard = self.store.read().await;
             guard.get(&key)
         };
-        log::info!("retreived record {record_opt:?}");
+        log::info!("retrieved record {record_opt:?}");
 
         if let Some(record) = record_opt {
             let is_formnet = {
@@ -92,6 +103,62 @@ impl FormAuthority {
                     vec![]
                 }
             };
+
+            // Filter out unhealthy IPs if health repository is configured
+            if let Some(health_repo) = &self.health_repository {
+                let original_count = ips.len();
+                
+                // Extract IPs without port for health check
+                let ip_addrs: Vec<IpAddr> = ips.iter().map(|addr| addr.ip()).collect();
+                
+                // Get filtered IPs based on health status
+                let health_repo_guard = health_repo.read().await;
+                let filtered_ips = health_repo_guard.filter_available_ips(&ip_addrs);
+                
+                if filtered_ips.len() < ip_addrs.len() {
+                    log::info!(
+                        "Health filtering: removed {} unhealthy IPs, {} remaining",
+                        ip_addrs.len() - filtered_ips.len(),
+                        filtered_ips.len()
+                    );
+                    
+                    // Only keep socket addresses with healthy IPs
+                    let filtered_socket_addrs: Vec<SocketAddr> = ips
+                        .into_iter()
+                        .filter(|socket_addr| filtered_ips.contains(&socket_addr.ip()))
+                        .collect();
+                    
+                    ips = filtered_socket_addrs;
+                }
+                
+                // If no healthy IPs remain, log a warning but continue with the original set
+                if ips.is_empty() && original_count > 0 {
+                    log::warn!(
+                        "Health filtering removed all IPs for {}. Using all IPs anyway to avoid service disruption.",
+                        key
+                    );
+                    // Re-extract the original IPs to avoid complete service disruption
+                    ips = if is_formnet {
+                        if !record.formnet_ip.is_empty() {
+                            let mut ips = record.formnet_ip.clone();
+                            if !record.public_ip.is_empty() {
+                                ips.extend(record.public_ip.clone());
+                            }
+                            ips
+                        } else if !record.public_ip.is_empty() {
+                            record.public_ip.clone()
+                        } else {
+                            vec![]
+                        }
+                    } else {
+                        if !record.public_ip.is_empty() {
+                            record.public_ip.clone()
+                        } else {
+                            vec![]
+                        }
+                    };
+                }
+            }
             
             // If we have a source IP and IPs to sort, use geolocation to sort them
             if let Some(source_ip) = src {
@@ -125,13 +192,25 @@ impl FormAuthority {
 
             log::info!("Final IPS: {ips:?}");
 
+            // Calculate TTL based on health status
+            let ttl = match &self.health_repository {
+                Some(_) => {
+                    // Use a lower TTL when health filtering is active to allow for faster recovery
+                    60 // 1 minute TTL when health filtering is active
+                },
+                None => {
+                    // Use a higher TTL when not doing health checks
+                    300 // 5 minutes TTL by default
+                }
+            };
+
             if let Ok(rr_name) = Name::from_utf8(&key) {
-                let mut rrset = RecordSet::new(&rr_name, rtype, 300);
+                let mut rrset = RecordSet::new(&rr_name, rtype, ttl);
                 match rtype {
                     RecordType::A => {
                         for ip in ips { 
                             if let IpAddr::V4(v4) = ip.ip() {
-                                let mut rec = Record::with(rrset.name().clone(), RecordType::A, 300);
+                                let mut rec = Record::with(rrset.name().clone(), RecordType::A, ttl);
                                 rec.set_data(Some(trust_dns_proto::rr::rdata::A(v4)));
                                 rrset.add_rdata(rec.into_record_of_rdata().data()?.clone());
                             }
@@ -140,7 +219,7 @@ impl FormAuthority {
                     RecordType::AAAA => {
                         for ip in ips {
                             if let IpAddr::V6(v6) = ip.ip() {
-                                let mut rec = Record::with(rrset.name().clone(), RecordType::AAAA, 300);
+                                let mut rec = Record::with(rrset.name().clone(), RecordType::AAAA, ttl);
                                 rec.set_data(Some(trust_dns_proto::rr::rdata::AAAA(v6)));
                                 rrset.add_rdata(rec.into_record_of_rdata().data()?.clone());
                             }
@@ -150,8 +229,8 @@ impl FormAuthority {
                         log::info!("Request is for CNAME record");
                         if let Ok(name) = Name::from_utf8(record.cname_target?) {
                             let rdata = RData::CNAME(CNAME(name));
-                            let rec: Record<RData> = Record::from_rdata(rrset.name().clone(), 300, rdata);
-                            rrset.insert(rec, 300);
+                            let rec: Record<RData> = Record::from_rdata(rrset.name().clone(), ttl, rdata);
+                            rrset.insert(rec, ttl);
                         }
                     }
                     _ => {}

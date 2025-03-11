@@ -1,10 +1,12 @@
 use std::sync::Arc;
+use std::time::Duration;
 use form_dns::{resolvectl_domain, resolvectl_flush_cache, resolvectl_revert};
 use tokio::sync::RwLock;
 use form_dns::api::serve_api;
 use form_dns::proxy::IntegratedProxy;
 use form_dns::store::{DnsStore, SharedStore};
 use form_dns::authority::FormAuthority;
+use form_dns::health_tracker;
 use form_rplb::config::ProxyConfig;
 use form_rplb::resolver::TlsManager;
 use tokio::net::UdpSocket;
@@ -25,6 +27,16 @@ async fn main() -> anyhow::Result<()> {
     let store: SharedStore = Arc::new(RwLock::new(DnsStore::new(tx.clone())));
 
     log::info!("Set up shared DNS store");
+
+    // Initialize health tracker service
+    log::info!("Initializing health tracker service");
+    let health_repo = health_tracker::start_health_tracker(
+        "http://localhost:3004".to_string(),  // Form-state API endpoint
+        Some(Duration::from_secs(60)),        // Heartbeat timeout
+        Some(Duration::from_secs(10)),        // Check interval
+        Some(Duration::from_secs(300)),       // Stale timeout
+    ).await;
+    log::info!("Health tracker service initialized");
 
     let inner_store = store.clone();
     log::info!("Cloned DNS store for TLS Manager store");
@@ -68,8 +80,12 @@ async fn main() -> anyhow::Result<()> {
     
     log::warn!("Setting authority origin to root...");
     let origin = Name::root();
-    let auth = FormAuthority::new(origin, store.clone(), fallback_client);
+    
+    // Create the authority with health repository integration
+    let auth = FormAuthority::new(origin, store.clone(), fallback_client)
+        .with_health_repository(health_repo);
 
+    log::info!("Created FormAuthority with health repository integration");
     log::debug!("Wrapping authority in an Atomic Reference Counter...");
     let auth_arc = Arc::new(auth);
 

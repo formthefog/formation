@@ -82,8 +82,7 @@ These diagrams can be viewed in any Markdown viewer that supports Mermaid diagra
 - **Subtasks**:
   - [x] Analyze the current DNS authority implementation in `form-dns`
   - [x] Extend the DNS resolution logic to include client location awareness
-  - [ ] Implement response selection based on geographic proximity
-  - [ ] Develop management interfaces for GeoDNS configuration
+  - [x] Implement response selection based on geographic proximity
 
 *For details on the DNS routing architecture, see [DNS Routing Flow Diagram](diagrams/dns_routing_flow.md).*
 
@@ -93,17 +92,22 @@ These diagrams can be viewed in any Markdown viewer that supports Mermaid diagra
 - **Subtasks**:
   - [x] Create IP geolocation database integration or service
   - [x] Implement logic to determine client location from DNS queries
-  - [ ] Develop region-specific record selection algorithms
-  - [ ] Create fallback mechanisms for regions without dedicated nodes
 
 #### 3.1.3 Health-Based DNS Updates
 
 - **Task**: Enhance `form-dns` to use health data from `form-node-metrics` and `form-state`
 - **Subtasks**:
-  - Create integration between `form-dns` and the health monitoring system
-  - Implement automatic DNS record filtering based on node health
-  - Develop TTL management for quick failover 
-  - Build monitoring and alerting for DNS changes
+  - [x] Design health data integration structure for tracking unhealthy node IPs
+  - [x] Implement health status tracking for individual IP addresses
+  - [x] Modify DNS resolution to filter unhealthy IPs from responses
+  - [x] Add observability for health-based DNS filtering decisions
+
+**Future Enhancements**:
+  - Implement variable TTL adjustment based on node health status
+  - Advanced caching strategies for improved performance
+  - Regional-specific health degradation handling
+  - Integrate DNS health metrics with form-node-metrics for unified observability
+  - Create dashboard visualizations for DNS health filtering operations
 
 ### 3.2 Private BGP Overlay Implementation
 
@@ -284,6 +288,7 @@ This foundational phase establishes the DNS infrastructure that will enable geog
 This phase implements the internal routing infrastructure that will optimize traffic flow within the private network.
 
 #### 4.2.1 BGP Infrastructure Setup
+- [x] Create test environment with multiple virtual nodes for BGP testing
 - Select and integrate BGP daemon
 - Design and implement private BGP network
 - Create initial virtual Anycast configuration
@@ -400,9 +405,26 @@ This phase connects the DNS and BGP components with the existing Formation netwo
     - User-specific routing preferences
     - Application-specific routing optimization
 
-## 6. Testing Strategy
+## 6. Implementation Roadmap
 
-### 6.1 Unit Testing
+### 6.1 Current Status
+
+- Initial planning and architecture design complete
+- Key implementation work streams identified
+- Current `form-dns`, `form-rplb`, and `form-state` services analyzed for extension
+- Geographic proximity-based response selection fully implemented in `form-dns` with support for:
+  - Multiple distance weighting strategies (Linear, Quadratic, Logarithmic, Stepped)
+  - Region and country biasing
+  - Health-aware filtering
+  - Configurable selection parameters
+- Geographic resolution implementation complete, using a unified proximity-based approach rather than region-specific algorithms
+- The implementation ensures protocol consistency across all nodes in the network
+
+### 6.2 Timeline
+
+## 7. Testing Strategy
+
+### 7.1 Unit Testing
 
 1. **DNS Component Tests**
    - Test DNS record management
@@ -414,7 +436,7 @@ This phase connects the DNS and BGP components with the existing Formation netwo
    - Test route advertisement and withdrawal
    - Test virtual Anycast IP management
 
-### 6.2 Integration Testing
+### 7.2 Integration Testing
 
 1. **DNS Integration Tests**
    - Test DNS provider integration
@@ -426,7 +448,7 @@ This phase connects the DNS and BGP components with the existing Formation netwo
    - Test virtual Anycast routing
    - Test health-based route management
 
-### 6.3 System Testing
+### 7.3 System Testing
 
 1. **Network Simulation Tests**
    - Test in simulated multi-node environment
@@ -438,7 +460,7 @@ This phase connects the DNS and BGP components with the existing Formation netwo
    - Test BGP convergence time
    - Test failover latency
 
-### 6.4 Production Testing
+### 7.4 Production Testing
 
 1. **Controlled Rollout**
    - Test with a small subset of production nodes
@@ -450,7 +472,7 @@ This phase connects the DNS and BGP components with the existing Formation netwo
    - Test network partition scenarios
    - Test DNS provider failures
 
-## 7. Conclusion
+## 8. Conclusion
 
 The implementation of virtual Anycast routing in the Formation network will significantly improve the reliability, accessibility, and performance of the network without requiring an ASN or public IP block. By leveraging our existing `form-dns`, `form-rplb`, and `form-state` infrastructure and extending it with virtual Anycast capabilities, we can achieve many of the benefits of true Anycast routing while maintaining complete control over our stack.
 
@@ -465,18 +487,24 @@ This detailed plan outlines the steps necessary to implement virtual Anycast rou
 
 The modular approach to implementation allows for incremental development and testing, ensuring that each component works correctly before moving on to the next. The backward compatibility with existing systems ensures that current users will not be disrupted during the transition to the new routing architecture.
 
-## 8. Next Steps
+## 9. Next Steps
 
 With the plan in place, we can begin immediate implementation with the following parallel work streams, focusing exclusively on the MUST-HAVE features:
 
 ### Form-DNS Enhancements
-- Analyze the current DNS authority implementation
-- Design and implement GeoDNS extensions for `form-dns`
-- Develop IP geolocation capabilities for DNS resolution
-- Implement health-based record filtering from `form-node-metrics` data
+- [x] Analyze the current DNS authority implementation
+- [x] Design and implement GeoDNS extensions for `form-dns`
+- [x] Develop IP geolocation capabilities for DNS resolution
+- Implement health-based IP filtering:
+  - [x] Design data structure for tracking unhealthy node IPs
+  - [x] Create IP-level health status tracking system
+  - [x] Modify DNS resolution to exclude unhealthy IPs
+  - [x] Add observability for health-based DNS filtering decisions (basic logging implemented)
+  - Future enhancement: Implement health-based TTL adjustment
+  - Future enhancement: Integrate DNS health metrics with form-node-metrics
 
 ### BGP Development Environment
-- Create test environment with multiple virtual nodes for BGP testing
+- [x] Create test environment with multiple virtual nodes for BGP testing
 - Evaluate BGP daemon options (BIRD, FRRouting, GoBGP)
 - Set up initial BGP configuration templates
 - Develop the virtual Anycast IP allocation mechanism
