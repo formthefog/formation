@@ -92,14 +92,14 @@ impl<'a, T: Display + Clone + PartialEq> RelayNatTraverse<'a, T> {
         if !crate::relay::is_relay_enabled() {
             // If relay isn't enabled by auto-detection or manual control,
             // just use the standard NAT traversal
-            return Ok(self.nat_traverse.step_parallel_sync()?);
+            return Ok(self.nat_traverse.step_parallel().await?);
         }
         
         // Get the list of remaining peers before attempting direct connections
         let remaining_before = self.nat_traverse.remaining();
         
         // Try direct connections first using parallel step
-        self.nat_traverse.step_parallel_sync()?;
+        self.nat_traverse.step_parallel().await?;
         
         // Record connection attempts
         if remaining_before > 0 {

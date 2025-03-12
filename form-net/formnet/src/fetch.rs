@@ -1344,7 +1344,7 @@ async fn handle_peer_updates(
                 "Attempting to establish connection with {} remaining unconnected peers (parallel mode)...",
                 nat_traverse.remaining()
             );
-            nat_traverse.step_parallel_sync()?;
+            nat_traverse.step_parallel().await?;
         }
         
         // Now handle the server NAT traversal
@@ -1624,7 +1624,7 @@ pub async fn fetch_server(
                 "Attempting to establish connection with {} remaining unconnected peers (parallel mode)...",
                 nat_traverse.remaining()
             );
-            nat_traverse.step_parallel_sync()?;
+            nat_traverse.step_parallel().await?;
         }
     }
 

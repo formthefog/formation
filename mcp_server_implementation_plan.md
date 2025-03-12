@@ -493,9 +493,19 @@ This phase establishes the foundational MCP server with basic VM management capa
 - [x] Set up project structure and basic module layout
 - [x] Add missing dependencies to Cargo.toml
 - [x] Implement tool registry (core data structures)
-- [ ] Implement tool registration mechanism
+- [x] Create placeholder modules for key components
+- [ ] Implement VM tool registration mechanism
+  - [ ] Create VM status tool
+  - [ ] Implement VM control operations tool
+  - [ ] Implement tool parameter validation
 - [ ] Create tool execution pipeline
+  - [ ] Implement authentication middleware for tool calls
+  - [ ] Create logging for tool execution
+  - [ ] Implement error handling for tool execution
 - [ ] Implement basic MCP protocol data models
+  - [ ] Create tool request/response structures
+  - [ ] Implement resource reference handling
+  - [ ] Create schema for tool metadata
 - [ ] Create authentication integration with existing credentials
 - [ ] Develop API endpoint structure
 - [ ] Implement request/response validation
