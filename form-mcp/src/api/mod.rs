@@ -1,79 +1,81 @@
 // API module for the MCP server
 //
-// This module contains the API endpoints, handlers, and middleware
-// for the MCP server.
+// This module handles the HTTP API endpoints for the MCP server,
+// including request handling, routing, and response formatting.
 
-mod routes;
+pub mod routes;
 pub mod handlers;
 
-use actix_web::{web, App, HttpServer, middleware};
-use actix_cors::Cors;
 use std::sync::Arc;
+use actix_web::{web, App, HttpServer, middleware};
+use actix_web::middleware::Compress;
+use actix_cors::Cors;
+use log::info;
 use crate::config::Settings;
 use crate::tools::ToolRegistry;
+use crate::auth;
 
 /// Initialize the API server with the appropriate routes and middleware
 pub async fn init_server(
     settings: Arc<Settings>,
     tool_registry: Arc<ToolRegistry>,
 ) -> std::io::Result<()> {
+    // Create a tool registry data object
+    let tool_registry_data = web::Data::new(tool_registry);
+    
     // Get server settings
     let host = settings.server.host.clone();
     let port = settings.server.port;
     let workers = settings.server.workers;
     
-    // Initialize HTTP server
-    let server = HttpServer::new(move || {
-        let settings = settings.clone();
-        
-        // Set up CORS
+    // Configure authentication
+    let enable_auth = settings.auth.enabled;
+    let auth_middleware = auth::AuthenticationMiddleware::new(enable_auth);
+    
+    // Log startup information
+    info!("Starting MCP server on {}:{}", host, port);
+    info!("Authentication enabled: {}", enable_auth);
+    
+    // Create and start the HTTP server
+    HttpServer::new(move || {
+        // Configure CORS if enabled
         let cors = if settings.server.cors_enabled {
-            let mut cors = Cors::default()
+            // Create a permissive CORS configuration for development
+            // In production, this should be more restrictive
+            Cors::default()
+                .allow_any_origin()
                 .allow_any_method()
                 .allow_any_header()
-                .max_age(3600);
-            
-            // Add allowed origins
-            for origin in &settings.server.cors_origins {
-                cors = cors.allowed_origin(origin);
-            }
-            
-            cors
+                .max_age(3600)
         } else {
-            Cors::permissive()
+            // Create a default CORS configuration that denies all cross-origin requests
+            Cors::default()
         };
         
         App::new()
-            // Add shared state
-            .app_data(web::Data::new(tool_registry.clone()))
-            .app_data(web::Data::new(settings.clone()))
-            
-            // Add middleware
-            .wrap(middleware::Logger::default())
-            .wrap(middleware::Compress::default())
-            .wrap(middleware::NormalizePath::trim())
+            // Register the tool registry
+            .app_data(tool_registry_data.clone())
+            // Set request timeout
+            .app_data(web::PayloadConfig::new(settings.server.request_timeout as usize))
+            // Enable compression
+            .wrap(Compress::default())
+            // Add CORS middleware
             .wrap(cors)
-            
+            // Add authentication middleware
+            .wrap(auth_middleware.clone())
             // Configure routes
             .configure(routes::configure)
     })
     .workers(workers)
-    .bind(format!("{}:{}", host, port))?;
-    
-    println!("Starting MCP server at http://{}:{}", host, port);
-    
-    server.run().await
+    .bind((host, port))?
+    .run()
+    .await
 }
 
-/// Configure API routes for the service
-pub fn configure_routes(cfg: &mut web::ServiceConfig) {
-    routes::configure(cfg);
-}
-
-/// Health check handler
+/// Simple health check endpoint
 pub async fn health_check() -> actix_web::HttpResponse {
     actix_web::HttpResponse::Ok().json(serde_json::json!({
         "status": "ok",
-        "version": crate::MCP_VERSION,
+        "version": crate::MCP_VERSION
     }))
 } 

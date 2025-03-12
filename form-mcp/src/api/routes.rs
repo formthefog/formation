@@ -4,7 +4,7 @@
 
 use actix_web::{web, HttpResponse, Responder};
 use crate::api::health_check;
-use crate::api::handlers::{tools, operations};
+use crate::api::handlers::{tools, operations, auth};
 use crate::models::operations::{OperationsRepository, create_repository};
 
 /// Configure API routes for the MCP server
@@ -20,6 +20,13 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         // MCP protocol endpoints
         .service(
             web::scope("/api")
+                // Authentication endpoints
+                .service(
+                    web::scope("/auth")
+                        .route("/login", web::post().to(auth::login))
+                        .route("/validate", web::post().to(auth::validate_token))
+                )
+                
                 // Tool discovery and execution
                 .route("/tools", web::get().to(tools::list_tools))
                 .route("/tools/{name}", web::post().to(tools::execute_tool))

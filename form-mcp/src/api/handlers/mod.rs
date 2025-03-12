@@ -5,6 +5,7 @@
 
 pub mod tools;
 pub mod operations;
+pub mod auth;
 
 /// Common response structure for API endpoints
 #[derive(serde::Serialize)]

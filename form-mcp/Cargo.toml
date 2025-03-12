@@ -36,6 +36,9 @@ hex = "0.4"
 jwt = "0.16"
 hmac = "0.12"
 tiny-keccak = { version = "2.0", features = ["sha3"] }
+sha3 = "0.10"
+sha2 = "0.10"
+futures-util = "0.3"
 
 # Logging and error handling
 log = "0.4"
