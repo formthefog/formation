@@ -4,6 +4,11 @@ pub mod store;
 pub mod proxy;
 pub mod authority;
 pub mod api;
+pub mod geolocation;
+pub mod geo_resolver;
+pub mod geo_util;
+pub mod health;
+pub mod health_tracker;
 
 pub fn resolvectl_domain() -> Result<(), Box<dyn std::error::Error>> {
     let output = std::process::Command::new("resolvectl")

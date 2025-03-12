@@ -16,6 +16,9 @@ pub fn build_routes(state: SharedStore) -> Router {
         .route("/server/create", post(new_server))
         .route("/record/:domain/initiate_verification", post(initiate_verification))
         .route("/record/:domain/check_verification", post(check_verification))
+        .route("/bootstrap/add", post(add_bootstrap_node))
+        .route("/bootstrap/remove", post(remove_bootstrap_node))
+        .route("/bootstrap/list", get(list_bootstrap_nodes))
         .with_state(state)
 }
 
@@ -50,6 +53,31 @@ pub enum Success {
     None,
     Some(FormDnsRecord),
     List(Vec<(String, FormDnsRecord)>)
+}
+
+// New data types for bootstrap node management
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BootstrapNodeRequest {
+    pub node_id: String,
+    pub ip_address: IpAddr,
+    pub region: Option<String>,
+    pub ttl: Option<u32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum BootstrapNodeResponse {
+    Success,
+    Failure(String),
+    NodesList(Vec<BootstrapNodeInfo>),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BootstrapNodeInfo {
+    pub node_id: String,
+    pub ip_address: IpAddr,
+    pub region: Option<String>,
+    pub ttl: u32,
+    pub health_status: String,  // "healthy", "unhealthy", etc.
 }
 
 async fn create_record(
@@ -349,6 +377,150 @@ async fn check_verification(
             log::error!("Domain verification check failed: {}", err);
             Json(DomainResponse::VerificationFailure(err))
         }
+    }
+}
+
+/// Add a new bootstrap node to the bootstrap domain
+async fn add_bootstrap_node(
+    State(state): State<SharedStore>,
+    Json(request): Json<BootstrapNodeRequest>,
+) -> Json<BootstrapNodeResponse> {
+    log::info!("Received request to add bootstrap node: {} at {}", 
+               request.node_id, request.ip_address);
+    
+    let domain = "bootstrap.formation.cloud";
+    let mut guard = state.write().await;
+    
+    // Create a socket address from the IP and default WireGuard port
+    let socket_addr = SocketAddr::new(request.ip_address, 51820);
+    
+    // Check if the bootstrap domain record exists
+    if let Some(mut record) = guard.get(domain).clone() {
+        // Update existing record
+        if !record.public_ip.contains(&socket_addr) {
+            record.public_ip.push(socket_addr);
+            
+            // Set custom TTL if provided
+            if let Some(ttl) = request.ttl {
+                record.ttl = ttl;
+            } else {
+                // Use a low TTL for bootstrap domain for faster failover
+                record.ttl = 60;
+            }
+            
+            // Set verification status to verified
+            record.verification_status = Some(VerificationStatus::Verified);
+            
+            // Save the updated record
+            guard.insert(domain, record).await;
+            log::info!("Added bootstrap node {} to domain {}", request.ip_address, domain);
+            return Json(BootstrapNodeResponse::Success);
+        } else {
+            return Json(BootstrapNodeResponse::Failure(
+                format!("Bootstrap node {} already exists", request.ip_address)
+            ));
+        }
+    } else {
+        // Create a new bootstrap domain record
+        let record = FormDnsRecord {
+            domain: domain.to_string(),
+            record_type: RecordType::A,
+            formnet_ip: vec![],
+            public_ip: vec![socket_addr],
+            cname_target: None,
+            ssl_cert: false,
+            ttl: request.ttl.unwrap_or(60), // Low TTL for bootstrap domain
+            verification_status: Some(VerificationStatus::Verified),
+            verification_timestamp: None,
+        };
+        
+        guard.insert(domain, record).await;
+        log::info!("Created bootstrap domain record with node {}", request.ip_address);
+        return Json(BootstrapNodeResponse::Success);
+    }
+}
+
+/// Remove a bootstrap node from the bootstrap domain
+async fn remove_bootstrap_node(
+    State(state): State<SharedStore>,
+    Json(request): Json<BootstrapNodeRequest>,
+) -> Json<BootstrapNodeResponse> {
+    log::info!("Received request to remove bootstrap node: {}", request.ip_address);
+    
+    let domain = "bootstrap.formation.cloud";
+    let mut guard = state.write().await;
+    
+    // Create a socket address from the IP and default WireGuard port
+    let socket_addr = SocketAddr::new(request.ip_address, 51820);
+    
+    if let Some(mut record) = guard.get(domain).clone() {
+        // Remove the node from the list
+        let original_len = record.public_ip.len();
+        record.public_ip.retain(|addr| addr != &socket_addr);
+        
+        if record.public_ip.len() < original_len {
+            // Save the updated record
+            guard.insert(domain, record).await;
+            log::info!("Removed bootstrap node {} from domain {}", request.ip_address, domain);
+            return Json(BootstrapNodeResponse::Success);
+        } else {
+            return Json(BootstrapNodeResponse::Failure(
+                format!("Bootstrap node {} not found", request.ip_address)
+            ));
+        }
+    } else {
+        return Json(BootstrapNodeResponse::Failure(
+            format!("Bootstrap domain {} not found", domain)
+        ));
+    }
+}
+
+/// List all bootstrap nodes
+async fn list_bootstrap_nodes(
+    State(state): State<SharedStore>,
+) -> Json<BootstrapNodeResponse> {
+    log::info!("Received request to list bootstrap nodes");
+    
+    let domain = "bootstrap.formation.cloud";
+    let guard = state.read().await;
+    
+    if let Some(record) = guard.get(domain) {
+        // Get the health repository to check node health status
+        let health_repo = guard.get_health_repository();
+        let nodes_info = if let Some(health_repo) = health_repo {
+            let health_guard = health_repo.read().await;
+            
+            record.public_ip.iter().map(|addr| {
+                let ip = addr.ip();
+                let health_status = if health_guard.is_available(&ip) {
+                    "healthy"
+                } else {
+                    "unhealthy"
+                }.to_string();
+                
+                BootstrapNodeInfo {
+                    node_id: format!("node-{}", ip), // Use IP as default node ID
+                    ip_address: ip,
+                    region: None, // We don't store region info yet
+                    ttl: record.ttl,
+                    health_status,
+                }
+            }).collect()
+        } else {
+            record.public_ip.iter().map(|addr| {
+                BootstrapNodeInfo {
+                    node_id: format!("node-{}", addr.ip()),
+                    ip_address: addr.ip(),
+                    region: None,
+                    ttl: record.ttl,
+                    health_status: "unknown".to_string(),
+                }
+            }).collect()
+        };
+        
+        return Json(BootstrapNodeResponse::NodesList(nodes_info));
+    } else {
+        return Json(BootstrapNodeResponse::NodesList(vec![]));
     }
 }
 

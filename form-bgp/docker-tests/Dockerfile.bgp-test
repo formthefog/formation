@@ -1,0 +1,48 @@
+FROM ubuntu:22.04
+
+# Install common utilities and tools
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    iproute2 \
+    iputils-ping \
+    tcpdump \
+    net-tools \
+    curl \
+    wget \
+    vim \
+    procps \
+    wireguard \
+    sudo \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install BIRD (lightweight BGP daemon)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends bird \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install FRRouting (comprehensive routing suite including BGP)
+RUN curl -s https://deb.frrouting.org/frr/keys.gpg | apt-key add - && \
+    echo deb https://deb.frrouting.org/frr $(lsb_release -s -c) frr-stable | tee -a /etc/apt/sources.list.d/frr.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends frr frr-pythontools \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install GoBGP (lightweight BGP implementation written in Go)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends golang git \
+    && rm -rf /var/lib/apt/lists/* \
+    && go install github.com/osrg/gobgp/v3/cmd/gobgp@latest \
+    && go install github.com/osrg/gobgp/v3/cmd/gobgpd@latest \
+    && cp ~/go/bin/gobgp /usr/local/bin/ \
+    && cp ~/go/bin/gobgpd /usr/local/bin/
+
+# Set up working directory
+WORKDIR /app
+
+# Add script to set up network
+COPY setup_network.sh /app/
+RUN chmod +x /app/setup_network.sh
+
+# Default command
+CMD ["/bin/bash"] 
