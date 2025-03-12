@@ -26,16 +26,8 @@ pub mod defaults {
     pub const SERVER_HOST: &str = "127.0.0.1";
     /// Default timeout for requests in seconds
     pub const REQUEST_TIMEOUT_SECS: u64 = 60;
-}
-
-/// Starts the MCP server with the given configuration
-/// 
-/// # Arguments
-/// * `config_path` - Path to the configuration file
-pub async fn start_server(config_path: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
-    // Placeholder for server start logic
-    // This will be implemented in a future sub-task
-    Ok(())
+    /// Default number of worker threads (0 = auto)
+    pub const WORKERS: usize = 0;
 }
 
 /// Gracefully shuts down the MCP server

@@ -1,14 +1,13 @@
-// Settings module for configuration
+// Settings module for the MCP server
 //
-// This module defines the settings structure and loading/saving functions
-// for the MCP server configuration.
+// This module contains the settings and configuration for the MCP server.
 
-use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::Path;
 use anyhow::Result;
+use serde::{Serialize, Deserialize};
+use crate::defaults;
 
-/// Server settings for the MCP server
+/// Server configuration settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerSettings {
     /// Host address to bind to
@@ -28,17 +27,17 @@ pub struct ServerSettings {
 impl Default for ServerSettings {
     fn default() -> Self {
         Self {
-            host: crate::defaults::SERVER_HOST.to_string(),
-            port: crate::defaults::SERVER_PORT,
-            workers: num_cpus::get(),
-            cors_enabled: false,
-            cors_origins: vec!["*".to_string()],
-            request_timeout: crate::defaults::REQUEST_TIMEOUT_SECS,
+            host: defaults::SERVER_HOST.to_string(),
+            port: defaults::SERVER_PORT,
+            workers: defaults::WORKERS,
+            cors_enabled: true,
+            cors_origins: vec!["http://localhost:3000".to_string()],
+            request_timeout: defaults::REQUEST_TIMEOUT_SECS,
         }
     }
 }
 
-/// Authentication settings
+/// Authentication configuration settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthSettings {
     /// Enable authentication
@@ -54,12 +53,12 @@ impl Default for AuthSettings {
         Self {
             enabled: true,
             jwt_secret: generate_random_secret(),
-            token_expiration: 86400, // 24 hours
+            token_expiration: 3600,
         }
     }
 }
 
-/// Database settings
+/// Database configuration settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseSettings {
     /// Database type (e.g., postgres, sqlite)
@@ -74,13 +73,13 @@ impl Default for DatabaseSettings {
     fn default() -> Self {
         Self {
             db_type: "postgres".to_string(),
-            connection_string: "postgres://postgres:postgres@localhost:5432/form_mcp".to_string(),
+            connection_string: "postgres://postgres:postgres@localhost:5432/formation".to_string(),
             max_connections: 5,
         }
     }
 }
 
-/// Complete settings for the MCP server
+/// Main settings structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     /// Environment (development, staging, production)
@@ -109,43 +108,37 @@ impl Default for Settings {
 
 /// Load settings from a file
 pub fn load(path: impl AsRef<Path>) -> Result<Settings> {
-    let config_str = match fs::read_to_string(&path) {
-        Ok(config_str) => config_str,
-        Err(_) => {
-            // If the file doesn't exist, create default settings
-            let default_settings = Settings::default();
-            save(&default_settings, path)?;
-            return Ok(default_settings);
-        }
-    };
+    // If the file exists, load it
+    if Path::new(path.as_ref()).exists() {
+        let content = std::fs::read_to_string(path)?;
+        let settings: Settings = toml::from_str(&content)?;
+        return Ok(settings);
+    }
     
-    let settings: Settings = toml::from_str(&config_str)?;
-    Ok(settings)
+    // Otherwise, return default settings
+    Ok(Settings::default())
 }
 
 /// Save settings to a file
 pub fn save(settings: &Settings, path: impl AsRef<Path>) -> Result<()> {
-    let config_str = toml::to_string_pretty(settings)?;
-    
-    // Create parent directories if they don't exist
-    if let Some(parent) = path.as_ref().parent() {
-        fs::create_dir_all(parent)?;
-    }
-    
-    fs::write(path, config_str)?;
+    let content = toml::to_string(settings)?;
+    std::fs::write(path, content)?;
     Ok(())
 }
 
 /// Generate a random secret for JWT
 fn generate_random_secret() -> String {
     use rand::{thread_rng, Rng};
-    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ\
+                            abcdefghijklmnopqrstuvwxyz\
+                            0123456789";
     let mut rng = thread_rng();
-    let secret: String = (0..32)
+    let secret: String = (0..64)
         .map(|_| {
             let idx = rng.gen_range(0..CHARSET.len());
             CHARSET[idx] as char
         })
         .collect();
+    
     secret
 } 

@@ -3,6 +3,8 @@
 // This module defines the data models used throughout the MCP server,
 // including MCP protocol structures and internal data representations.
 
+pub mod operations;
+
 /// Represents a resource in the MCP protocol
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Resource {

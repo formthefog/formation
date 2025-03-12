@@ -44,6 +44,8 @@ pub struct ToolDefinition {
     pub return_type: String,
     /// Tags for categorizing the tool
     pub tags: Vec<String>,
+    /// Whether this tool execution is potentially long-running and should use the operations system
+    pub is_long_running: Option<bool>,
 }
 
 /// Type alias for tool execution results

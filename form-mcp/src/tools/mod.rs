@@ -23,10 +23,12 @@ pub struct ToolContext {
     pub request_id: String,
     /// Additional contextual data
     pub context: std::collections::HashMap<String, String>,
+    /// Whether the user has admin privileges
+    pub is_admin: bool,
 }
 
 /// ToolRequest represents a request to execute a tool
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct ToolRequest {
     /// Name of the tool to execute
     pub name: String,

@@ -9,6 +9,7 @@ The MCP server provides a standardized interface for AI agents to interact with 
 ## Features
 
 - **Tool Registry System**: Register, discover, and execute tools for managing workloads
+- **Long-running Operations**: Track and manage the status of asynchronous operations
 - **Authentication & Authorization**: Secure access to Formation network management functions
 - **VM Lifecycle Management**: Create, control, and monitor VMs
 - **Network Configuration**: Manage network settings and connections
@@ -22,7 +23,12 @@ This project is under active development. Currently implemented:
 - [x] Basic project structure and module layout
 - [x] Core tool registry data structures
 - [x] Registry management functionality
-- [x] Placeholder modules for key components
+- [x] VM management tools
+- [x] Operations tracking system for long-running tasks
+- [x] API endpoints for tool execution and operation status
+- [ ] Authentication system
+- [ ] Metrics and monitoring tools
+- [ ] Network management tools
 
 ## Architecture
 
@@ -38,10 +44,23 @@ form-mcp/
 │   └── metrics/      # Metrics and monitoring tools
 ├── events/           # Event system for notifications
 ├── models/           # Data models and schemas
+│   └── operations/   # Long-running operations tracking
 ├── config/           # Configuration management
 ├── billing/          # Billing and payment integration
 └── errors/           # Error handling
 ```
+
+## API Endpoints
+
+### Tools
+
+- `GET /api/tools` - List available tools
+- `POST /api/tools/{name}` - Execute a tool
+
+### Operations
+
+- `GET /api/operations/{id}` - Get status of a long-running operation
+- `GET /api/operations` - List operations (optionally filtered by user)
 
 ## Getting Started
 

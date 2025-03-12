@@ -196,7 +196,12 @@ Implement management control plane to enable agents and AI to manage workload li
 - [~] Implement tool registry and execution system
   - [x] Create core data structures for tool registry
   - [x] Implement basic registry management functionality
-  - [ ] Develop VM management tools
+  - [x] Develop VM management tools
+    - [x] VM Create Tool - Provisioning new VMs with customizable configurations
+    - [x] VM Status Tool - Retrieving status information about existing VMs
+    - [x] VM Control Tool - Managing lifecycle operations (start, stop, restart)
+    - [x] VM List Tool - Listing available VMs with filtering capabilities
+    - [x] VM Delete Tool - Removing VMs when no longer needed
   - [ ] Build network configuration tools
   - [ ] Create metrics and monitoring tools
 - [ ] Create authentication and authorization system
@@ -206,7 +211,7 @@ Implement management control plane to enable agents and AI to manage workload li
 - [ ] Design and implement agent policy framework
 - [ ] Build logging and monitoring for agent actions
 
-**Status: CURRENT FOCUS** - Core framework implementation in progress. Initial project scaffold completed and tool registry implemented. Next steps focus on implementing specific VM management tools.
+**Status: IN PROGRESS** - Core framework implementation and VM management tools completed. VM tools provide full lifecycle management including creation, status checking, control operations, listing, and deletion. All tools interact properly with the state datastore and message queue system, with robust error handling and security checks. Next steps focus on implementing network configuration tools and metrics/monitoring capabilities.
 
 ### 7. Stateful Elastic Scaling
 

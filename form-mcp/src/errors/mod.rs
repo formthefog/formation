@@ -90,6 +90,9 @@ pub enum ToolError {
     
     #[error("Tool operation timed out")]
     Timeout,
+    
+    #[error("Forbidden: {0}")]
+    Forbidden(String),
 }
 
 // Implement ResponseError for ServerError to convert it to HTTP responses

@@ -35,6 +35,7 @@ rand = "0.8"
 hex = "0.4"
 jwt = "0.16"
 hmac = "0.12"
+tiny-keccak = { version = "2.0", features = ["sha3"] }
 
 # Logging and error handling
 log = "0.4"

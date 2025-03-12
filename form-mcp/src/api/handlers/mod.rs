@@ -3,8 +3,8 @@
 // This module contains the request handlers for the MCP server API endpoints.
 // Handlers process incoming requests and return appropriate responses.
 
-// Will be expanded in future sub-tasks with actual handler implementations
-// such as tool execution, tool discovery, etc.
+pub mod tools;
+pub mod operations;
 
 /// Common response structure for API endpoints
 #[derive(serde::Serialize)]

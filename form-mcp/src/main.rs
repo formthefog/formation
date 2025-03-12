@@ -1,5 +1,6 @@
 use std::env;
-use form_mcp::start_server;
+use form_mcp::{api, tools};
+use std::sync::Arc;
 use anyhow::Result;
 use log::{info, error};
 use std::process;
@@ -14,8 +15,24 @@ async fn main() -> Result<()> {
     // Get configuration path from command line arguments
     let config_path = env::args().nth(1);
     
-    // Start the server
-    match start_server(config_path.as_deref()).await {
+    // Load configuration
+    let settings = match form_mcp::config::load_config(config_path.as_deref()) {
+        Ok(settings) => {
+            info!("Loaded configuration successfully");
+            settings
+        },
+        Err(e) => {
+            error!("Failed to load configuration: {}", e);
+            process::exit(1);
+        }
+    };
+    
+    // Initialize tool registry
+    let registry = tools::init_registry();
+    info!("Initialized tool registry with {} tools", registry.list_tools().len());
+    
+    // Start the API server
+    match api::init_server(settings, registry).await {
         Ok(_) => {
             info!("form-mcp server stopped gracefully");
             Ok(())

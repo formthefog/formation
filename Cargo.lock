@@ -3248,6 +3248,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "thiserror 1.0.69",
+ "tiny-keccak",
  "tokio",
  "tokio-test",
  "toml 0.8.20",
