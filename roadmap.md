@@ -202,16 +202,21 @@ Implement management control plane to enable agents and AI to manage workload li
     - [x] VM Control Tool - Managing lifecycle operations (start, stop, restart)
     - [x] VM List Tool - Listing available VMs with filtering capabilities
     - [x] VM Delete Tool - Removing VMs when no longer needed
+  - [x] Implement workload packaging and deployment tools
+    - [x] Pack Build Tool - Building workloads from Formfile specifications
+    - [x] Pack Ship Tool - Deploying built workloads to Formation instances
   - [ ] Build network configuration tools
   - [ ] Create metrics and monitoring tools
-- [ ] Create authentication and authorization system
-- [ ] Implement workload lifecycle management tools
+- [x] Create authentication and authorization system
+  - [x] Implement JWT-based authentication
+  - [x] Add signature verification for requests
+  - [x] Create permission-based authorization
 - [ ] Build event system for workload state changes
 - [ ] Create resource optimization recommendations
 - [ ] Design and implement agent policy framework
 - [ ] Build logging and monitoring for agent actions
 
-**Status: IN PROGRESS** - Core framework implementation and VM management tools completed. VM tools provide full lifecycle management including creation, status checking, control operations, listing, and deletion. All tools interact properly with the state datastore and message queue system, with robust error handling and security checks. Next steps focus on implementing network configuration tools and metrics/monitoring capabilities.
+**Status: IN PROGRESS** - Core framework implementation, VM management tools, and workload packaging tools completed. VM tools provide full lifecycle management including creation, status checking, control operations, listing, and deletion. Pack tools enable building and deploying workloads using Formfile specifications. All tools interact properly with the state datastore and message queue system, with robust error handling and security checks. Next steps focus on implementing network configuration tools and metrics/monitoring capabilities.
 
 ### 7. Stateful Elastic Scaling
 

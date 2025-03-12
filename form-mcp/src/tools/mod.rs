@@ -6,7 +6,8 @@
 pub mod vm;
 pub mod network;
 pub mod metrics;
-mod registry;
+pub mod registry;
+pub mod pack;
 
 pub use registry::{ToolRegistry, Tool, ToolDefinition, ToolParameter, ToolResult};
 
@@ -61,6 +62,9 @@ pub fn init_registry() -> Arc<registry::ToolRegistry> {
     
     // Register metrics tools
     metrics::register_tools(&registry);
+    
+    // Register pack management tools
+    pack::register_tools(&registry);
     
     Arc::new(registry)
 }
