@@ -280,14 +280,11 @@ This phase establishes the DNS infrastructure that enables geographic routing an
 - [x] Implement basic health checks for entry nodes
 - [x] Create health-based DNS response filtering mechanism
 - [x] Implement health status repository
-- [ ] Implement variable TTL adjustment based on health status
-- [ ] Enhance regional health degradation handling
 
 #### 4.1.3 Testing and Validation
 - [x] Test geographic-based DNS routing
 - [x] Validate health-based updates
 - [x] Verify proximity-based routing accuracy
-- [ ] Test variable TTL adjustments
 
 ### 4.2 Phase 2: Private BGP Overlay (Optional)
 
@@ -364,6 +361,9 @@ This phase connects the DNS components with the existing Formation network and a
 *Note: These features will be considered only after all MUST-HAVE features are fully implemented and stable.*
 
 1. **Advanced DNS Features**
+   - Implement variable TTL adjustment based on health status
+   - Enhance regional health degradation handling
+   - Test variable TTL adjustments
    - DNSSEC implementation
    - Multi-region routing optimization
    - Latency-based routing
@@ -508,22 +508,20 @@ With the plan in place, we can proceed with implementation focusing exclusively 
   - [x] Create IP-level health status tracking system
   - [x] Modify DNS resolution to exclude unhealthy IPs
   - [x] Add observability for health-based DNS filtering decisions (basic logging implemented)
-  - [ ] Implement variable TTL adjustment based on health status
-  - [ ] Enhance regional health degradation handling
-  - [ ] Integrate DNS health metrics with form-node-metrics for unified observability
-  - [ ] Create dashboard visualizations for DNS health filtering operations
 
 ### Integration with Bootstrap Process
 - [x] Enhance bootstrap process to use GeoDNS through `form-dns`
 - [x] Update the join process to leverage health-aware DNS
 - [x] Create documentation for the new bootstrap approach
 
-### Enhanced Metrics and Observability
+### Future Enhancements
+- [ ] Implement variable TTL adjustment based on health status
+- [ ] Enhance regional health degradation handling
+- [ ] Integrate DNS health metrics with form-node-metrics for unified observability
+- [ ] Create dashboard visualizations for DNS health filtering operations
 - [ ] Improve logging for DNS resolution decisions
 - [ ] Add metrics collection for DNS resolution patterns
 - [ ] Create a dashboard for DNS health and performance
-
-### DNS Configuration Management
 - [ ] Implement a configuration framework for DNS settings
 - [ ] Create management API for DNS configuration
 - [ ] Develop validation and error checking for DNS settings

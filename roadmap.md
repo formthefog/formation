@@ -180,7 +180,14 @@ Implement advanced routing for seamless access to the network without requiring 
 - [x] Create health tracking for IP addresses
 - [x] Implement filtering of unhealthy IPs in DNS responses
 - [x] Enhance bootstrap process to use GeoDNS and health-aware DNS
-- [~] Implement BGP session management for nodes
+
+**Future Enhancements:**
+- [ ] Implement variable TTL adjustment based on node health status
+- [ ] Advanced caching strategies for DNS responses
+- [ ] Regional-specific health degradation handling
+- [ ] Integrate DNS health metrics with form-node-metrics for unified observability
+- [ ] Create dashboard visualizations for DNS health filtering operations
+- [ ] Implement BGP session management for nodes
   - [x] Create test environment with multiple virtual nodes for BGP testing
   - [ ] Evaluate and select BGP daemon
   - [ ] Implement BGP configuration generation
@@ -193,12 +200,7 @@ Implement advanced routing for seamless access to the network without requiring 
 - [ ] Implement border router configuration management
 - [ ] Create documentation for network operators
 
-**Future Enhancements:**
-- [ ] Implement variable TTL adjustment based on node health status
-- [ ] Advanced caching strategies for DNS responses
-- [ ] Regional-specific health degradation handling
-- [ ] Integrate DNS health metrics with form-node-metrics for unified observability
-- [ ] Create dashboard visualizations for DNS health filtering operations
+**Status: COMPLETED** - Core DNS-based routing functionality implemented, with BGP overlay and additional enhancements planned for future releases.
 
 ### 7. Stateful Elastic Scaling
 
