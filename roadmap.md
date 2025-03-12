@@ -88,30 +88,7 @@ Complete and enhance the existing vanity domain system to provide users with fri
 
 **Status: COMPLETED** - Core functionality implemented, with some optional enhancements planned for future releases.
 
-### 4. Native P2P AI Inference Engine
-
-Build a distributed AI inference engine with OpenAI/Anthropic compatible APIs for efficient model serving.
-
-**User Stories:**
-- As a developer, I want to use industry-standard APIs for AI inference
-- As a user, I want distributed inference to handle large models efficiently
-- As a user, I want to share compute resources for inference tasks
-- As a model provider, I want to deploy my models to the distributed network
-
-**Implementation Tasks:**
-- [ ] Design model weight sharding protocol
-- [ ] Create compatible API layer (OpenAI/Anthropic)
-- [ ] Implement model serving infrastructure
-- [ ] Build request routing and load balancing system
-- [ ] Create model registry and discovery mechanism
-- [ ] Implement efficient local caching of model weights
-- [ ] Design inference cluster management
-- [ ] Build failover and reliability mechanisms
-- [ ] Develop model quantization and optimization tools
-- [ ] Create accounting system for inference compute usage
-- [ ] Implement security and access control for models
-
-### 5. Economic Infrastructure
+### 4. Economic Infrastructure
 
 Implement event-driven resource usage tracking with frequent event emission and minimal state retention.
 
@@ -164,7 +141,7 @@ Implement event-driven resource usage tracking with frequent event emission and 
 - [ ] Implement resource pricing mechanism (Admin Dashboard Team)
 - [ ] Build invoice generation system (Billing Service Team)
 
-### 6. BGP/Anycast Routing
+### 5. BGP/Anycast Routing
 
 Implement advanced routing for seamless access to the network without requiring specific bootstrap nodes.
 
@@ -202,6 +179,30 @@ Implement advanced routing for seamless access to the network without requiring 
 
 **Status: COMPLETED** - Core DNS-based routing functionality implemented, with BGP overlay and additional enhancements planned for future releases.
 
+### 6. MCP Server for Workload Lifecycle Management
+
+Implement management control plane to enable agents and AI to manage workload lifecycles following the Model Context Protocol standard.
+
+**User Stories:**
+- As an AI agent, I want to deploy and manage workloads autonomously
+- As a developer, I want to automate scaling based on application metrics
+- As an operator, I want centralized management of distributed workloads
+- As a user, I want intelligent resource optimization for my workloads
+
+**Implementation Tasks:**
+- [x] Design MCP server architecture and API
+- [x] Choose appropriate language and framework (Rust with Actix Web)
+- [x] Set up project structure and basic module layout
+- [~] Implement tool registry and execution system
+- [ ] Create authentication and authorization system
+- [ ] Implement workload lifecycle management tools
+- [ ] Build event system for workload state changes
+- [ ] Create resource optimization recommendations
+- [ ] Design and implement agent policy framework
+- [ ] Build logging and monitoring for agent actions
+
+**Status: CURRENT FOCUS** - Core framework implementation in progress.
+
 ### 7. Stateful Elastic Scaling
 
 Enable dynamic scaling of compute resources and storage without losing application state.
@@ -224,28 +225,28 @@ Enable dynamic scaling of compute resources and storage without losing applicati
 - [ ] Create testing framework for scaling operations
 - [ ] Build rollback mechanisms for failed scaling operations
 
-### 8. MCP Server for Workload Lifecycle Management
+### 8. Native P2P AI Inference Engine
 
-Implement management control plane to enable agents and AI to manage workload lifecycles.
+Build a distributed AI inference engine with OpenAI/Anthropic compatible APIs for efficient model serving.
 
 **User Stories:**
-- As an AI agent, I want to deploy and manage workloads autonomously
-- As a developer, I want to automate scaling based on application metrics
-- As an operator, I want centralized management of distributed workloads
-- As a user, I want intelligent resource optimization for my workloads
+- As a developer, I want to use industry-standard APIs for AI inference
+- As a user, I want distributed inference to handle large models efficiently
+- As a user, I want to share compute resources for inference tasks
+- As a model provider, I want to deploy my models to the distributed network
 
 **Implementation Tasks:**
-- [ ] Design MCP server architecture and API
-- [ ] Implement agent authentication and authorization
-- [ ] Create workload lifecycle management commands
-- [ ] Build event system for workload state changes
-- [ ] Implement intelligent scheduling algorithms
-- [ ] Create resource optimization recommendations
-- [ ] Design and implement agent policy framework
-- [ ] Build logging and monitoring for agent actions
-- [ ] Implement AI decision making capabilities
-- [ ] Create audit trail for all agent operations
-- [ ] Develop safety mechanisms and limits for automated management
+- [ ] Design model weight sharding protocol
+- [ ] Create compatible API layer (OpenAI/Anthropic)
+- [ ] Implement model serving infrastructure
+- [ ] Build request routing and load balancing system
+- [ ] Create model registry and discovery mechanism
+- [ ] Implement efficient local caching of model weights
+- [ ] Design inference cluster management
+- [ ] Build failover and reliability mechanisms
+- [ ] Develop model quantization and optimization tools
+- [ ] Create accounting system for inference compute usage
+- [ ] Implement security and access control for models
 
 ## NICE TO HAVE
 
