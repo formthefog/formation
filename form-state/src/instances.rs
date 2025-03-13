@@ -706,43 +706,53 @@ impl Sha3Hash for InstanceCluster {
 }
 
 impl InstanceCluster {
+    /// Returns a reference to the members of this cluster
     pub fn members(&self) -> &BTreeMap<String, ClusterMember> {
         &self.members
     }
 
+    /// Returns a mutable reference to the members of this cluster
     pub fn members_mut(&mut self) -> &mut BTreeMap<String, ClusterMember> {
         &mut self.members
     }
 
+    /// Returns a reference to the cluster member with the given ID, if it exists
     pub fn get(&self, id: &str) -> Option<&ClusterMember> {
         self.members.get(id)
     }
 
+    /// Returns a mutable reference to the cluster member with the given ID, if it exists
     pub fn get_mut(&mut self, id: &str) -> Option<&mut ClusterMember> {
         self.members.get_mut(id)
     }
 
+    /// Inserts a new member into the cluster
     pub fn insert(&mut self, member: ClusterMember) {
         let id = member.id();
         self.members.insert(id.to_string(), member);
     }
 
+    /// Returns an iterator over the members of this cluster
     pub fn iter(&self) -> Iter<String, ClusterMember> {
         self.members.iter()
     }
 
+    /// Returns a mutable iterator over the members of this cluster
     pub fn iter_mut(&mut self) -> IterMut<String, ClusterMember> {
         self.members.iter_mut()
     }
 
+    /// Removes a member from the cluster and returns it, if it exists
     pub fn remove(&mut self, id: &str) -> Option<ClusterMember> {
         self.members.remove(id)
     }
 
+    /// Returns true if the cluster contains a member with the given ID
     pub fn contains_key(&self, id: &str) -> bool {
         self.members.contains_key(id)
     }
 
+    /// Returns the status of the cluster member with the given ID, if it exists
     pub fn get_member_status(&self, id: &str) -> Option<&str> {
         if let Some(member) = self.get(id) {
             return Some(member.status())
@@ -751,6 +761,7 @@ impl InstanceCluster {
         None
     }
 
+    /// Returns the last heartbeat timestamp of the cluster member with the given ID, if it exists
     pub fn get_member_last_heartbeat(&self, id: &str) -> Option<i64> {
         if let Some(member) = self.get(id) {
             return Some(member.last_heartbeat()) 
@@ -759,12 +770,196 @@ impl InstanceCluster {
         None
     }
 
+    /// Returns the number of heartbeats skipped by the cluster member with the given ID, if it exists
     pub fn get_member_heartbeats_skipped(&self, id: &str) -> Option<u32> {
         if let Some(member) = self.get(id) {
             return Some(member.heartbeats_skipped())
         }
 
         None
+    }
+
+    /// Returns a reference to the scaling policy for this cluster, if it exists
+    pub fn scaling_policy(&self) -> Option<&ScalingPolicy> {
+        self.scaling_policy.as_ref()
+    }
+
+    /// Sets the scaling policy for this cluster
+    pub fn set_scaling_policy(&mut self, policy: Option<ScalingPolicy>) {
+        self.scaling_policy = policy;
+    }
+
+    /// Returns the template instance ID for this cluster, if it exists
+    pub fn template_instance_id(&self) -> Option<&String> {
+        self.template_instance_id.as_ref()
+    }
+
+    /// Sets the template instance ID for this cluster
+    pub fn set_template_instance_id(&mut self, id: Option<String>) {
+        self.template_instance_id = id;
+    }
+
+    /// Returns whether session affinity is enabled for this cluster
+    pub fn session_affinity_enabled(&self) -> bool {
+        self.session_affinity_enabled
+    }
+
+    /// Sets whether session affinity is enabled for this cluster
+    pub fn set_session_affinity_enabled(&mut self, enabled: bool) {
+        self.session_affinity_enabled = enabled;
+    }
+
+    /// Returns the number of members in this cluster
+    pub fn size(&self) -> usize {
+        self.members.len()
+    }
+
+    /// Returns true if the cluster is empty (has no members)
+    pub fn is_empty(&self) -> bool {
+        self.members.is_empty()
+    }
+
+    /// Creates a new InstanceCluster with the specified template instance ID and no members
+    pub fn new_with_template(template_id: String) -> Self {
+        Self {
+            members: BTreeMap::new(),
+            scaling_policy: None,
+            template_instance_id: Some(template_id),
+            session_affinity_enabled: false,
+        }
+    }
+
+    /// Creates a new InstanceCluster with the specified scaling policy and no members
+    pub fn new_with_policy(policy: ScalingPolicy) -> Self {
+        Self {
+            members: BTreeMap::new(),
+            scaling_policy: Some(policy),
+            template_instance_id: None,
+            session_affinity_enabled: false,
+        }
+    }
+
+    /// Validates that the cluster's scaling policy is valid, if it exists
+    pub fn validate_scaling_policy(&self) -> Result<(), String> {
+        if let Some(policy) = &self.scaling_policy {
+            policy.validate()?;
+        }
+        Ok(())
+    }
+
+    /// Determines if the cluster needs to scale out based on its scaling policy and current metrics
+    ///
+    /// # Arguments
+    ///
+    /// * `current_cpu_utilization` - The current CPU utilization percentage across the cluster
+    /// * `current_time` - The current timestamp in seconds since Unix epoch
+    ///
+    /// # Returns
+    ///
+    /// `Some(target_count)` if scaling out is needed, `None` otherwise
+    pub fn should_scale_out(&self, current_cpu_utilization: u32, current_time: i64) -> Option<u32> {
+        // If there's no scaling policy, we can't scale
+        let policy = self.scaling_policy.as_ref()?;
+        
+        // If we're already at or above the maximum number of instances, we can't scale out
+        let current_count = self.size() as u32;
+        if current_count >= policy.max_instances() {
+            return None;
+        }
+        
+        // Check if we're in a cooldown period
+        if policy.is_in_scale_out_cooldown(current_time) {
+            return None;
+        }
+        
+        // Check if we need to scale based on CPU utilization
+        if policy.should_scale_out(current_count, current_cpu_utilization) {
+            return policy.get_target_instance_count(current_count, current_cpu_utilization, current_time);
+        }
+        
+        None
+    }
+    
+    /// Determines if the cluster needs to scale in based on its scaling policy and current metrics
+    ///
+    /// # Arguments
+    ///
+    /// * `current_cpu_utilization` - The current CPU utilization percentage across the cluster
+    /// * `current_time` - The current timestamp in seconds since Unix epoch
+    ///
+    /// # Returns
+    ///
+    /// `Some(target_count)` if scaling in is needed, `None` otherwise
+    pub fn should_scale_in(&self, current_cpu_utilization: u32, current_time: i64) -> Option<u32> {
+        // If there's no scaling policy, we can't scale
+        let policy = self.scaling_policy.as_ref()?;
+        
+        // If we're already at or below the minimum number of instances, we can't scale in
+        let current_count = self.size() as u32;
+        if current_count <= policy.min_instances() {
+            return None;
+        }
+        
+        // Check if we're in a cooldown period
+        if policy.is_in_scale_in_cooldown(current_time) {
+            return None;
+        }
+        
+        // Check if we need to scale based on CPU utilization
+        if policy.should_scale_in(current_count, current_cpu_utilization) {
+            return policy.get_target_instance_count(current_count, current_cpu_utilization, current_time);
+        }
+        
+        None
+    }
+    
+    /// Records that a scale-out operation was performed
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The timestamp of the scale-out operation in seconds since Unix epoch
+    pub fn record_scale_out(&mut self, timestamp: i64) {
+        if let Some(policy) = &mut self.scaling_policy {
+            policy.record_scale_out(timestamp);
+        }
+    }
+    
+    /// Records that a scale-in operation was performed
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The timestamp of the scale-in operation in seconds since Unix epoch
+    pub fn record_scale_in(&mut self, timestamp: i64) {
+        if let Some(policy) = &mut self.scaling_policy {
+            policy.record_scale_in(timestamp);
+        }
+    }
+    
+    /// Finds the instance IDs of the members that should be removed when scaling in
+    ///
+    /// # Arguments
+    ///
+    /// * `count` - The number of instances to remove
+    ///
+    /// # Returns
+    ///
+    /// A vector of instance IDs to remove
+    pub fn select_instances_to_remove(&self, count: usize) -> Vec<String> {
+        // Default strategy: remove instances with the oldest heartbeats
+        let mut members: Vec<(&String, &ClusterMember)> = self.members.iter().collect();
+        
+        // Sort by heartbeat timestamp (oldest first)
+        members.sort_by_key(|(_, member)| member.last_heartbeat());
+        
+        // Skip the template instance if set
+        let members_to_remove = members
+            .iter()
+            .filter(|(id, _)| self.template_instance_id.as_ref() != Some(id))
+            .take(count)
+            .map(|(id, _)| (*id).clone())
+            .collect();
+        
+        members_to_remove
     }
 }
 
@@ -1469,4 +1664,324 @@ mod tests {
         // Different clusters should have different hashes
         assert_ne!(output1, output3);
     }
+
+    #[test]
+    fn test_instance_cluster_accessors() {
+        // Create a custom scaling policy
+        let policy = ScalingPolicy::with_defaults();
+        
+        // Create a cluster with custom values
+        let mut cluster = InstanceCluster {
+            members: BTreeMap::new(),
+            scaling_policy: Some(policy.clone()),
+            template_instance_id: Some("instance1".to_string()),
+            session_affinity_enabled: true,
+        };
+        
+        // Test accessors
+        assert_eq!(cluster.scaling_policy().unwrap().min_instances(), policy.min_instances());
+        assert_eq!(cluster.template_instance_id().unwrap(), "instance1");
+        assert!(cluster.session_affinity_enabled());
+        
+        // Test mutators
+        cluster.set_scaling_policy(None);
+        cluster.set_template_instance_id(None);
+        cluster.set_session_affinity_enabled(false);
+        
+        assert!(cluster.scaling_policy().is_none());
+        assert!(cluster.template_instance_id().is_none());
+        assert!(!cluster.session_affinity_enabled());
+    }
+    
+    #[test]
+    fn test_instance_cluster_size_and_empty() {
+        // Test empty cluster
+        let mut cluster = InstanceCluster::default();
+        assert_eq!(cluster.size(), 0);
+        assert!(cluster.is_empty());
+        
+        // Add a member
+        let member = ClusterMember {
+            node_id: "node1".to_string(),
+            node_public_ip: "192.168.1.1".parse().unwrap(),
+            node_formnet_ip: "10.0.0.1".parse().unwrap(),
+            instance_id: "instance1".to_string(),
+            instance_formnet_ip: "10.0.0.2".parse().unwrap(),
+            status: "running".to_string(),
+            last_heartbeat: 12345,
+            heartbeats_skipped: 0,
+        };
+        
+        cluster.insert(member);
+        
+        // Test non-empty cluster
+        assert_eq!(cluster.size(), 1);
+        assert!(!cluster.is_empty());
+    }
+    
+    #[test]
+    fn test_instance_cluster_constructors() {
+        // Test new_with_template
+        let cluster1 = InstanceCluster::new_with_template("primary-instance".to_string());
+        assert!(cluster1.members.is_empty());
+        assert!(cluster1.scaling_policy.is_none());
+        assert_eq!(cluster1.template_instance_id, Some("primary-instance".to_string()));
+        assert!(!cluster1.session_affinity_enabled);
+        
+        // Test new_with_policy
+        let policy = ScalingPolicy::with_defaults();
+        let cluster2 = InstanceCluster::new_with_policy(policy.clone());
+        assert!(cluster2.members.is_empty());
+        assert!(cluster2.scaling_policy.is_some());
+        assert_eq!(cluster2.scaling_policy.unwrap().min_instances(), policy.min_instances());
+        assert!(cluster2.template_instance_id.is_none());
+        assert!(!cluster2.session_affinity_enabled);
+    }
+    
+    #[test]
+    fn test_validate_scaling_policy() {
+        // Test with valid policy
+        let valid_policy = ScalingPolicy::new(1, 5, 70, 300, 120);
+        let cluster1 = InstanceCluster::new_with_policy(valid_policy);
+        assert!(cluster1.validate_scaling_policy().is_ok());
+        
+        // Test with invalid policy
+        let invalid_policy = ScalingPolicy::new(10, 5, 70, 300, 120); // min > max
+        let cluster2 = InstanceCluster::new_with_policy(invalid_policy);
+        assert!(cluster2.validate_scaling_policy().is_err());
+        
+        // Test with no policy
+        let cluster3 = InstanceCluster::default();
+        assert!(cluster3.validate_scaling_policy().is_ok());
+    }
+    
+    #[test]
+    fn test_cluster_should_scale_out() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+            
+        // Create policy: min=2, max=5, target=70%
+        let policy = ScalingPolicy::new(2, 5, 70, 300, 120);
+        
+        // Create cluster with 3 members
+        let mut cluster = InstanceCluster::new_with_policy(policy);
+        
+        for i in 1..=3 {
+            let member = ClusterMember {
+                node_id: format!("node{}", i),
+                node_public_ip: "192.168.1.1".parse().unwrap(),
+                node_formnet_ip: "10.0.0.1".parse().unwrap(),
+                instance_id: format!("instance{}", i),
+                instance_formnet_ip: "10.0.0.2".parse().unwrap(),
+                status: "running".to_string(),
+                last_heartbeat: now,
+                heartbeats_skipped: 0,
+            };
+            cluster.insert(member);
+        }
+        
+        // Test scale-out conditions
+        
+        // High CPU (85%) should trigger scale-out
+        assert!(cluster.should_scale_out(85, now).is_some());
+        
+        // Low CPU (60%) should not trigger scale-out
+        assert!(cluster.should_scale_out(60, now).is_none());
+        
+        // When at max capacity, should not scale out regardless of CPU
+        for i in 4..=5 {
+            let member = ClusterMember {
+                node_id: format!("node{}", i),
+                node_public_ip: "192.168.1.1".parse().unwrap(),
+                node_formnet_ip: "10.0.0.1".parse().unwrap(),
+                instance_id: format!("instance{}", i),
+                instance_formnet_ip: "10.0.0.2".parse().unwrap(),
+                status: "running".to_string(),
+                last_heartbeat: now,
+                heartbeats_skipped: 0,
+            };
+            cluster.insert(member);
+        }
+        
+        assert!(cluster.should_scale_out(85, now).is_none());
+        
+        // Test cooldown period
+        // Reset to 3 members
+        cluster.members.clear();
+        for i in 1..=3 {
+            let member = ClusterMember {
+                node_id: format!("node{}", i),
+                node_public_ip: "192.168.1.1".parse().unwrap(),
+                node_formnet_ip: "10.0.0.1".parse().unwrap(),
+                instance_id: format!("instance{}", i),
+                instance_formnet_ip: "10.0.0.2".parse().unwrap(),
+                status: "running".to_string(),
+                last_heartbeat: now,
+                heartbeats_skipped: 0,
+            };
+            cluster.insert(member);
+        }
+        
+        // Record a scale-out
+        cluster.record_scale_out(now);
+        
+        // During cooldown, should not scale out
+        assert!(cluster.should_scale_out(85, now + 60).is_none()); // 60s later
+        
+        // After cooldown, should scale out
+        assert!(cluster.should_scale_out(85, now + 121).is_some()); // 121s later
+    }
+    
+    #[test]
+    fn test_cluster_should_scale_in() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+            
+        // Create policy: min=2, max=5, target=70%
+        let policy = ScalingPolicy::new(2, 5, 70, 300, 120);
+        
+        // Create cluster with 4 members
+        let mut cluster = InstanceCluster::new_with_policy(policy);
+        
+        for i in 1..=4 {
+            let member = ClusterMember {
+                node_id: format!("node{}", i),
+                node_public_ip: "192.168.1.1".parse().unwrap(),
+                node_formnet_ip: "10.0.0.1".parse().unwrap(),
+                instance_id: format!("instance{}", i),
+                instance_formnet_ip: "10.0.0.2".parse().unwrap(),
+                status: "running".to_string(),
+                last_heartbeat: now,
+                heartbeats_skipped: 0,
+            };
+            cluster.insert(member);
+        }
+        
+        // Test scale-in conditions
+        
+        // Low CPU (40%) should trigger scale-in
+        assert!(cluster.should_scale_in(40, now).is_some());
+        
+        // High CPU (60%) should not trigger scale-in
+        assert!(cluster.should_scale_in(60, now).is_none());
+        
+        // When at min capacity, should not scale in regardless of CPU
+        cluster.members.clear();
+        for i in 1..=2 {
+            let member = ClusterMember {
+                node_id: format!("node{}", i),
+                node_public_ip: "192.168.1.1".parse().unwrap(),
+                node_formnet_ip: "10.0.0.1".parse().unwrap(),
+                instance_id: format!("instance{}", i),
+                instance_formnet_ip: "10.0.0.2".parse().unwrap(),
+                status: "running".to_string(),
+                last_heartbeat: now,
+                heartbeats_skipped: 0,
+            };
+            cluster.insert(member);
+        }
+        
+        assert!(cluster.should_scale_in(40, now).is_none());
+        
+        // Test cooldown period
+        // Reset to 4 members
+        cluster.members.clear();
+        for i in 1..=4 {
+            let member = ClusterMember {
+                node_id: format!("node{}", i),
+                node_public_ip: "192.168.1.1".parse().unwrap(),
+                node_formnet_ip: "10.0.0.1".parse().unwrap(),
+                instance_id: format!("instance{}", i),
+                instance_formnet_ip: "10.0.0.2".parse().unwrap(),
+                status: "running".to_string(),
+                last_heartbeat: now,
+                heartbeats_skipped: 0,
+            };
+            cluster.insert(member);
+        }
+        
+        // Record a scale-in
+        cluster.record_scale_in(now);
+        
+        // During cooldown, should not scale in
+        assert!(cluster.should_scale_in(40, now + 200).is_none()); // 200s later
+        
+        // After cooldown, should scale in
+        assert!(cluster.should_scale_in(40, now + 301).is_some()); // 301s later
+    }
+    
+    #[test]
+    fn test_select_instances_to_remove() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        
+        // Create cluster with template instance
+        let mut cluster = InstanceCluster::new_with_template("instance1".to_string());
+        
+        // Add instances with different heartbeat times
+        let member1 = ClusterMember {
+            node_id: "node1".to_string(),
+            node_public_ip: "192.168.1.1".parse().unwrap(),
+            node_formnet_ip: "10.0.0.1".parse().unwrap(),
+            instance_id: "instance1".to_string(), // Template instance
+            instance_formnet_ip: "10.0.0.2".parse().unwrap(),
+            status: "running".to_string(),
+            last_heartbeat: now,
+            heartbeats_skipped: 0,
+        };
+        
+        let member2 = ClusterMember {
+            node_id: "node2".to_string(),
+            node_public_ip: "192.168.1.2".parse().unwrap(),
+            node_formnet_ip: "10.0.0.3".parse().unwrap(),
+            instance_id: "instance2".to_string(),
+            instance_formnet_ip: "10.0.0.4".parse().unwrap(),
+            status: "running".to_string(),
+            last_heartbeat: now - 100, // Older
+            heartbeats_skipped: 0,
+        };
+        
+        let member3 = ClusterMember {
+            node_id: "node3".to_string(),
+            node_public_ip: "192.168.1.3".parse().unwrap(),
+            node_formnet_ip: "10.0.0.5".parse().unwrap(),
+            instance_id: "instance3".to_string(),
+            instance_formnet_ip: "10.0.0.6".parse().unwrap(),
+            status: "running".to_string(),
+            last_heartbeat: now - 200, // Oldest
+            heartbeats_skipped: 0,
+        };
+        
+        let member4 = ClusterMember {
+            node_id: "node4".to_string(),
+            node_public_ip: "192.168.1.4".parse().unwrap(),
+            node_formnet_ip: "10.0.0.7".parse().unwrap(),
+            instance_id: "instance4".to_string(),
+            instance_formnet_ip: "10.0.0.8".parse().unwrap(),
+            status: "running".to_string(),
+            last_heartbeat: now - 50, // More recent
+            heartbeats_skipped: 0,
+        };
+        
+        cluster.insert(member1);
+        cluster.insert(member2);
+        cluster.insert(member3);
+        cluster.insert(member4);
+        
+        // Test selecting 2 instances to remove
+        let to_remove = cluster.select_instances_to_remove(2);
+        
+        // Should select the oldest instances that are not the template
+        assert_eq!(to_remove.len(), 2);
+        assert!(to_remove.contains(&"instance3".to_string())); // Oldest
+        assert!(to_remove.contains(&"instance2".to_string())); // Second oldest
+        assert!(!to_remove.contains(&"instance1".to_string())); // Template should be excluded
+    }
 }
+

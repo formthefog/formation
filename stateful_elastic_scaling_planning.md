@@ -233,11 +233,13 @@ pub struct InstanceCluster {
 - Added comprehensive accessor methods for all fields
 - Created extensive unit tests for all added functionality
 
-1.1.1.4: Update InstanceCluster implementation
-- Add getter/setter methods for new fields
+1.1.1.4: Update InstanceCluster implementation ✅
+- Add getter/setter methods for new fields (scaling_policy, template_instance_id, session_affinity_enabled)
 - Extend existing methods to handle scaling-related functionality
-- Implement additional helper methods needed for scaling operations
-- Write unit tests for the updated implementation
+- Implement additional helper methods for scaling operations (should_scale_out, should_scale_in, select_instances_to_remove)
+- Added validation methods for scaling policies
+- Implemented proper constructors with scaling configuration options
+- Created comprehensive unit tests for all new methods and functionality
 
 1.1.1.5: CRDT integration verification
 - Ensure proper CRDT handling for the new fields
