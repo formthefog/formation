@@ -363,6 +363,41 @@ impl InstanceGpu {
 
 }
 
+/// Defines scaling policies and constraints for an instance cluster.
+/// 
+/// This struct contains parameters that control how scaling operations are performed,
+/// including minimum and maximum instance counts, target utilization metrics,
+/// and cooldown periods to prevent oscillation.
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, PartialOrd)]
+pub struct ScalingPolicy {
+    /// Minimum number of instances that should be maintained
+    pub min_instances: u32,
+    
+    /// Maximum number of instances that can be created
+    pub max_instances: u32,
+    
+    /// Target CPU utilization percentage (0.0-100.0) that triggers scaling
+    pub target_cpu_utilization: f32,
+    
+    /// Cooldown period in seconds after scaling in before another scale-in can occur
+    pub scale_in_cooldown_seconds: u32,
+    
+    /// Cooldown period in seconds after scaling out before another scale-out can occur
+    pub scale_out_cooldown_seconds: u32,
+    
+    /// Timestamp of the last scale-in operation (Unix timestamp in seconds)
+    pub last_scale_in_time: i64,
+    
+    /// Timestamp of the last scale-out operation (Unix timestamp in seconds)
+    pub last_scale_out_time: i64,
+}
+
+impl Sha3Hash for ScalingPolicy {
+    fn hash(&self, hasher: &mut tiny_keccak::Sha3) {
+        hasher.update(&bincode::serialize(self).unwrap());
+    }
+}
+
 #[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstanceCluster {
     pub members: BTreeMap<String, ClusterMember>
@@ -759,5 +794,110 @@ impl InstanceState {
                 )
             )
         )?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use tiny_keccak::{Hasher, Sha3};
+
+    #[test]
+    fn test_scaling_policy_default() {
+        let policy = ScalingPolicy::default();
+        assert_eq!(policy.min_instances, 0);
+        assert_eq!(policy.max_instances, 0);
+        assert_eq!(policy.target_cpu_utilization, 0.0);
+        assert_eq!(policy.scale_in_cooldown_seconds, 0);
+        assert_eq!(policy.scale_out_cooldown_seconds, 0);
+        assert_eq!(policy.last_scale_in_time, 0);
+        assert_eq!(policy.last_scale_out_time, 0);
+    }
+
+    #[test]
+    fn test_scaling_policy_custom() {
+        // Create a custom scaling policy
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        
+        let policy = ScalingPolicy {
+            min_instances: 2,
+            max_instances: 10,
+            target_cpu_utilization: 75.0,
+            scale_in_cooldown_seconds: 300,
+            scale_out_cooldown_seconds: 120,
+            last_scale_in_time: now - 600,
+            last_scale_out_time: now - 300,
+        };
+        
+        // Verify the values
+        assert_eq!(policy.min_instances, 2);
+        assert_eq!(policy.max_instances, 10);
+        assert_eq!(policy.target_cpu_utilization, 75.0);
+        assert_eq!(policy.scale_in_cooldown_seconds, 300);
+        assert_eq!(policy.scale_out_cooldown_seconds, 120);
+        assert!(policy.last_scale_in_time > 0);
+        assert!(policy.last_scale_out_time > 0);
+    }
+    
+    #[test]
+    fn test_scaling_policy_hash() {
+        // Create two identical policies
+        let policy1 = ScalingPolicy {
+            min_instances: 2,
+            max_instances: 10,
+            target_cpu_utilization: 75.0,
+            scale_in_cooldown_seconds: 300,
+            scale_out_cooldown_seconds: 120,
+            last_scale_in_time: 1000,
+            last_scale_out_time: 2000,
+        };
+        
+        let policy2 = ScalingPolicy {
+            min_instances: 2,
+            max_instances: 10,
+            target_cpu_utilization: 75.0,
+            scale_in_cooldown_seconds: 300,
+            scale_out_cooldown_seconds: 120,
+            last_scale_in_time: 1000,
+            last_scale_out_time: 2000,
+        };
+        
+        // Create a different policy
+        let policy3 = ScalingPolicy {
+            min_instances: 3, // Different value
+            max_instances: 10,
+            target_cpu_utilization: 75.0,
+            scale_in_cooldown_seconds: 300,
+            scale_out_cooldown_seconds: 120,
+            last_scale_in_time: 1000,
+            last_scale_out_time: 2000,
+        };
+        
+        // Hash the policies
+        let mut hasher1 = Sha3::v256();
+        let mut hasher2 = Sha3::v256();
+        let mut hasher3 = Sha3::v256();
+        
+        let mut output1 = [0u8; 32];
+        let mut output2 = [0u8; 32];
+        let mut output3 = [0u8; 32];
+        
+        policy1.hash(&mut hasher1);
+        policy2.hash(&mut hasher2);
+        policy3.hash(&mut hasher3);
+        
+        hasher1.finalize(&mut output1);
+        hasher2.finalize(&mut output2);
+        hasher3.finalize(&mut output3);
+        
+        // Identical policies should have identical hashes
+        assert_eq!(output1, output2);
+        
+        // Different policies should have different hashes
+        assert_ne!(output1, output3);
     }
 }
