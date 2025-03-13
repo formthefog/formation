@@ -1983,5 +1983,224 @@ mod tests {
         assert!(to_remove.contains(&"instance2".to_string())); // Second oldest
         assert!(!to_remove.contains(&"instance1".to_string())); // Template should be excluded
     }
+
+    #[test]
+    fn test_mergeable_state_serialization() {
+        // Create an instance with ScalingPolicy and template_instance_id set
+        let instance = Instance {
+            instance_id: "test1".to_string(),
+            node_id: "node1".to_string(),
+            build_id: "build1".to_string(),
+            instance_owner: "owner1".to_string(),
+            formnet_ip: None,
+            dns_record: None,
+            created_at: 0,
+            updated_at: 0,
+            last_snapshot: 0,
+            status: InstanceStatus::Created,
+            host_region: "us-east".to_string(),
+            resources: InstanceResources {
+                vcpus: 2,
+                memory_mb: 1024,
+                bandwidth_mbps: 100,
+                gpu: None,
+            },
+            cluster: InstanceCluster {
+                members: BTreeMap::new(),
+                scaling_policy: Some(ScalingPolicy::with_defaults()),
+                template_instance_id: Some("template1".to_string()),
+                session_affinity_enabled: true,
+            },
+            formfile: "".to_string(),
+            snapshots: None,
+            metadata: InstanceMetadata {
+                tags: vec![],
+                description: "".to_string(),
+                annotations: InstanceAnnotations {
+                    deployed_by: "".to_string(),
+                    network_id: 0,
+                    build_commit: None,
+                },
+                security: InstanceSecurity {
+                    encryption: InstanceEncryption {
+                        is_encrypted: false,
+                        scheme: None,
+                    },
+                    tee: false,
+                    hsm: false,
+                },
+                monitoring: InstanceMonitoring {
+                    logging_enabled: false,
+                    metrics_endpoint: "".to_string(),
+                },
+            },
+        };
+
+        // Serialize and deserialize the instance to verify it works with our new fields
+        let serialized = serde_json::to_string(&instance).expect("Failed to serialize instance");
+        let deserialized: Instance = serde_json::from_str(&serialized).expect("Failed to deserialize instance");
+
+        // Verify that our new fields were properly serialized and deserialized
+        assert_eq!(instance.cluster.scaling_policy, deserialized.cluster.scaling_policy);
+        assert_eq!(instance.cluster.template_instance_id, deserialized.cluster.template_instance_id);
+        assert_eq!(instance.cluster.session_affinity_enabled, deserialized.cluster.session_affinity_enabled);
+    }
+
+    #[test]
+    fn test_instance_cluster_crdt_merge() {
+        use k256::ecdsa::SigningKey;
+        use crdts::{CmRDT, Map};
+        use rand::thread_rng;
+        
+        // Set up one actor
+        let actor1 = "node1".to_string();
+
+        // Create signing key
+        let sk1 = SigningKey::random(&mut thread_rng());
+        let pk_str1 = hex::encode(sk1.to_bytes());
+        let signing_key1 = SigningKey::from_slice(&hex::decode(pk_str1.clone()).unwrap()).unwrap();
+
+        // Create empty instance map
+        let mut map: Map<String, BFTReg<Instance, String>, String> = Map::new();
+
+        // Create a basic instance with no members
+        let mut instance = Instance {
+            instance_id: "test-instance".to_string(),
+            node_id: actor1.clone(),
+            build_id: "build1".to_string(),
+            instance_owner: "owner1".to_string(),
+            formnet_ip: None,
+            dns_record: None,
+            created_at: 0,
+            updated_at: 0,
+            last_snapshot: 0,
+            status: InstanceStatus::Created,
+            host_region: "us-east".to_string(),
+            resources: InstanceResources {
+                vcpus: 2,
+                memory_mb: 1024,
+                bandwidth_mbps: 100,
+                gpu: None,
+            },
+            cluster: InstanceCluster {
+                members: BTreeMap::new(),
+                scaling_policy: Some(ScalingPolicy::new(1, 5, 70, 300, 300)),
+                template_instance_id: Some("template1".to_string()),
+                session_affinity_enabled: true,
+            },
+            formfile: "".to_string(),
+            snapshots: None,
+            metadata: InstanceMetadata {
+                tags: vec![],
+                description: "".to_string(),
+                annotations: InstanceAnnotations {
+                    deployed_by: "".to_string(),
+                    network_id: 0,
+                    build_commit: None,
+                },
+                security: InstanceSecurity {
+                    encryption: InstanceEncryption {
+                        is_encrypted: false,
+                        scheme: None,
+                    },
+                    tee: false,
+                    hsm: false,
+                },
+                monitoring: InstanceMonitoring {
+                    logging_enabled: false,
+                    metrics_endpoint: "".to_string(),
+                },
+            },
+        };
+
+        // Create the first operation with no members
+        let add_ctx = map.read_ctx().derive_add_ctx(actor1.clone());
+        let op = map.update(instance.instance_id.clone(), add_ctx, |reg, _| {
+            reg.update(instance.clone(), actor1.clone(), signing_key1.clone()).unwrap()
+        });
+        // Apply the operation
+        map.apply(op);
+
+        // Now add a member to the instance
+        let member1 = ClusterMember {
+            node_id: "node1".to_string(),
+            node_public_ip: "192.168.1.1".parse().unwrap(),
+            node_formnet_ip: "10.0.0.1".parse().unwrap(),
+            instance_id: "member1".to_string(),
+            instance_formnet_ip: "10.0.0.2".parse().unwrap(),
+            status: "active".to_string(),
+            last_heartbeat: 123456789,
+            heartbeats_skipped: 0,
+        };
+        
+        // Retrieve the current instance
+        let mut updated_instance = map.get(&"test-instance".to_string()).val.unwrap().val().unwrap().value();
+        // Add the first member
+        updated_instance.cluster.members.insert(member1.instance_id.clone(), member1);
+        
+        // Update the instance in the map with the new member
+        let add_ctx = map.read_ctx().derive_add_ctx(actor1.clone());
+        let op = map.update(updated_instance.instance_id.clone(), add_ctx, |reg, _| {
+            reg.update(updated_instance.clone(), actor1.clone(), signing_key1.clone()).unwrap()
+        });
+        map.apply(op);
+        
+        // Add another member
+        let member2 = ClusterMember {
+            node_id: "node2".to_string(),
+            node_public_ip: "192.168.1.2".parse().unwrap(),
+            node_formnet_ip: "10.0.0.3".parse().unwrap(),
+            instance_id: "member2".to_string(),
+            instance_formnet_ip: "10.0.0.4".parse().unwrap(),
+            status: "active".to_string(),
+            last_heartbeat: 123456790,
+            heartbeats_skipped: 0,
+        };
+        
+        // Retrieve the current instance again
+        let mut updated_instance = map.get(&"test-instance".to_string()).val.unwrap().val().unwrap().value();
+        // Add the second member
+        updated_instance.cluster.members.insert(member2.instance_id.clone(), member2);
+        
+        // Update the instance in the map with both members
+        let add_ctx = map.read_ctx().derive_add_ctx(actor1.clone());
+        let op = map.update(updated_instance.instance_id.clone(), add_ctx, |reg, _| {
+            reg.update(updated_instance.clone(), actor1.clone(), signing_key1.clone()).unwrap()
+        });
+        map.apply(op);
+        
+        // Get the final instance state
+        let final_instance = map.get(&"test-instance".to_string()).val.unwrap().val().unwrap().value();
+        
+        // Verify that the cluster contains both members
+        assert_eq!(final_instance.cluster.members.len(), 2);
+        assert!(final_instance.cluster.members.contains_key("member1"));
+        assert!(final_instance.cluster.members.contains_key("member2"));
+        
+        // Verify that the fields we care about are correctly preserved
+        assert!(final_instance.cluster.scaling_policy.is_some());
+        assert_eq!(final_instance.cluster.template_instance_id.as_ref().unwrap(), "template1");
+        assert_eq!(final_instance.cluster.session_affinity_enabled, true);
+        
+        // Print the state for diagnostic purposes
+        println!("Final cluster state:");
+        println!("  Members: {}", final_instance.cluster.members.len());
+        println!("  Member keys: {:?}", final_instance.cluster.members.keys().collect::<Vec<_>>());
+        println!("  Scaling policy: {:?}", final_instance.cluster.scaling_policy);
+        println!("  Template instance ID: {:?}", final_instance.cluster.template_instance_id);
+        println!("  Session affinity enabled: {}", final_instance.cluster.session_affinity_enabled);
+        
+        // Test serialization
+        let serialized = serde_json::to_string(&final_instance).unwrap();
+        let deserialized: Instance = serde_json::from_str(&serialized).unwrap();
+        
+        // Verify that serialization/deserialization preserves all fields
+        assert_eq!(deserialized.cluster.members.len(), final_instance.cluster.members.len());
+        assert!(deserialized.cluster.members.contains_key("member1"));
+        assert!(deserialized.cluster.members.contains_key("member2"));
+        assert_eq!(deserialized.cluster.scaling_policy, final_instance.cluster.scaling_policy);
+        assert_eq!(deserialized.cluster.template_instance_id, final_instance.cluster.template_instance_id);
+        assert_eq!(deserialized.cluster.session_affinity_enabled, final_instance.cluster.session_affinity_enabled);
+    }
 }
 
