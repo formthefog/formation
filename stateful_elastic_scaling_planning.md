@@ -222,11 +222,16 @@ pub struct InstanceCluster {
 - Update derives and implement any necessary traits for the extended struct
 - Add documentation comments for new fields
 
-1.1.1.3: Implement utility methods for ScalingPolicy
-- Add constructor and accessor methods
-- Implement validation logic for policy parameters
-- Add methods to check if scaling actions are allowed (within min/max, not in cooldown)
-- Write unit tests for the utility methods
+1.1.1.3: Implement utility methods for ScalingPolicy ✅
+- Added constructor method (new) for creating policies with specific parameters
+- Added with_defaults() factory method for creating policies with sensible defaults
+- Added parameter validation logic through validate() method
+- Implemented methods to check if scaling actions are allowed (should_scale_out, should_scale_in)
+- Added cooldown period management (is_in_scale_out_cooldown, is_in_scale_in_cooldown)
+- Implemented record_scale_out and record_scale_in to track scaling operation timestamps
+- Created get_target_instance_count method for calculating optimal instance count
+- Added comprehensive accessor methods for all fields
+- Created extensive unit tests for all added functionality
 
 1.1.1.4: Update InstanceCluster implementation
 - Add getter/setter methods for new fields

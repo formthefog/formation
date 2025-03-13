@@ -393,6 +393,289 @@ pub struct ScalingPolicy {
     pub last_scale_out_time: i64,
 }
 
+impl ScalingPolicy {
+    /// Creates a new ScalingPolicy with the provided parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `min_instances` - Minimum number of instances to maintain
+    /// * `max_instances` - Maximum number of instances allowed
+    /// * `target_cpu_utilization` - Target CPU utilization percentage (0-100)
+    /// * `scale_in_cooldown_seconds` - Cooldown period after scaling in
+    /// * `scale_out_cooldown_seconds` - Cooldown period after scaling out
+    ///
+    /// # Returns
+    ///
+    /// A new ScalingPolicy with the specified parameters and current timestamps initialized to 0.
+    pub fn new(
+        min_instances: u32,
+        max_instances: u32,
+        target_cpu_utilization: u32,
+        scale_in_cooldown_seconds: u32,
+        scale_out_cooldown_seconds: u32,
+    ) -> Self {
+        Self {
+            min_instances,
+            max_instances,
+            target_cpu_utilization,
+            scale_in_cooldown_seconds,
+            scale_out_cooldown_seconds,
+            last_scale_in_time: 0,
+            last_scale_out_time: 0,
+        }
+    }
+
+    /// Creates a new ScalingPolicy with sensible defaults:
+    /// - min_instances: 1
+    /// - max_instances: 5
+    /// - target_cpu_utilization: 70%
+    /// - scale_in_cooldown_seconds: 300 (5 minutes)
+    /// - scale_out_cooldown_seconds: 120 (2 minutes)
+    pub fn with_defaults() -> Self {
+        Self {
+            min_instances: 1,
+            max_instances: 5,
+            target_cpu_utilization: 70,
+            scale_in_cooldown_seconds: 300,
+            scale_out_cooldown_seconds: 120,
+            last_scale_in_time: 0,
+            last_scale_out_time: 0,
+        }
+    }
+
+    /// Validates that the scaling policy parameters are coherent and within acceptable ranges.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if the policy is valid, or an error describing the validation failure.
+    pub fn validate(&self) -> Result<(), String> {
+        // Check min_instances <= max_instances
+        if self.min_instances > self.max_instances {
+            return Err(format!(
+                "min_instances ({}) must not be greater than max_instances ({})",
+                self.min_instances, self.max_instances
+            ));
+        }
+
+        // Check max_instances is at least 1
+        if self.max_instances == 0 {
+            return Err("max_instances must be at least 1".to_string());
+        }
+
+        // Check target_cpu_utilization is between 0 and 100
+        if self.target_cpu_utilization > 100 {
+            return Err(format!(
+                "target_cpu_utilization ({}) must be between 0 and 100",
+                self.target_cpu_utilization
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Returns the minimum number of instances that should be maintained.
+    pub fn min_instances(&self) -> u32 {
+        self.min_instances
+    }
+
+    /// Returns the maximum number of instances that can be created.
+    pub fn max_instances(&self) -> u32 {
+        self.max_instances
+    }
+
+    /// Returns the target CPU utilization percentage.
+    pub fn target_cpu_utilization(&self) -> u32 {
+        self.target_cpu_utilization
+    }
+
+    /// Returns the cooldown period in seconds after scaling in.
+    pub fn scale_in_cooldown_seconds(&self) -> u32 {
+        self.scale_in_cooldown_seconds
+    }
+
+    /// Returns the cooldown period in seconds after scaling out.
+    pub fn scale_out_cooldown_seconds(&self) -> u32 {
+        self.scale_out_cooldown_seconds
+    }
+
+    /// Returns the timestamp of the last scale-in operation.
+    pub fn last_scale_in_time(&self) -> i64 {
+        self.last_scale_in_time
+    }
+
+    /// Returns the timestamp of the last scale-out operation.
+    pub fn last_scale_out_time(&self) -> i64 {
+        self.last_scale_out_time
+    }
+
+    /// Checks if the current number of instances should trigger a scale-out operation.
+    ///
+    /// # Arguments
+    ///
+    /// * `current_instances` - The current number of instances
+    /// * `current_cpu_utilization` - The current CPU utilization percentage
+    ///
+    /// # Returns
+    ///
+    /// `true` if scaling out is recommended, `false` otherwise.
+    pub fn should_scale_out(&self, current_instances: u32, current_cpu_utilization: u32) -> bool {
+        // Cannot scale out if at maximum capacity
+        if current_instances >= self.max_instances {
+            return false;
+        }
+
+        // Scale out if CPU utilization is above target
+        current_cpu_utilization > self.target_cpu_utilization
+    }
+
+    /// Checks if the current number of instances should trigger a scale-in operation.
+    ///
+    /// # Arguments
+    ///
+    /// * `current_instances` - The current number of instances
+    /// * `current_cpu_utilization` - The current CPU utilization percentage
+    ///
+    /// # Returns
+    ///
+    /// `true` if scaling in is recommended, `false` otherwise.
+    pub fn should_scale_in(&self, current_instances: u32, current_cpu_utilization: u32) -> bool {
+        // Cannot scale in if at minimum capacity
+        if current_instances <= self.min_instances {
+            return false;
+        }
+
+        // Define a buffer below the target to prevent oscillation
+        // Only scale in if 15% below target
+        let scale_in_threshold = if self.target_cpu_utilization > 15 {
+            self.target_cpu_utilization - 15
+        } else {
+            0
+        };
+
+        // Scale in if CPU utilization is below the threshold
+        current_cpu_utilization < scale_in_threshold
+    }
+
+    /// Checks if the cluster is in a cooldown period after a recent scale-out operation.
+    ///
+    /// # Arguments
+    ///
+    /// * `current_time` - The current timestamp (Unix timestamp in seconds)
+    ///
+    /// # Returns
+    ///
+    /// `true` if in scale-out cooldown, `false` otherwise.
+    pub fn is_in_scale_out_cooldown(&self, current_time: i64) -> bool {
+        // If last_scale_out_time is 0, there's no cooldown (never scaled out)
+        if self.last_scale_out_time == 0 {
+            return false;
+        }
+
+        // Check if we're still within the cooldown period
+        current_time - self.last_scale_out_time < self.scale_out_cooldown_seconds as i64
+    }
+
+    /// Checks if the cluster is in a cooldown period after a recent scale-in operation.
+    ///
+    /// # Arguments
+    ///
+    /// * `current_time` - The current timestamp (Unix timestamp in seconds)
+    ///
+    /// # Returns
+    ///
+    /// `true` if in scale-in cooldown, `false` otherwise.
+    pub fn is_in_scale_in_cooldown(&self, current_time: i64) -> bool {
+        // If last_scale_in_time is 0, there's no cooldown (never scaled in)
+        if self.last_scale_in_time == 0 {
+            return false;
+        }
+
+        // Check if we're still within the cooldown period
+        current_time - self.last_scale_in_time < self.scale_in_cooldown_seconds as i64
+    }
+
+    /// Records a scale-out operation at the specified time.
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The timestamp when the scale-out occurred (Unix timestamp in seconds)
+    pub fn record_scale_out(&mut self, timestamp: i64) {
+        self.last_scale_out_time = timestamp;
+    }
+
+    /// Records a scale-in operation at the specified time.
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The timestamp when the scale-in occurred (Unix timestamp in seconds)
+    pub fn record_scale_in(&mut self, timestamp: i64) {
+        self.last_scale_in_time = timestamp;
+    }
+
+    /// Determines the target number of instances based on current metrics.
+    ///
+    /// # Arguments
+    ///
+    /// * `current_instances` - The current number of instances
+    /// * `current_cpu_utilization` - The current CPU utilization percentage
+    /// * `current_time` - The current timestamp (Unix timestamp in seconds)
+    ///
+    /// # Returns
+    ///
+    /// The recommended number of instances, or None if no change is needed
+    /// or the cluster is in a cooldown period.
+    pub fn get_target_instance_count(
+        &self,
+        current_instances: u32,
+        current_cpu_utilization: u32,
+        current_time: i64,
+    ) -> Option<u32> {
+        // Check if we need to scale out
+        if self.should_scale_out(current_instances, current_cpu_utilization) 
+           && !self.is_in_scale_out_cooldown(current_time) {
+            // Calculate the ratio of current to target utilization
+            let ratio = current_cpu_utilization as f64 / self.target_cpu_utilization as f64;
+            
+            // Calculate desired instance count (rounded up)
+            let desired_instances = (current_instances as f64 * ratio).ceil() as u32;
+            
+            // Cap at max_instances
+            let target_instances = std::cmp::min(desired_instances, self.max_instances);
+            
+            // Only return a value if it's different from current
+            if target_instances > current_instances {
+                return Some(target_instances);
+            }
+        }
+        
+        // Check if we need to scale in
+        if self.should_scale_in(current_instances, current_cpu_utilization)
+           && !self.is_in_scale_in_cooldown(current_time) {
+            // Calculate the ratio of target to current utilization
+            let ratio = if current_cpu_utilization == 0 {
+                // Special case: if current utilization is 0, reduce to minimum
+                0.0
+            } else {
+                self.target_cpu_utilization as f64 / current_cpu_utilization as f64
+            };
+            
+            // Calculate desired instance count (rounded down to be conservative)
+            let desired_instances = (current_instances as f64 / ratio).floor() as u32;
+            
+            // Ensure we don't go below min_instances
+            let target_instances = std::cmp::max(desired_instances, self.min_instances);
+            
+            // Only return a value if it's different from current
+            if target_instances < current_instances {
+                return Some(target_instances);
+            }
+        }
+        
+        // No change needed
+        None
+    }
+}
+
 impl Sha3Hash for ScalingPolicy {
     fn hash(&self, hasher: &mut tiny_keccak::Sha3) {
         hasher.update(&bincode::serialize(self).unwrap());
@@ -918,6 +1201,146 @@ mod tests {
         
         // Different policies should have different hashes
         assert_ne!(output1, output3);
+    }
+    
+    #[test]
+    fn test_scaling_policy_new() {
+        // Test creating a policy with the new() constructor
+        let policy = ScalingPolicy::new(2, 10, 75, 300, 120);
+        
+        assert_eq!(policy.min_instances, 2);
+        assert_eq!(policy.max_instances, 10);
+        assert_eq!(policy.target_cpu_utilization, 75);
+        assert_eq!(policy.scale_in_cooldown_seconds, 300);
+        assert_eq!(policy.scale_out_cooldown_seconds, 120);
+        assert_eq!(policy.last_scale_in_time, 0);
+        assert_eq!(policy.last_scale_out_time, 0);
+        
+        // Test the accessor methods
+        assert_eq!(policy.min_instances(), 2);
+        assert_eq!(policy.max_instances(), 10);
+        assert_eq!(policy.target_cpu_utilization(), 75);
+        assert_eq!(policy.scale_in_cooldown_seconds(), 300);
+        assert_eq!(policy.scale_out_cooldown_seconds(), 120);
+        assert_eq!(policy.last_scale_in_time(), 0);
+        assert_eq!(policy.last_scale_out_time(), 0);
+    }
+    
+    #[test]
+    fn test_scaling_policy_with_defaults() {
+        // Test creating a policy with defaults
+        let policy = ScalingPolicy::with_defaults();
+        
+        assert_eq!(policy.min_instances, 1);
+        assert_eq!(policy.max_instances, 5);
+        assert_eq!(policy.target_cpu_utilization, 70);
+        assert_eq!(policy.scale_in_cooldown_seconds, 300);
+        assert_eq!(policy.scale_out_cooldown_seconds, 120);
+        assert_eq!(policy.last_scale_in_time, 0);
+        assert_eq!(policy.last_scale_out_time, 0);
+    }
+    
+    #[test]
+    fn test_scaling_policy_validate() {
+        // Test valid policy
+        let valid_policy = ScalingPolicy::new(1, 5, 70, 300, 120);
+        assert!(valid_policy.validate().is_ok());
+        
+        // Test invalid min_instances > max_instances
+        let invalid_min_max = ScalingPolicy::new(10, 5, 70, 300, 120);
+        assert!(invalid_min_max.validate().is_err());
+        
+        // Test invalid max_instances = 0
+        let invalid_max_zero = ScalingPolicy::new(0, 0, 70, 300, 120);
+        assert!(invalid_max_zero.validate().is_err());
+        
+        // Test invalid target_cpu_utilization > 100
+        let invalid_cpu_util = ScalingPolicy::new(1, 5, 101, 300, 120);
+        assert!(invalid_cpu_util.validate().is_err());
+    }
+    
+    #[test]
+    fn test_should_scale_out() {
+        let policy = ScalingPolicy::new(1, 5, 70, 300, 120);
+        
+        // Should scale out: current_instances < max_instances and utilization above target
+        assert!(policy.should_scale_out(3, 85));
+        
+        // Should not scale out: at max capacity
+        assert!(!policy.should_scale_out(5, 85));
+        
+        // Should not scale out: utilization below target
+        assert!(!policy.should_scale_out(3, 65));
+    }
+    
+    #[test]
+    fn test_should_scale_in() {
+        let policy = ScalingPolicy::new(1, 5, 70, 300, 120);
+        
+        // Should scale in: current_instances > min_instances and utilization significantly below target
+        assert!(policy.should_scale_in(3, 40));  // 40 < (70-15)
+        
+        // Should not scale in: at min capacity
+        assert!(!policy.should_scale_in(1, 40));
+        
+        // Should not scale in: utilization not low enough
+        assert!(!policy.should_scale_in(3, 60));  // 60 > (70-15)
+    }
+    
+    #[test]
+    fn test_cooldown_periods() {
+        let mut policy = ScalingPolicy::new(1, 5, 70, 300, 120);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        
+        // Initially no cooldown (timestamps are 0)
+        assert!(!policy.is_in_scale_out_cooldown(now));
+        assert!(!policy.is_in_scale_in_cooldown(now));
+        
+        // Record scale out/in operations
+        policy.record_scale_out(now);
+        assert_eq!(policy.last_scale_out_time, now);
+        
+        policy.record_scale_in(now);
+        assert_eq!(policy.last_scale_in_time, now);
+        
+        // Test cooldown period active
+        assert!(policy.is_in_scale_out_cooldown(now + 60));  // 60s after scaling out (cooldown is 120s)
+        assert!(policy.is_in_scale_in_cooldown(now + 200));  // 200s after scaling in (cooldown is 300s)
+        
+        // Test cooldown period expired
+        assert!(!policy.is_in_scale_out_cooldown(now + 121));  // 121s after scaling out (cooldown is 120s)
+        assert!(!policy.is_in_scale_in_cooldown(now + 301));  // 301s after scaling in (cooldown is 300s)
+    }
+    
+    #[test]
+    fn test_get_target_instance_count() {
+        let mut policy = ScalingPolicy::new(1, 10, 70, 300, 120);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        
+        // Test scale out recommendation
+        let scale_out = policy.get_target_instance_count(3, 85, now);
+        assert!(scale_out.is_some());
+        assert!(scale_out.unwrap() > 3);
+        
+        // Test scale in recommendation
+        let scale_in = policy.get_target_instance_count(5, 40, now);
+        assert!(scale_in.is_some());
+        assert!(scale_in.unwrap() < 5);
+        
+        // Test no change needed (within target range)
+        let no_change = policy.get_target_instance_count(3, 70, now);
+        assert!(no_change.is_none());
+        
+        // Test cooldown prevents scaling
+        policy.record_scale_out(now);
+        let during_cooldown = policy.get_target_instance_count(3, 85, now + 60);
+        assert!(during_cooldown.is_none());
     }
     
     #[test]
