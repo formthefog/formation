@@ -215,7 +215,7 @@ pub struct InstanceCluster {
 - Add documentation comments explaining each field's purpose
 - Write unit tests for the struct
 
-1.1.1.2: Add scaling fields to InstanceCluster
+1.1.1.2: Add scaling fields to InstanceCluster ✅
 - Extend the existing InstanceCluster struct with scaling_policy field
 - Add template_instance_id field to identify the primary instance for scaling
 - Add session_affinity_enabled boolean flag

@@ -592,7 +592,10 @@ impl VmManager {
             host_region: String::new(),
             formfile: config.formfile.clone(),
             cluster: InstanceCluster {
-                members: BTreeMap::new()
+                members: BTreeMap::new(),
+                scaling_policy: None,
+                template_instance_id: None,
+                session_affinity_enabled: false
             },
             snapshots: None,
             metadata: InstanceMetadata {

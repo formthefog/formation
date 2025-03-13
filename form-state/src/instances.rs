@@ -368,7 +368,7 @@ impl InstanceGpu {
 /// This struct contains parameters that control how scaling operations are performed,
 /// including minimum and maximum instance counts, target utilization metrics,
 /// and cooldown periods to prevent oscillation.
-#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, PartialOrd)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ScalingPolicy {
     /// Minimum number of instances that should be maintained
     pub min_instances: u32,
@@ -376,8 +376,9 @@ pub struct ScalingPolicy {
     /// Maximum number of instances that can be created
     pub max_instances: u32,
     
-    /// Target CPU utilization percentage (0.0-100.0) that triggers scaling
-    pub target_cpu_utilization: f32,
+    /// Target CPU utilization percentage (0-100) that triggers scaling
+    /// Integer percentage instead of float to allow for Eq, Ord, and Hash derivation
+    pub target_cpu_utilization: u32,
     
     /// Cooldown period in seconds after scaling in before another scale-in can occur
     pub scale_in_cooldown_seconds: u32,
@@ -400,7 +401,25 @@ impl Sha3Hash for ScalingPolicy {
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstanceCluster {
-    pub members: BTreeMap<String, ClusterMember>
+    /// Cluster members indexed by instance ID
+    pub members: BTreeMap<String, ClusterMember>,
+    
+    /// Scaling policy configuration for this cluster
+    pub scaling_policy: Option<ScalingPolicy>,
+    
+    /// Instance ID to use as a template when scaling out
+    /// This is typically the primary instance in the cluster
+    pub template_instance_id: Option<String>,
+    
+    /// Whether session affinity is enabled for this cluster
+    /// When enabled, client requests are routed to the same instance consistently
+    pub session_affinity_enabled: bool
+}
+
+impl Sha3Hash for InstanceCluster {
+    fn hash(&self, hasher: &mut tiny_keccak::Sha3) {
+        hasher.update(&bincode::serialize(self).unwrap());
+    }
 }
 
 impl InstanceCluster {
@@ -808,7 +827,7 @@ mod tests {
         let policy = ScalingPolicy::default();
         assert_eq!(policy.min_instances, 0);
         assert_eq!(policy.max_instances, 0);
-        assert_eq!(policy.target_cpu_utilization, 0.0);
+        assert_eq!(policy.target_cpu_utilization, 0);
         assert_eq!(policy.scale_in_cooldown_seconds, 0);
         assert_eq!(policy.scale_out_cooldown_seconds, 0);
         assert_eq!(policy.last_scale_in_time, 0);
@@ -826,7 +845,7 @@ mod tests {
         let policy = ScalingPolicy {
             min_instances: 2,
             max_instances: 10,
-            target_cpu_utilization: 75.0,
+            target_cpu_utilization: 75,
             scale_in_cooldown_seconds: 300,
             scale_out_cooldown_seconds: 120,
             last_scale_in_time: now - 600,
@@ -836,7 +855,7 @@ mod tests {
         // Verify the values
         assert_eq!(policy.min_instances, 2);
         assert_eq!(policy.max_instances, 10);
-        assert_eq!(policy.target_cpu_utilization, 75.0);
+        assert_eq!(policy.target_cpu_utilization, 75);
         assert_eq!(policy.scale_in_cooldown_seconds, 300);
         assert_eq!(policy.scale_out_cooldown_seconds, 120);
         assert!(policy.last_scale_in_time > 0);
@@ -849,7 +868,7 @@ mod tests {
         let policy1 = ScalingPolicy {
             min_instances: 2,
             max_instances: 10,
-            target_cpu_utilization: 75.0,
+            target_cpu_utilization: 75,
             scale_in_cooldown_seconds: 300,
             scale_out_cooldown_seconds: 120,
             last_scale_in_time: 1000,
@@ -859,7 +878,7 @@ mod tests {
         let policy2 = ScalingPolicy {
             min_instances: 2,
             max_instances: 10,
-            target_cpu_utilization: 75.0,
+            target_cpu_utilization: 75,
             scale_in_cooldown_seconds: 300,
             scale_out_cooldown_seconds: 120,
             last_scale_in_time: 1000,
@@ -870,7 +889,7 @@ mod tests {
         let policy3 = ScalingPolicy {
             min_instances: 3, // Different value
             max_instances: 10,
-            target_cpu_utilization: 75.0,
+            target_cpu_utilization: 75,
             scale_in_cooldown_seconds: 300,
             scale_out_cooldown_seconds: 120,
             last_scale_in_time: 1000,
@@ -898,6 +917,133 @@ mod tests {
         assert_eq!(output1, output2);
         
         // Different policies should have different hashes
+        assert_ne!(output1, output3);
+    }
+    
+    #[test]
+    fn test_instance_cluster_default() {
+        // Test that default values are set correctly
+        let cluster = InstanceCluster::default();
+        
+        assert!(cluster.members.is_empty());
+        assert!(cluster.scaling_policy.is_none());
+        assert!(cluster.template_instance_id.is_none());
+        assert!(!cluster.session_affinity_enabled);
+    }
+    
+    #[test]
+    fn test_instance_cluster_custom() {
+        // Create a custom scaling policy
+        let policy = ScalingPolicy {
+            min_instances: 2,
+            max_instances: 5,
+            target_cpu_utilization: 70,
+            scale_in_cooldown_seconds: 300,
+            scale_out_cooldown_seconds: 120,
+            last_scale_in_time: 1000,
+            last_scale_out_time: 2000,
+        };
+        
+        // Create a member
+        let member = ClusterMember {
+            node_id: "node1".to_string(),
+            node_public_ip: "192.168.1.1".parse().unwrap(),
+            node_formnet_ip: "10.0.0.1".parse().unwrap(),
+            instance_id: "instance1".to_string(),
+            instance_formnet_ip: "10.0.0.2".parse().unwrap(),
+            status: "running".to_string(),
+            last_heartbeat: 12345,
+            heartbeats_skipped: 0,
+        };
+        
+        // Create a BTreeMap with the member
+        let mut members = BTreeMap::new();
+        members.insert(member.instance_id.clone(), member);
+        
+        // Create a cluster with custom values
+        let cluster = InstanceCluster {
+            members,
+            scaling_policy: Some(policy),
+            template_instance_id: Some("instance1".to_string()),
+            session_affinity_enabled: true,
+        };
+        
+        // Verify the values
+        assert_eq!(cluster.members.len(), 1);
+        assert!(cluster.members.contains_key("instance1"));
+        assert!(cluster.scaling_policy.is_some());
+        if let Some(sp) = &cluster.scaling_policy {
+            assert_eq!(sp.min_instances, 2);
+            assert_eq!(sp.max_instances, 5);
+        }
+        assert_eq!(cluster.template_instance_id, Some("instance1".to_string()));
+        assert!(cluster.session_affinity_enabled);
+    }
+    
+    #[test]
+    fn test_instance_cluster_hash() {
+        // Create two identical clusters
+        let create_cluster = || {
+            let policy = ScalingPolicy {
+                min_instances: 2,
+                max_instances: 5,
+                target_cpu_utilization: 70,
+                scale_in_cooldown_seconds: 300,
+                scale_out_cooldown_seconds: 120,
+                last_scale_in_time: 1000,
+                last_scale_out_time: 2000,
+            };
+            
+            let member = ClusterMember {
+                node_id: "node1".to_string(),
+                node_public_ip: "192.168.1.1".parse().unwrap(),
+                node_formnet_ip: "10.0.0.1".parse().unwrap(),
+                instance_id: "instance1".to_string(),
+                instance_formnet_ip: "10.0.0.2".parse().unwrap(),
+                status: "running".to_string(),
+                last_heartbeat: 12345,
+                heartbeats_skipped: 0,
+            };
+            
+            let mut members = BTreeMap::new();
+            members.insert(member.instance_id.clone(), member);
+            
+            InstanceCluster {
+                members,
+                scaling_policy: Some(policy),
+                template_instance_id: Some("instance1".to_string()),
+                session_affinity_enabled: true,
+            }
+        };
+        
+        let cluster1 = create_cluster();
+        let cluster2 = create_cluster();
+        
+        // Create a different cluster
+        let mut cluster3 = create_cluster();
+        cluster3.session_affinity_enabled = false; // Changed value
+        
+        // Hash the clusters
+        let mut hasher1 = Sha3::v256();
+        let mut hasher2 = Sha3::v256();
+        let mut hasher3 = Sha3::v256();
+        
+        let mut output1 = [0u8; 32];
+        let mut output2 = [0u8; 32];
+        let mut output3 = [0u8; 32];
+        
+        cluster1.hash(&mut hasher1);
+        cluster2.hash(&mut hasher2);
+        cluster3.hash(&mut hasher3);
+        
+        hasher1.finalize(&mut output1);
+        hasher2.finalize(&mut output2);
+        hasher3.finalize(&mut output3);
+        
+        // Identical clusters should have identical hashes
+        assert_eq!(output1, output2);
+        
+        // Different clusters should have different hashes
         assert_ne!(output1, output3);
     }
 }

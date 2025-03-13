@@ -3810,6 +3810,9 @@ mod tests {
             },
             cluster: InstanceCluster {
                 members: BTreeMap::new(),
+                scaling_policy: None,
+                template_instance_id: None,
+                session_affinity_enabled: false,
             },
             formfile: "".to_string(),
             snapshots: None,
