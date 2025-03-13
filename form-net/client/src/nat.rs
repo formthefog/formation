@@ -3,7 +3,7 @@
 //! Doesn't follow the specific ICE protocol, but takes great inspiration from RFC 8445
 //! and applies it to a protocol more specific to innernet.
 
-use std::{fmt::Display, time::{Duration, Instant}};
+use std::{fmt::Display, future::Future, pin::Pin, process::Output, time::{Duration, Instant}};
 
 use anyhow::Error;
 use futures::future;
@@ -131,18 +131,6 @@ impl<'a, T: Display + Clone + PartialEq> NatTraverse<'a, T> {
         }
 
         Ok(())
-    }
-
-    // Add a synchronous version that calls the async method using a runtime
-    pub fn step_parallel_sync(&mut self) -> Result<(), Error> {
-        // Create a runtime for executing the async step_parallel method
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        
-        rt.block_on(async {
-            self.step_parallel().await
-        })
     }
 
     pub async fn step_parallel(&mut self) -> Result<(), Error> {

@@ -1,0 +1,907 @@
+openapi: 3.0.3
+info:
+  title: Formation MCP Server API
+  description: |
+    Management Control Plane (MCP) API for the Formation network.
+    This API enables AI agents and users to manage workloads and resources in the Formation network.
+  version: 0.1.0
+  contact:
+    name: Formation Team
+    url: https://www.github.com/formation-dev/formation
+
+servers:
+  - url: http://localhost:3010
+    description: Local development server
+
+tags:
+  - name: auth
+    description: Authentication operations
+  - name: tools
+    description: Tool discovery and execution
+  - name: operations
+    description: Long-running operation management
+  - name: vm
+    description: Virtual machine management
+  - name: pack
+    description: Workload packaging and deployment
+
+paths:
+  # Authentication Endpoints
+  /api/auth/login:
+    post:
+      tags:
+        - auth
+      summary: Authenticate with the MCP server
+      description: |
+        Authenticate using a crypto signature to receive a JWT token for API access.
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          description: Authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/auth/validate:
+    post:
+      tags:
+        - auth
+      summary: Validate a JWT token
+      description: |
+        Validate an existing JWT token to ensure it's still valid.
+      operationId: validateToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidateTokenRequest'
+      responses:
+        '200':
+          description: Token is valid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+        '401':
+          description: Token is invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # Tool Endpoints
+  /api/tools:
+    get:
+      tags:
+        - tools
+      summary: List available tools
+      description: |
+        Get a list of all available tools in the MCP server, optionally filtered by category.
+      operationId: listTools
+      parameters:
+        - name: category
+          in: query
+          description: Optional category filter
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of tools
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolListResponse'
+
+  /api/tools/{name}:
+    post:
+      tags:
+        - tools
+      summary: Execute a tool
+      description: |
+        Execute a specific tool with provided parameters.
+      operationId: executeTool
+      parameters:
+        - name: name
+          in: path
+          description: Name of the tool to execute
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecuteToolRequest'
+      responses:
+        '200':
+          description: Tool executed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecuteToolResponse'
+        '400':
+          description: Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Tool not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # Pack Tool Endpoints
+  /api/tools/form_pack_build:
+    post:
+      tags:
+        - pack
+        - tools
+      summary: Build a workload from a Formfile
+      description: |
+        Build a workload package from a Formfile specification.
+        This tool creates a VM configuration and prepares a workload for deployment.
+      operationId: packBuild
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - parameters
+              properties:
+                parameters:
+                  type: object
+                  required:
+                    - formfile_content
+                  properties:
+                    formfile_content:
+                      type: string
+                      description: Content of the Formfile in JSON or YAML format
+                      example: |
+                        {
+                          "from": "ubuntu:22.04",
+                          "name": "my-app",
+                          "run": ["apt-get update", "apt-get install -y python3"],
+                          "include": ["app.py", "requirements.txt"],
+                          "entrypoint": "python3 app.py"
+                        }
+                    formfile_path:
+                      type: string
+                      description: Optional path to a Formfile on the server
+                      example: "/path/to/Formfile"
+                    build_options:
+                      type: object
+                      description: Optional build configuration options
+                      properties:
+                        cache:
+                          type: boolean
+                          description: Whether to use caching during build
+                          default: true
+                        timeout_seconds:
+                          type: integer
+                          description: Timeout for the build operation in seconds
+                          default: 600
+                context:
+                  type: object
+                  description: Optional contextual data
+                  additionalProperties:
+                    type: string
+      responses:
+        '200':
+          description: Build request accepted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          build_id:
+                            type: string
+                            description: Unique ID for tracking the build
+                            example: "550e8400-e29b-41d4-a716-446655440000"
+                          operation_id:
+                            type: string
+                            description: ID of the long-running operation for status tracking
+                            example: "a1b2c3d4-e5f6-1234-5678-abcdef123456"
+                          status:
+                            type: string
+                            description: Current status of the build
+                            enum: [accepted, queued, processing]
+                            example: "accepted"
+        '400':
+          description: Invalid Formfile or parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/tools/form_pack_ship:
+    post:
+      tags:
+        - pack
+        - tools
+      summary: Deploy a built workload
+      description: |
+        Deploy a built workload package to a Formation VM.
+        This tool takes a build ID and deploys the corresponding workload.
+      operationId: packShip
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - parameters
+              properties:
+                parameters:
+                  type: object
+                  required:
+                    - build_id
+                  properties:
+                    build_id:
+                      type: string
+                      description: ID of the built package to deploy
+                      example: "550e8400-e29b-41d4-a716-446655440000"
+                    target_node:
+                      type: string
+                      description: Optional target node ID
+                      example: "node-123"
+                    deployment_options:
+                      type: object
+                      description: Optional deployment configuration
+                      properties:
+                        auto_restart:
+                          type: boolean
+                          description: Whether to automatically restart the workload on failure
+                          default: true
+                        replica_count:
+                          type: integer
+                          description: Number of replicas to deploy
+                          default: 1
+                        timeout_seconds:
+                          type: integer
+                          description: Timeout for the deployment operation in seconds
+                          default: 300
+                context:
+                  type: object
+                  description: Optional contextual data
+                  additionalProperties:
+                    type: string
+      responses:
+        '200':
+          description: Deployment request accepted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          deployment_id:
+                            type: string
+                            description: Unique ID for the deployment
+                            example: "fe68c83d-23ad-42c0-9d23-f5c44d044329"
+                          operation_id:
+                            type: string
+                            description: ID of the long-running operation for status tracking
+                            example: "9801a236-f7b4-4c4d-8ff8-ab546c2e1f89"
+                          instance_id:
+                            type: string
+                            description: ID of the VM instance where the workload is being deployed
+                            example: "i-12345678"
+                          status:
+                            type: string
+                            description: Current status of the deployment
+                            enum: [accepted, queued, deploying]
+                            example: "accepted"
+        '400':
+          description: Invalid build ID or parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Build not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # Operation Endpoints
+  /api/operations/{id}:
+    get:
+      tags:
+        - operations
+      summary: Get operation status
+      description: |
+        Check the status of a long-running operation.
+      operationId: getOperationStatus
+      parameters:
+        - name: id
+          in: path
+          description: Operation ID
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Operation status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationStatusResponse'
+        '404':
+          description: Operation not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/operations:
+    get:
+      tags:
+        - operations
+      summary: List operations
+      description: |
+        List all operations for the current user, optionally filtered by user ID.
+      operationId: listOperations
+      parameters:
+        - name: user_id
+          in: query
+          description: Optional user ID filter
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of operations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationListResponse'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    LoginRequest:
+      type: object
+      required:
+        - address
+        - signed_message
+        - signature
+      properties:
+        address:
+          type: string
+          description: User ID or address
+          example: "0x1234567890abcdef1234567890abcdef12345678"
+        signed_message:
+          type: string
+          description: Message signed by the user
+          example: "I want to authenticate with the MCP server at timestamp 1683721584"
+        signature:
+          type: string
+          description: Signature of the message
+          example: "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+
+    ValidateTokenRequest:
+      type: object
+      required:
+        - token
+      properties:
+        token:
+          type: string
+          description: JWT token to validate
+          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+
+    LoginResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: Response status
+          enum: [success, error]
+          example: "success"
+        data:
+          type: object
+          properties:
+            token:
+              type: string
+              description: JWT token for authentication
+              example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+            user_id:
+              type: string
+              description: User ID
+              example: "0x1234567890abcdef1234567890abcdef12345678"
+            expires_at:
+              type: integer
+              description: Expiration timestamp in seconds
+              example: 1683724584
+            permissions:
+              type: array
+              description: Permissions granted to the user
+              items:
+                type: string
+                example: "vm:create"
+        message:
+          type: string
+          description: Error message (if any)
+          example: null
+
+    ToolDefinition:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Name of the tool
+          example: "form_pack_build"
+        description:
+          type: string
+          description: Description of the tool
+          example: "Builds a workload from a Formfile specification"
+        version:
+          type: string
+          description: Version of the tool
+          example: "0.1.0"
+        parameters:
+          type: array
+          description: Parameters for the tool
+          items:
+            $ref: '#/components/schemas/ToolParameter'
+        return_type:
+          type: string
+          description: Return type description
+          example: "Build ID and status for tracking the build process"
+        tags:
+          type: array
+          description: Tags for categorizing the tool
+          items:
+            type: string
+            example: "pack"
+        is_long_running:
+          type: boolean
+          description: Whether the tool execution is potentially long-running
+          example: true
+
+    ToolParameter:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Name of the parameter
+          example: "formfile_content"
+        description:
+          type: string
+          description: Description of the parameter
+          example: "Content of the Formfile in JSON or YAML format"
+        required:
+          type: boolean
+          description: Whether the parameter is required
+          example: true
+        parameter_type:
+          type: string
+          description: Type of the parameter
+          example: "string"
+        default:
+          type: object
+          description: Default value for the parameter
+          nullable: true
+        enum_values:
+          type: array
+          description: Enum values for the parameter (if applicable)
+          items:
+            type: object
+          nullable: true
+
+    ToolListResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: Response status
+          enum: [success, error]
+          example: "success"
+        data:
+          type: object
+          properties:
+            tools:
+              type: array
+              description: List of available tools
+              items:
+                $ref: '#/components/schemas/ToolDefinition'
+            categories:
+              type: array
+              description: List of available categories
+              items:
+                type: string
+                example: "pack"
+        message:
+          type: string
+          description: Error message (if any)
+          nullable: true
+
+    ExecuteToolRequest:
+      type: object
+      required:
+        - parameters
+      properties:
+        parameters:
+          type: object
+          description: Parameters for the tool execution
+          example:
+            formfile_content: "{\"from\":\"ubuntu:22.04\",\"name\":\"my-workload\"}"
+        context:
+          type: object
+          description: Optional contextual data
+          additionalProperties:
+            type: string
+          nullable: true
+
+    ExecuteToolResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: Response status
+          enum: [success, error]
+          example: "success"
+        data:
+          type: object
+          description: Tool execution result or operation information
+          additionalProperties: true
+          example:
+            build_id: "550e8400-e29b-41d4-a716-446655440000"
+            message: "Build request accepted successfully"
+        message:
+          type: string
+          description: Error message (if any)
+          nullable: true
+
+    OperationStatus:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Operation ID
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        status:
+          type: string
+          description: Status of the operation
+          enum: [queued, running, completed, failed, cancelled]
+          example: "running"
+        progress:
+          type: number
+          description: Progress of the operation (0.0 to 1.0)
+          nullable: true
+          example: 0.5
+        result:
+          type: object
+          description: Result of the operation (if completed)
+          nullable: true
+          additionalProperties: true
+        error:
+          type: string
+          description: Error message (if failed)
+          nullable: true
+
+    OperationStatusResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: Response status
+          enum: [success, error]
+          example: "success"
+        data:
+          $ref: '#/components/schemas/OperationStatus'
+        message:
+          type: string
+          description: Error message (if any)
+          nullable: true
+
+    OperationListResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: Response status
+          enum: [success, error]
+          example: "success"
+        data:
+          type: object
+          properties:
+            operations:
+              type: array
+              description: List of operations
+              items:
+                $ref: '#/components/schemas/OperationStatus'
+        message:
+          type: string
+          description: Error message (if any)
+          nullable: true
+
+    ErrorResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: Response status
+          enum: [error]
+          example: "error"
+        message:
+          type: string
+          description: Error message
+          example: "Authentication failed: Invalid signature"
+        code:
+          type: string
+          description: Error code
+          nullable: true
+          example: "auth_invalid_signature"
+        data:
+          type: object
+          description: Additional error data
+          nullable: true
+
+    ApiResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: Response status
+          enum: [success, error]
+          example: "success"
+        data:
+          type: object
+          description: Response data
+          nullable: true
+        message:
+          type: string
+          description: Message (success or error)
+          nullable: true
+
+    # Pack Tool Schemas
+    Formfile:
+      type: object
+      required:
+        - from
+      properties:
+        from:
+          type: string
+          description: Base image information
+          example: "ubuntu:22.04"
+        name:
+          type: string
+          description: Workload name
+          example: "my-workload"
+        run:
+          type: array
+          description: Commands to run during build
+          items:
+            type: string
+            example: "apt-get update"
+        include:
+          type: array
+          description: Files to include in the build
+          items:
+            type: string
+            example: "app.py"
+        env:
+          type: object
+          description: Environment variables
+          additionalProperties:
+            type: string
+          example:
+            PORT: "8080"
+            DEBUG: "false"
+        expose:
+          type: array
+          description: Ports to expose
+          items:
+            type: integer
+            format: int32
+            example: 8080
+        entrypoint:
+          type: string
+          description: Entry point command
+          example: "python3 app.py"
+        resources:
+          type: object
+          description: Resource configuration
+          properties:
+            vcpus:
+              type: integer
+              description: Number of vCPUs
+              example: 2
+            memory_mb:
+              type: integer
+              description: Memory size in MB
+              example: 1024
+            disk_gb:
+              type: integer
+              description: Disk size in GB
+              example: 10
+        network:
+          type: object
+          description: Network configuration
+          properties:
+            join_formnet:
+              type: boolean
+              description: Whether to join the formnet network
+              example: true
+            external_networks:
+              type: array
+              description: External networks to connect to
+              items:
+                type: string
+        metadata:
+          type: object
+          description: Additional metadata
+          additionalProperties:
+            type: string
+          example:
+            description: "My Flask application"
+            version: "1.0.0"
+
+    BuildStatus:
+      type: object
+      required:
+        - build_id
+        - status
+      properties:
+        build_id:
+          type: string
+          description: Unique ID for the build
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        status:
+          type: string
+          description: Current status of the build
+          enum: [created, building, succeeded, failed]
+          example: "building"
+        created_at:
+          type: string
+          format: date-time
+          description: When the build was created
+          example: "2023-05-10T15:30:00Z"
+        completed_at:
+          type: string
+          format: date-time
+          description: When the build was completed
+          nullable: true
+          example: "2023-05-10T15:35:00Z"
+        error:
+          type: string
+          description: Error message if the build failed
+          nullable: true
+        logs:
+          type: string
+          description: Build logs
+          nullable: true
+        formfile:
+          $ref: '#/components/schemas/Formfile'
+        vm_config:
+          $ref: '#/components/schemas/VMConfig'
+
+    DeploymentStatus:
+      type: object
+      required:
+        - deployment_id
+        - build_id
+        - status
+      properties:
+        deployment_id:
+          type: string
+          description: Unique ID for the deployment
+          example: "fe68c83d-23ad-42c0-9d23-f5c44d044329"
+        build_id:
+          type: string
+          description: ID of the build being deployed
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        status:
+          type: string
+          description: Current status of the deployment
+          enum: [created, deploying, running, failed, stopped]
+          example: "deploying"
+        instance_id:
+          type: string
+          description: ID of the VM instance
+          example: "i-12345678"
+        node_id:
+          type: string
+          description: ID of the node where the workload is deployed
+          nullable: true
+          example: "node-123"
+        created_at:
+          type: string
+          format: date-time
+          description: When the deployment was created
+          example: "2023-05-10T16:00:00Z"
+        started_at:
+          type: string
+          format: date-time
+          description: When the deployment started running
+          nullable: true
+          example: "2023-05-10T16:05:00Z"
+        error:
+          type: string
+          description: Error message if the deployment failed
+          nullable: true
+        endpoints:
+          type: array
+          description: List of accessible endpoints for the deployed workload
+          items:
+            type: object
+            properties:
+              protocol:
+                type: string
+                enum: [http, https, tcp, udp]
+                example: "http"
+              host:
+                type: string
+                example: "workload-fe68c83d.formation.network"
+              port:
+                type: integer
+                example: 8080
+          nullable: true
+
+    VMConfig:
+      type: object
+      properties:
+        vcpus:
+          type: integer
+          description: Number of vCPUs
+          example: 2
+        memory_mb:
+          type: integer
+          description: Memory size in MB
+          example: 2048
+        network:
+          type: object
+          description: Network configuration
+          properties:
+            join_formnet:
+              type: boolean
+              description: Whether to join the formnet network
+              example: true
+            external_networks:
+              type: array
+              description: External networks to connect to
+              items:
+                type: string
+        metadata:
+          type: object
+          description: Additional metadata
+          additionalProperties: true
+
+security:
+  - bearerAuth: [] 
