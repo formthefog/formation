@@ -15,6 +15,7 @@ The MCP server provides a standardized interface for AI agents to interact with 
 - **Network Configuration**: Manage network settings and connections
 - **Metrics & Monitoring**: Collect and analyze resource usage data
 - **Policy Enforcement**: Apply safety and security policies to management actions
+- **Workload Packaging (Pack)**: Build and deploy workloads using Formfile specifications
 
 ## Current Status
 
@@ -26,6 +27,7 @@ This project is under active development. Currently implemented:
 - [x] VM management tools
 - [x] Operations tracking system for long-running tasks
 - [x] API endpoints for tool execution and operation status
+- [x] Workload pack/build and ship tools
 - [ ] Authentication system
 - [ ] Metrics and monitoring tools
 - [ ] Network management tools
@@ -40,6 +42,7 @@ form-mcp/
 ├── auth/             # Authentication and authorization
 ├── tools/            # Tool implementations
 │   ├── vm/           # VM management tools
+│   ├── pack/         # Workload packaging tools
 │   ├── network/      # Network management tools
 │   └── metrics/      # Metrics and monitoring tools
 ├── events/           # Event system for notifications
@@ -50,17 +53,27 @@ form-mcp/
 └── errors/           # Error handling
 ```
 
-## API Endpoints
+## API Documentation
 
-### Tools
+### OpenAPI Specification
+
+The MCP server API is documented using the OpenAPI specification. You can view the full API documentation in the [openapi.yaml](./openapi.yaml) file.
+
+To explore the API interactively, you can use tools like:
+- [Swagger UI](https://swagger.io/tools/swagger-ui/)
+- [Redoc](https://redocly.github.io/redoc/)
+- [Stoplight Studio](https://stoplight.io/studio)
+
+Simply load the `openapi.yaml` file into one of these tools to browse the API documentation.
+
+### API Endpoints
 
 - `GET /api/tools` - List available tools
 - `POST /api/tools/{name}` - Execute a tool
-
-### Operations
-
 - `GET /api/operations/{id}` - Get status of a long-running operation
 - `GET /api/operations` - List operations (optionally filtered by user)
+- `POST /api/auth/login` - Authenticate with the MCP server
+- `POST /api/auth/validate` - Validate a JWT token
 
 ## Getting Started
 
