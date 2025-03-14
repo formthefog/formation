@@ -2,6 +2,7 @@
 // Mutators Module
 
 pub mod vm;
+pub mod dns;
 
 /// Trait for mutating fuzzable inputs
 pub trait Mutator<T> {

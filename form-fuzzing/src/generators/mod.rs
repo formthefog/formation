@@ -8,6 +8,7 @@ pub mod vm_operations;
 pub mod configuration;
 pub mod api;
 pub mod common;
+pub mod dns;
 
 use rand::Rng;
 
