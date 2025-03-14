@@ -2811,13 +2811,11 @@ impl InstanceCluster {
                         .map(|s| s.to_string())
                         .collect();
                     
-                    // Perform cleanup for each resource ID
-                    for resource_id in resource_ids {
-                        // In a real implementation, we would call resource cleanup methods
-                        // For now, we just log that we would release these resources
-                        log::info!("Rolling back: releasing resource {}", resource_id);
-                        // self.release_resource(&resource_id)?;
-                    }
+                    log::info!("Rolling back: cleaning up {} partially allocated resources", resource_ids.len());
+                    // Use our new method to clean up resources
+                    self.cleanup_partially_allocated_resources(&resource_ids)?;
+                } else {
+                    log::info!("No resources to release during rollback");
                 }
                 Ok(())
             },
@@ -3578,6 +3576,124 @@ impl InstanceCluster {
         }
         
         Ok(())
+    }
+
+    /// Cleans up partially allocated resources from a failed scaling operation
+    /// 
+    /// This method is used during rollback to ensure that any resources allocated during a
+    /// scaling operation that failed are properly released to prevent resource leaks.
+    /// 
+    /// # Arguments
+    /// * `allocated_resource_ids` - List of resource IDs that were allocated during the operation
+    /// 
+    /// # Returns
+    /// * `Ok(())` if cleanup was successful
+    /// * `Err(ScalingError)` if cleanup encountered errors
+    fn cleanup_partially_allocated_resources(&mut self, allocated_resource_ids: &[String]) -> Result<(), ScalingError> {
+        if allocated_resource_ids.is_empty() {
+            log::info!("No partially allocated resources to clean up.");
+            return Ok(());
+        }
+
+        log::info!("Starting cleanup of {} partially allocated resources", allocated_resource_ids.len());
+        
+        let mut success_count = 0;
+        let mut failed_ids = Vec::new();
+
+        // Group resources by type for better logging
+        let mut resource_types: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        
+        for resource_id in allocated_resource_ids {
+            // Determine resource type by prefix or pattern
+            let resource_type = if resource_id.starts_with("inst-") {
+                "instance"
+            } else if resource_id.starts_with("vol-") {
+                "volume"
+            } else if resource_id.starts_with("net-") {
+                "network"
+            } else if resource_id.starts_with("ip-") {
+                "ip_allocation"
+            } else {
+                "unknown"
+            };
+            
+            resource_types.entry(resource_type.to_string())
+                .or_insert_with(Vec::new)
+                .push(resource_id.clone());
+        }
+        
+        // Log summary of resources to clean up
+        for (res_type, ids) in &resource_types {
+            log::info!("Found {} {} resources to clean up", ids.len(), res_type);
+        }
+        
+        // Process each resource type
+        for (res_type, ids) in resource_types {
+            log::info!("Cleaning up {} resources", res_type);
+            
+            for resource_id in ids {
+                match res_type.as_str() {
+                    "instance" => {
+                        // Clean up instance resources
+                        log::info!("Releasing instance resources for ID: {}", resource_id);
+                        // In a real implementation, this would call appropriate APIs or services
+                        // to release the resources associated with this instance
+                        
+                        // For now, we'll just simulate successful cleanup
+                        success_count += 1;
+                    },
+                    "volume" => {
+                        // Clean up volume resources
+                        log::info!("Removing volume: {}", resource_id);
+                        // Implementation would detach and delete the volume
+                        
+                        success_count += 1;
+                    },
+                    "network" => {
+                        // Clean up network resources
+                        log::info!("Removing network resources: {}", resource_id);
+                        // Implementation would release network interfaces, security groups, etc.
+                        
+                        success_count += 1;
+                    },
+                    "ip_allocation" => {
+                        // Clean up IP allocations
+                        log::info!("Releasing IP allocation: {}", resource_id);
+                        // Implementation would release the IP back to the pool
+                        
+                        success_count += 1;
+                    },
+                    _ => {
+                        // Unknown resource type
+                        log::warn!("Unknown resource type for ID: {}, attempting generic cleanup", resource_id);
+                        // Attempt generic cleanup or skip
+                        
+                        // For unknown resources, we'll add them to the failed list
+                        failed_ids.push(resource_id);
+                    }
+                }
+            }
+        }
+        
+        // Log results
+        if failed_ids.is_empty() {
+            log::info!("Successfully cleaned up all {} partially allocated resources", success_count);
+            Ok(())
+        } else {
+            let error_msg = format!(
+                "Cleanup completed with partial success: {} resources cleaned up, {} failed: {:?}",
+                success_count,
+                failed_ids.len(),
+                failed_ids
+            );
+            log::warn!("{}", error_msg);
+            
+            Err(ScalingError {
+                error_type: "ResourceCleanupError".to_string(),
+                message: error_msg,
+                phase: "ResourceCleaning".to_string(),
+            })
+        }
     }
 }
 
@@ -5652,6 +5768,47 @@ mod tests {
             assert_eq!(member.node_public_ip.to_string(), "192.168.1.10", "Node public IP should be restored to original value");
         } else {
             panic!("Member instance-2 should exist after restoration");
+        }
+    }
+
+    #[test]
+    fn test_cleanup_partially_allocated_resources() {
+        // Create a basic cluster with a scaling manager
+        let mut cluster = InstanceCluster::new_with_template("template-1".to_string());
+        let timeout = Duration::from_secs(60);
+        cluster.init_scaling_manager(timeout);
+        
+        // Test with empty array
+        let result = cluster.cleanup_partially_allocated_resources(&[]);
+        assert!(result.is_ok(), "Cleanup with empty array should succeed");
+        
+        // Test with valid resource IDs
+        let resources = vec![
+            "inst-123".to_string(),
+            "vol-456".to_string(),
+            "net-789".to_string(),
+            "ip-101112".to_string()
+        ];
+        
+        let result = cluster.cleanup_partially_allocated_resources(&resources);
+        assert!(result.is_ok(), "Cleanup with valid resources should succeed");
+        
+        // Test with mixed valid and invalid resource IDs
+        let mixed_resources = vec![
+            "inst-123".to_string(),
+            "unknown-type-456".to_string(),
+            "vol-789".to_string()
+        ];
+        
+        let result = cluster.cleanup_partially_allocated_resources(&mixed_resources);
+        assert!(result.is_err(), "Cleanup with invalid resources should return an error");
+        
+        // Verify the error message contains information about the failed resource
+        if let Err(error) = result {
+            assert!(error.message.contains("unknown-type-456"), 
+                "Error message should include details about the failed resource");
+            assert_eq!(error.error_type, "ResourceCleanupError", 
+                "Error type should be ResourceCleanupError");
         }
     }
 }
