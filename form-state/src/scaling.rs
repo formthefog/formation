@@ -452,8 +452,317 @@ impl ScalingManager {
         Ok(())
     }
     
-    // Add additional transition methods for each phase transition
-    // Following the same pattern as above
+    /// Transitions to the ResourceAllocating phase
+    ///
+    /// This method can only be called when in the Planning phase.
+    ///
+    /// # Arguments
+    ///
+    /// * `resources` - Optional details about the resources being allocated
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` if the transition was successful
+    /// * `Err(ScalingError)` if the transition failed
+    pub fn transition_to_resource_allocating(&mut self, resources: Option<ScalingResources>) -> Result<(), ScalingError> {
+        let current_phase = match &self.current_phase {
+            Some(phase) => phase,
+            None => return Err(ScalingError {
+                error_type: "NoActiveOperation".to_string(),
+                message: "No active operation to transition".to_string(),
+                phase: "None".to_string(),
+            }),
+        };
+        
+        // Ensure we're in the Planning phase
+        if !matches!(current_phase, ScalingPhase::Planning { .. }) {
+            return Err(ScalingError {
+                error_type: "InvalidTransition".to_string(),
+                message: format!("Cannot transition from {} to ResourceAllocating", current_phase.phase_name()),
+                phase: current_phase.phase_name().to_string(),
+            });
+        }
+        
+        // Get the operation from the current phase
+        let operation = current_phase.operation().clone();
+        
+        // Create the new phase
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::from_secs(0))
+            .as_secs() as i64;
+        
+        let resource_allocating_phase = ScalingPhase::ResourceAllocating {
+            operation,
+            started_at: now,
+            resources,
+        };
+        
+        // Update the current phase
+        self.current_phase = Some(resource_allocating_phase);
+        
+        // Update the operation history
+        if let Some(record) = self.operation_history.last_mut() {
+            record.final_phase = "ResourceAllocating".to_string();
+        }
+        
+        Ok(())
+    }
+    
+    /// Transitions to the InstancePreparing phase
+    ///
+    /// This method can only be called when in the ResourceAllocating phase.
+    ///
+    /// # Arguments
+    ///
+    /// * `instance_ids` - IDs of instances being affected
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` if the transition was successful
+    /// * `Err(ScalingError)` if the transition failed
+    pub fn transition_to_instance_preparing(&mut self, instance_ids: Vec<String>) -> Result<(), ScalingError> {
+        let current_phase = match &self.current_phase {
+            Some(phase) => phase,
+            None => return Err(ScalingError {
+                error_type: "NoActiveOperation".to_string(),
+                message: "No active operation to transition".to_string(),
+                phase: "None".to_string(),
+            }),
+        };
+        
+        // Ensure we're in the ResourceAllocating phase
+        if !matches!(current_phase, ScalingPhase::ResourceAllocating { .. }) {
+            return Err(ScalingError {
+                error_type: "InvalidTransition".to_string(),
+                message: format!("Cannot transition from {} to InstancePreparing", current_phase.phase_name()),
+                phase: current_phase.phase_name().to_string(),
+            });
+        }
+        
+        // Get the operation from the current phase
+        let operation = current_phase.operation().clone();
+        
+        // Create the new phase
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::from_secs(0))
+            .as_secs() as i64;
+        
+        let instance_preparing_phase = ScalingPhase::InstancePreparing {
+            operation,
+            started_at: now,
+            instance_ids,
+        };
+        
+        // Update the current phase
+        self.current_phase = Some(instance_preparing_phase);
+        
+        // Update the operation history
+        if let Some(record) = self.operation_history.last_mut() {
+            record.final_phase = "InstancePreparing".to_string();
+        }
+        
+        Ok(())
+    }
+    
+    /// Transitions to the Configuring phase
+    ///
+    /// This method can only be called when in the InstancePreparing phase.
+    ///
+    /// # Arguments
+    ///
+    /// * `previous_config` - Optional previous configuration (for rollback if needed)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` if the transition was successful
+    /// * `Err(ScalingError)` if the transition failed
+    pub fn transition_to_configuring(&mut self, previous_config: Option<String>) -> Result<(), ScalingError> {
+        let current_phase = match &self.current_phase {
+            Some(phase) => phase,
+            None => return Err(ScalingError {
+                error_type: "NoActiveOperation".to_string(),
+                message: "No active operation to transition".to_string(),
+                phase: "None".to_string(),
+            }),
+        };
+        
+        // Ensure we're in the InstancePreparing phase
+        if !matches!(current_phase, ScalingPhase::InstancePreparing { .. }) {
+            return Err(ScalingError {
+                error_type: "InvalidTransition".to_string(),
+                message: format!("Cannot transition from {} to Configuring", current_phase.phase_name()),
+                phase: current_phase.phase_name().to_string(),
+            });
+        }
+        
+        // Get the operation from the current phase
+        let operation = current_phase.operation().clone();
+        
+        // Create the new phase
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::from_secs(0))
+            .as_secs() as i64;
+        
+        let configuring_phase = ScalingPhase::Configuring {
+            operation,
+            started_at: now,
+            previous_config,
+        };
+        
+        // Update the current phase
+        self.current_phase = Some(configuring_phase);
+        
+        // Update the operation history
+        if let Some(record) = self.operation_history.last_mut() {
+            record.final_phase = "Configuring".to_string();
+        }
+        
+        Ok(())
+    }
+    
+    /// Transitions to the Verifying phase
+    ///
+    /// This method can only be called when in the Configuring phase.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` if the transition was successful
+    /// * `Err(ScalingError)` if the transition failed
+    pub fn transition_to_verifying(&mut self) -> Result<(), ScalingError> {
+        let current_phase = match &self.current_phase {
+            Some(phase) => phase,
+            None => return Err(ScalingError {
+                error_type: "NoActiveOperation".to_string(),
+                message: "No active operation to transition".to_string(),
+                phase: "None".to_string(),
+            }),
+        };
+        
+        // Ensure we're in the Configuring phase
+        if !matches!(current_phase, ScalingPhase::Configuring { .. }) {
+            return Err(ScalingError {
+                error_type: "InvalidTransition".to_string(),
+                message: format!("Cannot transition from {} to Verifying", current_phase.phase_name()),
+                phase: current_phase.phase_name().to_string(),
+            });
+        }
+        
+        // Get the operation from the current phase
+        let operation = current_phase.operation().clone();
+        
+        // Create the new phase
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::from_secs(0))
+            .as_secs() as i64;
+        
+        let verifying_phase = ScalingPhase::Verifying {
+            operation,
+            started_at: now,
+            test_results: Vec::new(),
+        };
+        
+        // Update the current phase
+        self.current_phase = Some(verifying_phase);
+        
+        // Update the operation history
+        if let Some(record) = self.operation_history.last_mut() {
+            record.final_phase = "Verifying".to_string();
+        }
+        
+        Ok(())
+    }
+    
+    /// Adds a verification test result to the current Verifying phase
+    ///
+    /// # Arguments
+    ///
+    /// * `test_result` - The verification test result to add
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` if the test result was added successfully
+    /// * `Err(ScalingError)` if the operation is not in the Verifying phase
+    pub fn add_verification_result(&mut self, test_result: VerificationResult) -> Result<(), ScalingError> {
+        let current_phase = match &mut self.current_phase {
+            Some(ScalingPhase::Verifying { test_results, .. }) => {
+                test_results.push(test_result);
+                return Ok(());
+            },
+            Some(phase) => phase,
+            None => return Err(ScalingError {
+                error_type: "NoActiveOperation".to_string(),
+                message: "No active operation to add verification result to".to_string(),
+                phase: "None".to_string(),
+            }),
+        };
+        
+        Err(ScalingError {
+            error_type: "InvalidPhase".to_string(),
+            message: format!("Cannot add verification result in {} phase", current_phase.phase_name()),
+            phase: current_phase.phase_name().to_string(),
+        })
+    }
+    
+    /// Transitions to the Finalizing phase
+    ///
+    /// This method can only be called when in the Verifying phase.
+    ///
+    /// # Arguments
+    ///
+    /// * `cleanup_tasks` - Tasks that need to be completed
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` if the transition was successful
+    /// * `Err(ScalingError)` if the transition failed
+    pub fn transition_to_finalizing(&mut self, cleanup_tasks: Vec<String>) -> Result<(), ScalingError> {
+        let current_phase = match &self.current_phase {
+            Some(phase) => phase,
+            None => return Err(ScalingError {
+                error_type: "NoActiveOperation".to_string(),
+                message: "No active operation to transition".to_string(),
+                phase: "None".to_string(),
+            }),
+        };
+        
+        // Ensure we're in the Verifying phase
+        if !matches!(current_phase, ScalingPhase::Verifying { .. }) {
+            return Err(ScalingError {
+                error_type: "InvalidTransition".to_string(),
+                message: format!("Cannot transition from {} to Finalizing", current_phase.phase_name()),
+                phase: current_phase.phase_name().to_string(),
+            });
+        }
+        
+        // Get the operation from the current phase
+        let operation = current_phase.operation().clone();
+        
+        // Create the new phase
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::from_secs(0))
+            .as_secs() as i64;
+        
+        let finalizing_phase = ScalingPhase::Finalizing {
+            operation,
+            started_at: now,
+            cleanup_tasks,
+        };
+        
+        // Update the current phase
+        self.current_phase = Some(finalizing_phase);
+        
+        // Update the operation history
+        if let Some(record) = self.operation_history.last_mut() {
+            record.final_phase = "Finalizing".to_string();
+        }
+        
+        Ok(())
+    }
     
     /// Checks for phase timeouts and transitions to Failed if a timeout is detected
     ///

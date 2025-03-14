@@ -11,11 +11,11 @@ This document outlines the strategic roadmap for the Formation network, prioriti
 - ✅ MCP Server Phase 1 - Core framework, VM management tools, workload packaging, authentication, API documentation
 
 **In Progress:**
+- Stateful Elastic Scaling - Major progress with scaling state machine implementation
 - Vanity Domain Provisioning - Basic functionality implemented, enhancements in progress
 - Economic Infrastructure - Foundational components in place, integration work ongoing
 
 **Upcoming:**
-- Stateful Elastic Scaling
 - Native P2P AI Inference Engine
 
 ## MUST HAVE
@@ -248,19 +248,46 @@ Enable dynamic scaling of compute resources and storage without losing applicati
 - As a user, I want to scale my VM's resources up or down based on demand
 - As a developer, I want to add more storage to my instance without downtime
 - As an application owner, I want to add more CPU/RAM during peak periods
-- As a user, I want my application state preserved during scaling operations
+- As a system operator, I want to automatically scale clusters based on utilization metrics
 
 **Implementation Tasks:**
-- [ ] Implement hot-add capabilities for CPU, memory, and storage
-- [ ] Create seamless storage migration between tiers
-- [ ] Build resource monitoring and recommendation system
-- [ ] Implement state preservation during scaling operations
-- [ ] Create automated scaling policies framework
-- [ ] Develop scaling scheduler for time-based operations
-- [ ] Build API for programmatic scaling operations
-- [ ] Implement quota and limit management for scaling
+- [x] Design and implement data structure extensions
+  - [x] Add ScalingPolicy struct for configuration
+  - [x] Add ScalingOperation enum for operation types
+  - [x] Implement validation and helper methods
+  - [x] Add CRDT integration with serialization support
+- [x] Design and implement scaling state machine
+  - [x] Create ScalingManager to handle state transitions
+  - [x] Implement ScalingPhase enum for all operation phases
+  - [x] Add error handling and timeout mechanisms
+  - [x] Implement state transition methods with validation
+- [x] Implement phase operations for scaling
+  - [x] Validation phase for checking operation prerequisites
+  - [x] Metrics collection phase for resource usage data
+  - [x] Planning phase for calculating required resources
+  - [x] Resource allocation phase for preparing resources
+  - [x] Instance preparation phase for configuration
+  - [x] Configuration application phase for applying changes
+  - [x] Verification phase for ensuring correct application
+  - [x] Finalization phase for cleanup and record-keeping
+- [~] Implement automated metric-based scaling
+  - [~] Create resource usage thresholds for auto-scaling
+  - [ ] Implement periodic metric collection and evaluation
+  - [ ] Add automatic scaling operation triggering
+- [ ] Implement scale-down capability
+  - [ ] Add resource release logic
+  - [ ] Create instance selection algorithm for scale-down
+  - [ ] Implement graceful shutdown for removed instances
+- [ ] Add rollback capability for failed scaling operations
+  - [ ] Create operation history tracking
+  - [ ] Implement reversal operations for each phase
+  - [ ] Add automatic failure detection
 - [ ] Create testing framework for scaling operations
-- [ ] Build rollback mechanisms for failed scaling operations
+  - [x] Add basic unit tests for state machine functionality
+  - [ ] Implement integration tests with simulated resources
+  - [ ] Create stress tests for concurrent scaling operations
+
+**Status: IN PROGRESS** - Core scaling state machine implemented with all phase operations. Resource allocation and configuration handling completed. Metrics-based scaling triggers and testing infrastructure in development.
 
 ### 8. Native P2P AI Inference Engine
 
