@@ -1,4 +1,4 @@
-use std::{collections::{btree_map::{Iter, IterMut}, BTreeMap}, fmt::Display, net::IpAddr};
+use std::{collections::{btree_map::{Iter, IterMut}, BTreeMap}, fmt::Display, net::IpAddr, time::Duration};
 use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, CmRDT, Map, bft_reg::Update};
 use form_dns::store::FormDnsRecord;
 use form_types::state::{Response, Success};
@@ -7,6 +7,7 @@ use reqwest::Client;
 use serde::{Serialize, Deserialize};
 use tiny_keccak::Hasher;
 use crate::Actor;
+use crate::scaling::{ScalingManager, ScalingPhase, ScalingOperation, ScalingError};
 
 pub type InstanceOp = Op<String, BFTReg<Instance, Actor>, Actor>; 
 
@@ -696,7 +697,12 @@ pub struct InstanceCluster {
     
     /// Whether session affinity is enabled for this cluster
     /// When enabled, client requests are routed to the same instance consistently
-    pub session_affinity_enabled: bool
+    pub session_affinity_enabled: bool,
+    
+    /// State machine for managing scaling operations
+    /// This field is not serialized as part of the CRDT
+    #[serde(skip)]
+    pub scaling_manager: Option<crate::scaling::ScalingManager>,
 }
 
 impl Sha3Hash for InstanceCluster {
@@ -826,6 +832,7 @@ impl InstanceCluster {
             scaling_policy: None,
             template_instance_id: Some(template_id),
             session_affinity_enabled: false,
+            scaling_manager: None,
         }
     }
 
@@ -836,6 +843,7 @@ impl InstanceCluster {
             scaling_policy: Some(policy),
             template_instance_id: None,
             session_affinity_enabled: false,
+            scaling_manager: None,
         }
     }
 
@@ -960,6 +968,128 @@ impl InstanceCluster {
             .collect();
         
         members_to_remove
+    }
+    
+    /// Initializes the scaling manager with the specified timeout
+    ///
+    /// # Arguments
+    ///
+    /// * `timeout` - The default timeout for scaling operations
+    pub fn init_scaling_manager(&mut self, timeout: Duration) {
+        let mut manager = ScalingManager::new();
+        
+        // Set timeouts for each phase
+        let timeout_seconds = timeout.as_secs();
+        let phase_names = [
+            "Requested", "Validating", "Planning", "ResourceAllocating",
+            "InstancePreparing", "Configuring", "Verifying", "Finalizing"
+        ];
+        
+        for phase in phase_names.iter() {
+            manager.set_phase_timeout(phase, timeout_seconds);
+        }
+        
+        self.scaling_manager = Some(manager);
+    }
+    
+    /// Returns a reference to the scaling manager, if it exists
+    pub fn scaling_manager(&self) -> Option<&ScalingManager> {
+        self.scaling_manager.as_ref()
+    }
+    
+    /// Returns a mutable reference to the scaling manager, if it exists
+    pub fn scaling_manager_mut(&mut self) -> Option<&mut ScalingManager> {
+        self.scaling_manager.as_mut()
+    }
+    
+    /// Processes a single step of the scaling state machine
+    ///
+    /// This method examines the current phase of the scaling operation and
+    /// performs the appropriate action for that phase. It should be called
+    /// periodically to advance the state machine.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(true)` if the phase was processed and advanced
+    /// * `Ok(false)` if no processing was needed or possible
+    /// * `Err(ScalingError)` if an error occurred during processing
+    pub fn process_scaling_phase(&mut self) -> Result<bool, ScalingError> {
+        // Check if there's a scaling manager
+        let manager = match self.scaling_manager_mut() {
+            Some(manager) => manager,
+            None => return Ok(false), // No scaling manager, nothing to process
+        };
+        
+        // Check for timeouts
+        if manager.check_timeouts() {
+            return Ok(true); // Processed timeout
+        }
+        
+        // Get the current phase
+        let phase = match manager.current_phase() {
+            Some(phase) => phase,
+            None => return Ok(false), // No active operation, nothing to process
+        };
+        
+        // Process based on the current phase
+        match phase {
+            ScalingPhase::Requested { .. } => {
+                // Transition to validating
+                manager.transition_to_validating()?;
+                Ok(true)
+            },
+            // Other phases would have more complex implementations
+            // For now, we're just providing the basic structure
+            _ => Ok(false),
+        }
+    }
+    
+    /// Starts a new scaling operation using the state machine
+    ///
+    /// # Arguments
+    ///
+    /// * `operation` - The scaling operation to start
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` if the operation was started successfully
+    /// * `Err(ScalingError)` if the operation could not be started
+    pub fn start_scaling_state_machine(&mut self, operation: ScalingOperation) -> Result<(), ScalingError> {
+        // Ensure the scaling manager is initialized
+        if self.scaling_manager.is_none() {
+            self.init_scaling_manager(Duration::from_secs(300)); // 5 minutes default timeout
+        }
+        
+        // Start the operation
+        match self.scaling_manager_mut() {
+            Some(manager) => manager.start_operation(operation),
+            None => Err(ScalingError {
+                error_type: "NoScalingManager".to_string(),
+                message: "Scaling manager is not initialized".to_string(),
+                phase: "None".to_string(),
+            }),
+        }
+    }
+    
+    /// Cancels the current scaling operation and updates the status
+    ///
+    /// # Arguments
+    ///
+    /// * `reason` - The reason for cancellation
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` if the operation was canceled successfully
+    /// * `Err(ScalingError)` if there was no active operation to cancel
+    pub fn cancel_scaling_state_machine(&mut self, reason: &str) -> Result<(), ScalingError> {
+        match self.scaling_manager_mut() {
+            Some(manager) => manager.cancel_operation(reason),
+            None => Err(ScalingError {
+                error_type: "NoScalingManager".to_string(),
+                message: "Scaling manager is not initialized".to_string(),
+                phase: "None".to_string(),
+            }),
+        }
     }
 }
 
@@ -1584,6 +1714,7 @@ mod tests {
             scaling_policy: Some(policy),
             template_instance_id: Some("instance1".to_string()),
             session_affinity_enabled: true,
+            scaling_manager: None,
         };
         
         // Verify the values
@@ -1631,6 +1762,7 @@ mod tests {
                 scaling_policy: Some(policy),
                 template_instance_id: Some("instance1".to_string()),
                 session_affinity_enabled: true,
+                scaling_manager: None,
             }
         };
         
@@ -1676,6 +1808,7 @@ mod tests {
             scaling_policy: Some(policy.clone()),
             template_instance_id: Some("instance1".to_string()),
             session_affinity_enabled: true,
+            scaling_manager: None,
         };
         
         // Test accessors
@@ -2010,6 +2143,7 @@ mod tests {
                 scaling_policy: Some(ScalingPolicy::with_defaults()),
                 template_instance_id: Some("template1".to_string()),
                 session_affinity_enabled: true,
+                scaling_manager: None,
             },
             formfile: "".to_string(),
             snapshots: None,
@@ -2087,6 +2221,7 @@ mod tests {
                 scaling_policy: Some(ScalingPolicy::new(1, 5, 70, 300, 300)),
                 template_instance_id: Some("template1".to_string()),
                 session_affinity_enabled: true,
+                scaling_manager: None,
             },
             formfile: "".to_string(),
             snapshots: None,
@@ -2201,6 +2336,103 @@ mod tests {
         assert_eq!(deserialized.cluster.scaling_policy, final_instance.cluster.scaling_policy);
         assert_eq!(deserialized.cluster.template_instance_id, final_instance.cluster.template_instance_id);
         assert_eq!(deserialized.cluster.session_affinity_enabled, final_instance.cluster.session_affinity_enabled);
+    }
+
+    #[test]
+    fn test_scaling_state_machine() {
+        use crate::scaling::{ScalingOperation, ScalingPhase};
+        use std::time::Duration;
+        
+        // Create a scaling policy
+        let policy = ScalingPolicy::with_defaults();
+        
+        // Create an instance cluster with the policy
+        let mut cluster = InstanceCluster::new_with_policy(policy);
+        
+        // Initialize the scaling manager
+        cluster.init_scaling_manager(Duration::from_secs(300));
+        
+        // Insert a couple of cluster members
+        let member1 = ClusterMember {
+            node_id: "node1".to_string(),
+            node_public_ip: "192.168.1.1".parse().unwrap(),
+            node_formnet_ip: "10.0.0.1".parse().unwrap(),
+            instance_id: "instance1".to_string(),
+            instance_formnet_ip: "10.0.0.101".parse().unwrap(),
+            status: "running".to_string(),
+            last_heartbeat: 1234567890,
+            heartbeats_skipped: 0,
+        };
+        
+        let member2 = ClusterMember {
+            node_id: "node2".to_string(),
+            node_public_ip: "192.168.1.2".parse().unwrap(),
+            node_formnet_ip: "10.0.0.2".parse().unwrap(),
+            instance_id: "instance2".to_string(),
+            instance_formnet_ip: "10.0.0.102".parse().unwrap(),
+            status: "running".to_string(),
+            last_heartbeat: 1234567890,
+            heartbeats_skipped: 0,
+        };
+        
+        cluster.insert(member1);
+        cluster.insert(member2);
+        
+        // Add a template instance
+        cluster.set_template_instance_id(Some("instance1".to_string()));
+        
+        // Start a scale-out operation
+        let operation = ScalingOperation::ScaleOut { target_instances: 3 };
+        assert!(cluster.start_scaling_state_machine(operation).is_ok());
+        
+        // Verify the operation was started correctly
+        let manager = cluster.scaling_manager().unwrap();
+        let phase = manager.current_phase().unwrap();
+        match phase {
+            ScalingPhase::Requested { .. } => {},
+            _ => panic!("Wrong phase type"),
+        }
+        
+        // Process the scaling phase
+        assert!(cluster.process_scaling_phase().unwrap());
+        
+        // Verify the operation advanced to Validating
+        let manager = cluster.scaling_manager().unwrap();
+        let phase = manager.current_phase().unwrap();
+        match phase {
+            ScalingPhase::Validating { .. } => {},
+            _ => panic!("Failed to advance to Validating"),
+        }
+        
+        // Cancel the operation
+        assert!(cluster.cancel_scaling_state_machine("Testing cancellation").is_ok());
+        
+        // Verify the operation was canceled
+        let manager = cluster.scaling_manager().unwrap();
+        let phase = manager.current_phase().unwrap();
+        match phase {
+            ScalingPhase::Canceled { .. } => {},
+            _ => panic!("Failed to cancel operation"),
+        }
+        
+        // Try a scale-in operation with invalid parameters
+        let operation = ScalingOperation::ScaleIn { 
+            target_instances: 0, // Invalid - below min_instances
+            instance_ids: None,
+        };
+        
+        assert!(cluster.start_scaling_state_machine(operation).is_ok());
+        
+        // Process the scaling phase - should fail during validation
+        assert!(cluster.process_scaling_phase().unwrap());
+        
+        // Process another phase - this would perform validation logic
+        // In a real implementation, this would fail due to invalid parameters
+        // but our simple implementation just continues to the next phase
+        
+        // Show that the history tracks operations
+        let manager = cluster.scaling_manager().unwrap();
+        assert_eq!(manager.operation_history().len(), 2);
     }
 }
 

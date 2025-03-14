@@ -595,7 +595,8 @@ impl VmManager {
                 members: BTreeMap::new(),
                 scaling_policy: None,
                 template_instance_id: None,
-                session_affinity_enabled: false
+                session_affinity_enabled: false,
+                scaling_manager: None,
             },
             snapshots: None,
             metadata: InstanceMetadata {

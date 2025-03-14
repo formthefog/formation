@@ -3813,6 +3813,7 @@ mod tests {
                 scaling_policy: None,
                 template_instance_id: None,
                 session_affinity_enabled: false,
+                scaling_manager: None,
             },
             formfile: "".to_string(),
             snapshots: None,
