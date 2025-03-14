@@ -31,6 +31,7 @@ Currently implemented fuzzers:
 
 - **VM Management**: Tests VM creation, deletion, and ownership verification
 - **DNS Management**: Tests DNS zone creation, record management, and permission controls
+- **Network**: Tests packet routing, NAT traversal, and P2P connectivity with various network conditions
 - *(More will be added according to the implementation plan)*
 
 ## Usage
@@ -49,6 +50,9 @@ cargo run --bin fuzz_vm_management
 
 # Run the DNS management fuzzer
 cargo run --bin fuzz_dns
+
+# Run the Network fuzzer
+cargo run --bin fuzz_network
 ```
 
 ### Adding to CI/CD Pipeline
@@ -62,6 +66,7 @@ Add this to your GitHub Actions workflow:
     export FORM_FUZZING_ARTIFACTS_DIR=./fuzzing-artifacts
     cargo run --bin fuzz_vm_management
     cargo run --bin fuzz_dns
+    cargo run --bin fuzz_network
     # Add more fuzzers as they are implemented
 ```
 
