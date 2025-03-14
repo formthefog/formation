@@ -1,4 +1,4 @@
-use std::{collections::{btree_map::{Iter, IterMut}, BTreeMap}, fmt::Display, net::{IpAddr, Ipv4Addr}, time::{Duration, SystemTime, UNIX_EPOCH}};
+use std::{collections::{btree_map::{Iter, IterMut}, BTreeMap, HashSet}, fmt::Display, net::{IpAddr, Ipv4Addr}, time::{Duration, SystemTime, UNIX_EPOCH}};
 use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, CmRDT, Map, bft_reg::Update};
 use form_dns::store::FormDnsRecord;
 use form_types::state::{Response, Success};
@@ -2726,10 +2726,13 @@ impl InstanceCluster {
         // Replace the entire cluster configuration with the previous state
         log::info!("Rollback: fully restoring cluster configuration from backup");
         
-        // Restore cluster membership
-        self.members = previous_config.members;
+        // Step 1: Restore cluster membership using our more robust method
+        self.restore_cluster_membership(&previous_config.members)?;
         
-        // Restore other cluster properties
+        // Step 2: Restore network configurations for all instances
+        self.restore_instance_network_config(&previous_config.members, None)?;
+        
+        // Step 3: Restore other cluster properties
         self.template_instance_id = previous_config.template_instance_id;
         self.session_affinity_enabled = previous_config.session_affinity_enabled;
         
@@ -2742,6 +2745,7 @@ impl InstanceCluster {
             log::info!("Rollback: preserving current scaling manager state");
         }
 
+        log::info!("Rollback: cluster configuration restoration completed successfully");
         Ok(())
     }
 
@@ -3338,6 +3342,242 @@ impl InstanceCluster {
             // If no timeout, fall back to normal health checks
             self.check_scaling_operation_health()
         }
+    }
+
+    /// Restores cluster membership data from a pre-operation backup
+    /// 
+    /// This method restores the cluster's membership data to a previous state,
+    /// handling any conflicts between the current and previous states.
+    /// It includes verification to ensure consistency after restoration.
+    ///
+    /// # Arguments
+    ///
+    /// * `pre_operation_membership` - The cluster membership data to restore
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` if membership was restored successfully
+    /// * `Err(ScalingError)` if restoration failed
+    fn restore_cluster_membership(&mut self, pre_operation_membership: &BTreeMap<String, ClusterMember>) -> Result<(), ScalingError> {
+        // Step 1: Create deep copies of current and pre-operation membership for analysis
+        let current_membership = self.members.clone();
+        
+        // Step 2: Log the restoration attempt with detailed information
+        log::info!(
+            "Restoring cluster membership from backup: {} members in backup, {} members in current state",
+            pre_operation_membership.len(),
+            current_membership.len()
+        );
+        
+        // Step 3: Identify and categorize membership differences
+        let current_ids: HashSet<String> = current_membership.keys().cloned().collect();
+        let backup_ids: HashSet<String> = pre_operation_membership.keys().cloned().collect();
+        
+        // Members that were added after the backup was taken (not in backup but in current)
+        let added_members: HashSet<String> = current_ids.difference(&backup_ids).cloned().collect();
+        
+        // Members that were removed since the backup was taken (in backup but not in current)
+        let removed_members: HashSet<String> = backup_ids.difference(&current_ids).cloned().collect();
+        
+        // Members that exist in both states (will need careful handling for specific fields)
+        let common_members: HashSet<String> = current_ids.intersection(&backup_ids).cloned().collect();
+        
+        // Step 4: Log the analysis results
+        log::info!(
+            "Membership difference analysis: {} members added, {} members removed, {} members in common",
+            added_members.len(),
+            removed_members.len(),
+            common_members.len()
+        );
+        
+        // Step 5: Handle members that were added after the backup (likely created during the failed operation)
+        for member_id in &added_members {
+            log::info!("Removing member that was added after backup: {}", member_id);
+            self.members.remove(member_id);
+        }
+        
+        // Step 6: Handle members that were removed since the backup
+        for member_id in &removed_members {
+            if let Some(member) = pre_operation_membership.get(member_id) {
+                log::info!("Restoring previously removed member: {}", member_id);
+                self.members.insert(member_id.clone(), member.clone());
+            }
+        }
+        
+        // Step 7: Handle members that exist in both states with selective field updates
+        for member_id in &common_members {
+            let current = current_membership.get(member_id).unwrap();
+            let backup = pre_operation_membership.get(member_id).unwrap();
+            
+            // Check if there are significant differences between current and backup states
+            let status_changed = current.status != backup.status;
+            let ip_changed = current.instance_formnet_ip != backup.instance_formnet_ip;
+            
+            if status_changed || ip_changed {
+                log::info!(
+                    "Restoring member {} fields: status changed: {}, IP changed: {}",
+                    member_id,
+                    status_changed,
+                    ip_changed
+                );
+                
+                // Create a fresh copy of the backup member
+                let mut restored_member = backup.clone();
+                
+                // Selectively preserve certain fields from the current state if they're more recent
+                // For example, we might want to keep the latest heartbeat information
+                if current.last_heartbeat > backup.last_heartbeat {
+                    log::info!(
+                        "Preserving more recent heartbeat information for member {}: {} -> {}",
+                        member_id,
+                        backup.last_heartbeat,
+                        current.last_heartbeat
+                    );
+                    restored_member.last_heartbeat = current.last_heartbeat;
+                    restored_member.heartbeats_skipped = current.heartbeats_skipped;
+                }
+                
+                // Update the member with the restored version
+                self.members.insert(member_id.clone(), restored_member);
+            }
+        }
+        
+        // Step 8: Verify restoration was successful
+        if self.members.len() != pre_operation_membership.len() {
+            log::error!(
+                "Membership count mismatch after restoration: expected {}, got {}",
+                pre_operation_membership.len(),
+                self.members.len()
+            );
+            
+            return Err(ScalingError {
+                error_type: "RestorationError".to_string(),
+                message: format!(
+                    "Membership count mismatch after restoration: expected {}, got {}",
+                    pre_operation_membership.len(),
+                    self.members.len()
+                ),
+                phase: "Rollback".to_string(),
+            });
+        }
+        
+        // Perform additional verification on essential fields
+        let missing_essential_fields = self.members.iter().any(|(id, member)| {
+            if member.node_id.is_empty() || member.instance_id.is_empty() {
+                log::error!("Member {} has missing essential fields after restoration", id);
+                true
+            } else {
+                false
+            }
+        });
+        
+        if missing_essential_fields {
+            return Err(ScalingError {
+                error_type: "RestorationError".to_string(),
+                message: "Some members have missing essential fields after restoration".to_string(),
+                phase: "Rollback".to_string(),
+            });
+        }
+        
+        log::info!(
+            "Successfully restored cluster membership: {} members now in cluster",
+            self.members.len()
+        );
+        
+        Ok(())
+    }
+
+    /// Restores network configuration for instances from a pre-operation backup
+    /// 
+    /// This method focuses specifically on restoring network-related configurations
+    /// for instances, including FormNet IPs, DNS records, and network status.
+    ///
+    /// # Arguments
+    ///
+    /// * `pre_operation_membership` - The cluster membership data to restore network configs from
+    /// * `dns_records` - Optional map of DNS records to restore if available
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` if network configuration was restored successfully
+    /// * `Err(ScalingError)` if restoration failed
+    fn restore_instance_network_config(
+        &mut self,
+        pre_operation_membership: &BTreeMap<String, ClusterMember>,
+        dns_records: Option<&BTreeMap<String, form_dns::store::FormDnsRecord>>
+    ) -> Result<(), ScalingError> {
+        log::info!("Restoring instance network configurations from backup");
+        
+        // Track affected instances for reporting
+        let mut restored_instances = Vec::new();
+        let mut failed_instances = Vec::new();
+        
+        // First identify instances that need network configuration restoration
+        for (instance_id, backup_member) in pre_operation_membership {
+            if let Some(current_member) = self.members.get(instance_id) {
+                // Check if network configuration differs from backup
+                if current_member.instance_formnet_ip != backup_member.instance_formnet_ip ||
+                   current_member.node_formnet_ip != backup_member.node_formnet_ip ||
+                   current_member.node_public_ip != backup_member.node_public_ip {
+                    
+                    log::info!(
+                        "Network configuration change detected for instance {}: current IP: {}, backup IP: {}",
+                        instance_id,
+                        current_member.instance_formnet_ip,
+                        backup_member.instance_formnet_ip
+                    );
+                    
+                    // Create updated member with restored network configuration
+                    let mut restored_member = current_member.clone();
+                    restored_member.instance_formnet_ip = backup_member.instance_formnet_ip;
+                    restored_member.node_formnet_ip = backup_member.node_formnet_ip;
+                    restored_member.node_public_ip = backup_member.node_public_ip;
+                    
+                    // Update the member with restored network configuration
+                    self.members.insert(instance_id.clone(), restored_member);
+                    restored_instances.push(instance_id.clone());
+                }
+            }
+        }
+        
+        // If DNS records are provided, restore them for the affected instances
+        if let Some(dns_records) = dns_records {
+            log::info!("Restoring DNS records for {} instances", restored_instances.len());
+            
+            for instance_id in &restored_instances {
+                // In a real implementation, this would call DNS restore functionality
+                // For now, we just log the action that would be taken
+                if let Some(dns_record) = dns_records.get(instance_id) {
+                    log::info!("Would restore DNS record for instance {}: {:?}", instance_id, dns_record);
+                    // Actual DNS record restoration would happen here
+                } else {
+                    log::warn!("No DNS record found for instance {} during restoration", instance_id);
+                    failed_instances.push(instance_id.clone());
+                }
+            }
+        }
+        
+        // Log restoration results
+        log::info!(
+            "Network configuration restoration complete: {} instances restored, {} failures",
+            restored_instances.len(),
+            failed_instances.len()
+        );
+        
+        // Return error if any instances failed restoration
+        if !failed_instances.is_empty() {
+            return Err(ScalingError {
+                error_type: "NetworkRestorationError".to_string(),
+                message: format!(
+                    "Failed to completely restore network configuration for {} instances: {}",
+                    failed_instances.len(),
+                    failed_instances.join(", ")
+                ),
+                phase: "Rollback".to_string(),
+            });
+        }
+        
+        Ok(())
     }
 }
 
@@ -5244,5 +5484,174 @@ mod tests {
             assert_eq!(record.metadata.get("cluster_rollback_status").unwrap(), "completed");
         }
     }
-}
 
+    #[test]
+    fn test_restore_cluster_membership() {
+        // Create a test cluster with initial membership
+        let mut cluster = InstanceCluster::new_with_template("template-1".to_string());
+        let node_id = "node-1".to_string();
+        let instance_id1 = "instance-1".to_string();
+        let instance_id2 = "instance-2".to_string();
+        let instance_id3 = "instance-3".to_string();
+        
+        // Create and add members with initial network configurations
+        let member1 = ClusterMember {
+            node_id: node_id.clone(),
+            node_public_ip: "192.168.1.10".parse().unwrap(),
+            node_formnet_ip: "10.0.0.10".parse().unwrap(),
+            instance_id: instance_id1.clone(),
+            instance_formnet_ip: "10.0.0.100".parse().unwrap(),
+            status: "Active".to_string(),
+            last_heartbeat: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64,
+            heartbeats_skipped: 0,
+        };
+        
+        let member2 = ClusterMember {
+            node_id: node_id.clone(),
+            node_public_ip: "192.168.1.10".parse().unwrap(),
+            node_formnet_ip: "10.0.0.10".parse().unwrap(),
+            instance_id: instance_id2.clone(),
+            instance_formnet_ip: "10.0.0.101".parse().unwrap(),
+            status: "Active".to_string(),
+            last_heartbeat: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64,
+            heartbeats_skipped: 0,
+        };
+        
+        // Add members to the cluster
+        cluster.members.insert(instance_id1.clone(), member1);
+        cluster.members.insert(instance_id2.clone(), member2);
+        
+        // Create a backup of the original cluster membership
+        let pre_operation_membership = cluster.members.clone();
+        
+        // Simulate changes that would happen during an operation:
+        // 1. Add a new member
+        let member3 = ClusterMember {
+            node_id: node_id.clone(),
+            node_public_ip: "192.168.1.10".parse().unwrap(),
+            node_formnet_ip: "10.0.0.10".parse().unwrap(),
+            instance_id: instance_id3.clone(),
+            instance_formnet_ip: "10.0.0.102".parse().unwrap(),
+            status: "Initializing".to_string(),
+            last_heartbeat: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64,
+            heartbeats_skipped: 0,
+        };
+        cluster.members.insert(instance_id3.clone(), member3);
+        
+        // 2. Change status of an existing member
+        if let Some(member) = cluster.members.get_mut(&instance_id2) {
+            member.status = "Unhealthy".to_string();
+        }
+        
+        // 3. Remove a member
+        cluster.members.remove(&instance_id1);
+        
+        // Verify changes were made
+        assert_eq!(cluster.members.len(), 2); // One removed, one added
+        assert!(cluster.members.contains_key(&instance_id3)); // New member exists
+        assert!(!cluster.members.contains_key(&instance_id1)); // Old member removed
+        
+        if let Some(member) = cluster.members.get(&instance_id2) {
+            assert_eq!(member.status, "Unhealthy");
+        } else {
+            panic!("Member instance-2 should still exist");
+        }
+        
+        // Now restore the membership to pre-operation state
+        let result = cluster.restore_cluster_membership(&pre_operation_membership);
+        assert!(result.is_ok(), "Restoration should succeed");
+        
+        // Verify restoration worked correctly
+        assert_eq!(cluster.members.len(), 2); // Should have the original 2 members
+        assert!(!cluster.members.contains_key(&instance_id3)); // New member should be gone
+        assert!(cluster.members.contains_key(&instance_id1)); // Removed member should be back
+        assert!(cluster.members.contains_key(&instance_id2)); // Existing member should remain
+        
+        // Check that status was restored
+        if let Some(member) = cluster.members.get(&instance_id2) {
+            assert_eq!(member.status, "Active");
+        } else {
+            panic!("Member instance-2 should exist after restoration");
+        }
+    }
+
+    #[test]
+    fn test_restore_instance_network_config() {
+        // Create a test cluster with initial membership
+        let mut cluster = InstanceCluster::new_with_template("template-1".to_string());
+        let node_id = "node-1".to_string();
+        let instance_id1 = "instance-1".to_string();
+        let instance_id2 = "instance-2".to_string();
+        
+        // Create and add members with initial network configurations
+        let member1 = ClusterMember {
+            node_id: node_id.clone(),
+            node_public_ip: "192.168.1.10".parse().unwrap(),
+            node_formnet_ip: "10.0.0.10".parse().unwrap(),
+            instance_id: instance_id1.clone(),
+            instance_formnet_ip: "10.0.0.100".parse().unwrap(),
+            status: "Active".to_string(),
+            last_heartbeat: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64,
+            heartbeats_skipped: 0,
+        };
+        
+        let member2 = ClusterMember {
+            node_id: node_id.clone(),
+            node_public_ip: "192.168.1.10".parse().unwrap(),
+            node_formnet_ip: "10.0.0.10".parse().unwrap(),
+            instance_id: instance_id2.clone(),
+            instance_formnet_ip: "10.0.0.101".parse().unwrap(),
+            status: "Active".to_string(),
+            last_heartbeat: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64,
+            heartbeats_skipped: 0,
+        };
+        
+        // Add members to the cluster
+        cluster.members.insert(instance_id1.clone(), member1.clone());
+        cluster.members.insert(instance_id2.clone(), member2.clone());
+        
+        // Create a backup of the original network configuration
+        let pre_operation_membership = cluster.members.clone();
+        
+        // Simulate network configuration changes during an operation:
+        // 1. Change instance FormNet IP for member1
+        if let Some(member) = cluster.members.get_mut(&instance_id1) {
+            member.instance_formnet_ip = "10.0.0.200".parse().unwrap();
+        }
+        
+        // 2. Change node public IP for member2
+        if let Some(member) = cluster.members.get_mut(&instance_id2) {
+            member.node_public_ip = "192.168.1.20".parse().unwrap();
+        }
+        
+        // Verify changes were made
+        if let Some(member) = cluster.members.get(&instance_id1) {
+            assert_eq!(member.instance_formnet_ip.to_string(), "10.0.0.200");
+        } else {
+            panic!("Member instance-1 should exist");
+        }
+        
+        if let Some(member) = cluster.members.get(&instance_id2) {
+            assert_eq!(member.node_public_ip.to_string(), "192.168.1.20");
+        } else {
+            panic!("Member instance-2 should exist");
+        }
+        
+        // Now restore the network configuration
+        let result = cluster.restore_instance_network_config(&pre_operation_membership, None);
+        assert!(result.is_ok(), "Network configuration restoration should succeed");
+        
+        // Verify network configuration was restored correctly
+        if let Some(member) = cluster.members.get(&instance_id1) {
+            assert_eq!(member.instance_formnet_ip.to_string(), "10.0.0.100", "Instance FormNet IP should be restored to original value");
+        } else {
+            panic!("Member instance-1 should exist after restoration");
+        }
+        
+        if let Some(member) = cluster.members.get(&instance_id2) {
+            assert_eq!(member.node_public_ip.to_string(), "192.168.1.10", "Node public IP should be restored to original value");
+        } else {
+            panic!("Member instance-2 should exist after restoration");
+        }
+    }
+}
