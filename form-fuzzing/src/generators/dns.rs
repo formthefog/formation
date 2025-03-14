@@ -4,6 +4,7 @@
 use crate::generators::Generator;
 use rand::{Rng, distributions::Alphanumeric};
 use std::iter;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Represents a DNS record for fuzzing
 #[derive(Debug, Clone)]
@@ -74,11 +75,88 @@ pub struct DNSZone {
     pub minimum_ttl: u32,
 }
 
+/// Certificate validation method
+#[derive(Debug, Clone, PartialEq)]
+pub enum ValidationMethod {
+    /// HTTP validation (HTTP-01)
+    HTTP,
+    /// DNS validation (DNS-01)
+    DNS,
+    /// Email validation
+    Email,
+}
+
+impl ValidationMethod {
+    /// Get a random validation method
+    pub fn random() -> Self {
+        let mut rng = rand::thread_rng();
+        match rng.gen_range(0..3) {
+            0 => ValidationMethod::HTTP,
+            1 => ValidationMethod::DNS,
+            _ => ValidationMethod::Email,
+        }
+    }
+}
+
+/// Certificate type (wildcard or standard)
+#[derive(Debug, Clone, PartialEq)]
+pub enum CertificateType {
+    /// Standard certificate for a specific domain
+    Standard,
+    /// Wildcard certificate (*.domain.com)
+    Wildcard,
+}
+
+impl CertificateType {
+    /// Get a random certificate type
+    pub fn random() -> Self {
+        let mut rng = rand::thread_rng();
+        if rng.gen_bool(0.3) { // 30% chance of wildcard
+            CertificateType::Wildcard
+        } else {
+            CertificateType::Standard
+        }
+    }
+}
+
+/// SSL certificate information
+#[derive(Debug, Clone)]
+pub struct Certificate {
+    /// Domain the certificate is for
+    pub domain: String,
+    /// Whether this is a wildcard certificate
+    pub certificate_type: CertificateType,
+    /// When the certificate was issued
+    pub issued_at: u64,
+    /// When the certificate expires
+    pub expires_at: u64,
+    /// Validation method used
+    pub validation_method: ValidationMethod,
+    /// Status of the certificate
+    pub status: CertificateStatus,
+}
+
+/// Certificate status
+#[derive(Debug, Clone, PartialEq)]
+pub enum CertificateStatus {
+    /// Certificate is pending issuance
+    Pending,
+    /// Certificate is active
+    Active,
+    /// Certificate is expired
+    Expired,
+    /// Certificate was revoked
+    Revoked,
+    /// Certificate issuance failed
+    Failed(String),
+}
+
 /// Generator for DNS records
 pub struct DNSRecordGenerator {
     min_ttl: u32,
     max_ttl: u32,
     domains: Vec<String>,
+    include_wildcards: bool,
 }
 
 impl DNSRecordGenerator {
@@ -94,7 +172,15 @@ impl DNSRecordGenerator {
                 "fuzzing.test".to_string(),
                 "subdomain.example.com".to_string(),
             ],
+            include_wildcards: true,
         }
+    }
+    
+    /// Create a new DNS record generator with wildcard support disabled
+    pub fn new_no_wildcards() -> Self {
+        let mut generator = Self::new();
+        generator.include_wildcards = false;
+        generator
     }
     
     /// Generate values for a specific record type
@@ -118,6 +204,20 @@ impl DNSRecordGenerator {
         let index = rng.gen_range(0..self.domains.len());
         &self.domains[index]
     }
+    
+    /// Generate a random domain name, with potential for wildcard domains
+    pub fn generate_domain(&self) -> String {
+        let mut rng = rand::thread_rng();
+        
+        // Decide if we should generate a wildcard domain
+        if self.include_wildcards && rng.gen_bool(0.2) { // 20% chance
+            format!("*.{}", self.random_domain())
+        } else if rng.gen_bool(0.3) { // 30% chance of subdomain
+            format!("sub-{}.{}", generate_random_string(5), self.random_domain())
+        } else {
+            self.random_domain().clone()
+        }
+    }
 }
 
 impl Generator<DNSRecord> for DNSRecordGenerator {
@@ -133,11 +233,7 @@ impl Generator<DNSRecord> for DNSRecordGenerator {
         let ttl = rng.gen_range(self.min_ttl..=self.max_ttl);
         
         // Generate domain (use subdomain for variety)
-        let domain = if rng.gen_bool(0.3) {
-            format!("sub-{}.{}", generate_random_string(5), self.random_domain())
-        } else {
-            self.random_domain().clone()
-        };
+        let domain = self.generate_domain();
         
         // Generate values based on record type
         let values = self.generate_values_for_type(&record_type);
@@ -168,10 +264,10 @@ pub struct DNSZoneGenerator {
 
 impl DNSZoneGenerator {
     /// Create a new DNS zone generator with default settings
-    pub fn new() -> Self {
+    pub fn new(max_records: usize) -> Self {
         Self {
             min_records: 3,
-            max_records: 20,
+            max_records,
             record_generator: DNSRecordGenerator::new(),
         }
     }
@@ -217,6 +313,70 @@ impl Generator<DNSZone> for DNSZoneGenerator {
             retry,
             expire,
             minimum_ttl,
+        }
+    }
+}
+
+/// Generator for certificates
+pub struct CertificateGenerator {
+    domain_generator: DNSRecordGenerator,
+}
+
+impl CertificateGenerator {
+    /// Create a new certificate generator
+    pub fn new() -> Self {
+        Self {
+            domain_generator: DNSRecordGenerator::new(),
+        }
+    }
+}
+
+impl Generator<Certificate> for CertificateGenerator {
+    fn generate(&self) -> Certificate {
+        let mut rng = rand::thread_rng();
+        
+        // Generate domain
+        let domain = self.domain_generator.generate_domain();
+        
+        // Generate certificate type
+        let certificate_type = if domain.starts_with("*.") {
+            CertificateType::Wildcard
+        } else {
+            CertificateType::Standard
+        };
+        
+        // Generate validation method (wildcard certs require DNS validation)
+        let validation_method = if certificate_type == CertificateType::Wildcard {
+            ValidationMethod::DNS
+        } else {
+            ValidationMethod::random()
+        };
+        
+        // Generate timestamps
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        
+        let issued_at = now - rng.gen_range(0..30 * 24 * 60 * 60); // 0-30 days ago
+        let expires_at = issued_at + 90 * 24 * 60 * 60; // 90 days from issuance
+        
+        // Generate status
+        let status = match rng.gen_range(0..10) {
+            0 => CertificateStatus::Pending,
+            1 => CertificateStatus::Expired,
+            2 => CertificateStatus::Revoked,
+            3 => CertificateStatus::Failed("Validation failed".to_string()),
+            _ => CertificateStatus::Active,
+        };
+        
+        Certificate {
+            domain,
+            certificate_type,
+            issued_at,
+            expires_at,
+            validation_method,
+            status,
         }
     }
 }
@@ -272,4 +432,21 @@ fn generate_random_string(length: usize) -> String {
         .map(|()| rng.sample(Alphanumeric) as char)
         .take(length)
         .collect()
+}
+
+/// Generate a DNS-01 challenge response for ACME validation
+pub fn generate_dns01_challenge_response() -> String {
+    let mut rng = rand::thread_rng();
+    
+    // Generate a random base64-like string
+    let challenge: String = iter::repeat(())
+        .map(|()| {
+            let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+            let idx = rng.gen_range(0..chars.len());
+            chars.chars().nth(idx).unwrap()
+        })
+        .take(43) // Length for a typical ACME challenge
+        .collect();
+    
+    challenge
 } 

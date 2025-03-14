@@ -30,6 +30,60 @@ pub enum DNSOperationResult {
     InternalError(String),
     /// Timeout
     Timeout,
+    /// Certificate Error
+    CertificateError(String),
+}
+
+/// Certificate validation method
+#[derive(Debug, Clone, PartialEq)]
+pub enum ValidationMethod {
+    /// HTTP validation (HTTP-01)
+    HTTP,
+    /// DNS validation (DNS-01)
+    DNS,
+    /// Email validation
+    Email,
+}
+
+/// Certificate type (wildcard or standard)
+#[derive(Debug, Clone, PartialEq)]
+pub enum CertificateType {
+    /// Standard certificate for a specific domain
+    Standard,
+    /// Wildcard certificate (*.domain.com)
+    Wildcard,
+}
+
+/// SSL certificate information
+#[derive(Debug, Clone)]
+pub struct Certificate {
+    /// Domain the certificate is for
+    pub domain: String,
+    /// Whether this is a wildcard certificate
+    pub certificate_type: CertificateType,
+    /// When the certificate was issued
+    pub issued_at: u64,
+    /// When the certificate expires
+    pub expires_at: u64,
+    /// Validation method used
+    pub validation_method: ValidationMethod,
+    /// Status of the certificate
+    pub status: CertificateStatus,
+}
+
+/// Certificate status
+#[derive(Debug, Clone, PartialEq)]
+pub enum CertificateStatus {
+    /// Certificate is pending issuance
+    Pending,
+    /// Certificate is active
+    Active,
+    /// Certificate is expired
+    Expired,
+    /// Certificate was revoked
+    Revoked,
+    /// Certificate issuance failed
+    Failed(String),
 }
 
 /// Mock DNS zone manager for testing
@@ -50,6 +104,8 @@ pub struct MockDNSManager {
     operation_latency: Duration,
     /// Failure rate for simulating random failures
     failure_rate: f64,
+    /// Certificates
+    certificates: Arc<Mutex<HashMap<String, Certificate>>>,
 }
 
 impl MockDNSManager {
@@ -64,6 +120,7 @@ impl MockDNSManager {
             max_ops_per_minute: 60,
             operation_latency: Duration::from_millis(50),
             failure_rate: 0.05,
+            certificates: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -325,6 +382,205 @@ impl MockDNSManager {
         let zones = self.zones.lock().unwrap();
         zones.get(zone_name).cloned()
     }
+
+    /// Request a certificate for a domain
+    pub fn request_certificate(&self, user_id: &str, domain: &str, cert_type: CertificateType, validation_method: ValidationMethod) -> DNSOperationResult {
+        // Inject faults if configured
+        if fault_injection::should_inject_fault("dns_request_certificate") {
+            return DNSOperationResult::InternalError("Injected fault".to_string());
+        }
+
+        // Simulate operation latency
+        std::thread::sleep(self.operation_latency);
+
+        // Check rate limits
+        if !self.check_rate_limit(user_id) {
+            return DNSOperationResult::RateLimited;
+        }
+
+        // For wildcard certificates, require DNS validation
+        if cert_type == CertificateType::Wildcard && validation_method != ValidationMethod::DNS {
+            return DNSOperationResult::CertificateError("Wildcard certificates require DNS validation".to_string());
+        }
+
+        // Check if domain is associated with any of the zones the user has permission for
+        let domain_zone = domain.split('.').skip(1).collect::<Vec<&str>>().join(".");
+        if !self.has_permission(user_id, &domain_zone) {
+            return DNSOperationResult::PermissionDenied;
+        }
+
+        // Check if certificate already exists
+        let mut certificates = self.certificates.lock().unwrap();
+        if certificates.contains_key(domain) {
+            return DNSOperationResult::InvalidInput("Certificate already exists for this domain".to_string());
+        }
+
+        // Create new certificate
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        
+        let cert = Certificate {
+            domain: domain.to_string(),
+            certificate_type: cert_type,
+            issued_at: now,
+            expires_at: now + 90 * 24 * 60 * 60, // 90 days
+            validation_method,
+            status: CertificateStatus::Pending,
+        };
+
+        certificates.insert(domain.to_string(), cert);
+        
+        DNSOperationResult::Success
+    }
+
+    /// Verify domain ownership for certificate issuance
+    pub fn verify_certificate(&self, user_id: &str, domain: &str) -> DNSOperationResult {
+        // Inject faults if configured
+        if fault_injection::should_inject_fault("dns_verify_certificate") {
+            return DNSOperationResult::InternalError("Injected fault".to_string());
+        }
+
+        // Simulate operation latency
+        std::thread::sleep(self.operation_latency);
+
+        // Check rate limits
+        if !self.check_rate_limit(user_id) {
+            return DNSOperationResult::RateLimited;
+        }
+
+        // Check if certificate exists
+        let mut certificates = self.certificates.lock().unwrap();
+        let cert = match certificates.get_mut(domain) {
+            Some(cert) => cert,
+            None => return DNSOperationResult::CertificateError("No pending certificate found for this domain".to_string()),
+        };
+
+        // Only pending certificates can be verified
+        if cert.status != CertificateStatus::Pending {
+            return DNSOperationResult::CertificateError("Certificate is not in pending state".to_string());
+        }
+
+        // Simulate validation process
+        let mut rng = rand::thread_rng();
+        if rng.gen_bool(0.9) { // 90% success rate
+            cert.status = CertificateStatus::Active;
+            DNSOperationResult::Success
+        } else {
+            cert.status = CertificateStatus::Failed("Validation failed".to_string());
+            DNSOperationResult::CertificateError("Failed to verify domain ownership".to_string())
+        }
+    }
+
+    /// Renew a certificate
+    pub fn renew_certificate(&self, user_id: &str, domain: &str) -> DNSOperationResult {
+        // Inject faults if configured
+        if fault_injection::should_inject_fault("dns_renew_certificate") {
+            return DNSOperationResult::InternalError("Injected fault".to_string());
+        }
+
+        // Simulate operation latency
+        std::thread::sleep(self.operation_latency);
+
+        // Check rate limits
+        if !self.check_rate_limit(user_id) {
+            return DNSOperationResult::RateLimited;
+        }
+
+        // Check if certificate exists
+        let mut certificates = self.certificates.lock().unwrap();
+        let cert = match certificates.get_mut(domain) {
+            Some(cert) => cert,
+            None => return DNSOperationResult::CertificateError("No certificate found for this domain".to_string()),
+        };
+
+        // Only active certificates can be renewed
+        if cert.status != CertificateStatus::Active {
+            return DNSOperationResult::CertificateError("Certificate is not active".to_string());
+        }
+
+        // Update certificate
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        
+        cert.issued_at = now;
+        cert.expires_at = now + 90 * 24 * 60 * 60; // 90 days
+        
+        DNSOperationResult::Success
+    }
+
+    /// Revoke a certificate
+    pub fn revoke_certificate(&self, user_id: &str, domain: &str) -> DNSOperationResult {
+        // Inject faults if configured
+        if fault_injection::should_inject_fault("dns_revoke_certificate") {
+            return DNSOperationResult::InternalError("Injected fault".to_string());
+        }
+
+        // Simulate operation latency
+        std::thread::sleep(self.operation_latency);
+
+        // Check rate limits
+        if !self.check_rate_limit(user_id) {
+            return DNSOperationResult::RateLimited;
+        }
+
+        // Check if certificate exists
+        let mut certificates = self.certificates.lock().unwrap();
+        let cert = match certificates.get_mut(domain) {
+            Some(cert) => cert,
+            None => return DNSOperationResult::CertificateError("No certificate found for this domain".to_string()),
+        };
+
+        // Update certificate status
+        cert.status = CertificateStatus::Revoked;
+        
+        DNSOperationResult::Success
+    }
+
+    /// Get all certificates for a user
+    pub fn get_certificates(&self, user_id: &str) -> Vec<Certificate> {
+        // Get zones the user has permission for
+        let user_zones = self.get_zones(user_id);
+        
+        // Collect certificates for domains in those zones
+        let certificates = self.certificates.lock().unwrap();
+        certificates.values()
+            .filter(|cert| {
+                // Extract the zone from the certificate domain
+                let domain_parts: Vec<&str> = cert.domain.split('.').collect();
+                if domain_parts.len() < 2 {
+                    return false;
+                }
+                
+                let zone = domain_parts[1..].join(".");
+                user_zones.contains(&zone)
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Get a specific certificate
+    pub fn get_certificate(&self, user_id: &str, domain: &str) -> Option<Certificate> {
+        // Extract the zone from the domain
+        let domain_parts: Vec<&str> = domain.split('.').collect();
+        if domain_parts.len() < 2 {
+            return None;
+        }
+        
+        let zone = domain_parts[1..].join(".");
+        
+        // Check if user has permission for the zone
+        if !self.has_permission(user_id, &zone) {
+            return None;
+        }
+        
+        // Get the certificate
+        let certificates = self.certificates.lock().unwrap();
+        certificates.get(domain).cloned()
+    }
 }
 
 /// Mock DNS authentication service
@@ -472,6 +728,75 @@ impl DNSHarness {
             Ok(zone)
         } else {
             Err(DNSOperationResult::ZoneNotFound)
+        }
+    }
+
+    /// Request a certificate with authentication
+    pub fn request_certificate(&self, user_id: &str, api_key: &str, domain: &str, cert_type: CertificateType, validation_method: ValidationMethod) -> DNSOperationResult {
+        // Verify API key
+        if !self.authenticator.verify_api_key(user_id, api_key) {
+            return DNSOperationResult::AuthenticationFailed;
+        }
+
+        // Request certificate
+        self.manager.request_certificate(user_id, domain, cert_type, validation_method)
+    }
+
+    /// Verify certificate with authentication
+    pub fn verify_certificate(&self, user_id: &str, api_key: &str, domain: &str) -> DNSOperationResult {
+        // Verify API key
+        if !self.authenticator.verify_api_key(user_id, api_key) {
+            return DNSOperationResult::AuthenticationFailed;
+        }
+
+        // Verify certificate
+        self.manager.verify_certificate(user_id, domain)
+    }
+
+    /// Renew certificate with authentication
+    pub fn renew_certificate(&self, user_id: &str, api_key: &str, domain: &str) -> DNSOperationResult {
+        // Verify API key
+        if !self.authenticator.verify_api_key(user_id, api_key) {
+            return DNSOperationResult::AuthenticationFailed;
+        }
+
+        // Renew certificate
+        self.manager.renew_certificate(user_id, domain)
+    }
+
+    /// Revoke certificate with authentication
+    pub fn revoke_certificate(&self, user_id: &str, api_key: &str, domain: &str) -> DNSOperationResult {
+        // Verify API key
+        if !self.authenticator.verify_api_key(user_id, api_key) {
+            return DNSOperationResult::AuthenticationFailed;
+        }
+
+        // Revoke certificate
+        self.manager.revoke_certificate(user_id, domain)
+    }
+
+    /// Get all certificates with authentication
+    pub fn get_certificates(&self, user_id: &str, api_key: &str) -> Result<Vec<Certificate>, DNSOperationResult> {
+        // Verify API key
+        if !self.authenticator.verify_api_key(user_id, api_key) {
+            return Err(DNSOperationResult::AuthenticationFailed);
+        }
+
+        // Get certificates
+        Ok(self.manager.get_certificates(user_id))
+    }
+
+    /// Get a specific certificate with authentication
+    pub fn get_certificate(&self, user_id: &str, api_key: &str, domain: &str) -> Result<Certificate, DNSOperationResult> {
+        // Verify API key
+        if !self.authenticator.verify_api_key(user_id, api_key) {
+            return Err(DNSOperationResult::AuthenticationFailed);
+        }
+
+        // Get certificate
+        match self.manager.get_certificate(user_id, domain) {
+            Some(cert) => Ok(cert),
+            None => Err(DNSOperationResult::CertificateError("Certificate not found".to_string())),
         }
     }
 }

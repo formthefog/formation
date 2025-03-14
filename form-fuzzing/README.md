@@ -30,7 +30,7 @@ The fuzzing infrastructure consists of several key modules:
 Currently implemented fuzzers:
 
 - **VM Management**: Tests VM creation, deletion, and ownership verification
-- **DNS Management**: Tests DNS zone creation, record management, and permission controls
+- **DNS Management**: Tests DNS zone creation, record management, certificate handling, wildcard domains, and DNS propagation
 - **Network**: Tests packet routing, NAT traversal, and P2P connectivity with various network conditions
 - *(More will be added according to the implementation plan)*
 
