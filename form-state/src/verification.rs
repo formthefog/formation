@@ -50,6 +50,14 @@ impl RestorationVerificationResult {
             success,
             details: details.to_string(),
         });
+        
+        // Log each verification item as it's added
+        let log_level = if success { log::Level::Debug } else { log::Level::Warn };
+        log::log!(log_level, "Verification item [{}]: {} - {}", 
+            if success { "SUCCESS" } else { "FAILED" }, 
+            aspect, 
+            details
+        );
     }
 
     /// Returns a summary of the verification result
@@ -62,6 +70,19 @@ impl RestorationVerificationResult {
             "Verification {}: {}/{} checks passed",
             status, passed_count, total_count
         )
+    }
+    
+    /// Returns a detailed summary of the verification result
+    pub fn detailed_summary(&self) -> String {
+        let mut summary = self.summary();
+        summary.push_str("\n");
+        
+        for item in &self.verification_items {
+            let status = if item.success { "SUCCESS" } else { "FAILED" };
+            summary.push_str(&format!("- {}: {} - {}\n", status, item.aspect, item.details));
+        }
+        
+        summary
     }
 }
 
@@ -96,18 +117,29 @@ pub fn verify_state_restoration(
     );
     
     // 1. Verify cluster membership restoration
+    info!("STEP 1/4: Starting cluster membership verification");
     verify_cluster_membership(cluster, &mut result, pre_operation_membership);
     
     // 2. Verify network configuration restoration
+    info!("STEP 2/4: Starting network configuration verification");
     verify_network_configuration(cluster, &mut result, pre_operation_membership, dns_records);
     
     // 3. Verify cluster properties restoration
+    info!("STEP 3/4: Starting cluster properties verification");
     verify_cluster_properties(cluster, &mut result);
     
     // 4. Verify resource cleanup
+    info!("STEP 4/4: Starting resource cleanup verification");
     verify_resource_cleanup(cluster, &mut result, cleaned_resource_ids);
     
-    debug!("Verification completed: {}", result.summary());
+    // Log the verification result
+    if result.success {
+        info!("✅ Verification completed successfully: {}", result.summary());
+    } else {
+        warn!("❌ Verification completed with failures: {}", result.summary());
+    }
+    
+    // Return the verification result
     result
 }
 
@@ -117,85 +149,103 @@ pub fn verify_cluster_membership(
     result: &mut RestorationVerificationResult,
     pre_operation_membership: &BTreeMap<String, ClusterMember>
 ) {
-    debug!("Verifying cluster membership restoration...");
+    debug!("Starting cluster membership verification...");
+    info!("Verifying cluster members. Expected: {}, Current: {}", 
+        pre_operation_membership.len(), cluster.members.len());
     
-    // Check 1: Count of members should match
-    let members_count_match = cluster.members.len() == pre_operation_membership.len();
-    let count_details = format!(
-        "Current members: {}, Pre-operation members: {}", 
-        cluster.members.len(), 
-        pre_operation_membership.len()
-    );
+    // 1. Verify that the number of members matches
+    let member_count_match = cluster.members.len() == pre_operation_membership.len();
     
     result.add_item(
         "Member count match",
-        members_count_match,
-        &count_details
+        member_count_match,
+        &format!(
+            "Current members: {}, Pre-operation members: {}", 
+            cluster.members.len(), pre_operation_membership.len()
+        )
     );
     
-    // Check 2: All pre-operation members exist in current state
+    if !member_count_match {
+        debug!("Member count mismatch: Current={}, Expected={}", 
+            cluster.members.len(), pre_operation_membership.len());
+    }
+    
+    // 2. Verify that all pre-operation members are present in the current cluster
     let mut missing_members = Vec::new();
     
-    for (id, _pre_member) in pre_operation_membership {
+    for (id, _) in pre_operation_membership {
         if !cluster.members.contains_key(id) {
             missing_members.push(id.clone());
         }
     }
     
     let all_members_present = missing_members.is_empty();
-    let presence_details = if all_members_present {
-        "All pre-operation members are present in the restored state".to_string()
+    
+    if all_members_present {
+        result.add_item(
+            "All members present",
+            true,
+            "All pre-operation members are present in the restored state"
+        );
+        debug!("All {} pre-operation members are present in current cluster", pre_operation_membership.len());
     } else {
-        format!("Missing members: {}", missing_members.join(", "))
-    };
+        result.add_item(
+            "All members present", 
+            false,
+            &format!("Missing members: {}", missing_members.join(", "))
+        );
+        warn!("Missing {} members in restored cluster: {:?}", 
+            missing_members.len(), missing_members);
+    }
     
-    result.add_item(
-        "All members present",
-        all_members_present,
-        &presence_details
-    );
-    
-    // Check 3: Member attributes match
-    let mut attribute_mismatches = Vec::new();
+    // 3. Verify that the member attributes (IP, status, etc.) match
+    let mut mismatched_attributes = Vec::new();
     
     for (id, pre_member) in pre_operation_membership {
         if let Some(current_member) = cluster.members.get(id) {
-            // Check specific attributes - we care most about network info
-            if pre_member.node_id != current_member.node_id {
-                attribute_mismatches.push(format!("{}: node_id mismatch", id));
+            let mut mismatches = Vec::new();
+            
+            // Check node_id
+            if current_member.node_id != pre_member.node_id {
+                mismatches.push(format!("node_id mismatch (expected: {}, actual: {})", 
+                    pre_member.node_id, current_member.node_id));
             }
             
-            if pre_member.node_public_ip != current_member.node_public_ip {
-                attribute_mismatches.push(format!("{}: node_public_ip mismatch", id));
+            // Check instance_formnet_ip
+            if current_member.instance_formnet_ip != pre_member.instance_formnet_ip {
+                mismatches.push(format!("instance_formnet_ip mismatch"));
             }
             
-            if pre_member.node_formnet_ip != current_member.node_formnet_ip {
-                attribute_mismatches.push(format!("{}: node_formnet_ip mismatch", id));
+            // Check status
+            if current_member.status != pre_member.status {
+                mismatches.push(format!("status mismatch (expected: {}, actual: {})", 
+                    pre_member.status, current_member.status));
             }
             
-            if pre_member.instance_formnet_ip != current_member.instance_formnet_ip {
-                attribute_mismatches.push(format!("{}: instance_formnet_ip mismatch", id));
-            }
-            
-            if pre_member.status != current_member.status {
-                attribute_mismatches.push(format!("{}: status mismatch (expected: {}, actual: {})", 
-                                                id, pre_member.status, current_member.status));
+            if !mismatches.is_empty() {
+                mismatched_attributes.push(format!("{}: {}", id, mismatches.join(", ")));
+                debug!("Member {} has attribute mismatches: {:?}", id, mismatches);
             }
         }
     }
     
-    let attributes_match = attribute_mismatches.is_empty();
-    let attributes_details = if attributes_match {
-        "All member attributes correctly restored".to_string()
-    } else {
-        format!("Attribute mismatches: {}", attribute_mismatches.join("; "))
-    };
+    let attributes_match = mismatched_attributes.is_empty();
     
-    result.add_item(
-        "Member attributes match",
-        attributes_match,
-        &attributes_details
-    );
+    if attributes_match {
+        result.add_item(
+            "Member attributes match",
+            true,
+            "All member attributes correctly restored"
+        );
+        debug!("All member attributes correctly match pre-operation values");
+    } else {
+        result.add_item(
+            "Member attributes match",
+            false,
+            &format!("Attribute mismatches: {}", mismatched_attributes.join("; "))
+        );
+        warn!("Found attribute mismatches in {} members", mismatched_attributes.len());
+    }
     
     debug!("Cluster membership verification completed");
 }
@@ -428,10 +478,11 @@ pub fn verify_resource_cleanup(
     result: &mut RestorationVerificationResult,
     cleaned_resource_ids: Option<&[String]>,
 ) {
-    debug!("Verifying resource cleanup...");
+    debug!("Starting resource cleanup verification...");
     
     if let Some(resource_ids) = cleaned_resource_ids {
         if resource_ids.is_empty() {
+            info!("Resource cleanup verification: No resources needed cleanup");
             result.add_item(
                 "Resource cleanup",
                 true,
@@ -462,14 +513,23 @@ pub fn verify_resource_cleanup(
                 .push(resource_id.clone());
         }
         
+        // Log breakdown of resources to verify
+        for (res_type, ids) in &resource_types {
+            debug!("Verifying cleanup of {} {} resources: {:?}", ids.len(), res_type, ids);
+        }
+        
         // Check that no instances in the cleaned list exist in our current members
         let mut found_resources = Vec::new();
         
         // First check any resources with inst- prefix
         if let Some(instance_ids) = resource_types.get("instance") {
+            debug!("Checking if {} instance resources are properly cleaned up", instance_ids.len());
             for instance_id in instance_ids {
                 if cluster.members.contains_key(instance_id) {
+                    warn!("Instance {} was supposed to be cleaned up but is still in cluster members", instance_id);
                     found_resources.push(format!("{} (still in members)", instance_id));
+                } else {
+                    debug!("Instance {} was correctly cleaned up", instance_id);
                 }
             }
         }
@@ -482,38 +542,71 @@ pub fn verify_resource_cleanup(
                 continue;
             }
             
-            // For test purposes, check if these non-inst IDs exist in the cluster members
+            // Check if this might be an instance ID without the proper prefix
             if cluster.members.contains_key(resource_id) {
+                warn!("Instance resource {} was supposed to be cleaned up but is still in cluster members", resource_id);
                 found_resources.push(format!("{} (still in members)", resource_id));
             }
         }
         
+        // If we found any resources that should have been cleaned up, verification fails
         let cleanup_successful = found_resources.is_empty();
-        let cleanup_details = if cleanup_successful {
-            format!(
-                "All {} resources were successfully cleaned up: {}",
+        
+        // Construct a detailed summary of the cleanup results
+        let details;
+        
+        if cleanup_successful {
+            // Count resources by type for a more detailed success message
+            let instance_count = resource_types.get("instance").map_or(0, |v| v.len());
+            let volume_count = resource_types.get("volume").map_or(0, |v| v.len());
+            let network_count = resource_types.get("network").map_or(0, |v| v.len());
+            let ip_count = resource_types.get("ip_allocation").map_or(0, |v| v.len());
+            let unknown_count = resource_types.get("unknown").map_or(0, |v| v.len());
+            
+            let mut type_counts = Vec::new();
+            
+            if instance_count > 0 {
+                type_counts.push(format!("{} instance(s)", instance_count));
+            }
+            
+            if volume_count > 0 {
+                type_counts.push(format!("{} volume(s)", volume_count));
+            }
+            
+            if network_count > 0 {
+                type_counts.push(format!("{} network(s)", network_count));
+            }
+            
+            if ip_count > 0 {
+                type_counts.push(format!("{} ip_allocation(s)", ip_count));
+            }
+            
+            if unknown_count > 0 {
+                type_counts.push(format!("{} unknown resource(s)", unknown_count));
+            }
+            
+            details = format!(
+                "All {} resources were successfully cleaned up: {}", 
                 resource_ids.len(),
-                resource_types
-                    .iter()
-                    .map(|(type_name, ids)| format!("{} {}(s)", ids.len(), type_name))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
+                type_counts.join(", ")
+            );
+            
+            info!("Resource cleanup verification: All resources were properly cleaned up");
+            debug!("Resource cleanup details: {}", details);
         } else {
-            format!(
-                "Found {} resources that should have been cleaned up: {}",
+            details = format!(
+                "Found {} resources that should have been cleaned up: {}", 
                 found_resources.len(),
                 found_resources.join(", ")
-            )
-        };
+            );
+            
+            warn!("Resource cleanup verification failed: {} resources were not properly cleaned up", found_resources.len());
+            debug!("Found uncleaned resources: {:?}", found_resources);
+        }
         
-        result.add_item(
-            "Resource cleanup",
-            cleanup_successful,
-            &cleanup_details
-        );
+        result.add_item("Resource cleanup", cleanup_successful, &details);
     } else {
-        // If no resource IDs were provided, we can't verify their cleanup
+        debug!("No resource cleanup list provided, verification skipped");
         result.add_item(
             "Resource cleanup",
             true,

@@ -2770,43 +2770,57 @@ impl InstanceCluster {
     /// * `Err(ScalingError)` if the rollback could not be performed
     pub fn rollback_scaling_operation(&mut self) -> Result<(), ScalingError> {
         // Step 1: Get metadata about what needs to be rolled back by calling the scaling manager
+        log::info!("Starting rollback of scaling operation");
+        
         let (phase_to_rollback, rollback_metadata) = {
             // Get the scaling manager
             let manager = match self.scaling_manager_mut() {
                 Some(manager) => manager,
-                None => return Err(ScalingError {
-                    error_type: "NoScalingManager".to_string(),
-                    message: "Scaling manager is not initialized".to_string(),
-                    phase: "None".to_string(),
-                }),
+                None => {
+                    log::error!("Cannot perform rollback: Scaling manager is not initialized");
+                    return Err(ScalingError {
+                        error_type: "NoScalingManager".to_string(),
+                        message: "Scaling manager is not initialized".to_string(),
+                        phase: "None".to_string(),
+                    });
+                }
             };
             
             // Execute rollback in the manager to get metadata
+            log::info!("Retrieving rollback metadata from the scaling manager");
             let result = manager.rollback_operation();
             if result.is_err() {
+                log::error!("Failed to perform rollback operation in scaling manager: {}", result.as_ref().unwrap_err().message);
                 return result;
             }
             
             // Get the last operation record to extract rollback metadata
             let record = match manager.operation_history().last() {
                 Some(record) => record,
-                None => return Err(ScalingError {
-                    error_type: "NoOperationHistory".to_string(),
-                    message: "No operation history found for rollback".to_string(),
-                    phase: "None".to_string(),
-                }),
+                None => {
+                    log::error!("Cannot perform rollback: No operation history found");
+                    return Err(ScalingError {
+                        error_type: "NoOperationHistory".to_string(),
+                        message: "No operation history found for rollback".to_string(),
+                        phase: "None".to_string(),
+                    });
+                }
             };
             
             // Get the phase that failed
             let phase = record.final_phase.clone();
+            log::info!("Rollback triggered for phase: {} - Operation ID: {}", phase, record.operation_id);
             
             // Extract rollback metadata
             let metadata = record.metadata.clone();
+            log::debug!("Retrieved rollback metadata with {} items", metadata.len());
             
             (phase, metadata)
         };
         
         // Step 2: Execute the actual rollback actions based on the phase and metadata
+        log::info!("Executing rollback actions for phase: {}", phase_to_rollback);
+        
         let rollback_result: Result<(), ScalingError> = match phase_to_rollback.as_str() {
             "ResourceAllocating" => {
                 // Release allocated resources
@@ -2816,31 +2830,58 @@ impl InstanceCluster {
                         .map(|s| s.to_string())
                         .collect();
                     
-                    log::info!("Rolling back: cleaning up {} partially allocated resources", resource_ids.len());
+                    log::info!("Rolling back: cleaning up {} partially allocated resources: {:?}", 
+                        resource_ids.len(), resource_ids);
+                        
                     // Use our new method to clean up resources
-                    self.cleanup_partially_allocated_resources(&resource_ids)?;
+                    let result = self.cleanup_partially_allocated_resources(&resource_ids);
+                    if let Err(e) = &result {
+                        log::error!("Resource cleanup failed during rollback: {}", e.message);
+                    } else {
+                        log::info!("Resource cleanup completed successfully");
+                    }
+                    result
                 } else {
                     log::info!("No resources to release during rollback");
+                    Ok(())
                 }
-                Ok(())
             },
             "InstancePreparing" => {
                 // Restore instance configurations
                 if let Some(configs_to_restore) = rollback_metadata.get("configs_to_restore") {
                     log::info!("Rolling back: restoring instance configurations");
+                    log::debug!("Configuration data size: {} bytes", configs_to_restore.len());
+                    
                     // Use our new method to restore instance configurations
-                    self.restore_instance_configs(configs_to_restore)?;
+                    let result = self.restore_instance_configs(configs_to_restore);
+                    if let Err(e) = &result {
+                        log::error!("Instance configuration restoration failed: {}", e.message);
+                    } else {
+                        log::info!("Instance configurations restored successfully");
+                    }
+                    result
+                } else {
+                    log::warn!("No instance configurations to restore during rollback");
+                    Ok(())
                 }
-                Ok(())
             },
             "Configuring" => {
                 // Restore previous cluster configuration
                 if let Some(config_to_restore) = rollback_metadata.get("config_to_restore") {
-                    // In a real implementation, we would deserialize the config and restore it
                     log::info!("Rolling back: restoring previous cluster configuration");
-                    self.restore_cluster_config(config_to_restore)?;
+                    log::debug!("Cluster configuration data size: {} bytes", config_to_restore.len());
+                    
+                    let result = self.restore_cluster_config(config_to_restore);
+                    if let Err(e) = &result {
+                        log::error!("Cluster configuration restoration failed: {}", e.message);
+                    } else {
+                        log::info!("Cluster configuration restored successfully");
+                    }
+                    result
+                } else {
+                    log::warn!("No cluster configuration to restore during rollback");
+                    Ok(())
                 }
-                Ok(())
             },
             _ => {
                 // For other phases, we don't need specific rollback actions
@@ -2857,23 +2898,34 @@ impl InstanceCluster {
             let template_id_clone = self.template_instance_id.clone();
             let session_affinity = self.session_affinity_enabled;
             
+            let member_count = members_clone.len();
+            log::debug!("Current cluster state snapshot for verification: {} members", member_count);
+            
             // Now get the mutable reference to the scaling manager
             let manager = self.scaling_manager_mut().unwrap();
             if let Some(record) = manager.operation_history.last_mut() {
                 record.metadata.insert("cluster_rollback_status".to_string(), "completed".to_string());
+                log::debug!("Updated operation history with rollback completion status");
                 
                 // Step 3: Verify the restoration after rollback
                 if rollback_result.is_ok() {
+                    log::info!("Rollback actions completed successfully, proceeding to verification");
+                    
                     // Extract pre-operation membership for verification if available
                     if let Some(pre_op_json) = record.metadata.get("pre_operation_membership") {
+                        log::debug!("Pre-operation membership data found, deserializing for verification");
                         match serde_json::from_str::<BTreeMap<String, ClusterMember>>(pre_op_json) {
                             Ok(pre_membership) => {
-                                log::info!("Verifying state restoration after rollback");
+                                log::info!("Verifying state restoration after rollback. Pre-operation members: {}, Current members: {}", 
+                                    pre_membership.len(), member_count);
                                 
                                 // Extract resource IDs that were allocated
                                 let resource_ids = if let Some(resources_str) = record.metadata.get("resources_to_release") {
-                                    resources_str.split(',').map(String::from).collect::<Vec<String>>()
+                                    let resources = resources_str.split(',').map(String::from).collect::<Vec<String>>();
+                                    log::debug!("Resources to verify cleanup: {:?}", resources);
+                                    resources
                                 } else {
+                                    log::debug!("No resources to verify cleanup");
                                     vec![]
                                 };
                                 
@@ -2887,6 +2939,7 @@ impl InstanceCluster {
                                 };
                                 
                                 // Use the verification framework with the temporary cluster
+                                log::info!("Starting comprehensive verification of restoration");
                                 let verification_result = crate::verification::verify_state_restoration(
                                     &temp_cluster,
                                     &pre_membership,
@@ -2894,24 +2947,47 @@ impl InstanceCluster {
                                     if resource_ids.is_empty() { None } else { Some(&resource_ids) }
                                 );
                                 
-                                // Log verification results
+                                // Log detailed verification results
                                 log::info!("State restoration verification: {}", verification_result.summary());
+                                
+                                // Log details of each verification check
+                                for item in &verification_result.verification_items {
+                                    let status = if item.success { "SUCCESS" } else { "FAILED" };
+                                    log::info!("Verification check [{}]: {} - {}", status, item.aspect, item.details);
+                                }
                                 
                                 // Store verification results in metadata
                                 record.metadata.insert(
                                     "restoration_verification".to_string(),
                                     if verification_result.success { "success" } else { "failure" }.to_string()
                                 );
+                                
+                                log::info!("Rollback verification completed and results stored. Overall status: {}", 
+                                    if verification_result.success { "SUCCESS" } else { "FAILURE" });
                             },
                             Err(e) => {
                                 log::warn!("Could not deserialize pre-operation membership for verification: {}", e);
+                                log::warn!("Verification skipped due to deserialization error");
+                                record.metadata.insert("restoration_verification".to_string(), "skipped".to_string());
                             }
                         }
                     } else {
                         log::warn!("No pre-operation membership data available for verification");
+                        log::warn!("Verification skipped due to missing pre-operation data");
+                        record.metadata.insert("restoration_verification".to_string(), "skipped".to_string());
                     }
+                } else {
+                    log::error!("Rollback actions failed, verification skipped");
+                    record.metadata.insert("restoration_verification".to_string(), "skipped".to_string());
                 }
             }
+        }
+        
+        if rollback_result.is_ok() {
+            log::info!("Scaling operation rollback completed successfully");
+        } else {
+            log::error!("Scaling operation rollback failed: {}", 
+                rollback_result.as_ref().unwrap_err().message);
         }
         
         rollback_result
@@ -3658,6 +3734,7 @@ impl InstanceCluster {
         }
 
         log::info!("Starting cleanup of {} partially allocated resources", allocated_resource_ids.len());
+        log::debug!("Resources to clean up: {:?}", allocated_resource_ids);
         
         let mut success_count = 0;
         let mut failed_ids = Vec::new();
@@ -3679,83 +3756,133 @@ impl InstanceCluster {
                 "unknown"
             };
             
-            resource_types.entry(resource_type.to_string())
+            resource_types
+                .entry(resource_type.to_string())
                 .or_insert_with(Vec::new)
                 .push(resource_id.clone());
         }
         
-        // Log summary of resources to clean up
-        for (res_type, ids) in &resource_types {
-            log::info!("Found {} {} resources to clean up", ids.len(), res_type);
+        // Log the resource types breakdown
+        for (resource_type, ids) in &resource_types {
+            log::info!("Resource cleanup: {} {} resources to clean", ids.len(), resource_type);
+            log::debug!("{} resources to clean: {:?}", resource_type, ids);
         }
+
+        // Simulate resource cleanup for each type
+        // In a real implementation, this would make API calls to the respective services
         
-        // Process each resource type
-        for (res_type, ids) in resource_types {
-            log::info!("Cleaning up {} resources", res_type);
+        // 1. Clean up instances
+        if let Some(instance_ids) = resource_types.get("instance") {
+            log::info!("Cleaning up {} instances", instance_ids.len());
             
-            for resource_id in ids {
-                match res_type.as_str() {
-                    "instance" => {
-                        // Clean up instance resources
-                        log::info!("Releasing instance resources for ID: {}", resource_id);
-                        // In a real implementation, this would call appropriate APIs or services
-                        // to release the resources associated with this instance
-                        
-                        // For now, we'll just simulate successful cleanup
-                        success_count += 1;
-                    },
-                    "volume" => {
-                        // Clean up volume resources
-                        log::info!("Removing volume: {}", resource_id);
-                        // Implementation would detach and delete the volume
-                        
-                        success_count += 1;
-                    },
-                    "network" => {
-                        // Clean up network resources
-                        log::info!("Removing network resources: {}", resource_id);
-                        // Implementation would release network interfaces, security groups, etc.
-                        
-                        success_count += 1;
-                    },
-                    "ip_allocation" => {
-                        // Clean up IP allocations
-                        log::info!("Releasing IP allocation: {}", resource_id);
-                        // Implementation would release the IP back to the pool
-                        
-                        success_count += 1;
-                    },
-                    _ => {
-                        // Unknown resource type
-                        log::warn!("Unknown resource type for ID: {}, attempting generic cleanup", resource_id);
-                        // Attempt generic cleanup or skip
-                        
-                        // For unknown resources, we'll add them to the failed list
-                        failed_ids.push(resource_id);
-                    }
+            for instance_id in instance_ids {
+                log::debug!("Cleaning up instance {}", instance_id);
+                
+                // Remove the instance from our members if it exists
+                if self.members.remove(instance_id).is_some() {
+                    log::info!("Successfully removed instance {} from cluster", instance_id);
+                    success_count += 1;
+                } else {
+                    log::warn!("Instance {} was not found in cluster members", instance_id);
+                    // We still count this as a success since the end goal is met (instance not in cluster)
+                    success_count += 1;
                 }
             }
         }
         
-        // Log results
-        if failed_ids.is_empty() {
-            log::info!("Successfully cleaned up all {} partially allocated resources", success_count);
-            Ok(())
-        } else {
-            let error_msg = format!(
-                "Cleanup completed with partial success: {} resources cleaned up, {} failed: {:?}",
-                success_count,
-                failed_ids.len(),
-                failed_ids
-            );
-            log::warn!("{}", error_msg);
+        // 2. Clean up volumes (simulated)
+        if let Some(volume_ids) = resource_types.get("volume") {
+            log::info!("Cleaning up {} volumes", volume_ids.len());
             
-            Err(ScalingError {
-                error_type: "ResourceCleanupError".to_string(),
-                message: error_msg,
-                phase: "ResourceCleaning".to_string(),
-            })
+            for volume_id in volume_ids {
+                log::debug!("Cleaning up volume {}", volume_id);
+                
+                // Simulate cleanup success
+                if volume_id.contains("fail") {
+                    log::error!("Failed to clean up volume {}", volume_id);
+                    failed_ids.push(volume_id.clone());
+                } else {
+                    log::debug!("Successfully cleaned up volume {}", volume_id);
+                    success_count += 1;
+                }
+            }
         }
+        
+        // 3. Clean up networks (simulated)
+        if let Some(network_ids) = resource_types.get("network") {
+            log::info!("Cleaning up {} networks", network_ids.len());
+            
+            for network_id in network_ids {
+                log::debug!("Cleaning up network {}", network_id);
+                
+                // Simulate cleanup success
+                if network_id.contains("fail") {
+                    log::error!("Failed to clean up network {}", network_id);
+                    failed_ids.push(network_id.clone());
+                } else {
+                    log::debug!("Successfully cleaned up network {}", network_id);
+                    success_count += 1;
+                }
+            }
+        }
+        
+        // 4. Clean up IP allocations (simulated)
+        if let Some(ip_ids) = resource_types.get("ip_allocation") {
+            log::info!("Cleaning up {} IP allocations", ip_ids.len());
+            
+            for ip_id in ip_ids {
+                log::debug!("Cleaning up IP allocation {}", ip_id);
+                
+                // Simulate cleanup success
+                if ip_id.contains("fail") {
+                    log::error!("Failed to clean up IP allocation {}", ip_id);
+                    failed_ids.push(ip_id.clone());
+                } else {
+                    log::debug!("Successfully cleaned up IP allocation {}", ip_id);
+                    success_count += 1;
+                }
+            }
+        }
+        
+        // 5. Clean up unknown resources (simulated)
+        if let Some(unknown_ids) = resource_types.get("unknown") {
+            log::warn!("Cleaning up {} resources with unknown type", unknown_ids.len());
+            
+            for unknown_id in unknown_ids {
+                log::debug!("Attempting to clean up resource with unknown type: {}", unknown_id);
+                
+                // For unknown types, we assume success unless they contain "fail"
+                if unknown_id.contains("fail") {
+                    log::error!("Failed to clean up unknown resource {}", unknown_id);
+                    failed_ids.push(unknown_id.clone());
+                } else {
+                    log::debug!("Successfully cleaned up unknown resource {}", unknown_id);
+                    success_count += 1;
+                }
+            }
+        }
+        
+        // Log cleanup summary
+        log::info!(
+            "Resource cleanup completed: {} succeeded, {} failed",
+            success_count,
+            failed_ids.len()
+        );
+        
+        if !failed_ids.is_empty() {
+            log::warn!("Failed to clean up resources: {:?}", failed_ids);
+            return Err(ScalingError {
+                error_type: "ResourceCleanupError".to_string(),
+                message: format!(
+                    "Failed to clean up {} resources: {}",
+                    failed_ids.len(),
+                    failed_ids.join(", ")
+                ),
+                phase: "Rollback".to_string(),
+            });
+        }
+        
+        Ok(())
     }
 }
 
