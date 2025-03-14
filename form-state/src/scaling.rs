@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::thread;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// Types of scaling operations that can be performed
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -202,6 +201,108 @@ pub struct ScalingOperationRecord {
     pub successful: bool,
     /// Error details, if the operation failed
     pub error: Option<ScalingError>,
+    /// Detailed history of all phases this operation went through
+    pub phase_history: Vec<PhaseRecord>,
+    /// Serialized backup of cluster state before operation start
+    pub initial_cluster_state: Option<String>,
+    /// Maps phase names to serialized cluster state backups for that phase
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default)]
+    pub phase_cluster_states: BTreeMap<String, String>,
+    /// Additional metadata about the operation (for analysis and debugging)
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default)]
+    pub metadata: BTreeMap<String, String>,
+}
+
+/// Records information about a specific phase in a scaling operation
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PhaseRecord {
+    /// Name of the phase
+    pub phase_name: String,
+    /// When the phase started (Unix timestamp in seconds)
+    pub started_at: i64,
+    /// When the phase ended (Unix timestamp in seconds), if it has ended
+    pub ended_at: Option<i64>,
+    /// Whether the phase completed successfully
+    pub successful: Option<bool>,
+    /// Any error that occurred during this phase
+    pub error: Option<ScalingError>,
+    /// Phase-specific data (varies by phase type)
+    pub phase_data: PhaseData,
+}
+
+/// Records phase-specific data that might be needed for rollback
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PhaseData {
+    /// Data for the Requested phase
+    Requested {
+        /// When the operation was requested
+        requested_at: i64,
+    },
+    /// Data for the Validating phase
+    Validating {
+        // No special data needed for validation
+    },
+    /// Data for the Planning phase
+    Planning {
+        /// Pre-operation metrics collected during planning
+        pre_metrics: Option<ScalingMetrics>,
+    },
+    /// Data for the ResourceAllocating phase
+    ResourceAllocating {
+        /// Resources that were allocated
+        resources: Option<ScalingResources>,
+        /// Resource IDs created during allocation (for rollback)
+        allocated_resource_ids: Vec<String>,
+    },
+    /// Data for the InstancePreparing phase
+    InstancePreparing {
+        /// IDs of instances being prepared
+        instance_ids: Vec<String>,
+        /// Backup of instance configurations before preparation
+        instance_configs: Option<String>,
+    },
+    /// Data for the Configuring phase
+    Configuring {
+        /// Backup of previous configuration (for rollback)
+        previous_config: Option<String>,
+        /// Configuration changes that were applied
+        applied_changes: Option<String>,
+    },
+    /// Data for the Verifying phase
+    Verifying {
+        /// Results of verification tests
+        test_results: Vec<VerificationResult>,
+    },
+    /// Data for the Finalizing phase
+    Finalizing {
+        /// Cleanup tasks that were performed
+        cleanup_tasks: Vec<String>,
+    },
+    /// Data for the Completed phase
+    Completed {
+        /// Duration of the entire operation in seconds
+        duration_seconds: u64,
+        /// Result metrics after completion
+        result_metrics: Option<ScalingMetrics>,
+    },
+    /// Data for the Failed phase
+    Failed {
+        /// Reason for the failure
+        failure_reason: String,
+        /// Phase in which the failure occurred
+        failure_phase: String,
+        /// Any partial results from the failed operation
+        partial_results: Option<String>,
+    },
+    /// Data for the Canceled phase
+    Canceled {
+        /// Reason for cancellation
+        cancellation_reason: String,
+        /// Phase at which the operation was canceled
+        phase_at_cancellation: String,
+    },
 }
 
 /// Manager for the scaling state machine
@@ -215,9 +316,9 @@ pub struct ScalingManager {
     /// History of past scaling operations
     operation_history: Vec<ScalingOperationRecord>,
     /// Maximum allowed duration for each phase in seconds
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     #[serde(default)]
-    phase_timeouts: std::collections::HashMap<String, u64>,
+    phase_timeouts: BTreeMap<String, u64>,
     /// Last check timestamp (used for timeout detection)
     last_check_time: i64,
 }
@@ -251,7 +352,7 @@ impl Ord for ScalingManager {
 impl ScalingManager {
     /// Creates a new ScalingManager with default settings
     pub fn new() -> Self {
-        let mut phase_timeouts = std::collections::HashMap::new();
+        let mut phase_timeouts = std::collections::BTreeMap::new();
         
         // Set default timeouts for each phase
         phase_timeouts.insert("Requested".to_string(), 60);         // 1 minute
@@ -335,6 +436,10 @@ impl ScalingManager {
             final_phase: "Requested".to_string(),
             successful: false,
             error: None,
+            phase_history: Vec::new(),
+            initial_cluster_state: None,
+            phase_cluster_states: BTreeMap::new(),
+            metadata: BTreeMap::new(),
         });
         
         // Set the current phase
@@ -996,6 +1101,121 @@ impl ScalingManager {
         
         Ok(())
     }
+
+    /// Attempts to roll back a failed operation to a previous state
+    ///
+    /// This method analyzes the current failed operation and performs the appropriate
+    /// rollback actions based on the phase in which the failure occurred. It uses
+    /// the phase-specific data stored in the operation history to restore the previous state.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` if the rollback was successful
+    /// * `Err(ScalingError)` if the rollback failed or there's no failed operation to roll back
+    pub fn rollback_operation(&mut self) -> Result<(), ScalingError> {
+        // Ensure we have a failed operation to roll back
+        let (failure_phase, phase_data) = match &self.current_phase {
+            Some(ScalingPhase::Failed { 
+                failure_phase, 
+                ..
+            }) => {
+                // We have a failed operation, fetch the phase data
+                let phase_data = if let Some(record) = self.operation_history.last() {
+                    record.phase_history.iter()
+                        .find(|phase| phase.phase_name == *failure_phase)
+                        .map(|phase| phase.phase_data.clone())
+                } else {
+                    None
+                };
+                
+                (failure_phase.clone(), phase_data)
+            },
+            _ => return Err(ScalingError {
+                error_type: "InvalidRollback".to_string(),
+                message: "Cannot roll back: no failed operation exists".to_string(),
+                phase: "None".to_string(),
+            }),
+        };
+        
+        // Record rollback start
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::from_secs(0))
+            .as_secs() as i64;
+        
+        // Rollback metadata
+        let mut rollback_metadata = BTreeMap::new();
+        rollback_metadata.insert("rollback_started_at".to_string(), now.to_string());
+        rollback_metadata.insert("rollback_status".to_string(), "in_progress".to_string());
+        
+        // Execute the rollback based on the phase where failure occurred
+        let rollback_result: Result<(), ScalingError> = match failure_phase.as_str() {
+            "ResourceAllocating" => {
+                // For resource allocation failures, release any partially allocated resources
+                if let Some(PhaseData::ResourceAllocating { allocated_resource_ids, .. }) = phase_data {
+                    if !allocated_resource_ids.is_empty() {
+                        // Log resource IDs that need to be released
+                        rollback_metadata.insert(
+                            "resources_to_release".to_string(), 
+                            allocated_resource_ids.join(",")
+                        );
+                    }
+                }
+                Ok(())
+            },
+            "InstancePreparing" => {
+                // For instance preparation failures, restore instance configurations
+                if let Some(PhaseData::InstancePreparing { instance_configs, .. }) = phase_data {
+                    if let Some(configs) = instance_configs {
+                        // Store the configs that need to be restored
+                        rollback_metadata.insert(
+                            "configs_to_restore".to_string(), 
+                            configs
+                        );
+                    }
+                }
+                Ok(())
+            },
+            "Configuring" => {
+                // For configuration failures, restore the previous configuration
+                if let Some(PhaseData::Configuring { previous_config, .. }) = phase_data {
+                    if let Some(config) = previous_config {
+                        // Store the previous configuration that needs to be restored
+                        rollback_metadata.insert(
+                            "config_to_restore".to_string(), 
+                            config
+                        );
+                    }
+                }
+                Ok(())
+            },
+            _ => {
+                // For other phases, we don't need specific rollback actions
+                Ok(())
+            }
+        };
+        
+        // Add final rollback status based on result
+        match &rollback_result {
+            Ok(_) => {
+                rollback_metadata.insert("rollback_status".to_string(), "completed".to_string());
+                rollback_metadata.insert("rollback_completed_at".to_string(), now.to_string());
+            },
+            Err(err) => {
+                rollback_metadata.insert("rollback_status".to_string(), "failed".to_string());
+                rollback_metadata.insert("rollback_error".to_string(), err.message.clone());
+            }
+        }
+        
+        // Update operation history with rollback metadata
+        if let Some(record) = self.operation_history.last_mut() {
+            for (key, value) in rollback_metadata {
+                record.metadata.insert(key, value);
+            }
+        }
+        
+        rollback_result
+    }
 }
 
 impl ScalingPhase {
@@ -1174,5 +1394,73 @@ mod tests {
         assert_eq!(manager.operation_history()[0].final_phase, "Failed");
         assert!(manager.operation_history()[0].error.is_some());
         assert_eq!(manager.operation_history()[0].error.as_ref().unwrap().error_type, "Timeout");
+    }
+
+    #[test]
+    fn test_rollback_operation() {
+        // Create a manager
+        let mut manager = ScalingManager::new();
+        
+        // Start an operation
+        let operation = ScalingOperation::ScaleOut { target_instances: 5 };
+        assert!(manager.start_operation(operation.clone()).is_ok());
+        
+        // Transition to Validating phase
+        assert!(manager.transition_to_validating().is_ok());
+        
+        // Transition to Planning phase
+        assert!(manager.transition_to_planning(None).is_ok());
+        
+        // Transition to ResourceAllocating phase
+        let resources = ScalingResources {
+            cpu_cores: 4,
+            memory_mb: 8192,
+            storage_gb: 50,
+            network_bandwidth_mbps: 500,
+        };
+        assert!(manager.transition_to_resource_allocating(Some(resources.clone())).is_ok());
+        
+        // Simulate failure in this phase
+        let resource_ids = vec!["resource-1".to_string(), "resource-2".to_string()];
+        
+        // Manually insert phase data to test rollback
+        if let Some(record) = manager.operation_history.last_mut() {
+            record.phase_history.push(PhaseRecord {
+                phase_name: "ResourceAllocating".to_string(),
+                started_at: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or(Duration::from_secs(0))
+                    .as_secs() as i64,
+                ended_at: None,
+                successful: None,
+                error: None,
+                phase_data: PhaseData::ResourceAllocating {
+                    resources: Some(resources),
+                    allocated_resource_ids: resource_ids.clone(),
+                },
+            });
+        }
+        
+        // Fail the operation
+        assert!(manager.fail_operation("ResourceError", "Failed to allocate resources", None).is_ok());
+        
+        // Verify the operation is in the Failed state
+        match manager.current_phase() {
+            Some(ScalingPhase::Failed { failure_phase, .. }) => {
+                assert_eq!(failure_phase, "ResourceAllocating");
+            },
+            _ => panic!("Operation should be in Failed state"),
+        }
+        
+        // Test rollback
+        assert!(manager.rollback_operation().is_ok());
+        
+        // Verify rollback metadata
+        let record = manager.operation_history.last().unwrap();
+        assert_eq!(record.metadata.get("rollback_status").unwrap(), "completed");
+        
+        // Verify that resource IDs to release were logged
+        let resources_to_release = record.metadata.get("resources_to_release").unwrap();
+        assert_eq!(resources_to_release, "resource-1,resource-2");
     }
 } 

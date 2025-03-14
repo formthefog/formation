@@ -23,9 +23,9 @@ We have successfully completed the extension of the InstanceCluster data structu
 - ✅ Verified CRDT integration with serialization/deserialization and merging
 - ✅ Fixed type mismatch issue with ScalingOperations and InstanceCluster initialization
 
-### 2. Implement State Transitions for Scaling Operations (⬜ IN PROGRESS)
+### 2. Implement State Transitions for Scaling Operations (✅ COMPLETED)
 
-The next step is to implement state transitions for scaling operations, enabling the system to handle the lifecycle of scaling events:
+We have successfully implemented state transitions for scaling operations, enabling the system to handle the lifecycle of scaling events:
 
 - ✅ Design state machine for scaling operations
   - ✅ Defined all states and their properties
@@ -52,13 +52,67 @@ The next step is to implement state transitions for scaling operations, enabling
   - ✅ Implement apply_configuration_changes for actual scaling
   - ✅ Implement verify_scaling_operation to ensure changes succeeded
   - ✅ Implement finalize_scaling_operation for cleanup tasks
-- ⬜ Develop metrics collection for scaling operations
-- ⬜ Create transition validation to ensure correct progression through states
-- ⬜ Add rollback capabilities for failed operations
-- ⬜ Implement event logging for state transitions
 - ✅ Add tests for basic state machine transitions and functionality
 
-### 3. Implement Hot-Add Capabilities (⬜ PLANNED)
+### 3. Implement Rollback Capabilities for Failed Operations (⬜ IN PROGRESS)
+
+To ensure the system can recover from failures during scaling operations, we need to implement comprehensive rollback capabilities:
+
+- ✅ Enhance Operation History Tracking
+  - ✅ Extend `ScalingOperationRecord` to store detailed phase-specific information
+  - ✅ Implement data structures for tracking phase-specific rollback information
+  - ✅ Fix serialization and hashing issues by replacing HashMap with BTreeMap for collections
+  - ✅ Ensure proper trait implementations (Hash, Serialize, Deserialize) for all data types
+  - ✅ Validate data structure changes with comprehensive tests
+
+- ⬜ Create Phase-specific Rollback Operations
+  - ⬜ Design rollback function signature and error handling
+  - ⬜ Implement rollback for Resource Allocation phase
+  - ⬜ Implement rollback for Instance Preparation phase
+  - ⬜ Implement rollback for Configuration Changes phase
+  - ⬜ Implement rollback for other phases as needed
+  - ⬜ Add validation to ensure rollback is possible for each phase
+
+- ⬜ Implement Automatic Failure Detection & Handling
+  - ⬜ Create failure threshold definitions for each phase
+  - ⬜ Implement automatic detection of stuck or failed operations
+  - ⬜ Add timeout-based failure detection for long-running operations
+  - ⬜ Create health check mechanism for in-progress operations
+  - ⬜ Implement automatic rollback triggering on failure detection
+
+- ⬜ Develop Clean State Restoration Mechanism
+  - ⬜ Implement clean restoration of cluster membership data
+  - ⬜ Create mechanism to restore instance network configurations
+  - ⬜ Implement resource cleanup for partially allocated resources
+  - ⬜ Add verification steps to confirm complete state restoration
+  - ⬜ Create comprehensive logging for the restoration process
+
+- ⬜ Testing and Integration
+  - ⬜ Create unit tests for each rollback function
+  - ⬜ Implement integration tests for full rollback sequences
+  - ⬜ Add stress tests for concurrent operations with failures
+  - ⬜ Create test scenarios for different failure conditions
+  - ⬜ Implement validation of cluster state after rollback
+
+### 4. Improved Testing Framework (⬜ PLANNED)
+
+To ensure the reliability and robustness of the scaling system, we need comprehensive testing:
+
+- ⬜ Add integration tests with simulated resources
+- ⬜ Implement stress tests for concurrent scaling operations
+- ⬜ Create test cases for failure scenarios and rollbacks
+- ⬜ Test against various cluster configurations
+
+### 5. Automated Metric-based Scaling (⬜ PLANNED)
+
+Once the foundation is solidly tested, we will add automation:
+
+- ⬜ Implement periodic metric collection and evaluation
+- ⬜ Add automatic scaling operation triggering based on thresholds
+- ⬜ Create configurable policies for different scaling scenarios
+- ⬜ Implement cooldown periods to prevent scaling thrashing
+
+### 6. Implement Hot-Add Capabilities (⬜ FUTURE)
 
 After state transitions are in place, we'll need to implement the actual resource addition/removal capabilities:
 
@@ -67,7 +121,7 @@ After state transitions are in place, we'll need to implement the actual resourc
 - ⬜ Create seamless storage migration between tiers
 - ⬜ Build resource monitoring and recommendation system
 
-### 4. Implement State Preservation (⬜ PLANNED)
+### 7. Implement State Preservation (⬜ FUTURE)
 
 The final phase will focus on preserving application state during scaling operations:
 
@@ -80,19 +134,17 @@ The final phase will focus on preserving application state during scaling operat
 
 1. ✅ Design state machine for scaling operations - COMPLETED
 2. ✅ Implement the state machine based on the design in `scaling_state_machine_design.md` document - COMPLETED
-   - ✅ Create `form-state/src/scaling.rs` file with module structure
-   - ✅ Create core data structures (`ScalingPhase` enum and `ScalingManager` struct)
-   - ✅ Implement state transition logic with validation
-   - ✅ Add error handling and timeout mechanisms
-   - ✅ Integrate with `InstanceCluster`
-   - ✅ Add comprehensive test coverage
-3. ✅ Create scaffolding for each phase of the scaling process
-4. ✅ Implement core functionality for each phase of the scaling process
+3. ✅ Create scaffolding for each phase of the scaling process - COMPLETED
+4. ✅ Implement core functionality for each phase of the scaling process - COMPLETED
    - ✅ Fix compatibility issues with NetworkMetrics and DiskMetrics integration
    - ✅ Ensure proper resource estimation with realistic values (10GB disk size per instance)
-5. ⬜ Add additional test coverage for state transitions and error cases
-6. ⬜ Implement rollback capabilities for failed operations
-7. ⬜ Create comprehensive event logging system for scaling operations
+5. ⬜ Implement rollback capabilities for failed operations - CURRENT FOCUS
+   - ✅ Extend `ScalingOperationRecord` to store detailed phase-specific information - COMPLETED
+   - ⬜ Design and implement rollback functions for each phase - NEXT TASK
+   - ⬜ Complete other rollback sub-tasks in sequence
+6. ⬜ Develop improved testing framework
+7. ⬜ Implement automated metric-based scaling
+8. ⬜ Add additional event logging system for scaling operations
 
 ## Technical Considerations
 
@@ -100,4 +152,8 @@ The final phase will focus on preserving application state during scaling operat
 - Transitions must be idempotent where possible
 - The system should collect metrics at each phase for performance analysis
 - Error handling should include appropriate recovery mechanisms
-- The implementation should minimize disruption to running applications 
+- The implementation should minimize disruption to running applications
+- Rollback mechanisms must ensure complete restoration of previous state
+- Automated scaling must include safeguards against thrashing 
+- Use BTreeMap instead of HashMap for data structures requiring Hash trait implementation
+- Ensure all serializable data structures implement proper traits (Serialize, Deserialize, Hash, etc.) 

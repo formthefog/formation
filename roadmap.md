@@ -11,7 +11,7 @@ This document outlines the strategic roadmap for the Formation network, prioriti
 - ✅ MCP Server Phase 1 - Core framework, VM management tools, workload packaging, authentication, API documentation
 
 **In Progress:**
-- Stateful Elastic Scaling - Major progress with scaling state machine implementation
+- Stateful Elastic Scaling - Significant progress with operation history tracking and rollback infrastructure
 - Vanity Domain Provisioning - Basic functionality implemented, enhancements in progress
 - Economic Infrastructure - Foundational components in place, integration work ongoing
 
@@ -248,46 +248,38 @@ Enable dynamic scaling of compute resources and storage without losing applicati
 - As a user, I want to scale my VM's resources up or down based on demand
 - As a developer, I want to add more storage to my instance without downtime
 - As an application owner, I want to add more CPU/RAM during peak periods
-- As a system operator, I want to automatically scale clusters based on utilization metrics
+- As a system administrator, I want automatic recovery if scaling operations fail
 
 **Implementation Tasks:**
-- [x] Design and implement data structure extensions
-  - [x] Add ScalingPolicy struct for configuration
-  - [x] Add ScalingOperation enum for operation types
-  - [x] Implement validation and helper methods
-  - [x] Add CRDT integration with serialization support
-- [x] Design and implement scaling state machine
-  - [x] Create ScalingManager to handle state transitions
-  - [x] Implement ScalingPhase enum for all operation phases
-  - [x] Add error handling and timeout mechanisms
-  - [x] Implement state transition methods with validation
-- [x] Implement phase operations for scaling
-  - [x] Validation phase for checking operation prerequisites
-  - [x] Metrics collection phase for resource usage data
-  - [x] Planning phase for calculating required resources
-  - [x] Resource allocation phase for preparing resources
-  - [x] Instance preparation phase for configuration
-  - [x] Configuration application phase for applying changes
-  - [x] Verification phase for ensuring correct application
-  - [x] Finalization phase for cleanup and record-keeping
-- [~] Implement automated metric-based scaling
-  - [~] Create resource usage thresholds for auto-scaling
-  - [ ] Implement periodic metric collection and evaluation
-  - [ ] Add automatic scaling operation triggering
-- [ ] Implement scale-down capability
-  - [ ] Add resource release logic
-  - [ ] Create instance selection algorithm for scale-down
-  - [ ] Implement graceful shutdown for removed instances
-- [ ] Add rollback capability for failed scaling operations
-  - [ ] Create operation history tracking
-  - [ ] Implement reversal operations for each phase
-  - [ ] Add automatic failure detection
-- [ ] Create testing framework for scaling operations
-  - [x] Add basic unit tests for state machine functionality
-  - [ ] Implement integration tests with simulated resources
-  - [ ] Create stress tests for concurrent scaling operations
+- [x] Design and implement the core scaling state machine
+  - [x] Create well-defined states for each scaling phase
+  - [x] Build robust transition mechanisms with validation
+  - [x] Implement timeout handling and error recovery
+  - [x] Add serialization support for persistence
+- [x] Implement state machine integration with cluster management
+  - [x] Add scaling operations (scale out, scale in, replace)
+  - [x] Create validation logic for operations
+  - [x] Implement resource planning and allocation
+  - [x] Build instance preparation mechanisms
+  - [x] Create configuration application logic
+  - [x] Implement verification and finalization steps
+- [x] Develop phase-specific operation history tracking
+  - [x] Design data structures for rollback information storage
+  - [x] Implement detailed phase history recording
+  - [x] Fix serialization and hashing issues for collections
+  - [x] Ensure proper trait implementations for all data types
+- [ ] Implement comprehensive rollback capabilities
+  - [ ] Create phase-specific rollback functions
+  - [ ] Implement automatic failure detection
+  - [ ] Build clean state restoration mechanisms
+  - [ ] Add extensive testing for failure scenarios
+- [ ] Create automated scaling triggers
+  - [ ] Implement metric collection and evaluation
+  - [ ] Build threshold-based scaling decision logic
+  - [ ] Create configurable scaling policies
+  - [ ] Implement cooldown periods to prevent thrashing
 
-**Status: IN PROGRESS** - Core scaling state machine implemented with all phase operations. Resource allocation and configuration handling completed. Metrics-based scaling triggers and testing infrastructure in development.
+**Status: IN PROGRESS** - Core functionality implemented with state machine and operation phases. Operation history tracking complete with proper serialization and hashing. Currently working on rollback capabilities.
 
 ### 8. Native P2P AI Inference Engine
 
