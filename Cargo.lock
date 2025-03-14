@@ -3416,6 +3416,7 @@ dependencies = [
  "tokio",
  "trust-dns-proto 0.23.2",
  "url 2.5.4",
+ "uuid",
 ]
 
 [[package]]

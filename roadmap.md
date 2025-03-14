@@ -11,11 +11,11 @@ This document outlines the strategic roadmap for the Formation network, prioriti
 - ✅ MCP Server Phase 1 - Core framework, VM management tools, workload packaging, authentication, API documentation
 
 **In Progress:**
+- Stateful Elastic Scaling - Significant progress with operation history tracking, rollback infrastructure, verification framework, and comprehensive logging for state restoration
 - Vanity Domain Provisioning - Basic functionality implemented, enhancements in progress
 - Economic Infrastructure - Foundational components in place, integration work ongoing
 
 **Upcoming:**
-- Stateful Elastic Scaling
 - Native P2P AI Inference Engine
 
 ## MUST HAVE
@@ -242,25 +242,42 @@ Implement management control plane to enable agents and AI to manage workload li
 
 ### 7. Stateful Elastic Scaling
 
-Enable dynamic scaling of compute resources and storage without losing application state.
+**Status: IN PROGRESS**
+
+The implementation of the Stateful Elastic Scaling feature is well underway. We have successfully completed the core scaling state machine design and implementation, including the creation of the necessary data structures, validation mechanisms, and transitions between different scaling phases. We have also integrated the state machine with the cluster management system and implemented core functionality for each phase of the scaling process.
+
+We have made significant progress on the rollback capabilities for failed operations. The framework for rollback operations has been connected to the InstanceCluster, and we've implemented rollback methods for three critical phases: Resource Allocation, Instance Preparation, and Configuration Changes. These implementations handle reverting changes to instance configurations and cluster state when failures occur, ensuring the system can gracefully recover.
+
+We have successfully implemented automatic failure detection and handling mechanisms. The system now includes health check methods for all scaling phases, timeout detection for long-running operations, and automatic rollback triggering when failures or timeouts are detected. We've added comprehensive test coverage to verify these capabilities, ensuring that the system can automatically recover from various failure scenarios without manual intervention.
+
+Current development efforts are focused on clean state restoration mechanisms after rollback operations.
 
 **User Stories:**
-- As a user, I want to scale my VM's resources up or down based on demand
-- As a developer, I want to add more storage to my instance without downtime
-- As an application owner, I want to add more CPU/RAM during peak periods
-- As a user, I want my application state preserved during scaling operations
+- As a cluster administrator, I want instances to automatically scale in response to changing workloads
+- As a system operator, I want to set scaling thresholds that trigger automatic scaling operations
+- As a developer, I want state to be preserved when my application scales up or down
+- As a cluster administrator, I want to see detailed metrics about scaling operations
+- As a system operator, I want failed scaling operations to automatically roll back to a known good state
 
 **Implementation Tasks:**
-- [ ] Implement hot-add capabilities for CPU, memory, and storage
-- [ ] Create seamless storage migration between tiers
-- [ ] Build resource monitoring and recommendation system
-- [ ] Implement state preservation during scaling operations
-- [ ] Create automated scaling policies framework
-- [ ] Develop scaling scheduler for time-based operations
-- [ ] Build API for programmatic scaling operations
-- [ ] Implement quota and limit management for scaling
-- [ ] Create testing framework for scaling operations
-- [ ] Build rollback mechanisms for failed scaling operations
+- ✅ Design and implement a detailed state machine for scaling operations
+- ✅ Implement core functionality for each phase of the scaling process
+- ✅ Integrate scaling state machine with cluster management
+- ✅ Develop operation history tracking for analysis and rollback capabilities
+- ✅ Implement rollback mechanisms for Resource Allocation phase
+- ✅ Implement rollback mechanisms for Instance Preparation phase
+- ✅ Implement rollback mechanisms for Configuration Changes phase
+- ✅ Develop automatic failure detection and rollback triggering
+  - ✅ Implement health checks for ongoing scaling operations
+  - ✅ Add timeout detection for long-running operations
+  - ✅ Create automatic rollback on failure detection
+  - ✅ Add validation of cluster state after rollback
+- ⬜ Develop clean state restoration mechanism
+- ⬜ Add comprehensive integration testing
+- ⬜ Implement metric collection for scaling decisions
+- ⬜ Create configurable scaling policies
+- ⬜ Build automatic scaling based on metrics
+- ⬜ Add telemetry for monitoring scaling operations
 
 ### 8. Native P2P AI Inference Engine
 
