@@ -5,5 +5,6 @@ pub mod nodes;
 pub mod db;
 pub mod accounts;
 pub mod scaling;
+pub mod verification;
 
 pub type Actor = String;
