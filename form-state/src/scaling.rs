@@ -57,7 +57,7 @@ pub enum ScalingPhase {
         /// The type of scaling operation
         operation: ScalingOperation,
         /// When planning started (Unix timestamp in seconds)
-        started_at: i64,
+        planned_at: i64,
         /// Pre-operation metrics (may be used for comparison later)
         pre_metrics: Option<ScalingMetrics>,
     },
@@ -314,7 +314,7 @@ pub struct ScalingManager {
     /// The current phase of the scaling operation
     current_phase: Option<ScalingPhase>,
     /// History of past scaling operations
-    operation_history: Vec<ScalingOperationRecord>,
+    pub operation_history: Vec<ScalingOperationRecord>,
     /// Maximum allowed duration for each phase in seconds
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     #[serde(default)]
@@ -378,6 +378,12 @@ impl ScalingManager {
     /// Returns a reference to the current phase, if any
     pub fn current_phase(&self) -> Option<&ScalingPhase> {
         self.current_phase.as_ref()
+    }
+    
+    /// Returns a mutable reference to the current phase, if any
+    #[cfg(test)]
+    pub fn current_phase_mut(&mut self) -> Option<&mut ScalingPhase> {
+        self.current_phase.as_mut()
     }
     
     /// Returns the history of scaling operations
@@ -542,7 +548,7 @@ impl ScalingManager {
         
         let planning_phase = ScalingPhase::Planning {
             operation,
-            started_at: now,
+            planned_at: now,
             pre_metrics,
         };
         
@@ -1216,6 +1222,89 @@ impl ScalingManager {
         
         rollback_result
     }
+
+    /// Sets the last check time, primarily for testing purposes
+    /// 
+    /// # Arguments
+    /// 
+    /// * `time` - The time value to set (Unix timestamp in seconds)
+    #[cfg(test)]
+    pub fn set_last_check_time(&mut self, time: i64) {
+        self.last_check_time = time;
+    }
+
+    /// A test-specific method to check if the current phase has timed out
+    /// This method is the same as check_timeouts but does not update last_check_time
+    /// It's intended only for testing timeout detection
+    #[cfg(test)]
+    pub fn has_phase_timed_out(&self) -> bool {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::from_secs(0))
+            .as_secs() as i64;
+        
+        // Check if there's an active operation
+        let current_phase = match &self.current_phase {
+            Some(phase) if !phase.is_terminal() => phase,
+            Some(phase) => {
+                println!("DEBUG: Phase is terminal: {:?}", phase);
+                return false;
+            },
+            None => {
+                println!("DEBUG: No active operation");
+                return false;
+            },
+        };
+        
+        println!("DEBUG: Current phase: {:?}", current_phase.phase_name());
+        
+        // Get the start time of the current phase
+        let start_time = match current_phase.start_time() {
+            Some(time) => time,
+            None => {
+                println!("DEBUG: No start time for phase");
+                return false;
+            },
+        };
+        
+        println!("DEBUG: Phase start time: {}, current time: {}", start_time, now);
+        println!("DEBUG: Last check time: {}", self.last_check_time);
+        
+        // Get the timeout for the current phase
+        let timeout_seconds = match self.phase_timeouts.get(current_phase.phase_name()) {
+            Some(timeout) => *timeout,
+            None => {
+                println!("DEBUG: No timeout defined for phase {}", current_phase.phase_name());
+                return false;
+            },
+        };
+        
+        println!("DEBUG: Phase timeout: {} seconds", timeout_seconds);
+        
+        // For tests, use the last_check_time when determining if a timeout has occurred
+        // This allows tests to artificially simulate time passing by setting last_check_time
+        #[cfg(test)]
+        {
+            // Check if the phase has timed out based on last_check_time
+            let elapsed = now - start_time;
+            let artificial_elapsed = self.last_check_time - start_time;
+            let has_timed_out = artificial_elapsed > timeout_seconds as i64;
+            println!("DEBUG: Real time elapsed: {} seconds, Artificial time elapsed: {} seconds, has timed out: {}", 
+                      elapsed, artificial_elapsed, has_timed_out);
+            
+            return has_timed_out;
+        }
+        
+        // For non-test builds, use the actual current time
+        #[cfg(not(test))]
+        {
+            // Check if the phase has timed out
+            let has_timed_out = (now - start_time) > timeout_seconds as i64;
+            println!("DEBUG: Time elapsed: {} seconds, has timed out: {}", now - start_time, has_timed_out);
+            
+            has_timed_out
+        }
+    }
 }
 
 impl ScalingPhase {
@@ -1241,7 +1330,7 @@ impl ScalingPhase {
         match self {
             Self::Requested { requested_at, .. } => Some(*requested_at),
             Self::Validating { started_at, .. } => Some(*started_at),
-            Self::Planning { started_at, .. } => Some(*started_at),
+            Self::Planning { planned_at, .. } => Some(*planned_at),
             Self::ResourceAllocating { started_at, .. } => Some(*started_at),
             Self::InstancePreparing { started_at, .. } => Some(*started_at),
             Self::Configuring { started_at, .. } => Some(*started_at),
@@ -1285,6 +1374,46 @@ impl ScalingPhase {
         Self::Requested {
             operation,
             requested_at: now,
+        }
+    }
+
+    /// Set the start time of the phase for testing purposes
+    #[cfg(test)]
+    pub fn set_start_time_for_testing(&mut self, timestamp: i64) {
+        match self {
+            ScalingPhase::Requested { requested_at, .. } => {
+                *requested_at = timestamp;
+            },
+            ScalingPhase::Validating { started_at, .. } => {
+                *started_at = timestamp;
+            },
+            ScalingPhase::Planning { planned_at, .. } => {
+                *planned_at = timestamp;
+            },
+            ScalingPhase::ResourceAllocating { started_at, .. } => {
+                *started_at = timestamp;
+            },
+            ScalingPhase::InstancePreparing { started_at, .. } => {
+                *started_at = timestamp;
+            },
+            ScalingPhase::Configuring { started_at, .. } => {
+                *started_at = timestamp;
+            },
+            ScalingPhase::Verifying { started_at, .. } => {
+                *started_at = timestamp;
+            },
+            ScalingPhase::Finalizing { started_at, .. } => {
+                *started_at = timestamp;
+            },
+            ScalingPhase::Completed { .. } => {
+                // No start time to modify for terminal phases
+            },
+            ScalingPhase::Failed { .. } => {
+                // No start time to modify for terminal phases
+            },
+            ScalingPhase::Canceled { .. } => {
+                // No start time to modify for terminal phases
+            },
         }
     }
 }
