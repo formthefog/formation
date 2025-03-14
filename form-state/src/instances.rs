@@ -8,6 +8,7 @@ use serde::{Serialize, Deserialize};
 use tiny_keccak::Hasher;
 use crate::Actor;
 use crate::scaling::{ScalingManager, ScalingPhase, ScalingOperation, ScalingError, ScalingMetrics, ScalingResources};
+use crate::verification::RestorationVerificationResult;
 use log::{debug, info, warn, error};
 use chrono;
 
@@ -2751,15 +2752,17 @@ impl InstanceCluster {
         Ok(())
     }
 
-    /// Rolls back a failed scaling operation
-    /// 
-    /// This method triggers the rollback mechanism in the scaling manager and then
+    /// Rolls back a failed scaling operation, restoring the cluster to its previous state, and
     /// executes the necessary restoration actions based on the phase where the failure occurred.
     /// 
     /// The rollback process includes:
     /// - For ResourceAllocating phase: Releasing any allocated resources
     /// - For InstancePreparing phase: Restoring instance configurations from backup
     /// - For Configuring phase: Restoring the previous cluster configuration
+    ///
+    /// After restoration, the method uses the verification framework to verify that the
+    /// cluster state has been properly restored to its pre-operation state. The verification
+    /// results are logged and stored in the operation metadata for later analysis.
     ///
     /// # Returns
     /// 
@@ -2848,9 +2851,66 @@ impl InstanceCluster {
 
         // Update metadata to indicate rollback was completed
         {
+            // First, save any values we'll need for verification to avoid borrow checker issues
+            let members_clone = self.members.clone();
+            let scaling_policy_clone = self.scaling_policy.clone();
+            let template_id_clone = self.template_instance_id.clone();
+            let session_affinity = self.session_affinity_enabled;
+            
+            // Now get the mutable reference to the scaling manager
             let manager = self.scaling_manager_mut().unwrap();
             if let Some(record) = manager.operation_history.last_mut() {
                 record.metadata.insert("cluster_rollback_status".to_string(), "completed".to_string());
+                
+                // Step 3: Verify the restoration after rollback
+                if rollback_result.is_ok() {
+                    // Extract pre-operation membership for verification if available
+                    if let Some(pre_op_json) = record.metadata.get("pre_operation_membership") {
+                        match serde_json::from_str::<BTreeMap<String, ClusterMember>>(pre_op_json) {
+                            Ok(pre_membership) => {
+                                log::info!("Verifying state restoration after rollback");
+                                
+                                // Extract resource IDs that were allocated
+                                let resource_ids = if let Some(resources_str) = record.metadata.get("resources_to_release") {
+                                    resources_str.split(',').map(String::from).collect::<Vec<String>>()
+                                } else {
+                                    vec![]
+                                };
+                                
+                                // Create a temporary cluster using our cloned data
+                                let temp_cluster = InstanceCluster {
+                                    members: members_clone,
+                                    scaling_policy: scaling_policy_clone,
+                                    template_instance_id: template_id_clone,
+                                    session_affinity_enabled: session_affinity,
+                                    scaling_manager: None,
+                                };
+                                
+                                // Use the verification framework with the temporary cluster
+                                let verification_result = crate::verification::verify_state_restoration(
+                                    &temp_cluster,
+                                    &pre_membership,
+                                    None,  // DNS records not currently stored
+                                    if resource_ids.is_empty() { None } else { Some(&resource_ids) }
+                                );
+                                
+                                // Log verification results
+                                log::info!("State restoration verification: {}", verification_result.summary());
+                                
+                                // Store verification results in metadata
+                                record.metadata.insert(
+                                    "restoration_verification".to_string(),
+                                    if verification_result.success { "success" } else { "failure" }.to_string()
+                                );
+                            },
+                            Err(e) => {
+                                log::warn!("Could not deserialize pre-operation membership for verification: {}", e);
+                            }
+                        }
+                    } else {
+                        log::warn!("No pre-operation membership data available for verification");
+                    }
+                }
             }
         }
         
@@ -3696,104 +3756,6 @@ impl InstanceCluster {
                 phase: "ResourceCleaning".to_string(),
             })
         }
-    }
-
-    /// Result of a state restoration verification step
-    #[derive(Debug, Clone)]
-    pub struct VerificationItem {
-        /// The aspect of the cluster state being verified
-        pub aspect: String,
-        /// Whether the verification succeeded
-        pub success: bool,
-        /// Details about the verification result
-        pub details: String,
-    }
-
-    /// Result of the state restoration verification process
-    #[derive(Debug, Clone)]
-    pub struct RestorationVerificationResult {
-        /// Whether the overall verification succeeded
-        pub success: bool,
-        /// List of verification steps that were performed
-        pub verification_items: Vec<VerificationItem>,
-        /// Timestamp when the verification was performed
-        pub verified_at: i64,
-    }
-
-    impl RestorationVerificationResult {
-        /// Creates a new empty verification result
-        pub fn new() -> Self {
-            Self {
-                success: true, // Starts as true, set to false if any check fails
-                verification_items: Vec::new(),
-                verified_at: chrono::Utc::now().timestamp(),
-            }
-        }
-
-        /// Adds a verification item to the result
-        pub fn add_item(&mut self, aspect: &str, success: bool, details: &str) {
-            // If any item fails, mark the overall result as failed
-            if !success {
-                self.success = false;
-            }
-
-            self.verification_items.push(VerificationItem {
-                aspect: aspect.to_string(),
-                success,
-                details: details.to_string(),
-            });
-        }
-
-        /// Returns a summary of the verification result
-        pub fn summary(&self) -> String {
-            let status = if self.success { "SUCCESS" } else { "FAILED" };
-            let passed_count = self.verification_items.iter().filter(|item| item.success).count();
-            let total_count = self.verification_items.len();
-
-            format!(
-                "Verification {}: {}/{} checks passed",
-                status, passed_count, total_count
-            )
-        }
-    }
-
-    /// Verifies that the cluster state has been correctly restored after a rollback operation.
-    /// 
-    /// This method performs a series of checks to ensure that:
-    /// 1. Cluster membership has been correctly restored
-    /// 2. Network configurations are consistent with the pre-operation state
-    /// 3. Cluster properties (template ID, scaling policy, etc.) are correctly restored
-    /// 4. Resources have been properly cleaned up
-    ///
-    /// # Arguments
-    /// * `pre_operation_membership` - The cluster membership before the operation started
-    /// * `dns_records` - Optional DNS records from before the operation
-    /// * `cleaned_resource_ids` - IDs of resources that should have been cleaned up
-    ///
-    /// # Returns
-    /// A `RestorationVerificationResult` detailing which checks passed or failed
-    pub fn verify_state_restoration(
-        &self,
-        pre_operation_membership: &BTreeMap<String, ClusterMember>,
-        dns_records: Option<&BTreeMap<String, form_dns::store::FormDnsRecord>>,
-        cleaned_resource_ids: Option<&[String]>,
-    ) -> RestorationVerificationResult {
-        let mut result = RestorationVerificationResult::new();
-        
-        // Log the start of the verification process
-        debug!(
-            "Starting verification of state restoration for cluster with {} members",
-            self.members.len()
-        );
-        
-        // TODO: Implement specific verification steps for:
-        // 1. Cluster membership
-        // 2. Network configurations
-        // 3. Cluster properties
-        // 4. Resource cleanup
-        
-        // For now, just return the empty result (we'll implement the actual checks next)
-        result
     }
 }
 

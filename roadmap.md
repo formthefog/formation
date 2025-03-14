@@ -11,7 +11,7 @@ This document outlines the strategic roadmap for the Formation network, prioriti
 - ✅ MCP Server Phase 1 - Core framework, VM management tools, workload packaging, authentication, API documentation
 
 **In Progress:**
-- Stateful Elastic Scaling - Significant progress with operation history tracking and rollback infrastructure
+- Stateful Elastic Scaling - Significant progress with operation history tracking, rollback infrastructure, and verification framework for state restoration
 - Vanity Domain Provisioning - Basic functionality implemented, enhancements in progress
 - Economic Infrastructure - Foundational components in place, integration work ongoing
 
