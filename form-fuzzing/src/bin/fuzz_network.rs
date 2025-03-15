@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use std::collections::HashMap;
 
 use form_fuzzing::{self, constants, utils};
+use form_fuzzing::generators::Generator;
 use form_fuzzing::generators::network::{
     NetworkPacket, NetworkPacketGenerator, Protocol, NATConfig, 
     NATType, MappingBehavior, FilteringBehavior, P2PConnectionRequest,
@@ -17,6 +18,7 @@ use form_fuzzing::harness::network::{NetworkHarness, NetworkResult};
 use form_fuzzing::harness::FuzzingHarness;
 use form_fuzzing::instrumentation::coverage;
 use form_fuzzing::instrumentation::fault_injection;
+use form_fuzzing::instrumentation::fault_injection::FaultConfig;
 use form_fuzzing::mutators::network::{
     NetworkPacketMutator, NATConfigMutator, P2PConnectionRequestMutator
 };
@@ -126,22 +128,22 @@ fn main() {
         
         // Inject random faults occasionally
         if rng.gen_bool(0.1) {
-            fault_injection::register_fault_point("packet_routing", 0.5);
+            fault_injection::register_fault_point("packet_routing", FaultConfig::new("packet_routing", 0.5));
         }
         if rng.gen_bool(0.1) {
-            fault_injection::register_fault_point("nat_mapping", 0.5);
+            fault_injection::register_fault_point("nat_mapping", FaultConfig::new("nat_mapping", 0.5));
         }
         if rng.gen_bool(0.1) {
-            fault_injection::register_fault_point("p2p_connect", 0.5);
+            fault_injection::register_fault_point("p2p_connect", FaultConfig::new("p2p_connect", 0.5));
         }
         if rng.gen_bool(0.1) {
-            fault_injection::register_fault_point("network_packet_routing", 0.5);
+            fault_injection::register_fault_point("network_packet_routing", FaultConfig::new("network_packet_routing", 0.5));
         }
         if rng.gen_bool(0.1) {
-            fault_injection::register_fault_point("network_nat_traversal", 0.5);
+            fault_injection::register_fault_point("network_nat_traversal", FaultConfig::new("network_nat_traversal", 0.5));
         }
         if rng.gen_bool(0.1) {
-            fault_injection::register_fault_point("network_p2p_connection", 0.5);
+            fault_injection::register_fault_point("network_p2p_connection", FaultConfig::new("network_p2p_connection", 0.5));
         }
     }
     
@@ -170,7 +172,7 @@ fn main() {
     
     // Clean up and save coverage data
     harness.teardown();
-    coverage::save_coverage_data("network_fuzzer_coverage.dat");
+    coverage::save_coverage("network_fuzzer_coverage.dat");
     form_fuzzing::finalize();
 }
 

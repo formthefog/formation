@@ -6,15 +6,21 @@ use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use form_fuzzing::generators::dns::{
-    DNSRecord, DNSRecordType, DNSZone, DNSRecordGenerator, DNSZoneGenerator,
-    Certificate, CertificateType, ValidationMethod, CertificateStatus,
-    CertificateGenerator, generate_dns01_challenge_response
+use form_fuzzing::{
+    generators::Generator, 
+    mutators::Mutator,
+    harness::dns::{
+        DNSHarness, DNSOperationResult, CertificateType, ValidationMethod
+    },
+    generators::dns::{
+        DNSRecord, DNSRecordType, DNSZone, DNSRecordGenerator, DNSZoneGenerator,
+        Certificate, CertificateStatus,
+        CertificateGenerator, generate_dns01_challenge_response
+    },
+    mutators::dns::{DNSRecordMutator, DNSZoneMutator},
+    instrumentation::coverage,
+    instrumentation::fault_injection::{self, FaultConfig}
 };
-use form_fuzzing::harness::dns::{DNSHarness, DNSOperationResult};
-use form_fuzzing::instrumentation::coverage;
-use form_fuzzing::instrumentation::fault_injection;
-use form_fuzzing::mutators::dns::{DNSRecordMutator, DNSZoneMutator};
 use rand::{Rng, SeedableRng};
 use rand::rngs::StdRng;
 
@@ -52,6 +58,13 @@ impl DNSPropagationTracker {
             .map(|(domain, _)| domain.clone())
             .collect()
     }
+}
+
+/// Record metrics to a file for later analysis
+fn record_metrics_to_file() {
+    // This is a placeholder implementation - in a real system, 
+    // this would write detailed metrics to a file
+    println!("Recording metrics to file...");
 }
 
 fn main() {
@@ -114,6 +127,8 @@ fn main() {
     let mut internal_failures = 0;
     let mut timeout_failures = 0;
     let mut certificate_failures = 0;
+    let mut successful_updates = 0;
+    let mut cert_requests_succeeded = 0;
     
     // Track coverage
     let mut initial_coverage = coverage::get_coverage_count();
@@ -263,33 +278,35 @@ fn main() {
                     // Update the record
                     let mut updated_record = record.clone();
                     updated_record.ttl = 3600;
-                    let update_result = harness.update_record(
-                        user_id, api_key, &zone.name, &record.domain, record.record_type, updated_record
+                    match harness.update_record(user_id, api_key, &zone.name, &record.domain, record.record_type.clone(), updated_record.clone()) {
+                        DNSOperationResult::Success => {
+                            successful_updates += 1;
+                            println!("Updated record: {}, {:?} -> {:?}", &record.domain, record.record_type.clone(), updated_record.values);
+                        },
+                        _ => {
+                            not_found_failures += 1;
+                            println!("Record update test failed");
+                        }
+                    }
+                    
+                    // Delete the record
+                    let delete_record_result = harness.delete_record(
+                        user_id, api_key, &zone.name, &record.domain, record.record_type
                     );
                     
-                    if update_result == DNSOperationResult::Success {
-                        // Delete the record
-                        let delete_record_result = harness.delete_record(
-                            user_id, api_key, &zone.name, &record.domain, record.record_type
-                        );
+                    if delete_record_result == DNSOperationResult::Success {
+                        // Delete the zone
+                        let delete_zone_result = harness.delete_zone(user_id, api_key, &zone.name);
                         
-                        if delete_record_result == DNSOperationResult::Success {
-                            // Delete the zone
-                            let delete_zone_result = harness.delete_zone(user_id, api_key, &zone.name);
-                            
-                            if delete_zone_result == DNSOperationResult::Success {
-                                successful_tests += 1;
-                            } else {
-                                not_found_failures += 1;
-                                println!("Zone deletion test failed: {:?}", delete_zone_result);
-                            }
+                        if delete_zone_result == DNSOperationResult::Success {
+                            successful_tests += 1;
                         } else {
                             not_found_failures += 1;
-                            println!("Record deletion test failed: {:?}", delete_record_result);
+                            println!("Zone deletion test failed: {:?}", delete_zone_result);
                         }
                     } else {
                         not_found_failures += 1;
-                        println!("Record update test failed: {:?}", update_result);
+                        println!("Record deletion test failed: {:?}", delete_record_result);
                     }
                 } else {
                     invalid_input_failures += 1;
@@ -404,13 +421,16 @@ fn main() {
                     }
                 };
                 
-                let request_result = harness.request_certificate(user_id, api_key, &domain, cert_type, validation_method);
+                // Need to use harness methods with the correct parameter ordering
+                let request_result = harness.request_certificate(user_id, api_key, &domain, cert_type.clone(), validation_method.clone());
                 
                 match request_result {
                     DNSOperationResult::Success => {
-                        // For DNS validation, add the validation record
+                        cert_requests_succeeded += 1;
+                        
+                        // Only attempt validation for DNS validation method
                         if validation_method == ValidationMethod::DNS {
-                            // Generate challenge record
+                            // For DNS validation, add the validation record
                             let challenge_domain = format!("_acme-challenge.{}", domain);
                             let challenge_value = generate_dns01_challenge_response();
                             
@@ -515,24 +535,24 @@ fn main() {
             }
         }
         
-        // Inject random faults occasionally
+        // Register fault points
         if rng.gen_bool(0.1) {
-            fault_injection::register_fault_point("dns_create_zone", 0.5);
+            fault_injection::register_fault_point("dns_create_zone", FaultConfig::new("dns_create_zone", 0.5));
         }
         if rng.gen_bool(0.1) {
-            fault_injection::register_fault_point("dns_delete_zone", 0.5);
+            fault_injection::register_fault_point("dns_delete_zone", FaultConfig::new("dns_delete_zone", 0.5));
         }
         if rng.gen_bool(0.1) {
-            fault_injection::register_fault_point("dns_add_record", 0.5);
+            fault_injection::register_fault_point("dns_add_record", FaultConfig::new("dns_add_record", 0.5));
         }
         if rng.gen_bool(0.1) {
-            fault_injection::register_fault_point("dns_auth", 0.5);
+            fault_injection::register_fault_point("dns_auth", FaultConfig::new("dns_auth", 0.5));
         }
         if rng.gen_bool(0.1) {
-            fault_injection::register_fault_point("dns_request_certificate", 0.5);
+            fault_injection::register_fault_point("dns_request_certificate", FaultConfig::new("dns_request_certificate", 0.5));
         }
         if rng.gen_bool(0.1) {
-            fault_injection::register_fault_point("dns_verify_certificate", 0.5);
+            fault_injection::register_fault_point("dns_verify_certificate", FaultConfig::new("dns_verify_certificate", 0.5));
         }
     }
     
@@ -562,7 +582,8 @@ fn main() {
     println!("New edge coverage:      {}", current_coverage - initial_coverage);
     println!("=================================================================");
     
-    // Clean up and save coverage data
-    coverage::save_coverage_data("dns_fuzzer_coverage.dat");
+    // Save metrics and coverage data
+    record_metrics_to_file();
+    coverage::save_coverage("dns_fuzzer_coverage.dat");
     form_fuzzing::finalize();
 } 

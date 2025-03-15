@@ -5,7 +5,7 @@ use crate::generators::Generator;
 use rand::{Rng, thread_rng, seq::SliceRandom};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
-use crate::harness::p2p::{Message, BFTQueue, Topic, NodeId};
+use crate::harness::p2p::{Message, BFTQueue, Topic, NodeId, NodeIdentity, P2PConfig, Subscription, QoS};
 
 /// Generate a QueueOp for a BFTQueue containing Vec<u8>
 pub fn generate_queue_op() -> String {
@@ -18,6 +18,74 @@ pub fn generate_queue_op() -> String {
     
     // Add the message to create an Operation
     queue.add(message, NodeId::from(node_id.clone()))
+}
+
+/// Generate a NodeIdentity object
+pub fn generate_node_identity() -> NodeIdentity {
+    let mut rng = thread_rng();
+    let id = Uuid::new_v4().to_string();
+    let public_key = format!("pk-{}", Uuid::new_v4());
+    
+    // Generate 1-3 addresses
+    let addr_count = rng.gen_range(1..4);
+    let addresses = (0..addr_count)
+        .map(|_| format!("{}:{}", 
+            (0..4).map(|_| rng.gen_range(1..255).to_string()).collect::<Vec<_>>().join("."),
+            rng.gen_range(1000..65535)
+        ))
+        .collect();
+    
+    NodeIdentity {
+        id,
+        public_key,
+        addresses,
+    }
+}
+
+/// Generate a P2PConfig object
+pub fn generate_p2p_config() -> P2PConfig {
+    let mut rng = thread_rng();
+    
+    P2PConfig {
+        max_connections: rng.gen_range(5..50),
+        timeout_ms: rng.gen_range(100..5000),
+        keep_alive_interval_ms: rng.gen_range(1000..30000),
+    }
+}
+
+/// Generate a Subscription object
+pub fn generate_subscription() -> Subscription {
+    let mut rng = thread_rng();
+    
+    // Generate QoS
+    let qos = match rng.gen_range(0..3) {
+        0 => QoS::AtMostOnce,
+        1 => QoS::AtLeastOnce,
+        _ => QoS::ExactlyOnce,
+    };
+    
+    Subscription {
+        id: Uuid::new_v4().to_string(),
+        topic: generate_topic(),
+        qos,
+    }
+}
+
+/// Generate a Message object with a string payload
+pub fn generate_message() -> Message<String> {
+    let topics = [
+        "system.notification",
+        "user.event",
+        "network.status",
+        "cluster.update",
+        "node.metrics",
+    ];
+    
+    let content = topics.choose(&mut thread_rng())
+        .unwrap_or(&"default.message")
+        .to_string();
+    
+    Message::new(content)
 }
 
 /// Generate QueueRequest with random content

@@ -8,6 +8,8 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use std::collections::HashMap;
 
+use form_fuzzing::generators::Generator;
+use form_fuzzing::mutators::Mutator;
 use form_fuzzing::generators::economic::{
     AuthTokenGenerator, ApiKeyGenerator, InvalidAuthTokenGenerator, InvalidApiKeyGenerator,
     ResourceUsageReportGenerator, HighResourceUsageReportGenerator, CriticalResourceUsageReportGenerator,
@@ -678,16 +680,18 @@ fn main() {
         
         // Occasionally inject faults
         if rng.gen_bool(0.05) {
-            let fault_points = [
-                "economic_auth",
-                "economic_db",
-                "economic_threshold",
-                "economic_event",
-                "economic_webhook",
-            ];
+            let fault_type = rng.gen_range(0..5);
             
-            let fault_point = fault_points.choose(&mut rng).unwrap();
-            fault_injection::register_fault_point(fault_point, 0.5);
+            // Register fault points 
+            let fault_point = match fault_type {
+                0 => "economic_auth",
+                1 => "economic_rate_limit",
+                2 => "economic_processing",
+                3 => "economic_validation",
+                _ => "economic_storage",
+            };
+            
+            fault_injection::register_fault_point(fault_point, fault_injection::FaultConfig::new(fault_point, 0.5));
         }
     }
     
@@ -718,6 +722,6 @@ fn main() {
     println!("=================================================================");
     
     // Clean up and save coverage data
-    coverage::save_coverage_data("economic_fuzzer_coverage.dat");
+    coverage::save_coverage("economic_fuzzer_coverage.dat");
     form_fuzzing::finalize();
 } 

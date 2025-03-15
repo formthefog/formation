@@ -1,18 +1,29 @@
-use form_fuzzing::{
-    generators::state::{
-        AccountGenerator, InstanceGenerator, NodeGenerator, 
-        CrdtPeerGenerator, CrdtCidrGenerator, CrdtAssociationGenerator,
-        FormDnsRecordGenerator, CrdtDnsRecordGenerator
-    },
-    mutators::state::{
-        AccountMutator, InstanceMutator, NodeMutator,
-        CrdtPeerMutator, CrdtCidrMutator, CrdtAssociationMutator,
-        FormDnsRecordMutator, CrdtDnsRecordMutator
-    },
-    harness::state::StateFuzzHarness,
+//! State Fuzzer for Formation Network
+
+use form_fuzzing::generators::state::{
+    InstanceGenerator, NodeGenerator, AccountGenerator,
+    PeerGenerator, CidrGenerator, AssociationGenerator,
+    DnsRecordGenerator, CRDTDnsRecordGenerator
 };
-use form_fuzzing::{generators::Generator, mutators::Mutator};
-use std::time::Duration;
+use form_fuzzing::generators::Generator;
+use form_fuzzing::harness::state::StateFuzzHarness;
+use form_fuzzing::instrumentation::coverage;
+use form_fuzzing::instrumentation::fault_injection;
+use form_fuzzing::instrumentation::sanitizer;
+use form_fuzzing::mutators::Mutator;
+use form_fuzzing::mutators::state::{
+    AccountMutator, InstanceMutator, NodeMutator,
+    CrdtPeerMutator, CrdtCidrMutator, CrdtAssociationMutator,
+    FormDnsRecordMutator, CrdtDnsRecordMutator
+};
+
+use std::time::{Instant, Duration};
+use std::thread;
+use std::fs;
+use std::path::Path;
+use rand::Rng;
+use rand::seq::SliceRandom;
+use uuid::Uuid;
 
 fn main() {
     // Initialize logging
@@ -25,11 +36,11 @@ fn main() {
     let instance_gen = InstanceGenerator::new();
     let node_gen = NodeGenerator::new();
     let account_gen = AccountGenerator::new();
-    let crdt_peer_gen = CrdtPeerGenerator::new();
-    let crdt_cidr_gen = CrdtCidrGenerator::new();
-    let crdt_association_gen = CrdtAssociationGenerator::new();
-    let form_dns_record_gen = FormDnsRecordGenerator::new();
-    let crdt_dns_record_gen = CrdtDnsRecordGenerator::new();
+    let crdt_peer_gen = PeerGenerator::new();
+    let crdt_cidr_gen = CidrGenerator::new();
+    let crdt_association_gen = AssociationGenerator::new();
+    let form_dns_record_gen = DnsRecordGenerator::new();
+    let crdt_dns_record_gen = CRDTDnsRecordGenerator::new();
     
     // Set up mutators
     let instance_mut = InstanceMutator::new();

@@ -7,6 +7,7 @@ use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use form_fuzzing::generators::Generator;
 use form_fuzzing::generators::mcp::{
     LoginRequestGenerator, InvalidLoginRequestGenerator,
     VMCreateRequestGenerator, VMListRequestGenerator,
@@ -16,6 +17,8 @@ use form_fuzzing::generators::mcp::{
 use form_fuzzing::harness::mcp::{MCPHarness, MCPOperationResult};
 use form_fuzzing::instrumentation::coverage;
 use form_fuzzing::instrumentation::fault_injection;
+use form_fuzzing::instrumentation::fault_injection::FaultConfig;
+use form_fuzzing::mutators::Mutator;
 use form_fuzzing::mutators::mcp::{
     LoginRequestMutator, VMCreateRequestMutator, VMListRequestMutator,
     PackBuildRequestMutator, PackShipRequestMutator, JsonValueMutator,
@@ -284,7 +287,7 @@ fn main() {
             };
             
             // Execute VM create tool
-            let result = harness.execute_tool(&token, "vm.create", params);
+            let result = harness.execute_tool(&token, "vm.create", params.clone());
             
             match result {
                 MCPOperationResult::Success(data) => {
@@ -369,7 +372,7 @@ fn main() {
                 "status": request.status,
             });
             
-            let result = harness.execute_tool(&token, "vm.list", params);
+            let result = harness.execute_tool(&token, "vm.list", params.clone());
             
             match result {
                 MCPOperationResult::Success(_) => {
@@ -440,7 +443,7 @@ fn main() {
             };
             
             // Execute Pack Build tool
-            let result = harness.execute_tool(&token, "form_pack_build", params);
+            let result = harness.execute_tool(&token, "form_pack_build", params.clone());
             
             match result {
                 MCPOperationResult::Success(data) => {
@@ -544,7 +547,7 @@ fn main() {
             });
             
             // Execute Pack Ship tool
-            let result = harness.execute_tool(&token, "form_pack_ship", params);
+            let result = harness.execute_tool(&token, "form_pack_ship", params.clone());
             
             match result {
                 MCPOperationResult::Success(_) => {
@@ -585,19 +588,19 @@ fn main() {
         
         // Occasionally inject faults for each type of operation
         if rng.gen_bool(0.05) {
-            fault_injection::register_fault_point("mcp_auth", 0.5);
+            fault_injection::register_fault_point("mcp_auth", FaultConfig::new("mcp_auth", 0.5));
         }
         if rng.gen_bool(0.05) {
-            fault_injection::register_fault_point("mcp_vm_create", 0.5);
+            fault_injection::register_fault_point("mcp_vm_create", FaultConfig::new("mcp_vm_create", 0.5));
         }
         if rng.gen_bool(0.05) {
-            fault_injection::register_fault_point("mcp_vm_list", 0.5);
+            fault_injection::register_fault_point("mcp_vm_list", FaultConfig::new("mcp_vm_list", 0.5));
         }
         if rng.gen_bool(0.05) {
-            fault_injection::register_fault_point("mcp_pack_build", 0.5);
+            fault_injection::register_fault_point("mcp_pack_build", FaultConfig::new("mcp_pack_build", 0.5));
         }
         if rng.gen_bool(0.05) {
-            fault_injection::register_fault_point("mcp_pack_ship", 0.5);
+            fault_injection::register_fault_point("mcp_pack_ship", FaultConfig::new("mcp_pack_ship", 0.5));
         }
     }
     
@@ -628,6 +631,6 @@ fn main() {
     println!("=================================================================");
     
     // Clean up and save coverage data
-    coverage::save_coverage_data("mcp_fuzzer_coverage.dat");
+    coverage::save_coverage("mcp_fuzzer_coverage.dat");
     form_fuzzing::finalize();
 } 

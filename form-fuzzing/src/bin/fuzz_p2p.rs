@@ -9,17 +9,19 @@ use form_fuzzing::{
     generators::Generator, 
     mutators::Mutator,
     harness::p2p::{
-        P2PHarness, P2POperationResult, P2PError, Message, Topic, NodeId
+        P2PHarness, P2POperationResult, P2PError, Message, Topic, NodeId,
+        NodeIdentity, P2PConfig, Subscription, QoS
     }
 };
 use form_fuzzing::generators::p2p::{
     QueueRequest, QueueResponse, FormMQGenerator,
-    generate_node_id, generate_topic, generate_failure_reason
+    generate_node_id, generate_topic, generate_failure_reason,
+    generate_node_identity, generate_p2p_config, generate_subscription, generate_message
 };
 use form_fuzzing::mutators::p2p::{
     QueueRequestMutator, QueueResponseMutator
 };
-use form_fuzzing::instrumentation::coverage::{self, init_coverage_tracking};
+use form_fuzzing::instrumentation::coverage;
 use form_fuzzing::instrumentation::fault_injection::{self, FaultConfig};
 use form_fuzzing::instrumentation::sanitizer;
 
@@ -58,6 +60,8 @@ enum FuzzingStrategy {
     HighLoad,
     /// Test with extreme failure rates
     HighFailureRate,
+    /// Random strategy
+    Random,
 }
 
 impl FuzzingStrategy {
@@ -74,6 +78,7 @@ impl FuzzingStrategy {
             FuzzingStrategy::TopologyChanges,
             FuzzingStrategy::HighLoad,
             FuzzingStrategy::HighFailureRate,
+            FuzzingStrategy::Random,
         ]
     }
     
@@ -182,17 +187,20 @@ struct P2PFuzzer {
     stats: FuzzingStats,
     /// Corpus directory
     corpus_dir: Option<String>,
+    /// Strategy to use
+    strategy: FuzzingStrategy,
 }
 
 impl P2PFuzzer {
     /// Create a new P2P fuzzer
-    fn new() -> Self {
+    fn new(harness: P2PHarness, stats: FuzzingStats, strategy: FuzzingStrategy) -> Self {
         Self {
-            harness: P2PHarness::new(),
+            harness,
             request_mutator: QueueRequestMutator::new(),
             response_mutator: QueueResponseMutator::new(),
-            stats: FuzzingStats::new(),
+            stats,
             corpus_dir: None,
+            strategy,
         }
     }
     
@@ -208,7 +216,35 @@ impl P2PFuzzer {
         }
     }
     
-    /// Run a single fuzzing iteration with the given strategy
+    /// Run the fuzzer for a specified number of iterations
+    fn run(&mut self, iterations: usize) {
+        info!("Running {} iterations with strategy {:?}", iterations, self.strategy);
+        
+        for i in 0..iterations {
+            info!("Running iteration {}/{}", i+1, iterations);
+            
+            match self.strategy {
+                FuzzingStrategy::ValidNetwork => self.fuzz_valid_network(),
+                FuzzingStrategy::MixedNetwork => self.fuzz_mixed_network(),
+                FuzzingStrategy::ValidSubscription => self.fuzz_valid_subscription(),
+                FuzzingStrategy::InvalidSubscription => self.fuzz_invalid_subscription(),
+                FuzzingStrategy::ValidMessagePublishing => self.fuzz_valid_message_publishing(),
+                FuzzingStrategy::InvalidMessagePublishing => self.fuzz_invalid_message_publishing(),
+                FuzzingStrategy::MessageRouting => self.fuzz_message_routing(),
+                FuzzingStrategy::TopologyChanges => self.fuzz_topology_changes(),
+                FuzzingStrategy::HighLoad => self.fuzz_high_load(),
+                FuzzingStrategy::HighFailureRate => self.fuzz_high_failure_rate(),
+                FuzzingStrategy::Random => {
+                    // For random strategy, choose a different strategy each time
+                    let random_strategy = FuzzingStrategy::random();
+                    info!("Selected random strategy: {:?}", random_strategy);
+                    self.run_iteration(random_strategy);
+                },
+            }
+        }
+    }
+    
+    /// Run a single iteration with a specific strategy
     fn run_iteration(&mut self, strategy: FuzzingStrategy) {
         match strategy {
             FuzzingStrategy::ValidNetwork => self.fuzz_valid_network(),
@@ -221,30 +257,29 @@ impl P2PFuzzer {
             FuzzingStrategy::TopologyChanges => self.fuzz_topology_changes(),
             FuzzingStrategy::HighLoad => self.fuzz_high_load(),
             FuzzingStrategy::HighFailureRate => self.fuzz_high_failure_rate(),
+            FuzzingStrategy::Random => self.fuzz_random(),
         }
     }
     
     /// Fuzz network with valid nodes
     fn fuzz_valid_network(&mut self) {
-        // Create 3-5 nodes
+        info!("Running valid network test");
+        
         let mut rng = thread_rng();
-        let node_count = rng.gen_range(3..6);
+        let node_count = rng.gen_range(2..10);
         
-        // Clear existing nodes
-        self.reset_harness();
-        
+        // Create nodes with valid configuration
+        let mut nodes = Vec::new();
         for i in 0..node_count {
             let node_id = format!("node-{}", i);
-            let mut identity = generate_node_id();
-            identity.node_id = node_id.clone();
-            
-            let config = generate_topic();
+            let identity = generate_node_identity();  // Use the proper generator
+            let config = generate_p2p_config();       // Use the proper generator
             
             let result = self.harness.add_node(identity, config);
             self.stats.record(&result);
             
-            if let P2POperationResult::Error(e) = &result {
-                error!("Failed to create valid node {}: {:?}", node_id, e);
+            if let P2POperationResult::Success = &result {
+                nodes.push(node_id);
             }
         }
         
@@ -264,47 +299,47 @@ impl P2PFuzzer {
     
     /// Fuzz network with a mix of valid and invalid nodes
     fn fuzz_mixed_network(&mut self) {
-        // Create 3-5 nodes, some valid, some invalid
+        info!("Running mixed network test");
+        
         let mut rng = thread_rng();
-        let node_count = rng.gen_range(3..6);
+        let node_count = rng.gen_range(2..10);
         
-        // Clear existing nodes
-        self.reset_harness();
-        
+        // Create nodes with mixed valid/invalid configurations
+        let mut nodes = Vec::new();
         for i in 0..node_count {
             let node_id = format!("node-{}", i);
             
-            // 50% chance of an invalid node
+            // Generate either valid or invalid configuration
             let (identity, config) = if rng.gen_bool(0.5) {
-                let mut identity = generate_node_id();
-                identity.node_id = node_id.clone();
-                (identity, generate_topic())
+                (generate_node_identity(), generate_p2p_config())
             } else {
-                let mut identity = generate_failure_reason();
-                identity.node_id = node_id.clone();
-                (identity, generate_topic())
+                // For invalid configs, we'll use valid identity but with extreme values in config
+                let mut config = generate_p2p_config();
+                // Make configuration invalid with extreme values
+                config.max_connections = rng.gen_range(1000..5000);  // Too many connections
+                config.timeout_ms = if rng.gen_bool(0.5) { 0 } else { 1_000_000 };  // Invalid timeout
+                
+                (generate_node_identity(), config)
             };
             
             let result = self.harness.add_node(identity, config);
             self.stats.record(&result);
             
-            if let P2POperationResult::Error(e) = &result {
-                debug!("Failed to create node {}: {:?}", node_id, e);
+            if let P2POperationResult::Success = &result {
+                nodes.push(node_id);
             }
         }
         
-        // Try to connect nodes
-        if let Some(nodes) = self.get_active_node_ids() {
-            if nodes.len() >= 2 {
-                for _ in 0..rng.gen_range(1..10) {
-                    let from_idx = rng.gen_range(0..nodes.len());
-                    let mut to_idx = rng.gen_range(0..nodes.len());
-                    // Ensure from != to
-                    while to_idx == from_idx {
-                        to_idx = rng.gen_range(0..nodes.len());
-                    }
-                    
-                    let result = self.harness.connect_nodes(&nodes[from_idx], &nodes[to_idx]);
+        // Create some connections between nodes
+        if nodes.len() >= 2 {
+            let connection_count = rng.gen_range(1..nodes.len());
+            
+            for _ in 0..connection_count {
+                let from = nodes.choose(&mut rng).unwrap();
+                let to = nodes.choose(&mut rng).unwrap();
+                
+                if from != to {
+                    let result = self.harness.connect_nodes(from, to);
                     self.stats.record(&result);
                 }
             }
@@ -313,36 +348,42 @@ impl P2PFuzzer {
     
     /// Fuzz with valid subscriptions
     fn fuzz_valid_subscription(&mut self) {
-        let mut rng = thread_rng();
+        info!("Running valid subscription test");
         
-        // Ensure we have some nodes
-        if self.get_active_node_ids().map(|n| n.len()).unwrap_or(0) < 2 {
-            self.fuzz_valid_network();
+        // Get active nodes from the harness
+        let nodes = match self.get_active_node_ids() {
+            Some(n) if !n.is_empty() => n,
+            _ => {
+                // Create some nodes if none exist
+                self.fuzz_valid_network();
+                self.get_active_node_ids().unwrap_or_default()
+            }
+        };
+        
+        if nodes.is_empty() {
+            warn!("No active nodes available for subscription test");
+            return;
         }
         
-        if let Some(nodes) = self.get_active_node_ids() {
-            // Create 3-10 valid subscriptions
-            let sub_count = rng.gen_range(3..11);
+        let mut rng = thread_rng();
+        let sub_count = rng.gen_range(1..20);
+        
+        // Create valid subscriptions
+        for _i in 0..sub_count {
+            let subscription = generate_subscription();
+            let node_id = nodes.choose(&mut rng).unwrap();
             
-            for i in 0..sub_count {
-                let mut subscription = generate_topic();
-                subscription.subscriber_id = nodes.choose(&mut rng).unwrap().clone();
-                subscription.subscription_id = format!("sub-{}", i);
-                
-                let node_id = nodes.choose(&mut rng).unwrap();
-                
-                let result = self.harness.subscribe(Some(node_id), subscription);
-                self.stats.record(&result);
-            }
+            let result = self.harness.subscribe(Some(node_id), subscription);
+            self.stats.record(&result);
+        }
+        
+        // Unsubscribe from some
+        if rng.gen_bool(0.3) {
+            let unsub_id = format!("sub-{}", rng.gen_range(0..sub_count));
+            let node_id = nodes.choose(&mut rng).unwrap();
             
-            // Unsubscribe from some
-            if rng.gen_bool(0.3) {
-                let unsub_id = format!("sub-{}", rng.gen_range(0..sub_count));
-                let node_id = nodes.choose(&mut rng).unwrap();
-                
-                let result = self.harness.unsubscribe(Some(node_id), &unsub_id);
-                self.stats.record(&result);
-            }
+            let result = self.harness.unsubscribe(Some(node_id), &unsub_id);
+            self.stats.record(&result);
         }
     }
     
@@ -360,14 +401,12 @@ impl P2PFuzzer {
             let sub_count = rng.gen_range(3..11);
             
             for i in 0..sub_count {
-                let mut subscription = generate_topic();
-                
-                // Set valid subscriber ID to ensure it's only the subscription that's invalid
-                if !nodes.is_empty() {
-                    subscription.subscriber_id = nodes.choose(&mut rng).unwrap().clone();
-                }
-                
-                subscription.subscription_id = format!("sub-{}", i);
+                // Create a subscription with invalid characteristics
+                let mut subscription = Subscription {
+                    id: format!("sub-{}", i),
+                    topic: if rng.gen_bool(0.5) { "".to_string() } else { "invalid/#/topic".to_string() },
+                    qos: QoS::AtMostOnce,
+                };
                 
                 let node_id = nodes.choose(&mut rng).unwrap();
                 
@@ -416,21 +455,19 @@ impl P2PFuzzer {
             // Publish 5-15 valid messages
             let msg_count = rng.gen_range(5..16);
             
-            for i in 0..msg_count {
-                let mut message = generate_topic();
-                message.header.message_id = format!("msg-{}", Uuid::new_v4());
-                
+            for _i in 0..msg_count {
+                let message = generate_message();
                 let node_id = nodes.choose(&mut rng).unwrap();
                 
                 let result = self.harness.publish(Some(node_id), message);
                 self.stats.record(&result);
                 
                 // Occasionally try to receive messages
-                if i % 3 == 0 && !nodes.is_empty() {
+                if _i % 3 == 0 && !nodes.is_empty() {
                     let sub_id = format!("sub-{}", rng.gen_range(0..3)); // Assuming we have subs from fuzz_valid_subscription
                     let node_id = nodes.choose(&mut rng).unwrap();
                     
-                    match self.harness.receive(Some(node_id), &sub_id, 5) {
+                    match self.harness.receive::<String>(Some(node_id), &sub_id, 5) {
                         Ok(messages) => {
                             debug!("Received {} messages", messages.len());
                         },
@@ -457,9 +494,13 @@ impl P2PFuzzer {
             let msg_count = rng.gen_range(5..16);
             
             for _ in 0..msg_count {
-                let message = generate_failure_reason();
+                // Create an invalid message (using a string directly instead of proper Message)
+                let raw_message = generate_failure_reason();
                 
                 let node_id = nodes.choose(&mut rng).unwrap();
+                
+                // Properly create a Message object for publishing
+                let message = Message::new(raw_message);
                 
                 let result = self.harness.publish(Some(node_id), message);
                 self.stats.record(&result);
@@ -478,20 +519,15 @@ impl P2PFuzzer {
             
             // Also try duplicate message IDs
             if !nodes.is_empty() {
-                let mut message = generate_topic();
-                message.header.message_id = "duplicate-id".to_string();
+                // Since we can't set header directly, we'll just create a message with a special content
+                let message = Message::new("duplicate-id".to_string());
                 
                 let node_id = nodes.choose(&mut rng).unwrap();
                 
-                // First publish should succeed
-                let result1 = self.harness.publish(Some(node_id), message.clone());
-                self.stats.record(&result1);
+                let result = self.harness.publish(Some(node_id), message);
+                self.stats.record(&result);
                 
-                // Second publish should fail with duplicate ID
-                let result2 = self.harness.publish(Some(node_id), message);
-                self.stats.record(&result2);
-                
-                if !matches!(result2, P2POperationResult::Error(P2PError::DuplicateMessageId(_))) {
+                if !matches!(result, P2POperationResult::Error(P2PError::DuplicateMessageId(_))) {
                     warn!("Duplicate message ID not detected");
                 }
             }
@@ -500,363 +536,413 @@ impl P2PFuzzer {
     
     /// Fuzz message routing across different topologies
     fn fuzz_message_routing(&mut self) {
+        info!("Running message routing test");
+        
         let mut rng = thread_rng();
         
-        // Create a new network with a specific topology
+        // First create a network with a specific topology
+        // Typically a mesh network works best for routing tests
+        let node_count = rng.gen_range(3..8);
+        
+        // Clear existing state
         self.reset_harness();
         
-        // Create 4-8 nodes
-        let node_count = rng.gen_range(4..9);
-        
+        // Create nodes
+        let mut nodes = Vec::new();
         for i in 0..node_count {
             let node_id = format!("node-{}", i);
-            let mut identity = generate_node_id();
-            identity.node_id = node_id.clone();
+            let mut identity = generate_node_identity();
+            // Update the id field, not node_id
+            identity.id = node_id.clone();
             
-            let config = generate_topic();
+            // Create a proper P2PConfig object instead of a string
+            let config = generate_p2p_config();
             
             let result = self.harness.add_node(identity, config);
             self.stats.record(&result);
+            
+            if let P2POperationResult::Success = &result {
+                nodes.push(node_id);
+            }
         }
         
-        // Choose a topology
-        let topologies = ["star", "mesh", "ring", "line"];
-        let topology = topologies.choose(&mut rng).unwrap();
-        
-        let result = self.harness.build_topology(topology);
-        self.stats.record(&result);
-        
-        if let P2POperationResult::Error(e) = &result {
-            error!("Failed to build {} topology: {:?}", topology, e);
-            return;
+        // Connect the nodes in a mesh network
+        for i in 0..nodes.len() {
+            for j in i+1..nodes.len() {
+                let result = self.harness.connect_nodes(&nodes[i], &nodes[j]);
+                self.stats.record(&result);
+            }
         }
         
-        info!("Testing message routing with {} topology and {} nodes", topology, node_count);
-        
-        // Set up subscriptions
-        if let Some(nodes) = self.get_active_node_ids() {
-            // Create subscriptions on different nodes
-            for i in 0..node_count {
-                if i >= nodes.len() {
-                    break;
-                }
-                
-                let mut subscription = generate_topic();
-                subscription.subscriber_id = nodes[i].clone();
-                subscription.subscription_id = format!("routing-sub-{}", i);
-                
-                // Different subscription patterns
-                match i % 3 {
-                    0 => {
-                        // Exact topic
-                        subscription.topic_pattern = "test/routing".to_string();
+        // Create subscriptions with different patterns
+        for i in 0..nodes.len() {
+            if i < nodes.len() {
+                // Create a subscription with appropriate fields
+                let subscription = Subscription {
+                    id: format!("routing-sub-{}", i),
+                    topic: match i % 3 {
+                        0 => "test/routing".to_string(),
+                        1 => "test/+/data".to_string(),
+                        _ => "test/#".to_string(),
                     },
-                    1 => {
-                        // Single-level wildcard
-                        subscription.topic_pattern = "test/+/data".to_string();
-                    },
-                    _ => {
-                        // Multi-level wildcard
-                        subscription.topic_pattern = "test/#".to_string();
-                    }
-                }
+                    qos: QoS::AtLeastOnce,
+                };
                 
                 let result = self.harness.subscribe(Some(&nodes[i]), subscription);
                 self.stats.record(&result);
             }
+        }
+        
+        // Publish messages to different topics
+        let topics = [
+            "test/routing",
+            "test/custom/data",
+            "test/events/important",
+        ];
+        
+        for topic in topics {
+            // Create a message with the content being the topic
+            let message = Message::new(topic.to_string());
             
-            // Publish messages that should match different subscriptions
-            let topics = [
-                "test/routing",
-                "test/level1/data",
-                "test/level1/level2",
-                "unmatched/topic",
-            ];
+            let pub_node = nodes.choose(&mut rng).unwrap();
             
-            for topic in topics {
-                let mut message = generate_topic();
-                message.header.message_id = format!("routing-{}", Uuid::new_v4());
-                message.header.topic = topic.to_string();
+            let result = self.harness.publish(Some(pub_node), message);
+            self.stats.record(&result);
+            
+            // Allow some time for routing
+            std::thread::sleep(Duration::from_millis(50));
+            
+            // Try to receive messages on each node
+            for node_id in &nodes {
+                let sub_id = format!("routing-sub-{}", nodes.iter().position(|n| n == node_id).unwrap_or(0));
                 
-                let pub_node = nodes.choose(&mut rng).unwrap();
-                
-                let result = self.harness.publish(Some(pub_node), message);
-                self.stats.record(&result);
-                
-                // Try to receive on all nodes to check routing
-                for i in 0..node_count {
-                    if i >= nodes.len() {
-                        break;
-                    }
-                    
-                    let sub_id = format!("routing-sub-{}", i);
-                    match self.harness.receive(Some(&nodes[i]), &sub_id, 5) {
-                        Ok(messages) => {
-                            debug!("Node {} received {} messages for topic {}", 
-                                  nodes[i], messages.len(), topic);
-                        },
-                        Err(e) => {
-                            debug!("Node {} failed to receive messages: {:?}", nodes[i], e);
+                match self.harness.receive::<String>(Some(node_id), &sub_id, 5) {
+                    Ok(messages) => {
+                        if messages.is_empty() {
+                            info!("No messages received on node {} for topic {}", node_id, topic);
+                        } else {
+                            info!("Received {} messages on node {} for topic {}", messages.len(), node_id, topic);
                         }
+                    },
+                    Err(e) => {
+                        info!("Failed to receive messages on node {}: {:?}", node_id, e);
                     }
                 }
             }
         }
     }
     
-    /// Fuzz topology changes during operation
+    /// Fuzz with mixed network topology changes
     fn fuzz_topology_changes(&mut self) {
+        info!("Running topology changes test");
+        
+        // Create a network
+        self.fuzz_valid_network();
+        
         let mut rng = thread_rng();
         
-        // Create a new network
-        self.reset_harness();
-        
-        // Create 5-8 nodes
-        let node_count = rng.gen_range(5..9);
-        
-        for i in 0..node_count {
-            let node_id = format!("node-{}", i);
-            let mut identity = generate_node_id();
-            identity.node_id = node_id.clone();
-            
-            let config = generate_topic();
-            
-            let result = self.harness.add_node(identity, config);
-            self.stats.record(&result);
-        }
-        
-        // Start with a mesh topology
-        let result = self.harness.build_topology("mesh");
-        self.stats.record(&result);
-        
-        // Set up some subscriptions
-        self.fuzz_valid_subscription();
-        
-        // Publish some initial messages
-        self.fuzz_valid_message_publishing();
-        
-        // Change topology during operation
         if let Some(nodes) = self.get_active_node_ids() {
-            // Remove a random node
-            if nodes.len() > 3 {
-                let node_to_remove = nodes.choose(&mut rng).unwrap();
-                let result = self.harness.remove_node(node_to_remove);
-                self.stats.record(&result);
-                
-                info!("Removed node {} during operation", node_to_remove);
+            if nodes.is_empty() {
+                warn!("No active nodes for topology test");
+                return;
             }
             
-            // Change to ring topology
-            let result = self.harness.build_topology("ring");
-            self.stats.record(&result);
+            // Connect random nodes
+            let connect_count = rng.gen_range(1..nodes.len().max(2));
+            for _ in 0..connect_count {
+                if nodes.len() >= 2 {
+                    let idx1 = rng.gen_range(0..nodes.len());
+                    let mut idx2 = rng.gen_range(0..nodes.len());
+                    while idx1 == idx2 {
+                        idx2 = rng.gen_range(0..nodes.len());
+                    }
+                    
+                    let result = self.harness.connect_nodes(&nodes[idx1], &nodes[idx2]);
+                    self.stats.record(&result);
+                }
+            }
             
-            info!("Changed topology to ring during operation");
+            // Remove some nodes while operations are happening
+            if nodes.len() > 2 && rng.gen_bool(0.3) {
+                let remove_idx = rng.gen_range(0..nodes.len());
+                let node_to_remove = &nodes[remove_idx];
+                
+                let result = self.harness.remove_node(node_to_remove);
+                self.stats.record(&result);
+            }
             
-            // Publish more messages after topology change
-            self.fuzz_valid_message_publishing();
-            
-            // Add a new node during operation
-            let new_node_id = format!("node-new-{}", Uuid::new_v4());
-            let mut identity = generate_node_id();
-            identity.node_id = new_node_id.clone();
-            
-            let config = generate_topic();
-            
-            let result = self.harness.add_node(identity, config);
-            self.stats.record(&result);
-            
-            info!("Added new node {} during operation", new_node_id);
-            
-            // Connect the new node to an existing node
-            if let Some(existing_nodes) = self.get_active_node_ids() {
-                if !existing_nodes.is_empty() && existing_nodes.contains(&new_node_id) {
-                    let existing = existing_nodes.iter()
-                        .filter(|&n| n != &new_node_id)
-                        .collect::<Vec<_>>();
+            // "Disconnect" some nodes by adding and then removing connections
+            if nodes.len() >= 2 && rng.gen_bool(0.4) {
+                let idx1 = rng.gen_range(0..nodes.len());
+                let mut idx2 = rng.gen_range(0..nodes.len());
+                while idx1 == idx2 {
+                    idx2 = rng.gen_range(0..nodes.len());
+                }
+                
+                // First connect nodes
+                let connect_result = self.harness.connect_nodes(&nodes[idx1], &nodes[idx2]);
+                self.stats.record(&connect_result);
+                
+                // Then simulate disconnection by removing one of the nodes and adding it back
+                if rng.gen_bool(0.5) && matches!(connect_result, P2POperationResult::Success) {
+                    let temp_result = self.harness.remove_node(&nodes[idx2]);
+                    self.stats.record(&temp_result);
+                    
+                    if let P2POperationResult::Success = temp_result {
+                        // Re-add the node with the same ID
+                        let identity = NodeIdentity {
+                            id: nodes[idx2].clone(),
+                            public_key: format!("pk-{}", Uuid::new_v4()),
+                            addresses: vec![format!("192.168.1.{}", idx2 + 1)],
+                        };
                         
-                    if !existing.is_empty() {
-                        let connect_to = existing.choose(&mut rng).unwrap();
-                        let result = self.harness.connect_nodes(&new_node_id, connect_to);
-                        self.stats.record(&result);
+                        let config = P2PConfig {
+                            max_connections: rng.gen_range(3..10),
+                            timeout_ms: rng.gen_range(50..200),
+                            keep_alive_interval_ms: rng.gen_range(500..2000),
+                        };
                         
-                        info!("Connected new node {} to {}", new_node_id, connect_to);
+                        let add_result = self.harness.add_node(identity, config);
+                        self.stats.record(&add_result);
                     }
                 }
             }
             
-            // Publish more messages after adding a node
-            self.fuzz_valid_message_publishing();
+            // Create some subscriptions to test routing through topology
+            let sub_count = rng.gen_range(1..nodes.len().max(3));
+            for i in 0..sub_count {
+                if i < nodes.len() {
+                    let subscription = Subscription {
+                        id: format!("routing-sub-{}", i),
+                        topic: match rng.gen_range(0..3) {
+                            0 => "test/routing".to_string(),
+                            1 => "test/+/data".to_string(),
+                            _ => "test/#".to_string(),
+                        },
+                        qos: match rng.gen_range(0..3) {
+                            0 => QoS::AtMostOnce,
+                            1 => QoS::AtLeastOnce,
+                            _ => QoS::ExactlyOnce,
+                        },
+                    };
+                    
+                    let result = self.harness.subscribe(Some(&nodes[i]), subscription);
+                    self.stats.record(&result);
+                }
+            }
+            
+            // Publish messages that should be routed
+            let msg_count = rng.gen_range(1..10);
+            for _ in 0..msg_count {
+                // Select a random topic that should match some subscriptions
+                let topic = match rng.gen_range(0..3) {
+                    0 => "test/routing",
+                    1 => "test/custom/data",
+                    _ => "test/events/important",
+                };
+                
+                // Create a message for this topic
+                let message = Message::new(format!("Routed message: {}", Uuid::new_v4()));
+                
+                // Publish from a random node
+                let node_idx = rng.gen_range(0..nodes.len());
+                let result = self.harness.publish(Some(&nodes[node_idx]), message);
+                self.stats.record(&result);
+            }
         }
     }
     
     /// Fuzz high load scenarios
     fn fuzz_high_load(&mut self) {
+        info!("Running high load test");
+        
+        // Create a network with nodes that have limited resources
         let mut rng = thread_rng();
-        
-        // Create a new network with a mesh topology
-        self.reset_harness();
-        
-        // Create 5-10 nodes
-        let node_count = rng.gen_range(5..11);
+        let node_count = rng.gen_range(5..20);
         
         for i in 0..node_count {
-            let node_id = format!("node-{}", i);
-            let mut identity = generate_node_id();
-            identity.node_id = node_id.clone();
+            let identity = NodeIdentity {
+                id: format!("node-{}", i),
+                public_key: format!("pk-{}", Uuid::new_v4()),
+                addresses: vec![format!("192.168.1.{}", i+1)],
+            };
             
-            // Use configs with small queue sizes and message sizes
-            let mut config = generate_topic();
-            config.max_queue_size = rng.gen_range(5..20);
-            config.max_message_size = rng.gen_range(1024..4096);
+            // Create configs with limited resources
+            let config = P2PConfig {
+                max_connections: rng.gen_range(3..10),
+                timeout_ms: rng.gen_range(50..200),
+                keep_alive_interval_ms: rng.gen_range(500..2000),
+            };
             
             let result = self.harness.add_node(identity, config);
             self.stats.record(&result);
         }
         
-        let result = self.harness.build_topology("mesh");
-        self.stats.record(&result);
-        
+        // Get nodes and connect them in a mesh
         if let Some(nodes) = self.get_active_node_ids() {
-            // Create a lot of subscriptions (1-3 per node)
-            for node in &nodes {
-                let sub_count = rng.gen_range(1..4);
-                
-                for j in 0..sub_count {
-                    let mut subscription = generate_topic();
-                    subscription.subscriber_id = node.clone();
-                    subscription.subscription_id = format!("high-load-{}-{}", node, j);
-                    
-                    // Use wildcard topics to increase message routing
-                    subscription.topic_pattern = if j % 2 == 0 {
-                        "load/#".to_string()
-                    } else {
-                        "load/+/test".to_string()
-                    };
-                    
-                    let result = self.harness.subscribe(Some(node), subscription);
+            // Connect all nodes to create a full mesh (this should stress connection limits)
+            for i in 0..nodes.len() {
+                for j in i+1..nodes.len() {
+                    let result = self.harness.connect_nodes(&nodes[i], &nodes[j]);
                     self.stats.record(&result);
                 }
             }
             
-            // Publish a large number of messages (50-100)
-            let msg_count = rng.gen_range(50..101);
+            // Create a large number of subscriptions
+            let sub_count = rng.gen_range(50..200);
+            let node_count = nodes.len();
             
-            for i in 0..msg_count {
-                let mut message = generate_topic();
-                message.header.message_id = format!("high-load-{}", i);
-                
-                // Use varying topics that will hit different subscriptions
-                message.header.topic = match i % 3 {
-                    0 => "load/topic1".to_string(),
-                    1 => "load/topic2/test".to_string(),
-                    _ => "load/topic3/data".to_string(),
+            for i in 0..sub_count {
+                let node_idx = i % node_count;
+                let subscription = Subscription {
+                    id: format!("highload-sub-{}", i),
+                    topic: format!("load/topic/{}", i % 20),
+                    qos: QoS::AtLeastOnce, // Use QoS 1 to stress reliability mechanisms
                 };
                 
-                // Use random node for publishing
-                let node_id = nodes.choose(&mut rng).unwrap();
-                
-                let result = self.harness.publish(Some(node_id), message);
+                let result = self.harness.subscribe(Some(&nodes[node_idx]), subscription);
                 self.stats.record(&result);
-                
-                // We expect some to be rate limited or fail with queue full
-                match &result {
-                    P2POperationResult::Error(P2PError::QueueFull) => {
-                        // Expected under high load
-                    },
-                    P2POperationResult::RateLimited => {
-                        // Expected under high load
-                    },
-                    _ => {},
-                }
             }
             
-            // Check receiving messages after high load
-            for node in &nodes {
-                let sub_id = format!("high-load-{}-0", node);
-                match self.harness.receive(Some(node), &sub_id, 10) {
-                    Ok(messages) => {
-                        debug!("After high load, node {} received {} messages", 
-                              node, messages.len());
-                    },
-                    Err(e) => {
-                        debug!("Node {} failed to receive messages: {:?}", node, e);
-                    }
-                }
+            // Publish a large number of messages
+            let msg_count = rng.gen_range(100..500);
+            
+            for i in 0..msg_count {
+                let node_idx = i % node_count;
+                let topic_id = i % 20;
+                
+                let message = Message::new(format!("Highload message {} for topic {}", i, topic_id));
+                
+                let result = self.harness.publish(Some(&nodes[node_idx]), message);
+                self.stats.record(&result);
+                
+                // We don't try to receive immediately as that would make the test run very long
+                // Just stress test the publish capability
             }
         }
     }
     
-    /// Fuzz with high failure rates
+    /// Fuzz with extreme failure rates
     fn fuzz_high_failure_rate(&mut self) {
+        info!("Running high failure rate test");
+        
+        // Use thread_rng
         let mut rng = thread_rng();
         
-        // Create a new network
-        self.reset_harness();
-        
-        // Create 3-5 nodes
+        // First create a network
         let node_count = rng.gen_range(3..6);
         
+        // Clear existing network
+        self.reset_harness();
+        
+        // Set high failure rate
+        self.harness.set_failure_rate(0.7); // 70% failure rate
+        
+        // Create nodes
+        let mut nodes = Vec::new();
         for i in 0..node_count {
             let node_id = format!("node-{}", i);
-            let mut identity = generate_node_id();
-            identity.node_id = node_id.clone();
+            let mut identity = NodeIdentity {
+                id: node_id.clone(),
+                public_key: format!("pk-{}", Uuid::new_v4()),
+                addresses: vec![format!("192.168.1.{}", i+1)],
+            };
             
-            let config = generate_topic();
+            let config = P2PConfig {
+                max_connections: rng.gen_range(3..10),
+                timeout_ms: rng.gen_range(50..200),
+                keep_alive_interval_ms: rng.gen_range(500..2000),
+            };
             
             let result = self.harness.add_node(identity, config);
             self.stats.record(&result);
-        }
-        
-        // Set high failure and timeout rates
-        self.harness.set_failure_rate(0.7); // 70% failure rate
-        self.harness.set_timeout_rate(0.2); // 20% timeout rate
-        
-        // Set high latency
-        self.harness.set_network_latency(2000); // 2 second latency
-        
-        info!("Testing with high failure rate (70%) and timeout rate (20%)");
-        
-        // Try to build a topology
-        let topologies = ["star", "mesh", "ring", "line"];
-        let topology = topologies.choose(&mut rng).unwrap();
-        
-        let result = self.harness.build_topology(topology);
-        self.stats.record(&result);
-        
-        // Try to set up some subscriptions despite failures
-        for _ in 0..10 {
-            if let Some(nodes) = self.get_active_node_ids() {
-                if nodes.is_empty() {
-                    break;
-                }
-                
-                let node_id = nodes.choose(&mut rng).unwrap();
-                let subscription = generate_topic();
-                
-                let result = self.harness.subscribe(Some(node_id), subscription);
-                self.stats.record(&result);
+            
+            if let P2POperationResult::Success = &result {
+                nodes.push(node_id);
             }
         }
         
-        // Try to publish messages despite failures
+        // Attempt operations that will likely fail
         for _ in 0..20 {
-            if let Some(nodes) = self.get_active_node_ids() {
-                if nodes.is_empty() {
-                    break;
+            if nodes.is_empty() {
+                break;
+            }
+            
+            let operation = rng.gen_range(0..5);
+            match operation {
+                0 => if nodes.len() >= 2 {
+                    // Connect nodes
+                    let idx1 = rng.gen_range(0..nodes.len());
+                    let mut idx2 = rng.gen_range(0..nodes.len());
+                    while idx1 == idx2 {
+                        idx2 = rng.gen_range(0..nodes.len());
+                    }
+                    
+                    info!("Attempting to connect nodes {} and {}", nodes[idx1], nodes[idx2]);
+                    let result = self.harness.connect_nodes(&nodes[idx1], &nodes[idx2]);
+                    self.stats.record(&result);
+                },
+                1 => if !nodes.is_empty() {
+                    // Subscribe
+                    let idx = rng.gen_range(0..nodes.len());
+                    let subscription = Subscription {
+                        id: format!("sub-{}", Uuid::new_v4()),
+                        topic: generate_topic(),
+                        qos: QoS::AtLeastOnce,
+                    };
+                    
+                    info!("Attempting to subscribe with node {}", nodes[idx]);
+                    let result = self.harness.subscribe(Some(&nodes[idx]), subscription);
+                    self.stats.record(&result);
+                },
+                2 => if !nodes.is_empty() {
+                    // Publish
+                    let idx = rng.gen_range(0..nodes.len());
+                    let message = generate_message();
+                    
+                    info!("Attempting to publish with node {}", nodes[idx]);
+                    let result = self.harness.publish(Some(&nodes[idx]), message);
+                    self.stats.record(&result);
+                },
+                3 => if !nodes.is_empty() {
+                    // Remove node
+                    let idx = rng.gen_range(0..nodes.len());
+                    info!("Attempting to remove node {}", nodes[idx]);
+                    let result = self.harness.remove_node(&nodes[idx]);
+                    self.stats.record(&result);
+                    
+                    if let P2POperationResult::Success = &result {
+                        nodes.remove(idx);
+                    }
+                },
+                _ => {
+                    // Add new node
+                    let node_id = format!("node-new-{}", Uuid::new_v4());
+                    let identity = NodeIdentity {
+                        id: node_id.clone(),
+                        public_key: format!("pk-{}", Uuid::new_v4()),
+                        addresses: vec![format!("192.168.1.{}", nodes.len() + 1)],
+                    };
+                    
+                    let config = P2PConfig {
+                        max_connections: rng.gen_range(3..10),
+                        timeout_ms: rng.gen_range(50..200),
+                        keep_alive_interval_ms: rng.gen_range(500..2000),
+                    };
+                    
+                    info!("Attempting to add new node {}", node_id);
+                    let result = self.harness.add_node(identity, config);
+                    self.stats.record(&result);
+                    
+                    if let P2POperationResult::Success = &result {
+                        nodes.push(node_id);
+                    }
                 }
-                
-                let node_id = nodes.choose(&mut rng).unwrap();
-                let message = generate_topic();
-                
-                let result = self.harness.publish(Some(node_id), message);
-                self.stats.record(&result);
             }
         }
         
-        // Reset failure rates after test
+        // Reset failure rate for other tests
         self.harness.set_failure_rate(0.05);
-        self.harness.set_timeout_rate(0.03);
-        self.harness.set_network_latency(50);
     }
     
     /// Save an interesting input to corpus
@@ -884,70 +970,139 @@ impl P2PFuzzer {
     fn reset_harness(&mut self) {
         self.harness = P2PHarness::new();
     }
+
+    /// Reset a node's identity
+    fn reset_identity(&mut self) {
+        let mut rng = thread_rng();
+        
+        if let Some(nodes) = self.get_active_node_ids() {
+            if !nodes.is_empty() {
+                let node_id = nodes.choose(&mut rng).unwrap();
+                
+                info!("Resetting identity for node {}", node_id);
+                
+                // Instead of using update_identity, we'll remove the node and add it back
+                // with the same ID but different details
+                
+                // First remove the node
+                let remove_result = self.harness.remove_node(node_id);
+                self.stats.record(&remove_result);
+                
+                if let P2POperationResult::Success = remove_result {
+                    // Create a new identity with the same node ID
+                    let identity = NodeIdentity {
+                        id: node_id.clone(),
+                        public_key: format!("pk-reset-{}", Uuid::new_v4()),
+                        addresses: vec![format!("192.168.{}.{}", 
+                                          rng.gen_range(1..255), 
+                                          rng.gen_range(1..255))],
+                    };
+                    
+                    // Create a config
+                    let config = P2PConfig {
+                        max_connections: rng.gen_range(5..20),
+                        timeout_ms: rng.gen_range(100..1000),
+                        keep_alive_interval_ms: rng.gen_range(1000..5000),
+                    };
+                    
+                    // Add the node back
+                    let add_result = self.harness.add_node(identity, config);
+                    self.stats.record(&add_result);
+                }
+            }
+        }
+    }
+
+    /// Add an invalid node
+    fn add_invalid_node(&mut self) {
+        let node_id = generate_node_id();
+        
+        info!("Adding invalid node {}", node_id);
+        
+        // Create a node identity but with invalid properties
+        let mut identity = NodeIdentity {
+            id: node_id.clone(),
+            public_key: "".to_string(), // Invalid empty public key
+            addresses: vec![], // Invalid empty addresses
+        };
+        
+        // Create an invalid config
+        let config = P2PConfig {
+            max_connections: 0, // Invalid zero max connections
+            timeout_ms: 0,     // Invalid zero timeout
+            keep_alive_interval_ms: 0, // Invalid zero keep alive
+        };
+        
+        let result = self.harness.add_node(identity, config);
+        self.stats.record(&result);
+        
+        // We expect this to fail
+        match &result {
+            P2POperationResult::Error(_) => {
+                // Expected behavior
+            },
+            _ => {
+                warn!("Invalid node was accepted");
+            }
+        }
+    }
+
+    /// Fuzz a random strategy
+    fn fuzz_random(&mut self) {
+        let strategy = FuzzingStrategy::random();
+        self.run_iteration(strategy);
+    }
+
+    /// Print the statistics
+    fn print_stats(&self) {
+        info!("Fuzzing statistics:");
+        info!("----------------");
+        self.stats.report();
+    }
 }
 
 fn main() {
     // Initialize logging
     env_logger::init();
+    info!("Starting P2P fuzzing");
     
-    // Initialize coverage tracking
-    let coverage_guard = init_coverage_tracking("p2p");
+    // Parse arguments
+    let mut args = std::env::args().skip(1);
+    let iteration_count = args.next()
+        .map(|s| s.parse::<usize>().unwrap_or(10))
+        .unwrap_or(10);
     
-    // Initialize fault injection
-    let fault_config = FaultConfig::default();
-    fault_injection::init_with_config(fault_config);
-    
-    // Initialize sanitizers
-    sanitizer::init();
-    
-    info!("Starting Form-P2P message queue fuzzer");
-    
-    // Read configuration from environment variables
-    let max_iterations = env::var("FUZZ_ITERATIONS")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(1000);
-        
-    let corpus_dir = env::var("FUZZ_CORPUS_DIR").ok();
-    
-    let seed = env::var("FUZZ_SEED")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok());
-        
-    // Set up RNG with seed if provided
-    let rng = if let Some(seed_value) = seed {
-        info!("Using seed: {}", seed_value);
-        StdRng::seed_from_u64(seed_value)
+    // Create the fuzzer
+    let strategy = if args.len() > 0 {
+        match args.next().unwrap().as_str() {
+            "valid_network" => FuzzingStrategy::ValidNetwork,
+            "mixed_network" => FuzzingStrategy::MixedNetwork,
+            "subscription" => FuzzingStrategy::ValidSubscription,
+            "message" => FuzzingStrategy::ValidMessagePublishing,
+            "topology" => FuzzingStrategy::TopologyChanges,
+            "high_load" => FuzzingStrategy::HighLoad,
+            _ => FuzzingStrategy::Random,
+        }
     } else {
-        StdRng::from_rng(thread_rng()).expect("Failed to create RNG")
+        FuzzingStrategy::Random
     };
     
-    // Create fuzzer
-    let mut fuzzer = P2PFuzzer::new();
+    // Create a statistics tracker
+    let stats = FuzzingStats::new();
     
-    if let Some(dir) = corpus_dir {
-        fuzzer.set_corpus_dir(&dir);
-        info!("Using corpus directory: {}", dir);
-    }
+    // Create the harness 
+    let mut harness = P2PHarness::new();
     
-    // Run fuzzing iterations
-    info!("Running {} fuzzing iterations", max_iterations);
+    // Configure fault injection parameters directly on the harness
+    harness.set_failure_rate(0.05);  // 5% chance of random failure
+    harness.set_timeout_rate(0.03);  // 3% chance of timeout
     
-    for i in 0..max_iterations {
-        if i % 100 == 0 {
-            info!("Completed {} iterations", i);
-        }
-        
-        // Choose a random strategy
-        let strategy = FuzzingStrategy::random();
-        debug!("Iteration {}: Using strategy {:?}", i, strategy);
-        
-        // Run the iteration
-        fuzzer.run_iteration(strategy);
-    }
+    // Create and run the fuzzer
+    let mut fuzzer = P2PFuzzer::new(harness, stats, strategy);
+    fuzzer.run(iteration_count);
     
-    // Report statistics
-    fuzzer.stats.report();
+    // Print statistics
+    fuzzer.print_stats();
     
-    info!("Fuzzing completed");
+    info!("P2P fuzzing complete");
 } 

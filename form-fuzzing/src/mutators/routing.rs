@@ -6,6 +6,7 @@ use crate::generators::routing::{
     AnycastTest, Region, NodeHealth, AnycastRequest,
 };
 use crate::mutators::Mutator;
+use crate::generators::Generator;
 
 use rand::{Rng, thread_rng};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -741,6 +742,7 @@ impl Mutator<AnycastTest> for AnycastTestMutator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::generators::Generator;
     use crate::generators::routing::{
         RegionalIpGenerator, GeoDnsRequestGenerator, HealthStatusGenerator,
         BgpAnnouncementGenerator, AnycastTestGenerator,

@@ -13,12 +13,14 @@
 //! of the routing system and its ability to handle various geographic locations,
 //! network conditions, and failures.
 
+use form_fuzzing::generators::Generator;
+use form_fuzzing::mutators::Mutator;
 use form_fuzzing::generators::routing::{
-    Region, IpAddressGenerator, BgpAnnouncementGenerator, HealthStatusReportGenerator,
-    GeoDnsRequestGenerator, AnycastTestGenerator, InvalidBgpAnnouncementGenerator,
-    InvalidGeoDnsRequestGenerator, InvalidHealthStatusReportGenerator, InvalidIpAddressGenerator,
+    Region, RegionalIpGenerator, BgpAnnouncementGenerator, HealthStatusGenerator,
+    GeoDnsRequestGenerator, AnycastTestGenerator,
+    IpAddressInfo, GeoDnsRequest, HealthStatusReport, BgpAnnouncement, AnycastTest
 };
-use form_fuzzing::harness::routing::RoutingHarness;
+use form_fuzzing::harness::routing::{RoutingHarness, RoutingOperationResult};
 use form_fuzzing::instrumentation::coverage;
 use form_fuzzing::instrumentation::fault_injection;
 use form_fuzzing::instrumentation::sanitizer;
@@ -29,10 +31,11 @@ use form_fuzzing::mutators::routing::{
 
 use std::env;
 use std::fs::{self, create_dir_all};
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::fmt::Debug;
 use rand::{Rng, seq::SliceRandom, thread_rng};
 use uuid::Uuid;
 
@@ -47,104 +50,77 @@ fn main() {
     println!("Starting BGP/Anycast Routing Fuzzer");
     
     // Initialize coverage tracking
-    coverage::init("routing_fuzzer");
+    coverage::init();
     
     // Initialize fault injection
     fault_injection::init();
-    fault_injection::set_failure_probability(0.02);
     
     // Initialize sanitizer
     sanitizer::init();
     
-    // Read configuration from environment variables
-    let max_iterations = env::var("FORM_FUZZING_MAX_ITERATIONS")
+    // Parse command line args
+    let max_iterations = env::var("FUZZ_MAX_ITERATIONS")
         .ok()
-        .and_then(|s| s.parse().ok())
+        .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(DEFAULT_MAX_ITERATIONS);
-        
-    let corpus_dir = env::var("FORM_FUZZING_CORPUS_DIR")
+    
+    let corpus_dir = env::var("FUZZ_CORPUS_DIR")
         .unwrap_or_else(|_| DEFAULT_CORPUS_DIR.to_string());
-        
-    let seed = env::var("FORM_FUZZING_SEED")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or_else(|| {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            now
-        });
-        
-    println!("Configuration:");
-    println!("  Max Iterations: {}", max_iterations);
-    println!("  Corpus Directory: {}", corpus_dir);
-    println!("  Seed: {}", seed);
     
-    // Create corpus directory if it doesn't exist
-    let corpus_path = Path::new(&corpus_dir);
-    if !corpus_path.exists() {
-        create_dir_all(&corpus_path).expect("Failed to create corpus directory");
+    // Ensure corpus directory exists
+    if let Err(e) = create_dir_all(&corpus_dir) {
+        eprintln!("Warning: Failed to create corpus directory: {}", e);
     }
     
-    // Create subdirectories for different types of corpus
-    let bgp_corpus_dir = corpus_path.join("bgp");
-    let dns_corpus_dir = corpus_path.join("dns");
-    let health_corpus_dir = corpus_path.join("health");
-    let anycast_corpus_dir = corpus_path.join("anycast");
+    // Initialize generators
+    let ip_gen = RegionalIpGenerator::new(Region::random())
+        .with_ipv6(thread_rng().gen_bool(0.5))
+        .with_healthy_percentage(0.8);
     
-    for dir in [&bgp_corpus_dir, &dns_corpus_dir, &health_corpus_dir, &anycast_corpus_dir] {
-        if !dir.exists() {
-            create_dir_all(dir).expect("Failed to create corpus subdirectory");
-        }
-    }
+    let bgp_gen = BgpAnnouncementGenerator::new()
+        .with_multiple_prefixes(true)
+        .with_communities(true);
     
-    // Create the routing harness
-    let mut harness = RoutingHarness::new();
+    let dns_gen = GeoDnsRequestGenerator::new()
+        .with_client_ip(true)
+        .with_coordinates(true)
+        .with_ecs(true);
     
-    // Create generators
-    let ip_gen = IpAddressGenerator::new();
-    let bgp_gen = BgpAnnouncementGenerator::new();
-    let dns_gen = GeoDnsRequestGenerator::new();
-    let health_gen = HealthStatusReportGenerator::new();
-    let anycast_gen = AnycastTestGenerator::new();
+    let health_gen = HealthStatusGenerator::new()
+        .with_node_range(5, 20)
+        .with_healthy_percentage(0.7);
     
-    // Create invalid generators
-    let invalid_ip_gen = InvalidIpAddressGenerator::new();
-    let invalid_bgp_gen = InvalidBgpAnnouncementGenerator::new();
-    let invalid_dns_gen = InvalidGeoDnsRequestGenerator::new();
-    let invalid_health_gen = InvalidHealthStatusReportGenerator::new();
+    let anycast_gen = AnycastTestGenerator::new()
+        .with_request_range(5, 15);
     
-    // Create mutators
+    // Initialize mutators
     let ip_mutator = IpAddressMutator::new();
     let bgp_mutator = BgpAnnouncementMutator::new();
     let dns_mutator = GeoDnsRequestMutator::new();
     let health_mutator = HealthStatusMutator::new();
     let anycast_mutator = AnycastTestMutator::new();
     
-    // Statistics tracking
-    let mut stats = FuzzingStats::new();
-    let start_time = Instant::now();
+    // Initialize harness
+    let mut harness = RoutingHarness::new();
     
-    println!("Starting fuzzing loop for {} iterations", max_iterations);
+    // Initialize stats
+    let mut stats = FuzzingStats::new();
+    
+    println!("Running for {} iterations", max_iterations);
     
     // Main fuzzing loop
+    let start_time = Instant::now();
+    
     for i in 0..max_iterations {
-        // Print progress every 100 iterations
+        // Occasionally show progress
         if i % 100 == 0 && i > 0 {
-            let elapsed = start_time.elapsed();
-            println!("Completed {} iterations in {:.2}s ({:.2} iter/s)",
-                i,
-                elapsed.as_secs_f64(),
-                i as f64 / elapsed.as_secs_f64()
-            );
-            
-            // Print stats
-            stats.print();
+            let elapsed = start_time.elapsed().as_secs_f64();
+            println!("Progress: {}/{} iterations ({:.2} iter/sec)", 
+                     i, max_iterations, i as f64 / elapsed);
         }
         
-        // Pick a fuzzing strategy based on iteration index
-        let strategy = match i % 10 {
+        // Choose a random strategy for this iteration
+        let strategy = match thread_rng().gen_range(0..10) {
             0 => FuzzingStrategy::ValidBgpAnnouncement,
             1 => FuzzingStrategy::InvalidBgpAnnouncement,
             2 => FuzzingStrategy::ValidDnsRequest,
@@ -154,346 +130,352 @@ fn main() {
             6 => FuzzingStrategy::AnycastTest,
             7 => FuzzingStrategy::MixedOperations,
             8 => FuzzingStrategy::MutateBgpAnnouncement,
-            9 => FuzzingStrategy::MutateDnsAndHealth,
-            _ => unreachable!(),
+            _ => FuzzingStrategy::MutateDnsAndHealth,
         };
         
-        // Execute the selected strategy
+        // Execute the chosen strategy
         match strategy {
             FuzzingStrategy::ValidBgpAnnouncement => {
-                stats.bgp_announcements += 1;
-                
                 // Generate a valid BGP announcement
-                let announcement = bgp_gen
-                    .prefix_count(thread_rng().gen_range(1..5))
-                    .as_path_length(thread_rng().gen_range(1..10))
-                    .generate();
+                let announcement = bgp_gen.generate();
                 
                 // Process the announcement
                 match harness.process_bgp_announcement(&announcement) {
                     Ok(result) => {
                         stats.successful_bgp += 1;
+                        stats.bgp_announcements += 1;
                         
-                        // Save successful announcements to corpus
-                        if result.accepted {
-                            let filename = format!("bgp_valid_{}.log", Uuid::new_v4());
-                            let file_path = bgp_corpus_dir.join(filename);
-                            let data = format!("{:?}", announcement);
-                            fs::write(file_path, data).ok();
+                        // Save interesting results to corpus
+                        if result.propagated_to > 5 {
+                            save_to_corpus_debug(&announcement, "bgp_valid", &corpus_dir);
                         }
                     },
-                    Err(err) => {
+                    Err(e) => {
                         stats.failed_bgp += 1;
-                        println!("BGP announcement error: {:?}", err);
-                    }
+                        stats.bgp_announcements += 1;
+                        
+                        // This is unexpected for valid announcements
+                        if !matches!(e, RoutingOperationResult::RateLimited) {
+                            println!("Valid BGP announcement failed: {:?}", e);
+                            save_to_corpus_debug(&announcement, "bgp_valid_failed", &corpus_dir);
+                        }
+                    },
                 }
                 
-                // Also try a withdrawal sometimes
-                if thread_rng().gen_bool(0.3) {
-                    // Get list of all announced prefixes
-                    let prefixes = harness.bgp_router.get_announced_prefixes();
+                // Occasionally also test withdrawals
+                if thread_rng().gen_bool(0.2) {
+                    // Create a withdrawal for one of the prefixes
+                    let mut withdrawal = announcement.clone();
+                    withdrawal.is_withdrawal = true;
                     
-                    if !prefixes.is_empty() {
-                        // Generate a withdrawal for some random prefixes
-                        let mut selected_prefixes = Vec::new();
-                        let count = thread_rng().gen_range(1..=prefixes.len());
-                        
-                        for i in 0..count {
-                            if let Some(prefix) = prefixes.get(i) {
-                                selected_prefixes.push(*prefix);
-                            }
-                        }
-                        
-                        // Generate and process withdrawal
-                        let withdrawal = bgp_gen.generate_withdrawal(selected_prefixes);
-                        
-                        match harness.process_bgp_announcement(&withdrawal) {
-                            Ok(_) => stats.successful_bgp += 1,
-                            Err(_) => stats.failed_bgp += 1,
-                        }
+                    // If the announcement had multiple prefixes, only withdraw some
+                    if withdrawal.prefixes.len() > 1 {
+                        let keep_count = thread_rng().gen_range(1..withdrawal.prefixes.len());
+                        withdrawal.prefixes.truncate(keep_count);
                     }
+                    
+                    match harness.process_bgp_announcement(&withdrawal) {
+                        Ok(_) => stats.successful_bgp += 1,
+                        Err(_) => stats.failed_bgp += 1,
+                    }
+                    stats.bgp_announcements += 1;
                 }
             },
-            
             FuzzingStrategy::InvalidBgpAnnouncement => {
-                stats.bgp_announcements += 1;
+                // Generate a BGP announcement then make it invalid
+                let mut announcement = bgp_gen.generate();
                 
-                // Generate an invalid BGP announcement
-                let announcement = invalid_bgp_gen.generate();
+                // Now make it invalid in some way
+                let invalid_type = thread_rng().gen_range(0..5);
+                match invalid_type {
+                    0 => {
+                        // Empty AS path
+                        announcement.as_path.clear();
+                    },
+                    1 => {
+                        // Invalid next hop
+                        announcement.next_hop = IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0));
+                    },
+                    2 => {
+                        // Extremely long AS path
+                        announcement.as_path = (0..1000).map(|_| thread_rng().gen()).collect();
+                    },
+                    3 => {
+                        // Invalid prefix length
+                        if !announcement.prefixes.is_empty() {
+                            announcement.prefixes[0].1 = match announcement.prefixes[0].0 {
+                                IpAddr::V4(_) => 33, // Invalid for IPv4
+                                IpAddr::V6(_) => 129, // Invalid for IPv6
+                            };
+                        }
+                    },
+                    _ => {
+                        // Empty prefixes
+                        announcement.prefixes.clear();
+                    },
+                }
                 
-                // Process the announcement - should fail
+                // Process the invalid announcement - should fail
                 match harness.process_bgp_announcement(&announcement) {
                     Ok(_) => {
                         stats.unexpected_success += 1;
+                        stats.successful_bgp += 1;
                         
-                        // This should have failed but didn't - save to corpus
-                        let filename = format!("bgp_unexpected_success_{}.log", Uuid::new_v4());
-                        let file_path = bgp_corpus_dir.join(filename);
-                        let data = format!("{:?}", announcement);
-                        fs::write(file_path, data).ok();
-                        
-                        println!("Warning: Invalid BGP announcement was accepted: {:?}", announcement);
+                        // This is unexpected since it should have failed
+                        println!("Invalid BGP announcement was accepted!");
+                        save_to_corpus_debug(&announcement, "bgp_invalid_accepted", &corpus_dir);
                     },
                     Err(_) => {
                         stats.expected_failures += 1;
-                    }
+                        stats.failed_bgp += 1;
+                    },
                 }
+                stats.bgp_announcements += 1;
             },
-            
             FuzzingStrategy::ValidDnsRequest => {
-                stats.dns_requests += 1;
+                // First, add some DNS records to query
+                let domain = generate_domain();
+                let record_count = thread_rng().gen_range(1..8);
+                let mut added_records = 0;
                 
-                // First add some DNS records if needed
-                if thread_rng().gen_bool(0.5) || harness.dns_server.get_records("example.com").is_empty() {
-                    let domain = "example.com";
-                    let mut added_records = 0;
+                // Add different records in different regions
+                for _ in 0..record_count {
+                    let region = Region::random();
+                    let ip_info = ip_gen.generate();
                     
-                    // Add records for different regions
-                    for region in Region::all() {
-                        let ip_info = ip_gen
-                            .region(region)
-                            .generate_ip_info();
-                            
-                        match harness.add_dns_record(domain, ip_info) {
-                            RoutingHarness::RoutingOperationResult::Success => added_records += 1,
-                            _ => {}
-                        }
+                    match harness.add_dns_record(&domain, ip_info) {
+                        RoutingOperationResult::Success => added_records += 1,
+                        _ => {}
                     }
-                    
-                    println!("Added {} DNS records for example.com", added_records);
                 }
                 
                 // Generate a valid DNS request
-                let request = dns_gen
-                    .domain("example.com")
-                    .include_ecs(thread_rng().gen_bool(0.7))
-                    .include_coordinates(thread_rng().gen_bool(0.3))
-                    .client_region(Region::random())
-                    .generate();
+                let request = dns_gen.generate();
                 
-                // Process the DNS request
+                // Process the request
                 match harness.resolve_dns(&request) {
                     Ok(result) => {
                         stats.successful_dns += 1;
+                        stats.dns_requests += 1;
                         
-                        // Save successful requests to corpus
-                        let filename = format!("dns_valid_{}.log", Uuid::new_v4());
-                        let file_path = dns_corpus_dir.join(filename);
-                        let data = format!("{:?}\nResult: {:?}", request, result);
-                        fs::write(file_path, data).ok();
+                        // Save interesting results to corpus
+                        if result.addresses.len() > 2 {
+                            save_to_corpus_debug(&request, "dns_valid", &corpus_dir);
+                        }
                     },
-                    Err(err) => {
+                    Err(e) => {
                         stats.failed_dns += 1;
-                        println!("DNS request error: {:?}", err);
-                    }
+                        stats.dns_requests += 1;
+                        
+                        // This may be expected if we're requesting a domain without records
+                        if let RoutingOperationResult::DomainNotFound = e {
+                            // Expected
+                        } else {
+                            println!("Valid DNS request failed: {:?}", e);
+                            save_to_corpus_debug(&request, "dns_valid_failed", &corpus_dir);
+                        }
+                    },
                 }
             },
-            
             FuzzingStrategy::InvalidDnsRequest => {
-                stats.dns_requests += 1;
+                // Generate a DNS request then make it invalid
+                let mut request = dns_gen.generate();
                 
-                // Generate an invalid DNS request
-                let request = invalid_dns_gen.generate();
+                // Make it invalid in some way
+                let invalid_type = thread_rng().gen_range(0..3);
+                match invalid_type {
+                    0 => {
+                        // Invalid domain
+                        request.domain = ".invalid-domain.".to_string();
+                    },
+                    1 => {
+                        // Very long domain
+                        request.domain = (0..1000).map(|_| "a").collect::<String>() + ".com";
+                    },
+                    _ => {
+                        // Invalid ECS prefix
+                        if request.ecs_prefix.is_some() {
+                            request.ecs_prefix = Some(129); // Invalid prefix
+                        }
+                    },
+                }
                 
-                // Process the request - should fail
+                // Process the invalid request - should fail
                 match harness.resolve_dns(&request) {
-                    Ok(result) => {
+                    Ok(_) => {
                         stats.unexpected_success += 1;
+                        stats.successful_dns += 1;
                         
-                        // This should have failed but didn't - save to corpus
-                        let filename = format!("dns_unexpected_success_{}.log", Uuid::new_v4());
-                        let file_path = dns_corpus_dir.join(filename);
-                        let data = format!("{:?}\nResult: {:?}", request, result);
-                        fs::write(file_path, data).ok();
-                        
-                        println!("Warning: Invalid DNS request was accepted: {:?}", request);
+                        println!("Invalid DNS request was accepted!");
+                        save_to_corpus_debug(&request, "dns_invalid_accepted", &corpus_dir);
                     },
                     Err(_) => {
                         stats.expected_failures += 1;
-                    }
+                        stats.failed_dns += 1;
+                    },
                 }
+                stats.dns_requests += 1;
             },
-            
             FuzzingStrategy::ValidHealthReport => {
-                stats.health_reports += 1;
-                
                 // Generate a valid health report
-                let report = health_gen
-                    .node_count(thread_rng().gen_range(1..10))
-                    .generate();
-                
-                // Sometimes include unhealthy nodes
-                let report = if thread_rng().gen_bool(0.3) {
-                    health_gen
-                        .node_count(thread_rng().gen_range(5..15))
-                        .generate_with_unhealthy(thread_rng().gen_range(1..5))
-                } else {
-                    report
-                };
+                let report = health_gen.generate();
                 
                 // Process the health report
                 match harness.update_health(&report) {
-                    RoutingHarness::RoutingOperationResult::Success => {
+                    RoutingOperationResult::Success => {
                         stats.successful_health += 1;
                         
                         // Save successful reports to corpus
-                        let filename = format!("health_valid_{}.log", Uuid::new_v4());
-                        let file_path = health_corpus_dir.join(filename);
-                        let data = format!("{:?}", report);
-                        fs::write(file_path, data).ok();
+                        if report.nodes.len() > 10 {
+                            save_to_corpus_debug(&report, "health_valid", &corpus_dir);
+                        }
                     },
-                    err => {
+                    _ => {
                         stats.failed_health += 1;
-                        println!("Health report error: {:?}", err);
-                    }
+                        save_to_corpus_debug(&report, "health_valid_failed", &corpus_dir);
+                    },
                 }
-            },
-            
-            FuzzingStrategy::InvalidHealthReport => {
                 stats.health_reports += 1;
+            },
+            FuzzingStrategy::InvalidHealthReport => {
+                // Generate a health report then make it invalid
+                let mut report = health_gen.generate();
                 
-                // Generate an invalid health report
-                let report = invalid_health_gen.generate();
+                // Make it invalid in some way
+                let invalid_type = thread_rng().gen_range(0..3);
+                match invalid_type {
+                    0 => {
+                        // Empty report
+                        report.nodes.clear();
+                    },
+                    1 => {
+                        // Invalid health values
+                        for (_, health) in report.nodes.iter_mut() {
+                            health.health = 2.0; // Health should be 0.0-1.0
+                        }
+                    },
+                    _ => {
+                        // Timestamp in the future
+                        report.timestamp = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs() + 10000000;
+                    },
+                }
                 
                 // Process the report - should fail
                 match harness.update_health(&report) {
-                    RoutingHarness::RoutingOperationResult::Success => {
+                    RoutingOperationResult::Success => {
                         stats.unexpected_success += 1;
+                        stats.successful_health += 1;
                         
-                        // This should have failed but didn't - save to corpus
-                        let filename = format!("health_unexpected_success_{}.log", Uuid::new_v4());
-                        let file_path = health_corpus_dir.join(filename);
-                        let data = format!("{:?}", report);
-                        fs::write(file_path, data).ok();
-                        
-                        println!("Warning: Invalid health report was accepted: {:?}", report);
+                        // This is unexpected since it should have failed
+                        println!("Invalid health report was accepted!");
+                        save_to_corpus_debug(&report, "health_invalid_accepted", &corpus_dir);
                     },
                     _ => {
                         stats.expected_failures += 1;
-                    }
+                        stats.failed_health += 1;
+                    },
                 }
+                stats.health_reports += 1;
             },
-            
             FuzzingStrategy::AnycastTest => {
-                stats.anycast_tests += 1;
+                // Ensure we have some DNS records first
+                let domain = generate_domain();
+                let record_count = thread_rng().gen_range(5..10);
                 
-                // First set up the DNS records for the test if needed
-                let domain = "anycast-test.com";
-                let regions_with_records = HashSet::new();
-                
-                // Add records for all regions
-                for region in Region::all() {
-                    // Add multiple records per region
-                    for _ in 0..thread_rng().gen_range(1..4) {
-                        let ip_info = ip_gen
-                            .region(region)
-                            .generate_ip_info();
-                            
-                        harness.add_dns_record(domain, ip_info);
-                    }
+                for _ in 0..record_count {
+                    let ip_info = ip_gen.generate();
+                    // Ignore errors, just trying to add some records
+                    let _ = harness.add_dns_record(&domain, ip_info);
                 }
                 
                 // Generate an anycast test
-                let test = anycast_gen
-                    .domain(domain)
-                    .request_count(thread_rng().gen_range(3..10))
-                    .generate();
+                let test = anycast_gen.generate();
                 
-                // Run the anycast test
+                // Run the test
                 match harness.run_anycast_test(&test) {
                     Ok(results) => {
                         stats.successful_anycast += 1;
                         
-                        // Verify that the test results are valid
-                        let is_valid = harness.verify_anycast_test(&test.test_id, &results);
-                        
-                        if is_valid {
-                            // Save successful tests to corpus
-                            let filename = format!("anycast_valid_{}.log", Uuid::new_v4());
-                            let file_path = anycast_corpus_dir.join(filename);
-                            let data = format!("{:?}\nResults: {:?}", test, results);
-                            fs::write(file_path, data).ok();
+                        // Verify results
+                        let verified = harness.verify_anycast_test(&test.test_id, &results);
+                        if verified {
+                            // Good result
                         } else {
-                            stats.failed_anycast += 1;
+                            println!("Anycast test results did not match expectations");
                         }
+                        
+                        // Save to corpus
+                        save_to_corpus_debug(&test, "anycast_test", &corpus_dir);
                     },
-                    Err(err) => {
+                    Err(_) => {
                         stats.failed_anycast += 1;
-                        println!("Anycast test error: {:?}", err);
-                    }
+                    },
                 }
+                stats.anycast_tests += 1;
             },
-            
             FuzzingStrategy::MixedOperations => {
-                // Perform a series of mixed operations
-                let mut rng = thread_rng();
-                let op_count = rng.gen_range(5..15);
+                // Perform a random mix of operations
+                let operation_count = thread_rng().gen_range(5..15);
                 
-                for _ in 0..op_count {
-                    match rng.gen_range(0..4) {
+                for _ in 0..operation_count {
+                    match thread_rng().gen_range(0..4) {
                         0 => {
                             // BGP announcement
-                            stats.bgp_announcements += 1;
                             let announcement = bgp_gen.generate();
                             match harness.process_bgp_announcement(&announcement) {
                                 Ok(_) => stats.successful_bgp += 1,
                                 Err(_) => stats.failed_bgp += 1,
                             }
+                            stats.bgp_announcements += 1;
                         },
                         1 => {
+                            // Health report
+                            let report = health_gen.generate();
+                            match harness.update_health(&report) {
+                                RoutingOperationResult::Success => stats.successful_health += 1,
+                                _ => stats.failed_health += 1,
+                            }
+                            stats.health_reports += 1;
+                        },
+                        2 => {
                             // DNS request
-                            stats.dns_requests += 1;
+                            let domain = generate_domain();
+                            let ip_info = ip_gen.generate();
+                            // Ignore errors, just trying to add a record
+                            let _ = harness.add_dns_record(&domain, ip_info);
+                            
                             let request = dns_gen.generate();
                             match harness.resolve_dns(&request) {
                                 Ok(_) => stats.successful_dns += 1,
                                 Err(_) => stats.failed_dns += 1,
                             }
+                            stats.dns_requests += 1;
                         },
-                        2 => {
-                            // Health report
-                            stats.health_reports += 1;
-                            let report = health_gen.generate();
-                            match harness.update_health(&report) {
-                                RoutingHarness::RoutingOperationResult::Success => stats.successful_health += 1,
-                                _ => stats.failed_health += 1,
+                        _ => {
+                            // Anycast test
+                            let test = anycast_gen.generate();
+                            match harness.run_anycast_test(&test) {
+                                Ok(_) => stats.successful_anycast += 1,
+                                Err(_) => stats.failed_anycast += 1,
                             }
+                            stats.anycast_tests += 1;
                         },
-                        3 => {
-                            // Add DNS record
-                            let domain = match rng.gen_range(0..3) {
-                                0 => "example.com",
-                                1 => "test.org",
-                                _ => "anycast.net",
-                            };
-                            
-                            let ip_info = ip_gen.generate_ip_info();
-                            match harness.add_dns_record(domain, ip_info) {
-                                RoutingHarness::RoutingOperationResult::Success => stats.successful_dns += 1,
-                                _ => stats.failed_dns += 1,
-                            }
-                        },
-                        _ => unreachable!(),
                     }
                 }
             },
-            
             FuzzingStrategy::MutateBgpAnnouncement => {
-                stats.bgp_announcements += 1;
-                
-                // Generate a valid BGP announcement
+                // Generate a BGP announcement and then mutate it several times
                 let mut announcement = bgp_gen.generate();
                 
-                // Mutate it several times
+                // Apply multiple mutations
                 let mutation_count = thread_rng().gen_range(1..5);
                 
                 for _ in 0..mutation_count {
-                    announcement = match thread_rng().gen_range(0..5) {
-                        0 => bgp_mutator.mutate_prefixes(&announcement),
-                        1 => bgp_mutator.mutate_as_path(&announcement),
-                        2 => bgp_mutator.mutate_communities(&announcement),
-                        3 => bgp_mutator.mutate_next_hop(&announcement),
-                        _ => bgp_mutator.mutate_attributes(&announcement),
-                    };
+                    // Mutate the announcement
+                    bgp_mutator.mutate(&mut announcement);
                 }
                 
                 // Process the mutated announcement
@@ -501,23 +483,19 @@ fn main() {
                     Ok(_) => stats.successful_bgp += 1,
                     Err(_) => stats.failed_bgp += 1,
                 }
+                stats.bgp_announcements += 1;
             },
-            
             FuzzingStrategy::MutateDnsAndHealth => {
-                if thread_rng().gen_bool(0.5) {
-                    stats.dns_requests += 1;
-                    
-                    // Generate a DNS request and mutate it
+                // Mutate both DNS requests and health reports
+                {
+                    // DNS request
                     let mut request = dns_gen.generate();
                     
+                    // Apply mutations
                     let mutation_count = thread_rng().gen_range(1..3);
                     
                     for _ in 0..mutation_count {
-                        request = match thread_rng().gen_range(0..3) {
-                            0 => dns_mutator.mutate_domain(&request),
-                            1 => dns_mutator.mutate_client_ip(&request),
-                            _ => dns_mutator.mutate_ecs_prefix(&request),
-                        };
+                        dns_mutator.mutate(&mut request);
                     }
                     
                     // Process the mutated request
@@ -525,71 +503,87 @@ fn main() {
                         Ok(_) => stats.successful_dns += 1,
                         Err(_) => stats.failed_dns += 1,
                     }
-                } else {
-                    stats.health_reports += 1;
-                    
-                    // Generate a health report and mutate it
+                    stats.dns_requests += 1;
+                }
+                
+                {
+                    // Health report
                     let mut report = health_gen.generate();
                     
+                    // Apply mutations
                     let mutation_count = thread_rng().gen_range(1..3);
                     
                     for _ in 0..mutation_count {
-                        report = match thread_rng().gen_range(0..3) {
-                            0 => health_mutator.mutate_nodes(&report),
-                            1 => health_mutator.mutate_reporter(&report),
-                            _ => health_mutator.mutate_timestamp(&report),
-                        };
+                        health_mutator.mutate(&mut report);
                     }
                     
                     // Process the mutated report
                     match harness.update_health(&report) {
-                        RoutingHarness::RoutingOperationResult::Success => stats.successful_health += 1,
+                        RoutingOperationResult::Success => stats.successful_health += 1,
                         _ => stats.failed_health += 1,
                     }
+                    stats.health_reports += 1;
                 }
             },
         }
-        
-        // Occasionally clear state to start fresh
-        if thread_rng().gen_ratio(1, 50) {
-            harness.clear_all();
-            println!("Cleared harness state");
-        }
     }
     
-    // Print final statistics
+    // Print stats
     let elapsed = start_time.elapsed();
-    println!("\nFuzzing completed!");
-    println!("Executed {} iterations in {:.2}s ({:.2} iter/s)",
-        max_iterations,
-        elapsed.as_secs_f64(),
-        max_iterations as f64 / elapsed.as_secs_f64()
-    );
-    
+    println!("\nFuzzing completed in {:.2} seconds", elapsed.as_secs_f64());
     stats.print();
     
-    // Print coverage information
-    let coverage_info = coverage::get_coverage_info();
+    // Coverage information
+    let coverage_count = coverage::get_coverage_count();
     println!("\nCoverage Information:");
-    println!("  Covered blocks: {}", coverage_info.covered_blocks);
-    println!("  Total blocks: {}", coverage_info.total_blocks);
-    println!("  Coverage percentage: {:.2}%", coverage_info.percentage);
+    println!("  Code blocks covered: {}", coverage_count);
     
-    // Print sanitizer information
-    let sanitizer_info = sanitizer::get_sanitizer_info();
-    println!("\nSanitizer Information:");
-    println!("  Memory issues detected: {}", sanitizer_info.memory_issues);
-    println!("  Other issues detected: {}", sanitizer_info.other_issues);
-    
-    // Print fault injection information
-    let fault_info = fault_injection::get_fault_info();
-    println!("\nFault Injection Information:");
-    println!("  Faults injected: {}", fault_info.faults_injected);
-    println!("  Faults handled: {}", fault_info.faults_handled);
+    // Save results
+    println!("\nSaving results to {}", corpus_dir);
 }
 
-/// Fuzzing strategy
-#[derive(Debug, Clone, Copy)]
+/// Save an interesting input to the corpus using debug formatting
+fn save_to_corpus_debug<T: Debug>(
+    item: &T,
+    prefix: &str,
+    corpus_dir: &str
+) {
+    // Use debug formatting instead of serialization
+    let debug_str = format!("{:#?}", item);
+    let filename = format!("{}/{}-{}.txt", corpus_dir, prefix, Uuid::new_v4());
+    if let Err(e) = fs::write(&filename, debug_str) {
+        println!("Warning: Failed to write to corpus: {}", e);
+    }
+}
+
+/// Generate a random domain name
+fn generate_domain() -> String {
+    let mut rng = thread_rng();
+    
+    // Random length for subdomain
+    let len = rng.gen_range(3..15);
+    
+    // Generate random alphanumeric string
+    let subdomain: String = (0..len)
+        .map(|_| {
+            let ch = rng.gen_range(0..36);
+            if ch < 10 {
+                // digit
+                (b'0' + ch) as char
+            } else {
+                // lowercase letter
+                (b'a' + ch - 10) as char
+            }
+        })
+        .collect();
+    
+    let tlds = [".com", ".net", ".org", ".io", ".dev"];
+    let tld = tlds.choose(&mut rng).unwrap();
+    
+    format!("{}{}", subdomain, tld)
+}
+
+/// Fuzzing strategies
 enum FuzzingStrategy {
     /// Test valid BGP announcements
     ValidBgpAnnouncement,
@@ -613,7 +607,7 @@ enum FuzzingStrategy {
     MutateDnsAndHealth,
 }
 
-/// Statistics for fuzzing
+/// Fuzzing statistics
 struct FuzzingStats {
     /// Number of BGP announcements processed
     bgp_announcements: usize,
@@ -650,7 +644,7 @@ struct FuzzingStats {
 }
 
 impl FuzzingStats {
-    /// Create new statistics tracker
+    /// Create new stats
     fn new() -> Self {
         Self {
             bgp_announcements: 0,
@@ -674,31 +668,22 @@ impl FuzzingStats {
         }
     }
     
-    /// Print statistics
+    /// Print stats
     fn print(&self) {
-        println!("\nFuzzing Statistics:");
-        println!("  BGP Announcements:");
-        println!("    Total: {}", self.bgp_announcements);
-        println!("    Successful: {}", self.successful_bgp);
-        println!("    Failed: {}", self.failed_bgp);
+        println!("=== Routing Fuzzing Statistics ===");
+        println!("BGP Announcements: {} (Success: {}, Failed: {})", 
+                 self.bgp_announcements, self.successful_bgp, self.failed_bgp);
         
-        println!("  DNS Requests:");
-        println!("    Total: {}", self.dns_requests);
-        println!("    Successful: {}", self.successful_dns);
-        println!("    Failed: {}", self.failed_dns);
+        println!("DNS Requests: {} (Success: {}, Failed: {})", 
+                 self.dns_requests, self.successful_dns, self.failed_dns);
         
-        println!("  Health Reports:");
-        println!("    Total: {}", self.health_reports);
-        println!("    Successful: {}", self.successful_health);
-        println!("    Failed: {}", self.failed_health);
+        println!("Health Reports: {} (Success: {}, Failed: {})", 
+                 self.health_reports, self.successful_health, self.failed_health);
         
-        println!("  Anycast Tests:");
-        println!("    Total: {}", self.anycast_tests);
-        println!("    Successful: {}", self.successful_anycast);
-        println!("    Failed: {}", self.failed_anycast);
+        println!("Anycast Tests: {} (Success: {}, Failed: {})", 
+                 self.anycast_tests, self.successful_anycast, self.failed_anycast);
         
-        println!("  Error Handling:");
-        println!("    Unexpected Successes: {}", self.unexpected_success);
-        println!("    Expected Failures: {}", self.expected_failures);
+        println!("Invalid inputs accepted: {}", self.unexpected_success);
+        println!("Invalid inputs properly rejected: {}", self.expected_failures);
     }
 } 

@@ -2,12 +2,15 @@
 //! VM Management Fuzzer
 
 use form_fuzzing::{self, constants, utils};
-use form_fuzzing::generators::vm::{VMCreateRequest, VMCreateRequestGenerator};
+use form_fuzzing::generators::Generator;
+use form_fuzzing::generators::vm::VMCreateRequestGenerator;
 use form_fuzzing::harness::vm_management::{VMManagementHarness, Signature, VMOperationResult};
 use form_fuzzing::mutators::vm::{VMMutator, VMResourceMutator};
 use form_fuzzing::mutators::Mutator;
 use form_fuzzing::harness::FuzzingHarness;
-use form_fuzzing::instrumentation;
+use form_fuzzing::instrumentation::coverage;
+use form_fuzzing::instrumentation::fault_injection;
+use form_fuzzing::instrumentation::sanitizer;
 use form_fuzzing::reporters;
 
 use std::time::Instant;
@@ -23,7 +26,7 @@ fn main() {
     form_fuzzing::init();
     
     // Initialize instrumentation for coverage tracking
-    let _coverage_guard = instrumentation::coverage::init_coverage_tracking(constants::targets::VM_MANAGEMENT);
+    let _coverage_guard = form_fuzzing::instrumentation::coverage::init_coverage_tracking(constants::targets::VM_MANAGEMENT);
     
     println!("Setting up VM Management fuzzing harness...");
     
@@ -241,7 +244,7 @@ fn main() {
     harness.teardown();
     
     // Save coverage data
-    if let Err(e) = instrumentation::coverage::save_coverage(constants::targets::VM_MANAGEMENT) {
+    if let Err(e) = form_fuzzing::instrumentation::coverage::save_coverage(constants::targets::VM_MANAGEMENT) {
         eprintln!("Failed to save coverage data: {}", e);
     }
     
