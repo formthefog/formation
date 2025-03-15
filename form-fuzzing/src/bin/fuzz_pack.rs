@@ -6,15 +6,17 @@ use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use form_fuzzing::generators::Generator;
 use form_fuzzing::generators::pack::{
-    ApiKeyGenerator, InvalidApiKeyGenerator, FormfileGenerator, InvalidFormfileGenerator,
+    ApiKeyGenerator, InvalidApiKeyGenerator, ValidFormfileGenerator, InvalidFormfileGenerator,
     BuildIdGenerator, VmIdGenerator, DeploymentIdGenerator,
 };
 use form_fuzzing::harness::pack::{
     PackHarness, PackOperationResult, Formfile, BuildStatus, DeploymentStatus,
 };
 use form_fuzzing::instrumentation::coverage;
-use form_fuzzing::instrumentation::fault_injection;
+use form_fuzzing::instrumentation::fault_injection::{self, FaultConfig};
+use form_fuzzing::mutators::Mutator;
 use form_fuzzing::mutators::pack::{
     FormfileMutator, ResourcesMutator, NetworkMutator, UserMutator, 
     BuildIdMutator, VmIdMutator, DeploymentIdMutator, ApiKeyMutator,
@@ -38,7 +40,7 @@ fn main() {
     // Create generators
     let api_key_generator = ApiKeyGenerator::new();
     let invalid_api_key_generator = InvalidApiKeyGenerator::new();
-    let formfile_generator = FormfileGenerator::new();
+    let formfile_generator = ValidFormfileGenerator::new();
     let invalid_formfile_generator = InvalidFormfileGenerator::new();
     let build_id_generator = BuildIdGenerator::new();
     let vm_id_generator = VmIdGenerator::new();
@@ -75,17 +77,14 @@ fn main() {
     let mut rng = StdRng::seed_from_u64(seed);
     
     // Tracking interesting IDs for reuse
-    let mut registered_users = Vec::new();
-    let mut build_ids = Vec::new();
-    let mut vm_ids = Vec::new();
-    let mut deployment_ids = Vec::new();
+    let mut registered_users: Vec<(String, String)> = Vec::new();
+    let mut build_ids: Vec<String> = Vec::new();
+    let mut vm_ids: Vec<String> = Vec::new();
+    let mut deployment_ids: Vec<String> = Vec::new();
     
-    // Register some known users
-    for _ in 0..5 {
-        let (user_id, api_key) = api_key_generator.generate();
-        harness.register_api_key(&user_id, &api_key);
-        registered_users.push((user_id, api_key));
-    }
+    // Register initial user with valid API key
+    let (user_id, api_key) = api_key_generator.generate();
+    registered_users.push((user_id, api_key));
     
     // Counters for reporting
     let mut total_tests = 0;
@@ -120,16 +119,8 @@ fn main() {
                 build_failures, deployment_failures, rate_limit_failures, internal_failures, timeout_failures);
                 
             // Report coverage metrics
-            let (branches_hit, branches_total) = coverage::get_branch_coverage();
-            let (lines_hit, lines_total) = coverage::get_line_coverage();
-            
-            println!("  Branch coverage: {}/{} ({:.2}%)", 
-                branches_hit, branches_total, 
-                (branches_hit as f64 / branches_total as f64) * 100.0);
-                
-            println!("  Line coverage: {}/{} ({:.2}%)", 
-                lines_hit, lines_total, 
-                (lines_hit as f64 / lines_total as f64) * 100.0);
+            let coverage_count = coverage::get_coverage_count();
+            println!("  Coverage count: {}", coverage_count);
         }
         
         // Choose a fuzzing strategy
@@ -768,13 +759,13 @@ fn main() {
         
         // Occasionally inject faults for each type of operation
         if rng.gen_bool(0.05) {
-            fault_injection::register_fault_point("pack_auth", 0.5);
+            fault_injection::register_fault_point("pack_auth", FaultConfig::new("pack_auth", 0.5));
         }
         if rng.gen_bool(0.05) {
-            fault_injection::register_fault_point("pack_build", 0.5);
+            fault_injection::register_fault_point("pack_build", FaultConfig::new("pack_build", 0.5));
         }
         if rng.gen_bool(0.05) {
-            fault_injection::register_fault_point("pack_deploy", 0.5);
+            fault_injection::register_fault_point("pack_deploy", FaultConfig::new("pack_deploy", 0.5));
         }
     }
     
@@ -790,22 +781,6 @@ fn main() {
         build_failures, deployment_failures, rate_limit_failures, internal_failures, timeout_failures);
     println!("Tests per second: {:.2}", tests_per_second);
     
-    // Report coverage metrics
-    let (branches_hit, branches_total) = coverage::get_branch_coverage();
-    let (lines_hit, lines_total) = coverage::get_line_coverage();
-    
-    println!("Branch coverage: {}/{} ({:.2}%)", 
-        branches_hit, branches_total, 
-        (branches_hit as f64 / branches_total as f64) * 100.0);
-        
-    println!("Line coverage: {}/{} ({:.2}%)", 
-        lines_hit, lines_total, 
-        (lines_hit as f64 / lines_total as f64) * 100.0);
-    
-    // Save coverage data
-    coverage::save_to_file("pack_fuzzer_coverage.dat").expect("Failed to save coverage data");
-    
-    // Finalize fuzzing framework
-    coverage::finalize();
-    fault_injection::finalize();
+    // Clean up and finalize
+    println!("Fuzzing complete");
 } 

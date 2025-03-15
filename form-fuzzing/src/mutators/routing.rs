@@ -155,7 +155,7 @@ impl Mutator<GeoDnsRequest> for GeoDnsRequestMutator {
             },
             1 => {
                 // Mutate client IP
-                if let Some(ip) = &mut request.client_ip {
+                if let Some(ref mut ip) = &mut request.client_ip {
                     match ip {
                         IpAddr::V4(ipv4) => {
                             let octets = ipv4.octets();

@@ -2,7 +2,7 @@
 //! Generators for BGP/Anycast routing fuzzing
 
 use crate::generators::Generator;
-use rand::{Rng, distributions::Alphanumeric, thread_rng};
+use rand::{Rng, distributions::Alphanumeric, thread_rng, seq::SliceRandom};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::collections::HashMap;

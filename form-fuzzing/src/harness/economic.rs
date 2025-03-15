@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use rand::Rng;
 
 /// ResourceType represents different types of resources that can be metered
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub enum ResourceType {
     /// CPU usage in percentage (0-100 per core)
     CPU,
@@ -454,17 +454,20 @@ impl MockEconomicService {
         
         // Apply limit
         let limit_val = limit.unwrap_or(100).min(1000);
-        let limited_events: Vec<&UsageEvent> = if user_events.len() > limit_val {
+        let limited_events: Vec<&UsageEvent> = if user_events.clone().len() > limit_val {
             user_events[user_events.len() - limit_val..].to_vec()
         } else {
-            user_events
+            user_events.clone()
         };
         
-        // Return success with events
+        // Return events
+        let total_events = user_events.len();
+        let returned_events = limited_events.len();
+        
         EconomicOperationResult::Success(serde_json::json!({
             "events": limited_events,
-            "total": user_events.len(),
-            "returned": limited_events.len(),
+            "total": total_events,
+            "returned": returned_events,
         }))
     }
     
@@ -500,18 +503,22 @@ impl MockEconomicService {
         
         // Apply limit
         let limit_val = limit.unwrap_or(100).min(1000);
-        let limited_events: Vec<&ThresholdEvent> = if user_events.len() > limit_val {
+        let limited_events: Vec<&ThresholdEvent> = if user_events.clone().len() > limit_val {
             user_events[user_events.len() - limit_val..].to_vec()
         } else {
-            user_events
+            user_events.clone()
         };
         
-        // Return success with events
+        // Return events
+        let total_events = user_events.len();
+        let returned_events = limited_events.len();
+        let is_critical_only = critical_only.unwrap_or(false);
+        
         EconomicOperationResult::Success(serde_json::json!({
             "events": limited_events,
-            "total": user_events.len(),
-            "returned": limited_events.len(),
-            "critical_only": critical_only.unwrap_or(false),
+            "total": total_events,
+            "returned": returned_events,
+            "critical_only": is_critical_only,
         }))
     }
     
@@ -608,7 +615,7 @@ impl MockEconomicService {
         EconomicOperationResult::Success(serde_json::json!({
             "status": "healthy",
             "components": {
-                "event_emission": circuit_breaker_open ? "degraded" : "healthy",
+                "event_emission": if circuit_breaker_open { "degraded" } else { "healthy" },
                 "metrics_collection": "healthy",
                 "threshold_detection": "healthy",
                 "api": "healthy",

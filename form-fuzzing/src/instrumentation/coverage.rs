@@ -64,7 +64,7 @@ pub fn reset_coverage() {
 pub fn save_coverage(target: &str) -> io::Result<()> {
     let coverage_dir = utils::get_coverage_dir(target);
     let filename = utils::create_timestamped_filename("coverage", "json");
-    let path = coverage_dir.join(filename);
+    let path = coverage_dir.join(filename.clone());
     
     unsafe {
         if let Some(ref map) = COVERAGE_MAP {

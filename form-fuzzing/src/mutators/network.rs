@@ -7,9 +7,11 @@ use std::time::Duration;
 use rand::{Rng, seq::SliceRandom};
 use crate::generators::network::{
     NetworkPacket, Protocol, NATConfig, NATType,
-    MappingBehavior, FilteringBehavior, P2PConnectionRequest
+    MappingBehavior, FilteringBehavior, P2PConnectionRequest, NATConfigGenerator
 };
+use crate::generators::Generator;
 use crate::mutators::Mutator;
+use uuid::Uuid;
 
 /// A mutator for network packets
 pub struct NetworkPacketMutator;
@@ -251,7 +253,7 @@ impl Mutator<NATConfig> for NATConfigMutator {
                     // Either remove or mutate the existing upstream NAT
                     if rng.gen_bool(0.3) {
                         config.upstream_nat = None;
-                    } else if let Some(upstream) = &mut config.upstream_nat {
+                    } else if let Some(ref mut upstream) = config.upstream_nat {
                         self.mutate(upstream);
                     }
                 }
@@ -305,318 +307,99 @@ impl P2PConnectionRequestMutator {
         Self
     }
     
-    /// Generate a malformed server address
-    fn generate_malformed_server(&self) -> String {
-        let mut rng = rand::thread_rng();
-        match rng.gen_range(0..5) {
-            0 => "".to_string(),                                // Empty string
-            1 => "localhost".to_string(),                       // No port
-            2 => ":3478".to_string(),                           // No host
-            3 => format!("{}:{}", rng.gen::<u32>(), rng.gen::<u32>()), // Invalid host and port
-            _ => format!("stun.example.com:{}", rng.gen::<u32>()), // Invalid port
-        }
-    }
-}
-
-impl Mutator<P2PConnectionRequest> for P2PConnectionRequestMutator {
-    fn mutate(&self, request: &mut P2PConnectionRequest) {
+    /// Generate a malformed server for mutation
+    pub fn generate_malformed_server(&self) -> String {
         let mut rng = rand::thread_rng();
         
-        // Choose a mutation strategy
-        let mutation_strategy = rng.gen_range(0..10);
+        let malformed_servers = [
+            // Empty server
+            "",
+            // Invalid formatting
+            "invalid-format",
+            // Invalid domain
+            "@#$%^&*().example.com:3478",
+            // Invalid port
+            "stun.example.com:99999",
+            // Missing port
+            "stun.example.com:",
+            // No domain, just IP
+            "192.168.1.1:3478",
+            // Invalid URL scheme
+            "http://stun.example.com:3478",
+            // Extremely long domain
+            &format!("{}.example.com:3478", "x".repeat(200)),
+        ];
         
-        match mutation_strategy {
-            0 => {
-                // Change peer IDs
-                match rng.gen_range(0..3) {
-                    0 => {
-                        // Empty local ID
-                        request.local_id = "".to_string();
-                    },
-                    1 => {
-                        // Empty peer ID
-                        request.peer_id = "".to_string();
-                    },
-                    _ => {
-                        // Same ID for local and peer
-                        request.peer_id = request.local_id.clone();
-                    },
-                }
-            },
-            1 => {
-                // Modify STUN servers
-                match rng.gen_range(0..3) {
-                    0 => {
-                        // Clear all STUN servers
-                        request.stun_servers.clear();
-                    },
-                    1 => {
-                        // Add a malformed server
-                        request.stun_servers.push(self.generate_malformed_server());
-                    },
-                    _ => {
-                        // Replace with a single duplicate server
-                        if !request.stun_servers.is_empty() {
-                            let server = request.stun_servers[0].clone();
-                            request.stun_servers = vec![server.clone(), server];
-                        }
-                    },
-                }
-            },
-            2 => {
-                // Modify TURN servers
-                match rng.gen_range(0..3) {
-                    0 => {
-                        // Clear all TURN servers
-                        request.turn_servers.clear();
-                    },
-                    1 => {
-                        // Add a malformed server
-                        request.turn_servers.push(self.generate_malformed_server());
-                    },
-                    _ => {
-                        // Replace with a single duplicate server
-                        if !request.turn_servers.is_empty() {
-                            let server = request.turn_servers[0].clone();
-                            request.turn_servers = vec![server.clone(), server];
-                        }
-                    },
-                }
-            },
-            3 => {
-                // Modify protocols
-                match rng.gen_range(0..3) {
-                    0 => {
-                        // Clear all protocols
-                        request.protocols.clear();
-                    },
-                    1 => {
-                        // Use only TCP
-                        request.protocols = vec![Protocol::TCP];
-                    },
-                    _ => {
-                        // Use only UDP
-                        request.protocols = vec![Protocol::UDP];
-                    },
-                }
-            },
-            4 => {
-                // Toggle connection methods
-                match rng.gen_range(0..3) {
-                    0 => {
-                        // Disable all methods
-                        request.use_ice = false;
-                        request.use_direct = false;
-                        request.use_relay = false;
-                    },
-                    1 => {
-                        // Enable all methods
-                        request.use_ice = true;
-                        request.use_direct = true;
-                        request.use_relay = true;
-                    },
-                    _ => {
-                        // Only use relay (least efficient)
-                        request.use_ice = false;
-                        request.use_direct = false;
-                        request.use_relay = true;
-                    },
-                }
-            },
-            5 => {
-                // Change timeout to extreme values
-                match rng.gen_range(0..3) {
-                    0 => {
-                        // Very short timeout
-                        request.timeout = Duration::from_millis(1);
-                    },
-                    1 => {
-                        // Very long timeout
-                        request.timeout = Duration::from_secs(600); // 10 minutes
-                    },
-                    _ => {
-                        // Zero timeout
-                        request.timeout = Duration::from_secs(0);
-                    },
-                }
-            },
-            6 => {
-                // Modify candidates
-                match rng.gen_range(0..3) {
-                    0 => {
-                        // Clear all candidates
-                        request.local_candidates.clear();
-                        request.peer_candidates.clear();
-                    },
-                    1 => {
-                        // Add extreme candidates
-                        let packet_mutator = NetworkPacketMutator::new();
-                        let ip = packet_mutator.generate_extreme_ip();
-                        request.local_candidates.push(SocketAddr::new(ip, rng.gen()));
-                        request.peer_candidates.push(SocketAddr::new(ip, rng.gen()));
-                    },
-                    _ => {
-                        // Make candidates exactly the same
-                        if !request.local_candidates.is_empty() {
-                            let candidate = request.local_candidates[0];
-                            request.peer_candidates = vec![candidate];
-                        }
-                    },
-                }
-            },
-            7 => {
-                // Change connection attempts to extreme values
-                match rng.gen_range(0..3) {
-                    0 => request.connection_attempts = 0,   // No attempts
-                    1 => request.connection_attempts = 1,   // Single attempt
-                    _ => request.connection_attempts = 1000, // Very high number
-                }
-            },
-            8 => {
-                // Change keep_alive_interval to extreme values
-                match rng.gen_range(0..3) {
-                    0 => request.keep_alive_interval = Duration::from_secs(0), // No keep-alive
-                    1 => request.keep_alive_interval = Duration::from_millis(1), // Very fast
-                    _ => request.keep_alive_interval = Duration::from_secs(24 * 60 * 60), // Daily
-                }
-            },
-            9 => {
-                // Combined mutations
-                // Apply multiple changes at once
-                if rng.gen_bool(0.5) {
-                    request.use_ice = !request.use_ice;
-                }
-                if rng.gen_bool(0.5) {
-                    request.use_direct = !request.use_direct;
-                }
-                if rng.gen_bool(0.5) {
-                    request.use_relay = !request.use_relay;
-                }
-                
-                // Modify timeout
-                if rng.gen_bool(0.5) {
-                    request.timeout = Duration::from_secs(rng.gen_range(1..30));
-                }
-                
-                // Modify connection attempts
-                if rng.gen_bool(0.5) {
-                    request.connection_attempts = rng.gen_range(1..5);
-                }
-            },
-            _ => unreachable!(),
-        }
+        malformed_servers[rng.gen_range(0..malformed_servers.len())].to_string()
     }
     
-    /// Mutate STUN servers
-    fn mutate_stun_servers(&self, stun_servers: &mut Vec<String>) {
-        let mut rng = rand::thread_rng();
-        
-        if stun_servers.is_empty() {
-            // Add a server if none exist
-            if rng.gen_bool(0.7) {
-                stun_servers.push(self.generate_random_stun_server());
-            }
-            return;
-        }
-        
-        // Choose a mutation strategy
-        match rng.gen_range(0..3) {
-            0 => {
-                // Remove a random server
-                if !stun_servers.is_empty() {
-                    let index = rng.gen_range(0..stun_servers.len());
-                    stun_servers.remove(index);
-                }
-            },
-            1 => {
-                // Add a random server
-                if stun_servers.len() < 5 {
-                    stun_servers.push(self.generate_random_stun_server());
-                }
-            },
-            2 => {
-                // Modify an existing server
-                if !stun_servers.is_empty() {
-                    let index = rng.gen_range(0..stun_servers.len());
-                    stun_servers[index] = self.generate_random_stun_server();
-                }
-            },
-            _ => unreachable!(),
-        }
+    // Alias method for backward compatibility
+    pub fn generate_random_stun_server(&self) -> String {
+        self.generate_malformed_server()
     }
     
-    /// Mutate TURN servers
-    fn mutate_turn_servers(&self, turn_servers: &mut Vec<String>) {
-        let mut rng = rand::thread_rng();
-        
-        if turn_servers.is_empty() {
-            // Add a server if none exist
-            if rng.gen_bool(0.5) {
-                turn_servers.push(self.generate_random_turn_server());
-            }
-            return;
-        }
-        
-        // Choose a mutation strategy
-        match rng.gen_range(0..3) {
-            0 => {
-                // Remove a random server
-                if !turn_servers.is_empty() {
-                    let index = rng.gen_range(0..turn_servers.len());
-                    turn_servers.remove(index);
-                }
-            },
-            1 => {
-                // Add a random server
-                if turn_servers.len() < 3 {
-                    turn_servers.push(self.generate_random_turn_server());
-                }
-            },
-            2 => {
-                // Modify an existing server
-                if !turn_servers.is_empty() {
-                    let index = rng.gen_range(0..turn_servers.len());
-                    turn_servers[index] = self.generate_random_turn_server();
-                }
-            },
-            _ => unreachable!(),
-        }
+    // Alias method for backward compatibility
+    pub fn generate_random_turn_server(&self) -> String {
+        self.generate_malformed_server()
     }
     
-    /// Generate a random STUN server
-    fn generate_random_stun_server(&self) -> String {
+    // Fix for endpoint mutation
+    pub fn mutate_endpoint(&self, endpoint: &mut String) {
         let mut rng = rand::thread_rng();
         
-        // Generate IP or domain
-        let server = if rng.gen_bool(0.5) {
-            format!("{}.{}.{}.{}",
-                rng.gen::<u8>(), rng.gen::<u8>(), rng.gen::<u8>(), rng.gen::<u8>())
+        if rng.gen_bool(0.5) {
+            // Replace with an invalid endpoint
+            let invalid_endpoints = [
+                "",
+                "invalid-endpoint",
+                "127.0.0.1:99999", // Invalid port
+                "999.999.999.999:8000", // Invalid IP
+                "::1]", // Invalid IPv6
+                "[2001:db8::1:8000", // Missing closing bracket
+            ];
+            
+            *endpoint = invalid_endpoints[rng.gen_range(0..invalid_endpoints.len())].to_string();
         } else {
-            format!("stun.{}.com", rng.gen::<u32>())
-        };
-        
-        // Generate port
-        let port = rng.gen_range(1000..65535);
-        
-        format!("{}:{}", server, port)
+            // Modify existing endpoint
+            *endpoint = format!("{}:{}", 
+                format!("{}.{}.{}.{}", 
+                    rng.gen_range(1..255), 
+                    rng.gen_range(1..255),
+                    rng.gen_range(1..255),
+                    rng.gen_range(1..255)
+                ),
+                rng.gen_range(1024..65535)
+            );
+        }
     }
     
-    /// Generate a random TURN server
-    fn generate_random_turn_server(&self) -> String {
+    // Add mutate_protocol method
+    fn mutate_protocol(&self, original: Option<&Protocol>) -> Protocol {
         let mut rng = rand::thread_rng();
         
-        // Generate IP or domain
-        let server = if rng.gen_bool(0.5) {
-            format!("{}.{}.{}.{}",
-                rng.gen::<u8>(), rng.gen::<u8>(), rng.gen::<u8>(), rng.gen::<u8>())
+        if let Some(protocol) = original {
+            // Mutate existing protocol
+            if rng.gen_bool(0.3) {
+                // 30% chance to keep the same protocol
+                *protocol
+            } else {
+                // 70% chance to change to a different protocol
+                let all_protocols = Protocol::all();
+                let mut available: Vec<_> = all_protocols.into_iter()
+                    .filter(|p| p != protocol)
+                    .collect();
+                    
+                if available.is_empty() {
+                    // If somehow we filtered out all protocols, return the original
+                    *protocol
+                } else {
+                    *available.choose(&mut rng).unwrap()
+                }
+            }
         } else {
-            format!("turn.{}.com", rng.gen::<u32>())
-        };
-        
-        // Generate port
-        let port = rng.gen_range(1000..65535);
-        
-        format!("{}:{}", server, port)
+            // Generate a new protocol
+            Protocol::random()
+        }
     }
 }
 
@@ -624,65 +407,104 @@ impl Mutator<P2PConnectionRequest> for P2PConnectionRequestMutator {
     fn mutate(&self, input: &mut P2PConnectionRequest) {
         let mut rng = rand::thread_rng();
         
-        // Choose a mutation strategy
-        match rng.gen_range(0..10) {
+        // Choose which field to mutate
+        match rng.gen_range(0..8) {
             0 => {
-                // Mutate local endpoint
-                self.mutate_endpoint(&mut input.local_endpoint);
+                // Mutate local ID
+                input.local_id = if rng.gen_bool(0.3) {
+                    // Empty ID (invalid)
+                    "".to_string()
+                } else {
+                    // Random valid ID
+                    Uuid::new_v4().to_string()
+                };
             },
             1 => {
-                // Mutate remote endpoint
-                self.mutate_endpoint(&mut input.remote_endpoint);
+                // Mutate peer ID
+                input.peer_id = if rng.gen_bool(0.3) {
+                    // Empty ID (invalid)
+                    "".to_string()
+                } else {
+                    // Random valid ID
+                    Uuid::new_v4().to_string()
+                };
             },
             2 => {
-                // Mutate local NAT
-                self.nat_mutator.mutate(&mut input.local_nat);
+                // Mutate timeout
+                input.timeout = Duration::from_secs(rng.gen_range(1..30)); // Set a reasonable timeout value
             },
             3 => {
-                // Mutate remote NAT
-                self.nat_mutator.mutate(&mut input.remote_nat);
+                // Mutate protocols
+                if input.protocols.is_empty() || rng.gen_bool(0.5) {
+                    // Add a protocol
+                    input.protocols.push(self.mutate_protocol(None));
+                } else {
+                    // Mutate existing protocol
+                    let idx = rng.gen_range(0..input.protocols.len());
+                    let protocol = input.protocols.remove(idx);
+                    input.protocols.push(self.mutate_protocol(Some(&protocol)));
+                }
             },
             4 => {
-                // Mutate timeout
-                input.timeout_ms = mutate_timeout(input.timeout_ms);
+                // Mutate STUN servers
+                if input.stun_servers.is_empty() || rng.gen_bool(0.5) {
+                    // Add a server
+                    input.stun_servers.push(self.generate_malformed_server());
+                } else if input.stun_servers.len() > 1 && rng.gen_bool(0.3) {
+                    // Remove a server
+                    let idx = rng.gen_range(0..input.stun_servers.len());
+                    input.stun_servers.remove(idx);
+                } else {
+                    // Mutate server
+                    let idx = rng.gen_range(0..input.stun_servers.len());
+                    input.stun_servers[idx] = self.generate_malformed_server();
+                }
             },
             5 => {
-                // Toggle ICE
-                input.use_ice = !input.use_ice;
+                // Mutate TURN servers
+                if input.turn_servers.is_empty() || rng.gen_bool(0.5) {
+                    // Add a server
+                    input.turn_servers.push(self.generate_malformed_server());
+                } else if input.turn_servers.len() > 1 && rng.gen_bool(0.3) {
+                    // Remove a server
+                    let idx = rng.gen_range(0..input.turn_servers.len());
+                    input.turn_servers.remove(idx);
+                } else {
+                    // Mutate server
+                    let idx = rng.gen_range(0..input.turn_servers.len());
+                    input.turn_servers[idx] = self.generate_malformed_server();
+                }
             },
             6 => {
-                // Toggle STUN
-                input.use_stun = !input.use_stun;
-                
-                // If STUN is disabled, clear STUN servers
-                if !input.use_stun {
-                    input.stun_servers.clear();
-                } else if input.stun_servers.is_empty() {
-                    // Add at least one STUN server if enabled
-                    input.stun_servers.push(self.generate_random_stun_server());
+                // Random drastic mutation - completely invalid request
+                *input = P2PConnectionRequest {
+                    local_id: "".to_string(),
+                    peer_id: "".to_string(),
+                    stun_servers: vec![],
+                    turn_servers: vec![],
+                    protocols: vec![],
+                    timeout: Duration::from_secs(rng.gen_range(0..10)), // Very low timeout
+                    use_ice: false,
+                    use_direct: false,
+                    use_relay: false,
+                    local_candidates: vec![],
+                    peer_candidates: vec![],
+                    connection_attempts: 0,
+                    keep_alive_interval: Duration::from_secs(0)
+                };
+            },
+            _ => {
+                // Combination of mutations
+                if rng.gen_bool(0.5) {
+                    input.local_id = Uuid::new_v4().to_string();
+                }
+                if rng.gen_bool(0.5) {
+                    input.peer_id = Uuid::new_v4().to_string();
+                }
+                if rng.gen_bool(0.5) {
+                    input.timeout = Duration::from_secs(rng.gen_range(1..30));
                 }
             },
-            7 => {
-                // Toggle TURN
-                input.use_turn = !input.use_turn;
-                
-                // If TURN is disabled, clear TURN servers
-                if !input.use_turn {
-                    input.turn_servers.clear();
-                } else if input.turn_servers.is_empty() {
-                    // Add at least one TURN server if enabled
-                    input.turn_servers.push(self.generate_random_turn_server());
-                }
-            },
-            8 => {
-                // Mutate STUN servers
-                self.mutate_stun_servers(&mut input.stun_servers);
-            },
-            9 => {
-                // Mutate TURN servers
-                self.mutate_turn_servers(&mut input.turn_servers);
-            },
-            _ => unreachable!(),
         }
     }
 }
@@ -868,39 +690,39 @@ fn mutate_protocol(protocol: &Protocol) -> Protocol {
             match rng.gen_range(0..4) {
                 0 => Protocol::TCP,
                 1 => Protocol::UDP,
-                2 => Protocol::ICMP,
+                2 => Protocol::QUIC,
                 _ => Protocol::SCTP,
             }
         },
         1 => {
             // Use a custom protocol
-            Protocol::Custom(rng.gen())
+            Protocol::RUDP
         },
         2 => {
             // Modify the current protocol slightly for custom protocols
-            if let Protocol::Custom(value) = protocol {
-                let offset = rng.gen_range(-5..5);
-                Protocol::Custom(value.wrapping_add(offset as u8))
+            if let Protocol::RUDP = protocol {
+                let offset = rng.gen_range(0..3); // Use positive range only
+                Protocol::RUDP // Just return RUDP again
             } else {
                 // For standard protocols, pick a different standard one
                 let current = match protocol {
                     Protocol::TCP => 0,
                     Protocol::UDP => 1,
-                    Protocol::ICMP => 2,
+                    Protocol::QUIC => 2,
                     Protocol::SCTP => 3,
-                    _ => 4, // Custom case, but we already handled it above
+                    Protocol::DCCP => 4,
+                    _ => 5, // RUDP case
                 };
                 
-                let mut new_index = rng.gen_range(0..4);
-                if new_index == current {
-                    new_index = (new_index + 1) % 4;
-                }
-                
+                // Pick a different protocol
+                let new_index = (current + rng.gen_range(1..5)) % 6;
                 match new_index {
                     0 => Protocol::TCP,
                     1 => Protocol::UDP,
-                    2 => Protocol::ICMP,
-                    _ => Protocol::SCTP,
+                    2 => Protocol::QUIC,
+                    3 => Protocol::SCTP,
+                    4 => Protocol::DCCP,
+                    _ => Protocol::RUDP,
                 }
             }
         },
@@ -1032,12 +854,15 @@ fn mutate_nat_type(nat_type: &NATType) -> NATType {
     let mut rng = rand::thread_rng();
     
     // Just pick a different NAT type
-    match rng.gen_range(0..5) {
-        0 => NATType::NoNAT,
+    match rng.gen_range(0..8) {
+        0 => NATType::None,
         1 => NATType::FullCone,
-        2 => NATType::AddressRestrictedCone,
-        3 => NATType::PortRestrictedCone,
-        _ => NATType::Symmetric,
+        2 => NATType::RestrictedCone,
+        3 => NATType::PortRestricted,
+        4 => NATType::Symmetric,
+        5 => NATType::Hairpin,
+        6 => NATType::Double,
+        _ => NATType::Carrier,
     }
 }
 
@@ -1047,9 +872,9 @@ fn mutate_mapping_behavior(behavior: &MappingBehavior) -> MappingBehavior {
     
     // Pick a different mapping behavior
     match rng.gen_range(0..3) {
-        0 => MappingBehavior::EndpointIndependent,
-        1 => MappingBehavior::AddressDependent,
-        _ => MappingBehavior::AddressAndPortDependent,
+        0 => MappingBehavior::Consistent,
+        1 => MappingBehavior::PortPreserving,
+        _ => MappingBehavior::Random,
     }
 }
 
@@ -1059,9 +884,9 @@ fn mutate_filtering_behavior(behavior: &FilteringBehavior) -> FilteringBehavior 
     
     // Pick a different filtering behavior
     match rng.gen_range(0..3) {
-        0 => FilteringBehavior::EndpointIndependent,
-        1 => FilteringBehavior::AddressDependent,
-        _ => FilteringBehavior::AddressAndPortDependent,
+        0 => FilteringBehavior::Endpoint,
+        1 => FilteringBehavior::Address,
+        _ => FilteringBehavior::None,
     }
 }
 

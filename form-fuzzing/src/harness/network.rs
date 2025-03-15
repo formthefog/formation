@@ -8,10 +8,10 @@ use std::time::{Duration, Instant};
 
 use crate::generators::network::{
     NetworkPacket, Protocol, NATConfig, 
-    NATType, FilteringBehavior, P2PConnectionRequest
+    NATType, FilteringBehavior, P2PConnectionRequest, MappingBehavior
 };
 use crate::harness::FuzzingHarness;
-use rand::Rng;
+use rand::{Rng, thread_rng, seq::SliceRandom};
 
 /// Result of a network operation
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,7 +73,8 @@ impl MockNATSimulator {
         let mut rng = rand::thread_rng();
         
         // Get NAT config
-        let config = self.nat_configs.get(endpoint_id)
+        let nat_configs = self.nat_configs.clone();
+        let config = nat_configs.get(endpoint_id)
             .ok_or_else(|| format!("No NAT config for endpoint {}", endpoint_id))?;
             
         // Check if the port is blocked
@@ -104,7 +105,7 @@ impl MockNATSimulator {
             },
             _ => {
                 // For other NAT types, check if we already have a mapping
-                if let Some(external_endpoint) = self.mappings.get(&internal_endpoint) {
+                if let Some(external_endpoint) = self.mappings.clone().get(&internal_endpoint) {
                     return Ok(*external_endpoint);
                 }
                 
@@ -138,7 +139,7 @@ impl MockNATSimulator {
     }
     
     /// Allocate an external port based on NAT mapping behavior
-    fn allocate_external_port(&self, config: &NATConfig, internal_port: u16) -> Result<u16, String> {
+    fn allocate_external_port(&mut self, config: &NATConfig, internal_port: u16) -> Result<u16, String> {
         let mut rng = rand::thread_rng();
         
         match config.mapping_behavior {
@@ -264,7 +265,7 @@ impl MockPacketRouter {
         }
         
         // Get NAT simulator
-        let nat_simulator = self.nat_simulator.lock().unwrap();
+        let mut nat_simulator = self.nat_simulator.lock().unwrap();
         
         // Translate source endpoint through NAT
         let nat_src_endpoint = match nat_simulator.get_external_endpoint(src_id, src_endpoint, Some(dst_endpoint)) {

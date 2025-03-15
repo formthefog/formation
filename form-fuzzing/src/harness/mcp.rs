@@ -392,7 +392,7 @@ impl MockMCPServer {
             
             operation.completed_at = Some(now);
             operation.result = result;
-            operation.error = error;
+            operation.error = error.clone();
             operation.status = if error.is_some() { "failed".to_string() } else { "completed".to_string() };
             
             true

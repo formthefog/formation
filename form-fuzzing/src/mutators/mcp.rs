@@ -275,12 +275,12 @@ impl Mutator<PackBuildRequest> for PackBuildRequestMutator {
                     let lines: Vec<&str> = request.formfile_content.lines().collect();
                     if !lines.is_empty() {
                         let idx = rng.gen_range(0..lines.len());
-                        let mut new_lines = lines.clone();
+                        let mut new_lines: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
                         
                         // Corrupt indentation
                         if !new_lines[idx].is_empty() {
                             if new_lines[idx].starts_with("  ") {
-                                new_lines[idx] = &new_lines[idx][1..]; // Remove one space
+                                new_lines[idx] = new_lines[idx][1..].to_string(); // Remove one space
                             } else {
                                 new_lines[idx] = format!("  {}", new_lines[idx]); // Add spaces
                             }

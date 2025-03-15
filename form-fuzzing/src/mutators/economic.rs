@@ -7,7 +7,7 @@ use crate::generators::economic::{AuthToken, ApiKey, ResourceUsageReport};
 use crate::mutators::Mutator;
 
 use std::collections::HashMap;
-use rand::Rng;
+use rand::{Rng, thread_rng, seq::SliceRandom};
 
 /// Mutator for authentication tokens
 pub struct AuthTokenMutator;

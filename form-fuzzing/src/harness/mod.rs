@@ -7,6 +7,10 @@ pub mod vm_management;
 pub mod network;
 pub mod mcp;
 pub mod economic;
+pub mod routing;
+pub mod state;
+pub mod p2p;
+pub mod pack;
 
 pub use common::*;
 pub use dns::*;
@@ -14,6 +18,10 @@ pub use vm_management::*;
 pub use network::*;
 pub use mcp::*;
 pub use economic::*;
+pub use routing::*;
+pub use state::*;
+pub use p2p::*;
+pub use pack::*;
 
 /// Trait for fuzzing harnesses
 pub trait FuzzingHarness {

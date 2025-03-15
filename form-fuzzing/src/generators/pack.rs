@@ -2,13 +2,14 @@
 //! Generators for Pack Manager and Image Builder fuzzing
 
 use crate::generators::Generator;
-use crate::harness::pack::{Formfile, Resources, Network, User, GpuRequirement, BuildStatus, DeploymentStatus};
+use crate::harness::pack::{Formfile, BuildStatus, DeploymentStatus};
 
-use rand::{Rng, distributions::Alphanumeric};
+use rand::{Rng, distributions::Alphanumeric, thread_rng, seq::SliceRandom};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
 
-/// Generator for API keys
+/// API Key Generator
 pub struct ApiKeyGenerator;
 
 impl ApiKeyGenerator {
@@ -116,499 +117,247 @@ impl Generator<String> for DeploymentIdGenerator {
     }
 }
 
-/// Generator for valid Formfiles
-pub struct FormfileGenerator {
-    /// Include resource specifications
-    include_resources: bool,
-    /// Include network configuration
-    include_network: bool,
-    /// Include user configuration
-    include_users: bool,
-    /// Complexity level (0-3)
-    complexity: usize,
-}
+/// Valid Formfile Generator
+pub struct ValidFormfileGenerator;
 
-impl FormfileGenerator {
-    /// Create a new Formfile generator with default settings
-    pub fn new() -> Self {
-        Self {
-            include_resources: true,
-            include_network: true,
-            include_users: true,
-            complexity: 2,
-        }
-    }
-    
-    /// Set whether to include resource specifications
-    pub fn with_resources(mut self, include: bool) -> Self {
-        self.include_resources = include;
-        self
-    }
-    
-    /// Set whether to include network configuration
-    pub fn with_network(mut self, include: bool) -> Self {
-        self.include_network = include;
-        self
-    }
-    
-    /// Set whether to include user configuration
-    pub fn with_users(mut self, include: bool) -> Self {
-        self.include_users = include;
-        self
-    }
-    
-    /// Set complexity level (0-3)
-    pub fn with_complexity(mut self, level: usize) -> Self {
-        self.complexity = level.min(3);
-        self
-    }
-    
-    /// Generate a random user
-    fn generate_user(&self) -> User {
-        let mut rng = rand::thread_rng();
-        
-        let username = generate_random_string(8);
-        let password = if rng.gen_bool(0.7) {
-            Some(generate_random_string(12))
-        } else {
-            None
-        };
-        
-        let sudo = if rng.gen_bool(0.5) {
-            Some(true)
-        } else {
-            Some(false)
-        };
-        
-        let ssh_authorized_keys = if rng.gen_bool(0.8) {
-            Some(vec![format!("ssh-rsa {}", generate_random_base64(372))])
-        } else {
-            None
-        };
-        
-        User {
-            username,
-            password,
-            sudo,
-            ssh_authorized_keys,
-        }
-    }
-    
-    /// Generate random resources
-    fn generate_resources(&self) -> Resources {
-        let mut rng = rand::thread_rng();
-        
-        // Decide what to include
-        let include_vcpus = rng.gen_bool(0.9);
-        let include_memory = rng.gen_bool(0.9);
-        let include_disk = rng.gen_bool(0.8);
-        let include_gpu = rng.gen_bool(0.3);
-        
-        // Generate valid values
-        let vcpus = if include_vcpus {
-            Some(rng.gen_range(1..=16))
-        } else {
-            None
-        };
-        
-        let memory_mb = if include_memory {
-            Some(rng.gen_range(512..=16384))
-        } else {
-            None
-        };
-        
-        let disk_gb = if include_disk {
-            Some(rng.gen_range(10..=500))
-        } else {
-            None
-        };
-        
-        let gpu = if include_gpu {
-            Some(GpuRequirement {
-                model: ["nvidia-a100", "nvidia-t4", "nvidia-a10", "amd-mi100"]
-                    .choose(&mut rng)
-                    .unwrap()
-                    .to_string(),
-                count: rng.gen_range(1..=4),
-            })
-        } else {
-            None
-        };
-        
-        Resources {
-            vcpus,
-            memory_mb,
-            disk_gb,
-            gpu,
-        }
-    }
-    
-    /// Generate random network configuration
-    fn generate_network(&self) -> Network {
-        let mut rng = rand::thread_rng();
-        
-        let join_formnet = if rng.gen_bool(0.8) {
-            Some(true)
-        } else {
-            Some(false)
-        };
-        
-        let external_networks = if rng.gen_bool(0.4) {
-            let count = rng.gen_range(1..=3);
-            let networks = (0..count)
-                .map(|_| {
-                    let names = ["public", "private", "restricted", "internal", "dmz"];
-                    names.choose(&mut rng).unwrap().to_string()
-                })
-                .collect();
-            Some(networks)
-        } else {
-            None
-        };
-        
-        Network {
-            join_formnet,
-            external_networks,
-        }
-    }
-}
-
-impl Generator<Formfile> for FormfileGenerator {
-    fn generate(&self) -> Formfile {
-        let mut rng = rand::thread_rng();
-        
-        // Generate name
-        let name = if rng.gen_bool(0.9) {
-            Some(format!("app-{}", generate_random_string(8)))
-        } else {
-            None
-        };
-        
-        // Generate base image
-        let from = if rng.gen_bool(0.99) { // Almost always include a base image
-            let images = ["ubuntu:22.04", "ubuntu:20.04", "debian:11", "alpine:3.16"];
-            Some(images.choose(&mut rng).unwrap().to_string())
-        } else {
-            None // Occasionally omit for error testing
-        };
-        
-        // Generate run commands based on complexity
-        let run = if self.complexity > 0 && rng.gen_bool(0.9) {
-            let count = match self.complexity {
-                0 => 0,
-                1 => rng.gen_range(1..=2),
-                2 => rng.gen_range(2..=5),
-                _ => rng.gen_range(5..=10),
-            };
-            
-            if count > 0 {
-                let commands = [
-                    "apt-get update",
-                    "apt-get install -y python3",
-                    "apt-get install -y nginx",
-                    "apt-get install -y postgresql",
-                    "pip install flask",
-                    "pip install requests",
-                    "mkdir -p /app/data",
-                    "chmod 755 /app/data",
-                    "echo 'Hello World' > /app/index.html",
-                    "systemctl enable nginx",
-                ];
-                
-                Some((0..count)
-                    .map(|i| commands[i % commands.len()].to_string())
-                    .collect())
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        
-        // Generate files to include
-        let include = if self.complexity > 0 && rng.gen_bool(0.7) {
-            let count = match self.complexity {
-                0 => 0,
-                1 => rng.gen_range(1..=2),
-                2 => rng.gen_range(2..=5),
-                _ => rng.gen_range(5..=10),
-            };
-            
-            if count > 0 {
-                let files = [
-                    "app.py",
-                    "requirements.txt",
-                    "static/index.html",
-                    "templates/base.html",
-                    "config.json",
-                    "data/seed.sql",
-                    "scripts/setup.sh",
-                    "Dockerfile",
-                    "README.md",
-                    ".env",
-                ];
-                
-                Some((0..count)
-                    .map(|i| files[i % files.len()].to_string())
-                    .collect())
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        
-        // Generate environment variables
-        let env = if self.complexity > 0 && rng.gen_bool(0.6) {
-            let count = match self.complexity {
-                0 => 0,
-                1 => rng.gen_range(1..=2),
-                2 => rng.gen_range(2..=5),
-                _ => rng.gen_range(5..=10),
-            };
-            
-            if count > 0 {
-                let keys = [
-                    "PORT",
-                    "DEBUG",
-                    "LOG_LEVEL",
-                    "DB_HOST",
-                    "DB_PORT",
-                    "DB_USER",
-                    "DB_PASSWORD",
-                    "API_KEY",
-                    "REDIS_URL",
-                    "NODE_ENV",
-                ];
-                
-                let values = [
-                    "8080",
-                    "false",
-                    "info",
-                    "localhost",
-                    "5432",
-                    "postgres",
-                    "password123",
-                    "a1b2c3d4e5f6",
-                    "redis://localhost:6379",
-                    "production",
-                ];
-                
-                let mut env_map = HashMap::new();
-                for i in 0..count {
-                    env_map.insert(
-                        keys[i % keys.len()].to_string(),
-                        values[i % values.len()].to_string(),
-                    );
-                }
-                
-                Some(env_map)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        
-        // Generate exposed ports
-        let expose = if rng.gen_bool(0.7) {
-            let count = rng.gen_range(1..=3);
-            let ports = [80, 443, 8080, 3000, 5000, 8000, 8888, 9000];
-            
-            Some((0..count)
-                .map(|i| ports[i % ports.len()])
-                .collect())
-        } else {
-            None
-        };
-        
-        // Generate entrypoint
-        let entrypoint = if rng.gen_bool(0.6) {
-            let entrypoints = [
-                "python app.py",
-                "node server.js",
-                "nginx -g 'daemon off;'",
-                "/usr/sbin/sshd -D",
-                "./run.sh",
-            ];
-            
-            Some(entrypoints.choose(&mut rng).unwrap().to_string())
-        } else {
-            None
-        };
-        
-        // Generate resources if enabled
-        let resources = if self.include_resources {
-            Some(self.generate_resources())
-        } else {
-            None
-        };
-        
-        // Generate network if enabled
-        let network = if self.include_network {
-            Some(self.generate_network())
-        } else {
-            None
-        };
-        
-        // Generate working directory
-        let workdir = if rng.gen_bool(0.7) {
-            let dirs = ["/app", "/srv/www", "/var/www", "/opt/app", "/home/app"];
-            Some(dirs.choose(&mut rng).unwrap().to_string())
-        } else {
-            None
-        };
-        
-        // Generate users if enabled
-        let users = if self.include_users && rng.gen_bool(0.7) {
-            let count = rng.gen_range(1..=3);
-            Some((0..count).map(|_| self.generate_user()).collect())
-        } else {
-            None
-        };
-        
-        Formfile {
-            name,
-            from,
-            run,
-            include,
-            env,
-            expose,
-            entrypoint,
-            resources,
-            network,
-            workdir,
-            users,
-        }
-    }
-}
-
-/// Generator for invalid Formfiles
-pub struct InvalidFormfileGenerator;
-
-impl InvalidFormfileGenerator {
-    /// Create a new invalid Formfile generator
+impl ValidFormfileGenerator {
+    /// Create a new ValidFormfile generator
     pub fn new() -> Self {
         Self
     }
+    
+    /// Generate a random base image
+    pub fn generate_base_image(&self) -> String {
+        let mut rng = rand::thread_rng();
+        let bases = [
+            "alpine:latest",
+            "ubuntu:20.04",
+            "debian:bullseye",
+            "fedora:latest",
+            "amazonlinux:2",
+            "python:3.9",
+            "ruby:3.0",
+            "node:16",
+            "golang:1.17",
+            "rust:1.56",
+        ];
+        
+        bases.choose(&mut rng).unwrap().to_string()
+    }
+    
+    /// Generate random run commands
+    pub fn generate_run_commands(&self) -> Vec<String> {
+        let mut rng = rand::thread_rng();
+        let mut commands = Vec::new();
+        
+        let command_count = rng.gen_range(1..10);
+        
+        for _ in 0..command_count {
+            let cmd = match rng.gen_range(0..10) {
+                0 => "apt-get update && apt-get install -y curl wget".to_string(),
+                1 => "pip install requests".to_string(),
+                2 => "echo 'hello world' > /app/hello.txt".to_string(),
+                3 => "mkdir -p /data".to_string(),
+                4 => "apk add --no-cache curl".to_string(),
+                5 => "npm install express".to_string(),
+                6 => "cargo build --release".to_string(),
+                7 => "go build main.go".to_string(),
+                8 => "chmod +x /app/start.sh".to_string(),
+                _ => "echo 'Custom command'".to_string(),
+            };
+            
+            commands.push(cmd);
+        }
+        
+        commands
+    }
+    
+    /// Generate environment variables
+    pub fn generate_env_vars(&self) -> HashMap<String, String> {
+        let mut rng = rand::thread_rng();
+        let mut env_vars = HashMap::new();
+        
+        let env_count = rng.gen_range(0..5);
+        
+        for _ in 0..env_count {
+            let key = match rng.gen_range(0..10) {
+                0 => "DEBUG".to_string(),
+                1 => "LOG_LEVEL".to_string(),
+                2 => "APP_ENV".to_string(),
+                3 => "API_KEY".to_string(),
+                4 => "PORT".to_string(),
+                5 => "DATABASE_URL".to_string(),
+                6 => "REDIS_URL".to_string(),
+                7 => "APP_SECRET".to_string(),
+                8 => "NODE_ENV".to_string(),
+                _ => "CUSTOM_VAR".to_string(),
+            };
+            
+            let value = match key.as_str() {
+                "DEBUG" => "true".to_string(),
+                "LOG_LEVEL" => "info".to_string(),
+                "APP_ENV" => "production".to_string(),
+                "API_KEY" => format!("key_{}", Uuid::new_v4().simple()),
+                "PORT" => "8080".to_string(),
+                "DATABASE_URL" => "postgres://user:pass@localhost:5432/db".to_string(),
+                "REDIS_URL" => "redis://localhost:6379".to_string(),
+                "APP_SECRET" => Uuid::new_v4().to_string(),
+                "NODE_ENV" => "production".to_string(),
+                _ => "value".to_string(),
+            };
+            
+            env_vars.insert(key, value);
+        }
+        
+        env_vars
+    }
+    
+    /// Generate a valid Formfile
+    pub fn generate_formfile(&self) -> Formfile {
+        let base_image = self.generate_base_image();
+        let run_commands = self.generate_run_commands();
+        let env_vars = self.generate_env_vars();
+        
+        // Create a basic valid formfile
+        Formfile {
+            base_image,
+            run_commands,
+            env_vars,
+            resources: None,
+            network: None, 
+            exposed_ports: Vec::new(),
+            users: Vec::new(),
+            entrypoint: None,
+        }
+    }
 }
 
-impl Generator<Formfile> for InvalidFormfileGenerator {
+/// Implement Generator trait for ValidFormfileGenerator
+impl Generator<Formfile> for ValidFormfileGenerator {
     fn generate(&self) -> Formfile {
+        self.generate_formfile()
+    }
+}
+
+/// Invalid Formfile Generator
+pub struct InvalidFormfileGenerator {
+    valid_generator: ValidFormfileGenerator,
+}
+
+impl InvalidFormfileGenerator {
+    /// Create a new InvalidFormfile generator
+    pub fn new() -> Self {
+        Self {
+            valid_generator: ValidFormfileGenerator::new(),
+        }
+    }
+    
+    /// Generate an invalid Formfile
+    pub fn generate(&self) -> Formfile {
         let mut rng = rand::thread_rng();
+        let mut formfile = self.valid_generator.generate_formfile();
         
-        // Start with a valid formfile
-        let valid_generator = FormfileGenerator::new();
-        let mut formfile = valid_generator.generate();
-        
-        // Choose an invalidation strategy
-        let strategy = rng.gen_range(0..5);
-        
-        match strategy {
+        // Choose one way to make it invalid
+        match rng.gen_range(0..5) {
             0 => {
-                // Missing required base image
-                formfile.from = None;
+                // Empty base image
+                formfile.base_image = "".to_string();
             },
             1 => {
-                // Invalid resource specifications
-                if let Some(ref mut resources) = formfile.resources {
-                    match rng.gen_range(0..4) {
-                        0 => {
-                            // Invalid vCPU count
-                            resources.vcpus = Some(rng.gen_range(100..255));
-                        },
-                        1 => {
-                            // Invalid memory (too small)
-                            resources.memory_mb = Some(rng.gen_range(1..32));
-                        },
-                        2 => {
-                            // Invalid disk (too large)
-                            resources.disk_gb = Some(rng.gen_range(10000..20000));
-                        },
-                        3 => {
-                            // Invalid GPU count
-                            if let Some(ref mut gpu) = resources.gpu {
-                                gpu.count = rng.gen_range(20..100);
-                            } else {
-                                resources.gpu = Some(GpuRequirement {
-                                    model: "unknown-gpu".to_string(),
-                                    count: rng.gen_range(20..100),
-                                });
-                            }
-                        },
-                        _ => {}
-                    }
-                } else {
-                    // Create invalid resources
-                    formfile.resources = Some(Resources {
-                        vcpus: Some(0),
-                        memory_mb: Some(1),
-                        disk_gb: Some(0),
-                        gpu: None,
-                    });
-                }
+                // No run commands
+                formfile.run_commands = vec![];
             },
             2 => {
-                // Invalid user configuration
-                if let Some(ref mut users) = formfile.users {
-                    if !users.is_empty() {
-                        match rng.gen_range(0..3) {
-                            0 => {
-                                // Empty username
-                                users[0].username = "".to_string();
-                            },
-                            1 => {
-                                // Username "root"
-                                users[0].username = "root".to_string();
-                            },
-                            2 => {
-                                // Invalid SSH key
-                                users[0].ssh_authorized_keys = Some(vec!["invalid key".to_string()]);
-                            },
-                            _ => {}
-                        }
-                    } else {
-                        // Add invalid user
-                        users.push(User {
-                            username: "".to_string(),
-                            password: None,
-                            sudo: None,
-                            ssh_authorized_keys: None,
-                        });
-                    }
-                } else {
-                    // Create invalid user list
-                    formfile.users = Some(vec![User {
-                        username: "root".to_string(),
-                        password: Some("password".to_string()),
-                        sudo: Some(true),
-                        ssh_authorized_keys: None,
-                    }]);
+                // Invalid resources
+                if let Some(resources) = &mut formfile.resources {
+                    resources.vcpus = 0;
                 }
             },
             3 => {
                 // Invalid network configuration
-                if formfile.network.is_none() {
-                    formfile.network = Some(Network {
-                        join_formnet: Some(true),
-                        external_networks: Some(vec!["invalid/network".to_string()]),
-                    });
-                } else if let Some(ref mut network) = formfile.network {
-                    network.external_networks = Some(vec!["invalid/network".to_string()]);
+                if let Some(network) = &mut formfile.network {
+                    network.external_networks = vec!["invalid/network".to_string()];
                 }
             },
             4 => {
-                // Invalid command
-                if formfile.run.is_none() {
-                    formfile.run = Some(vec!["rm -rf /".to_string()]);
-                } else if let Some(ref mut run) = formfile.run {
-                    run.push("rm -rf /".to_string());
-                }
+                // Risky/dangerous command
+                formfile.run_commands = vec!["rm -rf /".to_string()];
             },
-            _ => {}
+            _ => {
+                // Default case, make base image invalid
+                formfile.base_image = "nonexistent:taggg".to_string();
+            }
         }
         
         formfile
+    }
+}
+
+/// Implement Generator trait for InvalidFormfileGenerator
+impl Generator<Formfile> for InvalidFormfileGenerator {
+    fn generate(&self) -> Formfile {
+        self.generate()
+    }
+}
+
+/// BuildInfo Generator
+pub struct BuildInfoGenerator;
+
+impl BuildInfoGenerator {
+    /// Create a new BuildInfo generator
+    pub fn new() -> Self {
+        Self
+    }
+    
+    /// Generate a build ID and status
+    pub fn generate(&self) -> (String, String, BuildStatus) {
+        let mut rng = rand::thread_rng();
+        
+        let build_id = format!("build_{}", Uuid::new_v4().simple());
+        let user_id = format!("user_{}", Uuid::new_v4().simple());
+        
+        let status = match rng.gen_range(0..5) {
+            0 => BuildStatus::Queued,
+            1 => BuildStatus::InProgress,
+            2 => BuildStatus::Completed,
+            3 => BuildStatus::Failed,
+            _ => BuildStatus::Cancelled,
+        };
+        
+        (build_id, user_id, status)
+    }
+}
+
+/// DeploymentInfo Generator
+pub struct DeploymentInfoGenerator {
+    build_info_generator: BuildInfoGenerator,
+}
+
+impl DeploymentInfoGenerator {
+    /// Create a new DeploymentInfo generator
+    pub fn new() -> Self {
+        Self {
+            build_info_generator: BuildInfoGenerator::new(),
+        }
+    }
+    
+    /// Generate a deployment ID and status
+    pub fn generate(&self) -> (String, String, String, DeploymentStatus) {
+        let mut rng = rand::thread_rng();
+        
+        let (build_id, user_id, _) = self.build_info_generator.generate();
+        let deployment_id = format!("deploy_{}", Uuid::new_v4().simple());
+        let vm_id = format!("vm_{}", Uuid::new_v4().simple());
+        
+        let status = match rng.gen_range(0..5) {
+            0 => DeploymentStatus::Queued,
+            1 => DeploymentStatus::InProgress,
+            2 => DeploymentStatus::Completed,
+            3 => DeploymentStatus::Failed,
+            _ => DeploymentStatus::Cancelled,
+        };
+        
+        (deployment_id, build_id, vm_id, status)
     }
 }
 
@@ -636,4 +385,4 @@ pub fn generate_random_base64(length: usize) -> String {
     (0..length)
         .map(|_| char::from(base64_chars[rng.gen_range(0..64)]))
         .collect()
-} 
+}

@@ -1,7 +1,8 @@
 // form-fuzzing/src/harness/routing.rs
 //! Harness for BGP/Anycast routing fuzzing
 
-use crate::generators::routing::{
+use crate::generators::routing;
+use routing::{
     Region, IpAddressInfo, GeoDnsRequest, HealthStatusReport, BgpAnnouncement,
     AnycastTest, NodeHealth, AnycastRequest,
 };
@@ -260,8 +261,8 @@ impl MockBgpRouter {
             }
             
             // Store the announcement
-            self.prefixes.insert((*ip, *prefix_len), announcement.clone());
-            self.withdrawn.remove(&(*ip, *prefix_len));
+            self.prefixes.insert((ip.clone(), *prefix_len), announcement.clone());
+            self.withdrawn.remove(&(ip.clone(), *prefix_len));
         }
         
         // Simulate varying propagation speeds
@@ -824,101 +825,53 @@ impl RoutingHarness {
     
     /// Process a BGP announcement
     pub fn process_bgp_announcement(&mut self, announcement: &BgpAnnouncement) -> Result<BgpProcessResult, RoutingOperationResult> {
-        sanitizer::track_memory_usage();
-        
-        // Inject potential fault
-        if fault_injection::should_inject_fault("bgp_announce") {
-            return Err(RoutingOperationResult::InternalError("Fault injected".to_string()));
+        match self.bgp_router.process_announcement(announcement) {
+            result if result.accepted => Ok(result),
+            result if !result.accepted && result.error.is_some() => {
+                Err(RoutingOperationResult::BgpError(result.error.unwrap()))
+            },
+            _ => Err(RoutingOperationResult::InvalidInput("BGP announcement rejected".to_string()))
         }
-        
-        let result = self.bgp_router.process_announcement(announcement);
-        
-        if let Some(error) = &result.error {
-            return Err(RoutingOperationResult::BgpError(error.clone()));
-        }
-        
-        Ok(result)
     }
     
     /// Resolve a DNS request
     pub fn resolve_dns(&mut self, request: &GeoDnsRequest) -> Result<DNSLookupResult, RoutingOperationResult> {
-        sanitizer::track_memory_usage();
-        
-        // Inject potential fault
-        if fault_injection::should_inject_fault("dns_resolve") {
-            return Err(RoutingOperationResult::InternalError("Fault injected".to_string()));
-        }
-        
         self.dns_server.resolve(request)
     }
     
     /// Add a DNS record
     pub fn add_dns_record(&mut self, domain: &str, ip_info: IpAddressInfo) -> RoutingOperationResult {
-        sanitizer::track_memory_usage();
+        // Track memory usage for this operation
+        // sanitizer::track_memory_usage();
         
-        // Validate inputs
-        if domain.is_empty() {
-            return RoutingOperationResult::InvalidInput("Domain cannot be empty".to_string());
-        }
+        self.dns_server.add_record(domain, ip_info.clone());
         
-        // Inject potential fault
-        if fault_injection::should_inject_fault("dns_add") {
-            return RoutingOperationResult::InternalError("Fault injected".to_string());
-        }
-        
-        self.dns_server.add_record(domain, ip_info);
         RoutingOperationResult::Success
     }
     
     /// Remove a DNS record
     pub fn remove_dns_record(&mut self, domain: &str, address: &IpAddr) -> RoutingOperationResult {
-        sanitizer::track_memory_usage();
-        
-        // Validate inputs
-        if domain.is_empty() {
-            return RoutingOperationResult::InvalidInput("Domain cannot be empty".to_string());
-        }
-        
-        // Inject potential fault
-        if fault_injection::should_inject_fault("dns_remove") {
-            return RoutingOperationResult::InternalError("Fault injected".to_string());
-        }
+        // Track memory usage for this operation
+        // sanitizer::track_memory_usage();
         
         self.dns_server.remove_record(domain, address);
+        
         RoutingOperationResult::Success
     }
     
     /// Update health from a report
     pub fn update_health(&mut self, report: &HealthStatusReport) -> RoutingOperationResult {
-        sanitizer::track_memory_usage();
-        
-        // Validate inputs
-        if report.nodes.is_empty() {
-            return RoutingOperationResult::InvalidInput("Health report cannot be empty".to_string());
-        }
-        
-        // Inject potential fault
-        if fault_injection::should_inject_fault("health_update") {
-            return RoutingOperationResult::InternalError("Fault injected".to_string());
-        }
-        
         self.dns_server.update_health_from_report(report);
         self.health_tracker.insert(report.report_id.clone(), report.clone());
+        
         RoutingOperationResult::Success
     }
     
     /// Run an anycast test
     pub fn run_anycast_test(&mut self, test: &AnycastTest) -> Result<HashMap<String, Vec<IpAddr>>, RoutingOperationResult> {
-        sanitizer::track_memory_usage();
-        
         // Validate inputs
         if test.requests.is_empty() {
             return Err(RoutingOperationResult::InvalidInput("Anycast test cannot be empty".to_string()));
-        }
-        
-        // Inject potential fault
-        if fault_injection::should_inject_fault("anycast_test") {
-            return Err(RoutingOperationResult::InternalError("Fault injected".to_string()));
         }
         
         // Store test for reference

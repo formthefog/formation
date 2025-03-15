@@ -206,7 +206,7 @@ impl Generator<NetworkPacket> for NetworkPacketGenerator {
                 headers.insert("checksum".to_string(), rng.gen::<u32>().to_string());
             },
             Protocol::DCCP => {
-                headers.insert("seq".to_string(), rng.gen::<u48>().to_string());
+                headers.insert("seq".to_string(), rng.gen::<u64>().to_string());
                 headers.insert("service_code".to_string(), rng.gen::<u32>().to_string());
             },
             Protocol::RUDP => {
@@ -328,6 +328,26 @@ pub struct P2PConnectionRequest {
     pub keep_alive_interval: Duration,
 }
 
+impl Default for P2PConnectionRequest {
+    fn default() -> Self {
+        Self {
+            local_id: String::new(),
+            peer_id: String::new(),
+            stun_servers: Vec::new(),
+            turn_servers: Vec::new(),
+            protocols: Vec::new(),
+            use_ice: false,
+            use_direct: false,
+            use_relay: false,
+            timeout: Duration::from_secs(30),
+            local_candidates: Vec::new(),
+            peer_candidates: Vec::new(),
+            connection_attempts: 1,
+            keep_alive_interval: Duration::from_secs(60),
+        }
+    }
+}
+
 /// A generator for P2P connection requests
 pub struct P2PConnectionRequestGenerator;
 
@@ -392,8 +412,9 @@ impl Generator<P2PConnectionRequest> for P2PConnectionRequestGenerator {
             
         // Select random protocols to try
         let all_protocols = Protocol::all();
+        let protocol_count = rng.gen_range(1..=all_protocols.len());
         let protocols: Vec<Protocol> = all_protocols
-            .choose_multiple(&mut rng, rng.gen_range(1..=all_protocols.len()))
+            .choose_multiple(&mut rng, protocol_count)
             .cloned()
             .collect();
             

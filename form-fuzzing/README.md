@@ -27,15 +27,16 @@ The fuzzing infrastructure consists of several key modules:
 
 ## Available Fuzzers
 
-The following fuzzers are currently implemented:
+The following fuzzers are available:
 
-- **VM Management**: Tests VM creation, deletion, and state transitions.
-- **DNS Management**: Tests DNS record management, certificate handling, wildcard domains, and DNS propagation.
-- **Network**: Tests network configuration, topology management, and firewall rules.
-- **MCP Server**: Tests the Management Control Plane API including authentication, VM operations, workload building and deployment.
-- **Economic Infrastructure**: Tests resource usage tracking, threshold detection, event emission, and the API layer for economic infrastructure.
-- **Pack Manager and Image Builder**: Tests formfile validation, image building, package deployment, and lifecycle operations for containerized workloads.
-- **BGP/Anycast Routing**: Tests BGP announcements, GeoDNS resolution, health tracking, and anycast routing functionality.
+- **VM Management Fuzzer**: Tests VM creation, deletion, and management operations.
+- **DNS Management Fuzzer**: Tests DNS record creation, updates, and resolution.
+- **Network Fuzzer**: Tests network configuration, routing, and connectivity.
+- **MCP Server Fuzzer**: Tests the Management Control Plane server API.
+- **Economic Fuzzer**: Tests the economic infrastructure components.
+- **Pack Manager Fuzzer**: Tests the Pack Manager and Image Builder components.
+- **BGP/Anycast Routing Fuzzer**: Tests BGP announcements, GeoDNS resolution, health tracking, and anycast routing.
+- **P2P Message Queue Fuzzer**: Tests P2P message publishing, topic subscription, message routing, and network conditions.
 
 ## Usage
 
@@ -48,26 +49,18 @@ The following fuzzers are currently implemented:
 ### Running Fuzzers
 
 ```bash
-# Run the VM Management fuzzer
-cargo run --bin fuzz_vm
+# Build the project
+cargo build
 
-# Run the DNS Management fuzzer
-cargo run --bin fuzz_dns
-
-# Run the Network fuzzer
-cargo run --bin fuzz_network
-
-# Run the MCP Server fuzzer
-cargo run --bin fuzz_mcp
-
-# Run the Economic Infrastructure fuzzer
-cargo run --bin fuzz_economic
-
-# Run the Pack Manager and Image Builder fuzzer
-cargo run --bin fuzz_pack
-
-# Run the BGP/Anycast Routing fuzzer
-cargo run --bin fuzz_routing
+# Run a specific fuzzer
+cargo run --bin fuzz_vm          # Run VM management fuzzer
+cargo run --bin fuzz_dns         # Run DNS management fuzzer
+cargo run --bin fuzz_network     # Run network fuzzer
+cargo run --bin fuzz_mcp         # Run MCP server fuzzer
+cargo run --bin fuzz_economic    # Run economic infrastructure fuzzer
+cargo run --bin fuzz_pack        # Run Pack Manager fuzzer
+cargo run --bin fuzz_routing     # Run BGP/Anycast routing fuzzer
+cargo run --bin fuzz_p2p         # Run P2P message queue fuzzer
 ```
 
 ### Integrating into CI/CD
@@ -84,6 +77,7 @@ Add the following to your GitHub Actions workflow:
     cargo run --bin fuzz_economic
     cargo run --bin fuzz_pack
     cargo run --bin fuzz_routing
+    cargo run --bin fuzz_p2p
 ```
 
 ## Environment Variables

@@ -8,6 +8,10 @@ pub mod dns;
 pub mod network;
 pub mod mcp;
 pub mod economic;
+pub mod p2p;
+pub mod routing;
+pub mod state;
+pub mod pack;
 
 /// Trait for mutators
 pub trait Mutator<T> {

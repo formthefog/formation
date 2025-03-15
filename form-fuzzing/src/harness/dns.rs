@@ -4,6 +4,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::thread;
+use rand::thread_rng;
+use rand::Rng;
 
 use crate::generators::dns::{DNSRecord, DNSRecordType, DNSZone};
 use crate::instrumentation::fault_injection;
@@ -214,7 +217,7 @@ impl MockDNSManager {
         if zones.contains_key(&zone.name) {
             return DNSOperationResult::InvalidInput("Zone already exists".to_string());
         }
-        zones.insert(zone.name.clone(), zone);
+        zones.insert(zone.name.clone(), zone.clone());
 
         // Grant permission to the user
         drop(zones);
