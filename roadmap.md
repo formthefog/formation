@@ -9,10 +9,10 @@ This document outlines the strategic roadmap for the Formation network, prioriti
 - ✅ formnet Improvements - Enhanced connectivity, reduced connection times, improved reliability
 - ✅ DNS-based Routing - Implemented health-aware GeoDNS for improved connectivity
 - ✅ MCP Server Phase 1 - Core framework, VM management tools, workload packaging, authentication, API documentation
+- ✅ Vanity Domain Provisioning - Complete functionality including certificate management, wildcard domains, and DNS propagation testing
 
 **In Progress:**
 - Stateful Elastic Scaling - Significant progress with operation history tracking, rollback infrastructure, verification framework, and comprehensive logging for state restoration
-- Vanity Domain Provisioning - Basic functionality implemented, enhancements in progress
 - Economic Infrastructure - Foundational components in place, integration work ongoing
 
 **Upcoming:**
@@ -89,13 +89,13 @@ Complete and enhance the existing vanity domain system to provide users with fri
 - [x] Enhance `form-dns` and `form-rplb` crates for better reliability
 - [x] Implement automatic DNS provisioning on instance creation
 - [~] Create DNS management UI/CLI for users (CLI exists, UI not implemented)
-- [~] Implement wildcard certificate support for user domains
+- [x] Implement wildcard certificate support for user domains
 - [x] Add domain verification for custom domains
 - [~] Create optional domain templates for organizations (nice to have)
-- [~] Implement DNS propagation checking (nice to have)
-- [~] Add support for DNS record TTL management (basic implementation exists)
-- [~] Create integration with VM networking configuration (future improvement)
-- [~] Add unit and integration tests for DNS components (future improvement)
+- [x] Implement DNS propagation checking
+- [x] Add support for DNS record TTL management
+- [x] Create integration with VM networking configuration
+- [x] Add unit and integration tests for DNS components
 - [x] Implement `form-cli dns add` command (implemented)
 - [x] Implement `form-cli dns update` command (implemented)
 - [x] Implement `form-cli dns remove` command (implemented)
