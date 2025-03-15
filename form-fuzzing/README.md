@@ -27,30 +27,30 @@ The fuzzing infrastructure consists of several key modules:
 
 ## Available Fuzzers
 
-Currently implemented fuzzers:
+The following fuzzers are currently implemented:
 
-- **VM Management**: Tests VM creation, deletion, and ownership verification
-- **DNS Management**: Tests DNS zone creation, record management, certificate handling, wildcard domains, and DNS propagation
-- **Network**: Tests packet routing, NAT traversal, and P2P connectivity with various network conditions
-- **MCP Server**: Tests the Management Control Plane API, including authentication, VM operations, workload building, and deployment
-- **Economic Infrastructure**: Tests resource usage tracking, threshold detection, event emission, and the API layer for economic infrastructure
-- *(More will be added according to the implementation plan)*
+- **VM Management**: Tests VM creation, deletion, and state transitions.
+- **DNS Management**: Tests DNS record management, certificate handling, wildcard domains, and DNS propagation.
+- **Network**: Tests network configuration, topology management, and firewall rules.
+- **MCP Server**: Tests the Management Control Plane API including authentication, VM operations, workload building and deployment.
+- **Economic Infrastructure**: Tests resource usage tracking, threshold detection, event emission, and the API layer for economic infrastructure.
+- **Pack Manager and Image Builder**: Tests formfile validation, image building, package deployment, and lifecycle operations for containerized workloads.
 
 ## Usage
 
-### Running a Specific Fuzzer
+### Environment Variables
+
+- `FORM_FUZZING_CORPUS_DIR`: Specifies the directory to store corpus files (default: `fuzzing-corpus/<component>`)
+- `FORM_FUZZING_MAX_ITERATIONS`: Specifies the maximum number of iterations (default: 1000)
+- `FORM_FUZZING_SEED`: Specifies the random seed for reproducibility (default: 42)
+
+### Running Fuzzers
 
 ```bash
-# Set environment variables (optional)
-export FORM_FUZZING_MODE=quick  # Options: quick, standard, thorough, ci, debug
-export FORM_FUZZING_MAX_ITERATIONS=1000
-export FORM_FUZZING_CORPUS_DIR=./my-corpus
-export FORM_FUZZING_ARTIFACTS_DIR=./my-artifacts
+# Run the VM Management fuzzer
+cargo run --bin fuzz_vm
 
-# Run the VM management fuzzer
-cargo run --bin fuzz_vm_management
-
-# Run the DNS management fuzzer
+# Run the DNS Management fuzzer
 cargo run --bin fuzz_dns
 
 # Run the Network fuzzer
@@ -61,23 +61,24 @@ cargo run --bin fuzz_mcp
 
 # Run the Economic Infrastructure fuzzer
 cargo run --bin fuzz_economic
+
+# Run the Pack Manager and Image Builder fuzzer
+cargo run --bin fuzz_pack
 ```
 
-### Adding to CI/CD Pipeline
+### Integrating into CI/CD
 
-Add this to your GitHub Actions workflow:
+Add the following to your GitHub Actions workflow:
 
 ```yaml
-- name: Run fuzzers
+- name: Run Fuzzers
   run: |
-    export FORM_FUZZING_MODE=ci
-    export FORM_FUZZING_ARTIFACTS_DIR=./fuzzing-artifacts
-    cargo run --bin fuzz_vm_management
+    cargo run --bin fuzz_vm
     cargo run --bin fuzz_dns
     cargo run --bin fuzz_network
     cargo run --bin fuzz_mcp
     cargo run --bin fuzz_economic
-    # Add more fuzzers as they are implemented
+    cargo run --bin fuzz_pack
 ```
 
 ## Environment Variables
@@ -96,12 +97,13 @@ This implementation follows the comprehensive fuzzing plan developed for the For
 
 ## Contributing
 
-When adding new fuzzers:
+To add a new fuzzer:
 
-1. Create a generator module for your component
-2. Implement a harness for your component
-3. Add a binary that uses the generator and harness
-4. Update the README to document the new fuzzer
+1. Add generators in `src/generators/<component>.rs`
+2. Add mutators in `src/mutators/<component>.rs`
+3. Add a harness in `src/harness/<component>.rs`
+4. Add a fuzzer binary in `src/bin/fuzz_<component>.rs`
+5. Update this README.md
 
 ## License
 

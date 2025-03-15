@@ -53,4 +53,41 @@ pub fn finalize() {
     }
     
     println!("Fuzzing process finalized successfully");
+}
+
+/// Generator modules for creating valid and invalid test inputs
+pub mod generators {
+    pub mod vm;
+    pub mod dns;
+    pub mod network;
+    pub mod mcp;
+    pub mod economic;
+    pub mod pack;
+}
+
+/// Mutator modules for modifying test inputs
+pub mod mutators {
+    pub mod vm;
+    pub mod dns;
+    pub mod network;
+    pub mod mcp;
+    pub mod economic;
+    pub mod pack;
+}
+
+/// Harness modules for testing components
+pub mod harness {
+    pub mod vm;
+    pub mod dns;
+    pub mod network;
+    pub mod mcp;
+    pub mod economic;
+    pub mod pack;
+}
+
+/// Instrumentation for tracking code coverage and injecting faults
+pub mod instrumentation {
+    pub mod coverage;
+    pub mod fault_injection;
+    pub mod sanitizer;
 } 
