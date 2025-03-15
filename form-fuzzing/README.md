@@ -35,6 +35,7 @@ The following fuzzers are currently implemented:
 - **MCP Server**: Tests the Management Control Plane API including authentication, VM operations, workload building and deployment.
 - **Economic Infrastructure**: Tests resource usage tracking, threshold detection, event emission, and the API layer for economic infrastructure.
 - **Pack Manager and Image Builder**: Tests formfile validation, image building, package deployment, and lifecycle operations for containerized workloads.
+- **BGP/Anycast Routing**: Tests BGP announcements, GeoDNS resolution, health tracking, and anycast routing functionality.
 
 ## Usage
 
@@ -64,6 +65,9 @@ cargo run --bin fuzz_economic
 
 # Run the Pack Manager and Image Builder fuzzer
 cargo run --bin fuzz_pack
+
+# Run the BGP/Anycast Routing fuzzer
+cargo run --bin fuzz_routing
 ```
 
 ### Integrating into CI/CD
@@ -79,6 +83,7 @@ Add the following to your GitHub Actions workflow:
     cargo run --bin fuzz_mcp
     cargo run --bin fuzz_economic
     cargo run --bin fuzz_pack
+    cargo run --bin fuzz_routing
 ```
 
 ## Environment Variables
