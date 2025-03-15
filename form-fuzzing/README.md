@@ -32,6 +32,8 @@ Currently implemented fuzzers:
 - **VM Management**: Tests VM creation, deletion, and ownership verification
 - **DNS Management**: Tests DNS zone creation, record management, certificate handling, wildcard domains, and DNS propagation
 - **Network**: Tests packet routing, NAT traversal, and P2P connectivity with various network conditions
+- **MCP Server**: Tests the Management Control Plane API, including authentication, VM operations, workload building, and deployment
+- **Economic Infrastructure**: Tests resource usage tracking, threshold detection, event emission, and the API layer for economic infrastructure
 - *(More will be added according to the implementation plan)*
 
 ## Usage
@@ -53,6 +55,12 @@ cargo run --bin fuzz_dns
 
 # Run the Network fuzzer
 cargo run --bin fuzz_network
+
+# Run the MCP Server fuzzer
+cargo run --bin fuzz_mcp
+
+# Run the Economic Infrastructure fuzzer
+cargo run --bin fuzz_economic
 ```
 
 ### Adding to CI/CD Pipeline
@@ -67,6 +75,8 @@ Add this to your GitHub Actions workflow:
     cargo run --bin fuzz_vm_management
     cargo run --bin fuzz_dns
     cargo run --bin fuzz_network
+    cargo run --bin fuzz_mcp
+    cargo run --bin fuzz_economic
     # Add more fuzzers as they are implemented
 ```
 

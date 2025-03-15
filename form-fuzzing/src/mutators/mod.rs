@@ -1,12 +1,17 @@
 // Formation Network Fuzzing Infrastructure
 // Mutators Module
 
+//! Mutators for test inputs
+
 pub mod vm;
 pub mod dns;
+pub mod network;
+pub mod mcp;
+pub mod economic;
 
-/// Trait for mutating fuzzable inputs
+/// Trait for mutators
 pub trait Mutator<T> {
-    /// Mutate the given input
+    /// Mutate a test input
     fn mutate(&self, input: &mut T);
     
     /// Apply multiple mutations to the input

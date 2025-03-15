@@ -1,11 +1,19 @@
 // form-fuzzing/src/harness/mod.rs
 //! Test harnesses for fuzzing various components
 
+pub mod common;
+pub mod dns;
 pub mod vm_management;
 pub mod network;
-pub mod dns;
 pub mod mcp;
-pub mod common;
+pub mod economic;
+
+pub use common::*;
+pub use dns::*;
+pub use vm_management::*;
+pub use network::*;
+pub use mcp::*;
+pub use economic::*;
 
 /// Trait for fuzzing harnesses
 pub trait FuzzingHarness {

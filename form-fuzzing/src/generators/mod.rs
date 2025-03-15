@@ -9,6 +9,8 @@ pub mod configuration;
 pub mod api;
 pub mod common;
 pub mod dns;
+pub mod mcp;
+pub mod economic;
 
 use rand::Rng;
 
