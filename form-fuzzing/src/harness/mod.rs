@@ -11,6 +11,8 @@ pub mod routing;
 pub mod state;
 pub mod p2p;
 pub mod pack;
+pub mod node_metrics;
+pub mod vm_metrics;
 
 pub use common::*;
 pub use dns::*;
@@ -22,6 +24,8 @@ pub use routing::*;
 pub use state::*;
 pub use p2p::*;
 pub use pack::*;
+pub use node_metrics::*;
+pub use vm_metrics::*;
 
 /// Trait for fuzzing harnesses
 pub trait FuzzingHarness {

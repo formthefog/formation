@@ -3,15 +3,17 @@
 
 //! Mutators for test inputs
 
-pub mod vm;
 pub mod dns;
-pub mod network;
-pub mod mcp;
 pub mod economic;
+pub mod mcp;
+pub mod network;
+pub mod node_metrics;
 pub mod p2p;
+pub mod pack;
 pub mod routing;
 pub mod state;
-pub mod pack;
+pub mod vm;
+pub mod vm_metrics;
 
 /// Trait for mutators
 pub trait Mutator<T> {

@@ -276,6 +276,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "afl"
+version = "0.12.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6c32f2f36624ffe2a8f65f9d76c224846b3a3d7242485bb5927c1127ee6c715"
+dependencies = [
+ "clap",
+ "fs_extra",
+ "home",
+ "libc",
+ "rustc_version 0.4.1",
+ "tempfile",
+ "xdg",
+]
+
+[[package]]
 name = "ahash"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -920,6 +935,12 @@ dependencies = [
  "thiserror 1.0.69",
  "vmm-sys-util",
 ]
+
+[[package]]
+name = "arbitrary"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dde20b3d026af13f561bdd0f15edf01fc734f0dafcedbaf42bba506a9517f223"
 
 [[package]]
 name = "arc-swap"
@@ -1630,6 +1651,97 @@ dependencies = [
 ]
 
 [[package]]
+name = "bolero"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "212e8dca6d4001cc6cac941d6932ddaa8cd27f57e5e44a9da19c913eb6a43b33"
+dependencies = [
+ "bolero-afl",
+ "bolero-engine",
+ "bolero-generator",
+ "bolero-honggfuzz",
+ "bolero-kani",
+ "bolero-libfuzzer",
+ "cfg-if",
+ "rand 0.8.5",
+]
+
+[[package]]
+name = "bolero-afl"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1b34f05de1527425bb05287da09ff1ff1612538648824db49e16d9693b24065"
+dependencies = [
+ "bolero-engine",
+ "cc",
+]
+
+[[package]]
+name = "bolero-engine"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6206263ebdd42e093c1229dab3957f61c9fd68d73c00f238ae25a378778b6bd3"
+dependencies = [
+ "anyhow",
+ "backtrace",
+ "bolero-generator",
+ "lazy_static",
+ "pretty-hex",
+ "rand 0.8.5",
+]
+
+[[package]]
+name = "bolero-generator"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac749fb4f2e14734e835a9352c0d1eb2ab62a025d4c56a823fa3f391e015741a"
+dependencies = [
+ "bolero-generator-derive",
+ "either",
+ "rand_core 0.6.4",
+]
+
+[[package]]
+name = "bolero-generator-derive"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53397bfda19ccb48527faa14025048fc4bb76f090ccdeef1e5a355bfe4a94467"
+dependencies = [
+ "proc-macro-crate 1.3.1",
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
+name = "bolero-honggfuzz"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf78581db1a7263620a8767e645b93ad287c70122ae76f5bd67040c7f06ff8e3"
+dependencies = [
+ "bolero-engine",
+]
+
+[[package]]
+name = "bolero-kani"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e55cec272a617f5ae4ce670db035108eb97c10cd4f67de851a3c8d3f18f19cb"
+dependencies = [
+ "bolero-engine",
+]
+
+[[package]]
+name = "bolero-libfuzzer"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb42f66ee3ec89b9c411994de59d4710ced19df96fea2059feea1c2d73904c5b"
+dependencies = [
+ "bolero-engine",
+ "cc",
+]
+
+[[package]]
 name = "bollard"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1679,7 +1791,7 @@ version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fa043787170f3c86165087d42e7d40e12d2a1eba7a2f9dd8a941b55f3be914cc"
 dependencies = [
- "env_logger 0.11.6",
+ "env_logger 0.11.7",
  "lazy-regex",
  "log",
  "regex",
@@ -2542,6 +2654,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c877555693c14d2f84191cfd3ad8582790fc52b5e2274b40b59cf5f5cea25c7"
 
 [[package]]
+name = "deunicode"
+version = "1.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "339544cc9e2c4dc3fc7149fd630c5f22263a4fdf18a98afd0075784968b5cf00"
+
+[[package]]
 name = "devices"
 version = "0.1.0"
 dependencies = [
@@ -2893,14 +3011,14 @@ dependencies = [
 
 [[package]]
 name = "env_logger"
-version = "0.11.6"
+version = "0.11.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dcaee3d8e3cfc3fd92428d477bc97fc29ec8716d180c0d74c643bb26166660e0"
+checksum = "c3716d7a920fb4fac5d84e9d4bce8ceb321e9414b4409da61b07b75c1e3d0697"
 dependencies = [
  "anstream",
  "anstyle",
  "env_filter",
- "humantime 2.1.0",
+ "jiff",
  "log",
 ]
 
@@ -2977,6 +3095,16 @@ dependencies = [
  "once_cell",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "fake"
+version = "2.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d391ba4af7f1d93f01fcf7b2f29e2bc9348e109dfdbf4dcbdc51dfa38dab0b6"
+dependencies = [
+ "deunicode",
+ "rand 0.8.5",
 ]
 
 [[package]]
@@ -3199,7 +3327,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
- "env_logger 0.11.6",
+ "env_logger 0.11.7",
  "form-rplb",
  "form-types",
  "log",
@@ -3215,6 +3343,38 @@ dependencies = [
  "trust-dns-client 0.23.2",
  "trust-dns-proto 0.23.2",
  "trust-dns-server 0.23.2",
+]
+
+[[package]]
+name = "form-fuzzing"
+version = "0.1.0"
+dependencies = [
+ "afl",
+ "arbitrary",
+ "bolero",
+ "chrono",
+ "clap",
+ "crdts",
+ "env_logger 0.11.7",
+ "fake",
+ "form-node-metrics",
+ "form-p2p",
+ "form-state",
+ "form-traits",
+ "form-types",
+ "form-vm-metrics",
+ "hex",
+ "honggfuzz",
+ "humantime 2.1.0",
+ "libfuzzer-sys",
+ "log",
+ "proptest",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -3637,6 +3797,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fs_extra"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
+
+[[package]]
 name = "funty"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4054,6 +4220,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "honggfuzz"
+version = "0.5.57"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc563d4f41b17364d5c48ded509f2bcf1c3f6ae9c7f203055b4a5c325072d57e"
+dependencies = [
+ "arbitrary",
+ "lazy_static",
+ "memmap2",
+ "rustc_version 0.4.1",
+ "semver 1.0.25",
+]
+
+[[package]]
 name = "hostsfile"
 version = "1.2.0"
 dependencies = [
@@ -4294,7 +4473,7 @@ dependencies = [
  "byteorder",
  "cfg-if",
  "concat-idents",
- "env_logger 0.11.6",
+ "env_logger 0.11.7",
  "iced-x86",
  "igvm",
  "igvm_defs",
@@ -4707,6 +4886,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d75a2a4b1b190afb6f5425f10f6a8f959d2ea0b9c2b1d79553551850539e4674"
 
 [[package]]
+name = "jiff"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d699bc6dfc879fb1bf9bdff0d4c56f0884fc6f0d0eb0fba397a6d00cd9a6b85e"
+dependencies = [
+ "jiff-static",
+ "log",
+ "portable-atomic",
+ "portable-atomic-util",
+ "serde",
+]
+
+[[package]]
+name = "jiff-static"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d16e75759ee0aa64c57a56acbf43916987b20c77373cb7e808979e02b93c9f9"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.98",
+]
+
+[[package]]
 name = "jobserver"
 version = "0.1.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4861,6 +5064,16 @@ name = "libc"
 version = "0.2.169"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5aba8db14291edd000dfcc4d620c7ebfb122c613afb886ca8803fa4e128a20a"
+
+[[package]]
+name = "libfuzzer-sys"
+version = "0.4.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf78f52d400cf2d84a3a973a78a592b4adc535739e0a5597a0da6f0c357adc75"
+dependencies = [
+ "arbitrary",
+ "cc",
+]
 
 [[package]]
 name = "libloading"
@@ -5087,6 +5300,15 @@ name = "memchr"
 version = "2.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78ca9ab1a0babb1e7d5695e3530886289c18cf2f87ec19a575a0abdce112e3a3"
+
+[[package]]
+name = "memmap2"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd3f7eed9d3848f8b98834af67102b720745c4ec028fcd0aa0239277e7de374f"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "memoffset"
@@ -6232,6 +6454,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "portable-atomic"
+version = "1.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "350e9b48cbc6b0e028b0473b114454c6316e57336ee184ceab6e53f72c178b3e"
+
+[[package]]
+name = "portable-atomic-util"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8a2f0d8d040d7848a709caf78912debcc3f33ee4b3cac47d73d1e1069e83507"
+dependencies = [
+ "portable-atomic",
+]
+
+[[package]]
 name = "powerfmt"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6245,6 +6482,12 @@ checksum = "77957b295656769bb8ad2b6a6b09d897d94f05c41b069aede1fcdaa675eaea04"
 dependencies = [
  "zerocopy 0.7.35",
 ]
+
+[[package]]
+name = "pretty-hex"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6fa0831dd7cc608c38a5e323422a0077678fa5744aa2be4ad91c4ece8eec8d5"
 
 [[package]]
 name = "pretty_assertions"
@@ -9262,7 +9505,7 @@ version = "0.1.0"
 dependencies = [
  "block",
  "clap",
- "env_logger 0.11.6",
+ "env_logger 0.11.7",
  "epoll",
  "libc",
  "log",
@@ -9280,7 +9523,7 @@ name = "vhost_user_net"
 version = "0.1.0"
 dependencies = [
  "clap",
- "env_logger 0.11.6",
+ "env_logger 0.11.7",
  "epoll",
  "libc",
  "log",
@@ -10210,6 +10453,12 @@ dependencies = [
  "linux-raw-sys",
  "rustix",
 ]
+
+[[package]]
+name = "xdg"
+version = "2.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "213b7324336b53d2414b2db8537e56544d981803139155afa84f76eeebb7a546"
 
 [[package]]
 name = "xdg-home"

@@ -19,12 +19,15 @@ bolero = "0.10.0"  # Property-based testing framework with fuzzing support
 humantime = "2.1.0"
 tracing = "0.1.37"
 tokio = { version = "1.29.1", features = ["full"] }
+clap = { version = "4.4.12", features = ["derive"] }
 
 # Formation Network crates
 form-types = { path = "../form-types" }
 form-traits = { path = "../form-traits" }
 form-state = { path = "../form-state" }
 form-p2p = { path = "../form-p2p" }
+form-node-metrics = { path = "../form-node-metrics" }
+form-vm-metrics = { path = "../form-vm-metrics" }
 # Uncommenting only the ones we actually need for our current fuzzers
 # form-vmm = { path = "../form-vmm/form-vmm" }
 # form-cli = { path = "../form-cli" }
@@ -59,10 +62,38 @@ path = "src/bin/fuzz_p2p.rs"
 name = "fuzz_state"
 path = "src/bin/fuzz_state.rs"
 
-# Additional fuzzers will be added here as they are implemented
+[[bin]]
+name = "fuzz_node_metrics"
+path = "src/bin/fuzz_node_metrics.rs"
+
+[[bin]]
+name = "fuzz_vm_metrics"
+path = "src/bin/fuzz_vm_metrics.rs"
+
+[[bin]]
+name = "fuzz_mcp"
+path = "src/bin/fuzz_mcp.rs"
+
+[[bin]]
+name = "fuzz_economic"
+path = "src/bin/fuzz_economic.rs"
+
+[[bin]]
+name = "fuzz_dns"
+path = "src/bin/fuzz_dns.rs"
+
+[[bin]]
+name = "fuzz_network"
+path = "src/bin/fuzz_network.rs"
+
+[[bin]]
+name = "fuzz_pack"
+path = "src/bin/fuzz_pack.rs"
+
+[[bin]]
+name = "fuzz_routing"
+path = "src/bin/fuzz_routing.rs"
 
 [lib]
 name = "form_fuzzing"
 path = "src/lib.rs"
-
-# Removed profiles as they should be defined at workspace level 
