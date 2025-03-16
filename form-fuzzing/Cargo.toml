@@ -1,0 +1,99 @@
+[package]
+name = "form-fuzzing"
+version = "0.1.0"
+edition = "2021"
+description = "Comprehensive fuzzing infrastructure for the Formation Network"
+repository = "https://github.com/formation/formation"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+# Fuzzing-specific dependencies
+arbitrary = "1.3.0"
+libfuzzer-sys = "0.4.6"
+honggfuzz = "0.5.55"
+afl = "0.12.11"
+proptest = "1.2.0"
+rand = "0.8.5"
+fake = "2.6.1"
+bolero = "0.10.0"  # Property-based testing framework with fuzzing support
+humantime = "2.1.0"
+tracing = "0.1.37"
+tokio = { version = "1.29.1", features = ["full"] }
+clap = { version = "4.4.12", features = ["derive"] }
+
+# Formation Network crates
+form-types = { path = "../form-types" }
+form-traits = { path = "../form-traits" }
+form-state = { path = "../form-state" }
+form-p2p = { path = "../form-p2p" }
+form-node-metrics = { path = "../form-node-metrics" }
+form-vm-metrics = { path = "../form-vm-metrics" }
+# Uncommenting only the ones we actually need for our current fuzzers
+# form-vmm = { path = "../form-vmm/form-vmm" }
+# form-cli = { path = "../form-cli" }
+# form-net = { path = "../form-net/formnet" }
+# form-dns = { path = "../form-dns" }
+# form-rplb = { path = "../form-rplb" }
+# form-mcp = { path = "../form-mcp" }
+
+# These dependencies are needed for compiling our mock CRDT types
+crdts = { git = "http://github.com/Cryptonomikhan/rust-crdt", rev = "af3a3dd" }
+serde = { version = "1.0.199", features = ["derive"] }
+uuid = { version = "1.8.0", features = [ "v4", "fast-rng", "macro-diagnostics", "serde"] }
+chrono = "0.4"
+hex = "0.4.3"
+serde_json = "1.0"
+log = "0.4.26"
+env_logger = "0.11.7"
+
+[features]
+default = []
+timeout = []
+
+[[bin]]
+name = "fuzz_vm_management"
+path = "src/bin/fuzz_vm_management.rs"
+
+[[bin]]
+name = "fuzz_p2p"
+path = "src/bin/fuzz_p2p.rs"
+
+[[bin]]
+name = "fuzz_state"
+path = "src/bin/fuzz_state.rs"
+
+[[bin]]
+name = "fuzz_node_metrics"
+path = "src/bin/fuzz_node_metrics.rs"
+
+[[bin]]
+name = "fuzz_vm_metrics"
+path = "src/bin/fuzz_vm_metrics.rs"
+
+[[bin]]
+name = "fuzz_mcp"
+path = "src/bin/fuzz_mcp.rs"
+
+[[bin]]
+name = "fuzz_economic"
+path = "src/bin/fuzz_economic.rs"
+
+[[bin]]
+name = "fuzz_dns"
+path = "src/bin/fuzz_dns.rs"
+
+[[bin]]
+name = "fuzz_network"
+path = "src/bin/fuzz_network.rs"
+
+[[bin]]
+name = "fuzz_pack"
+path = "src/bin/fuzz_pack.rs"
+
+[[bin]]
+name = "fuzz_routing"
+path = "src/bin/fuzz_routing.rs"
+
+[lib]
+name = "form_fuzzing"
+path = "src/lib.rs"
