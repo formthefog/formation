@@ -27,9 +27,11 @@ def run_worker(rank, world_size, input_data):
 
     # Splitting layers across workers
     total_layers = len(model.transformer.h)
-    layers_per_node = total_layers // 2  
+    layers_per_node = total_layers // world_size 
     start_layer = rank * layers_per_node
-    end_layer = start_layer + layers_per_node if rank == 0 else total_layers
+    end_layer = start_layer + layers_per_node if rank < world_size - 1 else total_layers
+
+    print(total_layers, layers_per_node, start_layer, end_layer)
 
     # Move only assigned layers to the correct device
     for i, layer in enumerate(model.transformer.h):
@@ -52,9 +54,9 @@ def run_worker(rank, world_size, input_data):
         dist.send(input_ids, 1)  
         print("Worker 0: Data sent to Worker 1.")
 
-        # Wait for final processed text from Worker 1
+        # Wait for final processed text from last worker
         recv_buffer = torch.zeros(1024, dtype=torch.uint8).to(device)  # Allocate large enough buffer
-        dist.recv(recv_buffer, 1)
+        dist.recv(recv_buffer, world_size - 1)
 
         # Decode received text
         received_text = recv_buffer.cpu().numpy().tobytes().decode("utf-8").strip("\x00")
@@ -62,40 +64,37 @@ def run_worker(rank, world_size, input_data):
 
         return received_text
 
-    elif rank == 1:
-        print("Worker 1: Waiting for hidden states from Worker 0...")
+    elif rank > 0:
+        print(f"Worker {rank}: Waiting for hidden states from Worker {rank - 1}...")
 
-        # Receive hidden states from Worker 0
         recv_hidden_states = torch.zeros(1, 128, model.config.n_embd).to(device)
-        dist.recv(recv_hidden_states, 0)
+        dist.recv(recv_hidden_states, rank - 1)
 
-        # Ensure `input_ids` is properly received
         recv_input_ids = torch.zeros((1, 10), dtype=torch.long).to(device)
-        dist.recv(recv_input_ids, 0)
+        dist.recv(recv_input_ids, rank - 1)
 
-        print(f"Worker 1: Received input_ids: {recv_input_ids.tolist()}")
-
-        # Process through Worker 1's layers
         for i in range(start_layer, end_layer):
             recv_hidden_states = model.transformer.h[i](recv_hidden_states)[0]
 
-        # Generate using autoregressive decoding
-        generated_ids = model.generate(
-            input_ids=recv_input_ids,
-            max_length=recv_input_ids.shape[1] + 50,  
-            do_sample=True,  
-            top_k=50  
-        )
+        if rank == world_size - 1:
+            attention_mask = torch.ones(recv_input_ids.shape, device=device)
+            generated_ids = model.generate(
+                input_ids=recv_input_ids,
+                attention_mask=attention_mask,
+                max_length=recv_input_ids.shape[1] + 50,
+                do_sample=True,
+                top_k=50,
+                pad_token_id=tokenizer.eos_token_id
+            )
+            generated_sentence = tokenizer.decode(generated_ids.squeeze().tolist(), skip_special_tokens=True)
+            encoded_text = torch.tensor(list(generated_sentence.encode("utf-8")), dtype=torch.uint8).to(device)
 
-        print(f"Worker 1: Generated token sequence: {generated_ids.tolist()}")
+            print(f"Worker {rank}: Sending final generated text to Worker 0...")
+            dist.send(encoded_text, 0)
+        else:
+            print(f"Worker {rank}: Forwarding hidden states and input IDs to Worker {rank + 1}...")
+            dist.send(recv_hidden_states, rank + 1)
+            dist.send(recv_input_ids, rank + 1)
 
-        # Decode the generated token sequence to a string
-        generated_sentence = tokenizer.decode(generated_ids.squeeze().tolist(), skip_special_tokens=True)
-        print(f"Worker 1: Generated sentence: {generated_sentence}")
-
-        # Convert string to byte tensor and send to Worker 0
-        encoded_text = torch.tensor(list(generated_sentence.encode("utf-8")), dtype=torch.uint8).to(device)
-        dist.send(encoded_text, 0)
-        print("Worker 1: Generated text sent to Worker 0.")
 
     dist.destroy_process_group()
