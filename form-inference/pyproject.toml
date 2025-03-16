@@ -1,0 +1,23 @@
+[project]
+name = "form-inference"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "benjamindimant",email = "benjamin@dimant.com"}
+]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "torch (>=2.6.0,<3.0.0)",
+    "transformers (>=4.49.0,<5.0.0)",
+    "fastapi (>=0.115.11,<0.116.0)",
+    "pydantic (>=2.10.6,<3.0.0)",
+    "psutil (>=7.0.0,<8.0.0)",
+    "uvicorn (>=0.34.0,<0.35.0)",
+    "python-dotenv (>=1.0.1,<2.0.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
