@@ -12,7 +12,7 @@ The [VMM Service API](./vmm/index.md) provides endpoints for managing virtual ma
 
 ### State Service API
 
-The [State Service API](./state/index.md) manages the global state of the Formation cloud, including peers, CIDRs (Classless Inter-Domain Routing), associations, DNS records, instances, nodes, and accounts. This API is responsible for maintaining consistency across the distributed system.
+The [State Service API](./state/index.md) manages the global state of the Formation cloud, including users, CIDRs (Classless Inter-Domain Routing), associations, DNS records, instances, nodes, and accounts. This API is responsible for maintaining consistency across the distributed system.
 
 ### P2P Service API
 
@@ -25,6 +25,10 @@ The [DNS Service API](./dns/index.md) manages domain name resolution within the 
 ### Formnet API
 
 The [Formnet API](./formnet/index.md) manages the network layer of the Formation protocol, handling WireGuard-based encrypted connections between nodes and instances.
+
+## OpenAPI Specifications
+
+For developers who prefer standard API specifications, we provide [OpenAPI specifications](./openapi/index.md) for all our services. These specifications can be used with tools like Swagger UI, Postman, or OpenAPI Generator to facilitate integration with your applications.
 
 ## Authentication
 
@@ -47,6 +51,15 @@ All APIs accept and return JSON-formatted data unless otherwise specified. HTTP 
 ## Rate Limiting
 
 API endpoints may implement rate limiting to prevent abuse. Rate limits, when applicable, are documented in the respective API sections.
+
+## API Guidelines for Users
+
+Please note that most POST, PUT, and DELETE endpoints are intended for internal use only. As a user of the Formation Protocol, you should primarily interact with the GET endpoints which provide read-only access to the system state. The primary exceptions to this rule are:
+
+1. **P2P Service API**: Users can publish messages to the message queue
+2. **Inference Engine API**: Users can make direct inference requests to the network (coming soon)
+
+Attempting to use internal-only endpoints may result in authentication errors or service disruption.
 
 ## Next Steps
 

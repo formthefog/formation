@@ -1,0 +1,1602 @@
+openapi: 3.0.3
+info:
+  title: Formation State Service API
+  description: |
+    API for managing global state across the Formation cloud platform.
+    The State Service maintains the globally consistent state of the Formation cloud.
+    It is responsible for managing all network resources including users, DNS records, instances, nodes, and accounts.
+  version: 1.0.0
+servers:
+  - url: http://localhost:3004
+    description: Local State Service
+  - url: https://api.formation.cloud/state
+    description: Production State Service
+tags:
+  - name: Core
+    description: Core endpoints for health checking
+  - name: Users
+    description: Endpoints for managing users
+  - name: DNS Records
+    description: Endpoints for managing DNS records
+  - name: Instances
+    description: Endpoints for managing VM instances
+  - name: Nodes
+    description: Endpoints for managing compute nodes
+  - name: Accounts
+    description: Endpoints for managing user accounts
+
+paths:
+  /ping:
+    get:
+      summary: Health Check
+      description: Verifies that the State Service is running and responsive.
+      tags:
+        - Core
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "healthy"
+
+  /user/{id}/get:
+    get:
+      summary: Get User
+      description: Retrieves information about a specific user by ID.
+      tags:
+        - Users
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The ID of the user to retrieve
+      responses:
+        '200':
+          description: User information retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /user/{ip}/get_from_ip:
+    get:
+      summary: Get User by IP
+      description: Retrieves information about a user based on their IP address.
+      tags:
+        - Users
+      parameters:
+        - name: ip
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The IP address of the user to retrieve
+      responses:
+        '200':
+          description: User information retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /user/{id}/get_all_allowed:
+    get:
+      summary: Get All Allowed Users
+      description: Retrieves all users that are allowed to interact with the specified user.
+      tags:
+        - Users
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The ID of the user
+      responses:
+        '200':
+          description: List of allowed users retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserListResponse'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /user/list:
+    get:
+      summary: List Users
+      description: Retrieves a list of all users.
+      tags:
+        - Users
+      responses:
+        '200':
+          description: List of users retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserListResponse'
+
+  /user/list_admin:
+    get:
+      summary: List Admin Users
+      description: Retrieves a list of all users with administrative privileges.
+      tags:
+        - Users
+      responses:
+        '200':
+          description: List of admin users retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserListResponse'
+
+  /user/{cidr}/list:
+    get:
+      summary: List Users by CIDR
+      description: Retrieves a list of users associated with a specific CIDR.
+      tags:
+        - Users
+      parameters:
+        - name: cidr
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The CIDR ID to list users for
+      responses:
+        '200':
+          description: List of users retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserListResponse'
+        '404':
+          description: CIDR not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /dns/{domain}/get:
+    get:
+      summary: Get DNS Record
+      description: Retrieves information about a specific DNS record.
+      tags:
+        - DNS Records
+      parameters:
+        - name: domain
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The domain name to retrieve the DNS record for
+      responses:
+        '200':
+          description: DNS record retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DnsRecordResponse'
+        '404':
+          description: DNS record not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /dns/{node_ip}/list:
+    get:
+      summary: Get DNS Records by Node IP
+      description: Retrieves DNS records associated with a specific node IP.
+      tags:
+        - DNS Records
+      parameters:
+        - name: node_ip
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The node IP to retrieve DNS records for
+      responses:
+        '200':
+          description: DNS records retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DnsRecordListResponse'
+        '404':
+          description: Node IP not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /dns/list:
+    get:
+      summary: List DNS Records
+      description: Retrieves a list of all DNS records.
+      tags:
+        - DNS Records
+      responses:
+        '200':
+          description: List of DNS records retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DnsRecordListResponse'
+
+  /instance/{instance_id}/get:
+    get:
+      summary: Get Instance
+      description: Retrieves information about a specific instance.
+      tags:
+        - Instances
+      parameters:
+        - name: instance_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The ID of the instance to retrieve
+      responses:
+        '200':
+          description: Instance information retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceResponse'
+        '404':
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /instance/{build_id}/get_by_build_id:
+    get:
+      summary: Get Instance by Build ID
+      description: Retrieves information about an instance using its build ID.
+      tags:
+        - Instances
+      parameters:
+        - name: build_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The build ID of the instance to retrieve
+      responses:
+        '200':
+          description: Instance information retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceResponse'
+        '404':
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /instance/{build_id}/get_instance_ips:
+    get:
+      summary: Get Instance IPs
+      description: Retrieves IP addresses associated with a specific instance.
+      tags:
+        - Instances
+      parameters:
+        - name: build_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The build ID of the instance to retrieve IPs for
+      responses:
+        '200':
+          description: Instance IPs retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IpListResponse'
+        '404':
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /instance/{instance_id}/metrics:
+    get:
+      summary: Get Instance Metrics
+      description: Retrieves performance metrics for a specific instance.
+      tags:
+        - Instances
+      parameters:
+        - name: instance_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The ID of the instance to retrieve metrics for
+      responses:
+        '200':
+          description: Instance metrics retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceMetricsResponse'
+        '404':
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /instance/list/metrics:
+    get:
+      summary: List Instance Metrics
+      description: Retrieves performance metrics for all instances.
+      tags:
+        - Instances
+      responses:
+        '200':
+          description: Instance metrics list retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceMetricsListResponse'
+
+  /cluster/{build_id}/metrics:
+    get:
+      summary: Get Cluster Metrics
+      description: Retrieves performance metrics for a specific cluster.
+      tags:
+        - Instances
+      parameters:
+        - name: build_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The build ID of the cluster to retrieve metrics for
+      responses:
+        '200':
+          description: Cluster metrics retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClusterMetricsResponse'
+        '404':
+          description: Cluster not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /instance/list:
+    get:
+      summary: List Instances
+      description: Retrieves a list of all instances.
+      tags:
+        - Instances
+      responses:
+        '200':
+          description: List of instances retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceListResponse'
+
+  /node/{id}/get:
+    get:
+      summary: Get Node
+      description: Retrieves information about a specific node.
+      tags:
+        - Nodes
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The ID of the node to retrieve
+      responses:
+        '200':
+          description: Node information retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeResponse'
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /node/{id}/metrics:
+    get:
+      summary: Get Node Metrics
+      description: Retrieves performance metrics for a specific node.
+      tags:
+        - Nodes
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The ID of the node to retrieve metrics for
+      responses:
+        '200':
+          description: Node metrics retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeMetricsResponse'
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /node/list/metrics:
+    get:
+      summary: List Node Metrics
+      description: Retrieves performance metrics for all nodes.
+      tags:
+        - Nodes
+      responses:
+        '200':
+          description: Node metrics list retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeMetricsListResponse'
+
+  /node/list:
+    get:
+      summary: List Nodes
+      description: Retrieves a list of all nodes.
+      tags:
+        - Nodes
+      responses:
+        '200':
+          description: List of nodes retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeListResponse'
+
+  /account/{address}/get:
+    get:
+      summary: Get Account
+      description: Retrieves information about a specific account by Ethereum address.
+      tags:
+        - Accounts
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The Ethereum address of the account to retrieve
+      responses:
+        '200':
+          description: Account information retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountResponse'
+        '404':
+          description: Account not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /account/list:
+    get:
+      summary: List Accounts
+      description: Retrieves a list of all accounts.
+      tags:
+        - Accounts
+      responses:
+        '200':
+          description: List of accounts retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountListResponse'
+
+components:
+  schemas:
+    Success:
+      type: object
+      oneOf:
+        - type: object
+          properties:
+            Some:
+              type: object
+              description: Single item response
+        - type: object
+          properties:
+            List:
+              type: array
+              description: List of items
+        - type: object
+          properties:
+            None:
+              type: object
+              description: Empty response
+
+    Response:
+      type: object
+      oneOf:
+        - type: object
+          properties:
+            Success:
+              $ref: '#/components/schemas/Success'
+        - type: object
+          properties:
+            Failure:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  description: Error message
+
+    ErrorResponse:
+      type: object
+      properties:
+        Failure:
+          type: object
+          properties:
+            reason:
+              type: string
+              description: Error message
+      required:
+        - Failure
+
+    UserContents:
+      type: object
+      properties:
+        name:
+          type: string
+          description: User name
+        ip:
+          type: string
+          description: IP address
+        cidr_id:
+          type: string
+          description: CIDR ID
+        public_key:
+          type: string
+          description: Public key
+        endpoint:
+          type: string
+          nullable: true
+          description: WireGuard endpoint
+        persistent_keepalive_interval:
+          type: integer
+          nullable: true
+          description: WireGuard persistent keepalive interval
+        is_admin:
+          type: boolean
+          description: Whether the user has admin privileges
+        is_disabled:
+          type: boolean
+          description: Whether the user is disabled
+        is_redeemed:
+          type: boolean
+          description: Whether the user has redeemed their invite
+        invite_expires:
+          type: integer
+          nullable: true
+          description: When the user's invite expires (if not redeemed)
+        candidates:
+          type: array
+          items:
+            type: string
+          description: Candidate nodes
+      required:
+        - name
+        - ip
+        - cidr_id
+        - public_key
+        - is_admin
+        - is_disabled
+        - is_redeemed
+        - candidates
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          description: User ID
+        contents:
+          $ref: '#/components/schemas/UserContents'
+      required:
+        - id
+        - contents
+
+    UserResponse:
+      type: object
+      properties:
+        Success:
+          type: object
+          properties:
+            Some:
+              $ref: '#/components/schemas/User'
+          required:
+            - Some
+      required:
+        - Success
+
+    UserListItem:
+      $ref: '#/components/schemas/User'
+
+    UserListResponse:
+      type: object
+      properties:
+        Success:
+          type: object
+          properties:
+            List:
+              type: array
+              items:
+                $ref: '#/components/schemas/UserListItem'
+          required:
+            - List
+      required:
+        - Success
+
+    DnsRecord:
+      type: object
+      properties:
+        domain:
+          type: string
+          description: Domain name
+        record_type:
+          type: string
+          description: Record type (A, AAAA, CNAME, etc.)
+        formnet_ip:
+          type: array
+          items:
+            type: string
+          description: FormNet socket addresses (IP:port) for this record
+        public_ip:
+          type: array
+          items:
+            type: string
+          description: Public socket addresses (IP:port) for this record
+        cname_target:
+          type: string
+          nullable: true
+          description: Target domain for CNAME records
+        ttl:
+          type: integer
+          description: Time to live in seconds
+        ssl_cert:
+          type: boolean
+          description: Whether SSL certificate is enabled for this domain
+      required:
+        - domain
+        - record_type
+        - formnet_ip
+        - public_ip
+        - ttl
+        - ssl_cert
+
+    DnsRecordResponse:
+      type: object
+      properties:
+        Success:
+          type: object
+          properties:
+            Some:
+              $ref: '#/components/schemas/DnsRecord'
+          required:
+            - Some
+      required:
+        - Success
+
+    DnsRecordListItem:
+      $ref: '#/components/schemas/DnsRecord'
+
+    DnsRecordListResponse:
+      type: object
+      properties:
+        Success:
+          type: object
+          properties:
+            List:
+              type: array
+              items:
+                $ref: '#/components/schemas/DnsRecordListItem'
+          required:
+            - List
+      required:
+        - Success
+
+    Instance:
+      type: object
+      properties:
+        instance_id:
+          type: string
+          description: Instance ID
+        node_id:
+          type: string
+          description: Node ID where the instance is running
+        build_id:
+          type: string
+          description: Build ID
+        instance_owner:
+          type: string
+          description: Owner user ID
+        formnet_ip:
+          type: string
+          nullable: true
+          description: FormNet IP address
+        dns_record:
+          $ref: '#/components/schemas/DnsRecord'
+          nullable: true
+          description: DNS record for this instance
+        created_at:
+          type: integer
+          description: Creation timestamp
+        updated_at:
+          type: integer
+          description: Last update timestamp
+        last_snapshot:
+          type: integer
+          description: Last snapshot timestamp
+        status:
+          type: string
+          enum: [Building, Built, Created, Started, Stopped, Killed, CriticalError]
+          description: Instance status
+        host_region:
+          type: string
+          description: Host region
+        resources:
+          $ref: '#/components/schemas/InstanceResources'
+          description: Resources allocated to this instance
+        cluster:
+          $ref: '#/components/schemas/InstanceCluster'
+          description: Cluster configuration if part of a cluster
+        formfile:
+          type: string
+          description: Base64 encoded formfile content
+        snapshots:
+          $ref: '#/components/schemas/Snapshots'
+          nullable: true
+          description: Snapshot history
+        metadata:
+          $ref: '#/components/schemas/InstanceMetadata'
+          description: Instance metadata
+      required:
+        - instance_id
+        - node_id
+        - build_id
+        - instance_owner
+        - created_at
+        - updated_at
+        - last_snapshot
+        - status
+        - host_region
+        - resources
+        - cluster
+        - formfile
+        - metadata
+
+    InstanceResources:
+      type: object
+      properties:
+        vcpus:
+          type: integer
+          description: Number of virtual CPUs
+        memory_mb:
+          type: integer
+          description: Memory size in MiB
+        bandwidth_mbps:
+          type: integer
+          description: Network bandwidth in Mbps
+        gpu:
+          $ref: '#/components/schemas/InstanceGpu'
+          nullable: true
+          description: GPU configuration if available
+      required:
+        - vcpus
+        - memory_mb
+        - bandwidth_mbps
+
+    InstanceGpu:
+      type: object
+      properties:
+        count:
+          type: integer
+          description: Number of GPUs
+        model:
+          type: string
+          description: GPU model
+        vram_mb:
+          type: integer
+          description: GPU VRAM in MiB
+        usage:
+          type: integer
+          description: Current GPU usage percentage
+      required:
+        - count
+        - model
+        - vram_mb
+        - usage
+
+    InstanceCluster:
+      type: object
+      properties:
+        members:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ClusterMember'
+          description: Map of member instance IDs to cluster member details
+        scaling_policy:
+          $ref: '#/components/schemas/ScalingPolicy'
+          nullable: true
+          description: Scaling policy configuration
+        template_instance_id:
+          type: string
+          nullable: true
+          description: Instance ID to use as template for scaling
+        session_affinity_enabled:
+          type: boolean
+          description: Whether session affinity is enabled
+      required:
+        - members
+        - session_affinity_enabled
+
+    ClusterMember:
+      type: object
+      properties:
+        node_id:
+          type: string
+          description: Node ID
+        node_public_ip:
+          type: string
+          description: Node public IP
+        node_formnet_ip:
+          type: string
+          description: Node FormNet IP
+        instance_id:
+          type: string
+          description: Instance ID
+        instance_formnet_ip:
+          type: string
+          description: Instance FormNet IP
+        status:
+          type: string
+          description: Member status
+        last_heartbeat:
+          type: integer
+          description: Last heartbeat timestamp
+        heartbeats_skipped:
+          type: integer
+          description: Number of heartbeats skipped
+      required:
+        - node_id
+        - node_public_ip
+        - node_formnet_ip
+        - instance_id
+        - instance_formnet_ip
+        - status
+        - last_heartbeat
+        - heartbeats_skipped
+
+    ScalingPolicy:
+      type: object
+      properties:
+        min_instances:
+          type: integer
+          description: Minimum number of instances
+        max_instances:
+          type: integer
+          description: Maximum number of instances
+        target_cpu_utilization:
+          type: integer
+          description: Target CPU utilization percentage
+        scale_in_cooldown_seconds:
+          type: integer
+          description: Scale-in cooldown period in seconds
+        scale_out_cooldown_seconds:
+          type: integer
+          description: Scale-out cooldown period in seconds
+        last_scale_in_time:
+          type: integer
+          description: Last scale-in operation timestamp
+        last_scale_out_time:
+          type: integer
+          description: Last scale-out operation timestamp
+      required:
+        - min_instances
+        - max_instances
+        - target_cpu_utilization
+        - scale_in_cooldown_seconds
+        - scale_out_cooldown_seconds
+        - last_scale_in_time
+        - last_scale_out_time
+
+    Snapshots:
+      type: object
+      properties:
+        snapshot_id:
+          type: string
+          description: Snapshot ID
+        timestamp:
+          type: integer
+          description: Snapshot timestamp
+        description:
+          type: string
+          nullable: true
+          description: Snapshot description
+        previous_snapshot:
+          $ref: '#/components/schemas/Snapshots'
+          nullable: true
+          description: Previous snapshot in the chain
+      required:
+        - snapshot_id
+        - timestamp
+
+    InstanceMetadata:
+      type: object
+      properties:
+        tags:
+          type: array
+          items:
+            type: string
+          description: Instance tags
+        description:
+          type: string
+          description: Instance description
+        annotations:
+          $ref: '#/components/schemas/InstanceAnnotations'
+          description: Instance annotations
+        security:
+          $ref: '#/components/schemas/InstanceSecurity'
+          description: Instance security configuration
+        monitoring:
+          $ref: '#/components/schemas/InstanceMonitoring'
+          description: Instance monitoring configuration
+      required:
+        - tags
+        - description
+        - annotations
+        - security
+        - monitoring
+
+    InstanceAnnotations:
+      type: object
+      properties:
+        deployed_by:
+          type: string
+          description: User ID that deployed the instance
+        network_id:
+          type: integer
+          description: Network ID
+        build_commit:
+          type: string
+          nullable: true
+          description: Git commit hash of the build
+      required:
+        - deployed_by
+        - network_id
+
+    InstanceSecurity:
+      type: object
+      properties:
+        encryption:
+          $ref: '#/components/schemas/InstanceEncryption'
+          description: Encryption configuration
+        tee:
+          type: boolean
+          description: Whether Trusted Execution Environment is enabled
+        hsm:
+          type: boolean
+          description: Whether Hardware Security Module is enabled
+      required:
+        - encryption
+        - tee
+        - hsm
+
+    InstanceEncryption:
+      type: object
+      properties:
+        is_encrypted:
+          type: boolean
+          description: Whether the instance is encrypted
+        scheme:
+          type: string
+          nullable: true
+          description: Encryption scheme
+      required:
+        - is_encrypted
+
+    InstanceMonitoring:
+      type: object
+      properties:
+        logging_enabled:
+          type: boolean
+          description: Whether logging is enabled
+        metrics_endpoint:
+          type: string
+          description: Metrics endpoint URL
+      required:
+        - logging_enabled
+        - metrics_endpoint
+
+    InstanceMetrics:
+      type: object
+      properties:
+        load_avg_1:
+          type: integer
+          description: 1-minute load average (scaled)
+        load_avg_5:
+          type: integer
+          description: 5-minute load average (scaled)
+        load_avg_15:
+          type: integer
+          description: 15-minute load average (scaled)
+        process_count:
+          type: integer
+          description: Number of processes
+        disk_read_bytes_per_sec:
+          type: integer
+          description: Disk read throughput in bytes per second
+        disk_write_bytes_per_sec:
+          type: integer
+          description: Disk write throughput in bytes per second
+        network_in_bytes_per_sec:
+          type: integer
+          description: Network inbound throughput in bytes per second
+        network_out_bytes_per_sec:
+          type: integer
+          description: Network outbound throughput in bytes per second
+        cpu_temperature:
+          type: integer
+          nullable: true
+          description: CPU temperature in degrees Celsius
+        gpu_temperature:
+          type: integer
+          nullable: true
+          description: GPU temperature in degrees Celsius
+        power_usage_watts:
+          type: integer
+          nullable: true
+          description: Power usage in watts
+      required:
+        - load_avg_1
+        - load_avg_5
+        - load_avg_15
+        - process_count
+        - disk_read_bytes_per_sec
+        - disk_write_bytes_per_sec
+        - network_in_bytes_per_sec
+        - network_out_bytes_per_sec
+
+    InstanceMetricsResponse:
+      type: object
+      properties:
+        Success:
+          type: object
+          properties:
+            Some:
+              $ref: '#/components/schemas/InstanceMetrics'
+          required:
+            - Some
+      required:
+        - Success
+
+    InstanceMetricsListItem:
+      $ref: '#/components/schemas/InstanceMetrics'
+
+    InstanceMetricsListResponse:
+      type: object
+      properties:
+        Success:
+          type: object
+          properties:
+            List:
+              type: array
+              items:
+                $ref: '#/components/schemas/InstanceMetricsListItem'
+          required:
+            - List
+      required:
+        - Success
+
+    ClusterMemberMetrics:
+      type: object
+      properties:
+        instance_id:
+          type: string
+          description: Instance ID
+        cpu_usage_percentage:
+          type: number
+          format: float
+          description: CPU usage percentage
+        memory_usage_mib:
+          type: integer
+          description: Memory usage in MiB
+        disk_usage_gb:
+          type: number
+          format: float
+          description: Disk usage in GB
+        network_rx_bytes:
+          type: integer
+          description: Network received bytes
+        network_tx_bytes:
+          type: integer
+          description: Network transmitted bytes
+      required:
+        - instance_id
+        - cpu_usage_percentage
+        - memory_usage_mib
+        - disk_usage_gb
+        - network_rx_bytes
+        - network_tx_bytes
+
+    ClusterMetrics:
+      type: object
+      properties:
+        cluster_id:
+          type: string
+          description: Cluster ID
+        cpu_usage_percentage:
+          type: number
+          format: float
+          description: CPU usage percentage
+        memory_usage_mib:
+          type: integer
+          description: Memory usage in MiB
+        disk_usage_gb:
+          type: number
+          format: float
+          description: Disk usage in GB
+        network_rx_bytes:
+          type: integer
+          description: Network received bytes
+        network_tx_bytes:
+          type: integer
+          description: Network transmitted bytes
+        timestamp:
+          type: integer
+          description: Metrics timestamp
+        members:
+          type: array
+          items:
+            $ref: '#/components/schemas/ClusterMemberMetrics'
+          description: Metrics for individual cluster members
+      required:
+        - cluster_id
+        - cpu_usage_percentage
+        - memory_usage_mib
+        - disk_usage_gb
+        - network_rx_bytes
+        - network_tx_bytes
+        - timestamp
+        - members
+
+    ClusterMetricsResponse:
+      type: object
+      properties:
+        Success:
+          type: object
+          properties:
+            Some:
+              $ref: '#/components/schemas/ClusterMetrics'
+          required:
+            - Some
+      required:
+        - Success
+
+    Node:
+      type: object
+      properties:
+        node_id:
+          type: string
+          description: Node ID
+        node_owner:
+          type: string
+          description: Owner user ID
+        created_at:
+          type: integer
+          description: Creation timestamp
+        updated_at:
+          type: integer
+          description: Last update timestamp
+        last_heartbeat:
+          type: integer
+          description: Last heartbeat timestamp
+        host_region:
+          type: string
+          description: Host region
+        capabilities:
+          $ref: '#/components/schemas/NodeCapabilities'
+          description: Node hardware capabilities
+        capacity:
+          $ref: '#/components/schemas/NodeCapacity'
+          description: Node capacity
+        metrics:
+          $ref: '#/components/schemas/NodeMetrics'
+          description: Node metrics
+        metadata:
+          $ref: '#/components/schemas/NodeMetadata'
+          description: Node metadata
+        host:
+          type: object
+          description: Node hostname information
+      required:
+        - node_id
+        - node_owner
+        - created_at
+        - updated_at
+        - last_heartbeat
+        - host_region
+        - capabilities
+        - capacity
+        - metrics
+        - metadata
+        - host
+
+    NodeCapabilities:
+      type: object
+      properties:
+        cpu_model:
+          type: string
+          description: CPU model
+        cpu_cores:
+          type: integer
+          description: Number of CPU cores
+        total_memory:
+          type: integer
+          description: Total memory in MB
+        total_storage:
+          type: integer
+          description: Total storage in bytes
+        gpu_models:
+          type: array
+          items:
+            $ref: '#/components/schemas/GpuInfo'
+          description: GPU information
+        network_interfaces:
+          type: array
+          items:
+            $ref: '#/components/schemas/NetworkCapability'
+          description: Network interfaces
+        tpm:
+          $ref: '#/components/schemas/TpmInfo'
+          nullable: true
+          description: TPM information
+        sgx:
+          $ref: '#/components/schemas/SgxInfo'
+          nullable: true
+          description: SGX information
+        sev:
+          $ref: '#/components/schemas/SevInfo'
+          nullable: true
+          description: SEV information
+        virtualization_type:
+          type: string
+          nullable: true
+          description: Virtualization type
+      required:
+        - cpu_model
+        - cpu_cores
+        - total_memory
+        - total_storage
+        - gpu_models
+        - network_interfaces
+
+    GpuInfo:
+      type: object
+      properties:
+        model:
+          type: string
+          description: GPU model
+        vram_mb:
+          type: integer
+          description: GPU VRAM in MB
+        count:
+          type: integer
+          description: Number of GPUs of this model
+      required:
+        - model
+        - vram_mb
+        - count
+
+    NetworkCapability:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Network interface name
+        speed_mbps:
+          type: integer
+          description: Interface speed in Mbps
+        is_public:
+          type: boolean
+          description: Whether this interface has public IP
+      required:
+        - name
+        - speed_mbps
+        - is_public
+
+    TpmInfo:
+      type: object
+      properties:
+        version:
+          type: string
+          description: TPM version
+        manufacturer:
+          type: string
+          description: TPM manufacturer
+      required:
+        - version
+        - manufacturer
+
+    SgxInfo:
+      type: object
+      properties:
+        supported:
+          type: boolean
+          description: Whether SGX is supported
+        epc_size_mb:
+          type: integer
+          description: EPC size in MB
+      required:
+        - supported
+        - epc_size_mb
+
+    SevInfo:
+      type: object
+      properties:
+        supported:
+          type: boolean
+          description: Whether SEV is supported
+        version:
+          type: string
+          description: SEV version
+      required:
+        - supported
+        - version
+
+    NodeCapacity:
+      type: object
+      properties:
+        cpu_total_cores:
+          type: integer
+          description: Total CPU cores
+        cpu_available_cores:
+          type: integer
+          description: Available CPU cores (scaled by 1000)
+        memory_total_bytes:
+          type: integer
+          description: Total memory in bytes
+        memory_available_bytes:
+          type: integer
+          description: Available memory in bytes
+        storage_total_bytes:
+          type: integer
+          description: Total storage in bytes
+        storage_available_bytes:
+          type: integer
+          description: Available storage in bytes
+        gpu_total_memory_bytes:
+          type: integer
+          description: Total GPU memory in bytes
+        gpu_available_memory_bytes:
+          type: integer
+          description: Available GPU memory in bytes
+        network_total_bandwidth:
+          type: integer
+          description: Total network bandwidth
+        network_available_bandwidth:
+          type: integer
+          description: Available network bandwidth
+      required:
+        - cpu_total_cores
+        - cpu_available_cores
+        - memory_total_bytes
+        - memory_available_bytes
+        - storage_total_bytes
+        - storage_available_bytes
+        - gpu_total_memory_bytes
+        - gpu_available_memory_bytes
+        - network_total_bandwidth
+        - network_available_bandwidth
+
+    NodeMetrics:
+      type: object
+      properties:
+        load_avg_1:
+          type: integer
+          description: 1-minute load average (scaled)
+        load_avg_5:
+          type: integer
+          description: 5-minute load average (scaled)
+        load_avg_15:
+          type: integer
+          description: 15-minute load average (scaled)
+        process_count:
+          type: integer
+          description: Number of processes
+        disk_read_bytes_per_sec:
+          type: integer
+          description: Disk read throughput in bytes per second
+        disk_write_bytes_per_sec:
+          type: integer
+          description: Disk write throughput in bytes per second
+        network_in_bytes_per_sec:
+          type: integer
+          description: Network inbound throughput in bytes per second
+        network_out_bytes_per_sec:
+          type: integer
+          description: Network outbound throughput in bytes per second
+        cpu_temperature:
+          type: integer
+          nullable: true
+          description: CPU temperature in degrees Celsius
+        gpu_temperature:
+          type: integer
+          nullable: true
+          description: GPU temperature in degrees Celsius
+        power_usage_watts:
+          type: integer
+          nullable: true
+          description: Power usage in watts
+      required:
+        - load_avg_1
+        - load_avg_5
+        - load_avg_15
+        - process_count
+        - disk_read_bytes_per_sec
+        - disk_write_bytes_per_sec
+        - network_in_bytes_per_sec
+        - network_out_bytes_per_sec
+
+    NodeMetadata:
+      type: object
+      properties:
+        tags:
+          type: array
+          items:
+            type: string
+          description: Node tags
+        description:
+          type: string
+          description: Node description
+        annotations:
+          $ref: '#/components/schemas/NodeAnnotations'
+          description: Node annotations
+        monitoring:
+          $ref: '#/components/schemas/NodeMonitoring'
+          description: Node monitoring configuration
+      required:
+        - tags
+        - description
+        - annotations
+        - monitoring
+
+    NodeAnnotations:
+      type: object
+      properties:
+        roles:
+          type: array
+          items:
+            type: string
+          description: Node roles
+        datacenter:
+          type: string
+          description: Datacenter identifier
+      required:
+        - roles
+        - datacenter
+
+    NodeMonitoring:
+      type: object
+      properties:
+        logging_enabled:
+          type: boolean
+          description: Whether logging is enabled
+        metrics_endpoint:
+          type: string
+          description: Metrics endpoint URL
+      required:
+        - logging_enabled
+        - metrics_endpoint
+
+    Account:
+      type: object
+      properties:
+        address:
+          type: string
+          description: Ethereum-style address
+        name:
+          type: string
+          nullable: true
+          description: Account name
+        owned_instances:
+          type: array
+          items:
+            type: string
+          description: Set of instance IDs owned by this account
+        authorized_instances:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [Owner, Manager, Operator, ReadOnly]
+          description: Map of instance IDs to authorization level
+        created_at:
+          type: integer
+          description: Creation timestamp
+        updated_at:
+          type: integer
+          description: Last update timestamp
+      required:
+        - address
+        - owned_instances
+        - authorized_instances
+        - created_at
+        - updated_at
+
+    AccountResponse:
+      type: object
+      properties:
+        Success:
+          type: object
+          properties:
+            Some:
+              $ref: '#/components/schemas/Account'
+          required:
+            - Some
+      required:
+        - Success
+
+    AccountListItem:
+      $ref: '#/components/schemas/Account'
+
+    AccountListResponse:
+      type: object
+      properties:
+        Success:
+          type: object
+          properties:
+            List:
+              type: array
+              items:
+                $ref: '#/components/schemas/AccountListItem'
+          required:
+            - List
+      required:
+        - Success 

@@ -1,0 +1,1331 @@
+openapi: 3.0.3
+info:
+  title: Formation State Service API
+  description: |
+    The State Service API for the Formation protocol manages the globally consistent 
+    state of the Formation cloud, including users, CIDRs, associations, DNS records, 
+    instances, nodes, and accounts.
+  version: 1.0.0
+  contact:
+    name: Formation Protocol
+    url: https://formation.cloud
+
+servers:
+  - url: 'https://network.formation.cloud:3004'
+    description: Formation State Service API
+
+tags:
+  - name: Health
+    description: Health check endpoints
+  - name: Users
+    description: User management endpoints
+  - name: CIDRs
+    description: CIDR management endpoints
+  - name: Associations
+    description: Association management endpoints
+  - name: DNS
+    description: DNS record management endpoints
+  - name: Instances
+    description: Instance management endpoints
+  - name: Nodes
+    description: Node management endpoints
+  - name: Accounts
+    description: Account management endpoints
+
+paths:
+  /ping:
+    get:
+      summary: Health Check
+      description: Verifies that the State Service is running and responsive.
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            text/plain:
+              example: "healthy"
+
+  # User Endpoints
+  /user/{id}/get:
+    get:
+      summary: Get User
+      description: Retrieves information about a specific user by ID.
+      tags:
+        - Users
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: User ID
+      responses:
+        '200':
+          description: User information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /user/{ip}/get_from_ip:
+    get:
+      summary: Get User by IP
+      description: Retrieves information about a user based on their IP address.
+      tags:
+        - Users
+      parameters:
+        - name: ip
+          in: path
+          required: true
+          schema:
+            type: string
+          description: User IP address
+      responses:
+        '200':
+          description: User information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /user/{id}/get_all_allowed:
+    get:
+      summary: Get All Allowed Users
+      description: Retrieves all users that are allowed to interact with the specified user.
+      tags:
+        - Users
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: User ID
+      responses:
+        '200':
+          description: List of allowed users
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserListResponse'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /user/list:
+    get:
+      summary: List Users
+      description: Retrieves a list of all users.
+      tags:
+        - Users
+      responses:
+        '200':
+          description: List of users
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserListResponse'
+
+  /user/list_admin:
+    get:
+      summary: List Admin Users
+      description: Retrieves a list of all users with administrative privileges.
+      tags:
+        - Users
+      responses:
+        '200':
+          description: List of admin users
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserListResponse'
+
+  /user/{cidr}/list:
+    get:
+      summary: List Users by CIDR
+      description: Retrieves a list of users associated with a specific CIDR.
+      tags:
+        - Users
+      parameters:
+        - name: cidr
+          in: path
+          required: true
+          schema:
+            type: string
+          description: CIDR ID
+      responses:
+        '200':
+          description: List of users for the CIDR
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserListResponse'
+        '404':
+          description: CIDR not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # CIDR Endpoints
+  /cidr/{id}/get:
+    get:
+      summary: Get CIDR
+      description: Retrieves information about a specific CIDR.
+      tags:
+        - CIDRs
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: CIDR ID
+      responses:
+        '200':
+          description: CIDR information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CidrResponse'
+        '404':
+          description: CIDR not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /cidr/list:
+    get:
+      summary: List CIDRs
+      description: Retrieves a list of all CIDRs.
+      tags:
+        - CIDRs
+      responses:
+        '200':
+          description: List of CIDRs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CidrListResponse'
+
+  # Association Endpoints
+  /assoc/list:
+    get:
+      summary: List Associations
+      description: Retrieves a list of all associations.
+      tags:
+        - Associations
+      responses:
+        '200':
+          description: List of associations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssociationListResponse'
+
+  /assoc/{cidr_id}/relationships:
+    get:
+      summary: Get CIDR Relationships
+      description: Retrieves all relationships for a specific CIDR.
+      tags:
+        - Associations
+      parameters:
+        - name: cidr_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: CIDR ID
+      responses:
+        '200':
+          description: CIDR relationships
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RelationshipResponse'
+        '404':
+          description: CIDR not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # DNS Endpoints
+  /dns/{domain}/get:
+    get:
+      summary: Get DNS Record
+      description: Retrieves information about a specific DNS record.
+      tags:
+        - DNS
+      parameters:
+        - name: domain
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Domain name
+      responses:
+        '200':
+          description: DNS record information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DnsResponse'
+        '404':
+          description: DNS record not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /dns/{node_ip}/list:
+    get:
+      summary: Get DNS Records by Node IP
+      description: Retrieves DNS records associated with a specific node IP.
+      tags:
+        - DNS
+      parameters:
+        - name: node_ip
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Node IP address
+      responses:
+        '200':
+          description: List of DNS records
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DnsRecord'
+
+  /dns/list:
+    get:
+      summary: List DNS Records
+      description: Retrieves a list of all DNS records.
+      tags:
+        - DNS
+      responses:
+        '200':
+          description: List of DNS records
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DnsListResponse'
+
+  # Instance Endpoints
+  /instance/{instance_id}/get:
+    get:
+      summary: Get Instance
+      description: Retrieves information about a specific instance.
+      tags:
+        - Instances
+      parameters:
+        - name: instance_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Instance ID
+      responses:
+        '200':
+          description: Instance information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceResponse'
+        '404':
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /instance/{build_id}/get_by_build_id:
+    get:
+      summary: Get Instance by Build ID
+      description: Retrieves information about an instance using its build ID.
+      tags:
+        - Instances
+      parameters:
+        - name: build_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Build ID
+      responses:
+        '200':
+          description: Instance information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceResponse'
+        '404':
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /instance/{build_id}/get_instance_ips:
+    get:
+      summary: Get Instance IPs
+      description: Retrieves IP addresses associated with a specific instance.
+      tags:
+        - Instances
+      parameters:
+        - name: build_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Build ID
+      responses:
+        '200':
+          description: Instance IP addresses
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IpAddressResponse'
+        '404':
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /instance/{instance_id}/metrics:
+    get:
+      summary: Get Instance Metrics
+      description: Retrieves performance metrics for a specific instance.
+      tags:
+        - Instances
+      parameters:
+        - name: instance_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Instance ID
+      responses:
+        '200':
+          description: Instance metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceMetricsResponse'
+        '404':
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /instance/list/metrics:
+    get:
+      summary: List Instance Metrics
+      description: Retrieves performance metrics for all instances.
+      tags:
+        - Instances
+      responses:
+        '200':
+          description: List of instance metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceMetricsListResponse'
+
+  /cluster/{build_id}/metrics:
+    get:
+      summary: Get Cluster Metrics
+      description: Retrieves performance metrics for a specific cluster.
+      tags:
+        - Instances
+      parameters:
+        - name: build_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Cluster ID
+      responses:
+        '200':
+          description: Cluster metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClusterMetricsResponse'
+        '404':
+          description: Cluster not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /instance/list:
+    get:
+      summary: List Instances
+      description: Retrieves a list of all instances.
+      tags:
+        - Instances
+      responses:
+        '200':
+          description: List of instances
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceListResponse'
+
+  # Node Endpoints
+  /node/{id}/get:
+    get:
+      summary: Get Node
+      description: Retrieves information about a specific node.
+      tags:
+        - Nodes
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Node ID
+      responses:
+        '200':
+          description: Node information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeResponse'
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /node/{id}/metrics:
+    get:
+      summary: Get Node Metrics
+      description: Retrieves performance metrics for a specific node.
+      tags:
+        - Nodes
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Node ID
+      responses:
+        '200':
+          description: Node metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeMetricsResponse'
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /node/list/metrics:
+    get:
+      summary: List Node Metrics
+      description: Retrieves performance metrics for all nodes.
+      tags:
+        - Nodes
+      responses:
+        '200':
+          description: List of node metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeMetricsListResponse'
+
+  /node/list:
+    get:
+      summary: List Nodes
+      description: Retrieves a list of all nodes.
+      tags:
+        - Nodes
+      responses:
+        '200':
+          description: List of nodes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeListResponse'
+
+  # Account Endpoints
+  /account/{address}/get:
+    get:
+      summary: Get Account
+      description: Retrieves information about a specific account by Ethereum address.
+      tags:
+        - Accounts
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Ethereum address
+      responses:
+        '200':
+          description: Account information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountResponse'
+        '404':
+          description: Account not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /account/list:
+    get:
+      summary: List Accounts
+      description: Retrieves a list of all accounts.
+      tags:
+        - Accounts
+      responses:
+        '200':
+          description: List of accounts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountListResponse'
+
+components:
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "user-123456789"
+        name:
+          type: string
+          example: "Alice"
+        public_key:
+          type: string
+          example: "0x1234567890abcdef1234567890abcdef12345678"
+        peer_type:
+          type: string
+          enum: [user, admin]
+          example: "user"
+        created_at:
+          type: integer
+          example: 1677721600
+        updated_at:
+          type: integer
+          example: 1677721600
+      required:
+        - id
+        - name
+        - public_key
+        - peer_type
+        - created_at
+        - updated_at
+
+    Cidr:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "cidr-123456789"
+        cidr:
+          type: string
+          example: "192.168.100.0/24"
+        name:
+          type: string
+          example: "VM Network"
+        owner:
+          type: string
+          example: "user-123456789"
+        created_at:
+          type: integer
+          example: 1677721600
+        updated_at:
+          type: integer
+          example: 1677721600
+      required:
+        - id
+        - cidr
+        - name
+        - owner
+        - created_at
+        - updated_at
+
+    Association:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "assoc-123456789"
+        name:
+          type: string
+          example: "VM to Control"
+        source_cidr:
+          type: string
+          example: "cidr-123456789"
+        target_cidr:
+          type: string
+          example: "cidr-987654321"
+        allow_bidirectional:
+          type: boolean
+          example: true
+        created_at:
+          type: integer
+          example: 1677721600
+        updated_at:
+          type: integer
+          example: 1677721600
+      required:
+        - id
+        - name
+        - source_cidr
+        - target_cidr
+        - allow_bidirectional
+        - created_at
+        - updated_at
+
+    CidrRelationship:
+      type: object
+      properties:
+        source:
+          $ref: '#/components/schemas/Cidr'
+        target:
+          $ref: '#/components/schemas/Cidr'
+      required:
+        - source
+        - target
+
+    DnsRecord:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "dns-123456789"
+        domain:
+          type: string
+          example: "myapp.formation.cloud"
+        record_type:
+          type: string
+          enum: [A, AAAA, CNAME, MX, TXT, SRV]
+          example: "A"
+        value:
+          type: string
+          example: "192.168.100.10"
+        ttl:
+          type: integer
+          example: 300
+        created_at:
+          type: integer
+          example: 1677721600
+        updated_at:
+          type: integer
+          example: 1677721600
+      required:
+        - id
+        - domain
+        - record_type
+        - value
+        - ttl
+        - created_at
+        - updated_at
+
+    Instance:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "instance-123456789"
+        build_id:
+          type: string
+          example: "build-123456789"
+        name:
+          type: string
+          example: "web-server"
+        owner:
+          type: string
+          example: "user-123456789"
+        vcpu_count:
+          type: integer
+          example: 2
+        mem_size_mib:
+          type: integer
+          example: 2048
+        disk_size_gb:
+          type: integer
+          example: 10
+        state:
+          type: string
+          enum: [running, stopped, failed, starting, stopping]
+          example: "running"
+        created_at:
+          type: integer
+          example: 1677721600
+        updated_at:
+          type: integer
+          example: 1677721600
+      required:
+        - id
+        - build_id
+        - name
+        - owner
+        - vcpu_count
+        - mem_size_mib
+        - disk_size_gb
+        - state
+        - created_at
+        - updated_at
+
+    InstanceMetrics:
+      type: object
+      properties:
+        instance_id:
+          type: string
+          example: "instance-123456789"
+        cpu_usage_percentage:
+          type: number
+          format: float
+          example: 25.5
+        memory_usage_mib:
+          type: integer
+          example: 1024
+        disk_usage_gb:
+          type: number
+          format: float
+          example: 5.2
+        network_rx_bytes:
+          type: integer
+          example: 1024000
+        network_tx_bytes:
+          type: integer
+          example: 512000
+        timestamp:
+          type: integer
+          example: 1677723600
+      required:
+        - instance_id
+        - cpu_usage_percentage
+        - memory_usage_mib
+        - disk_usage_gb
+        - network_rx_bytes
+        - network_tx_bytes
+        - timestamp
+
+    ClusterMemberMetrics:
+      type: object
+      properties:
+        instance_id:
+          type: string
+          example: "instance-123456789"
+        cpu_usage_percentage:
+          type: number
+          format: float
+          example: 25.5
+        memory_usage_mib:
+          type: integer
+          example: 1024
+        disk_usage_gb:
+          type: number
+          format: float
+          example: 5.2
+        network_rx_bytes:
+          type: integer
+          example: 1024000
+        network_tx_bytes:
+          type: integer
+          example: 512000
+      required:
+        - instance_id
+        - cpu_usage_percentage
+        - memory_usage_mib
+        - disk_usage_gb
+        - network_rx_bytes
+        - network_tx_bytes
+
+    ClusterMetrics:
+      type: object
+      properties:
+        cluster_id:
+          type: string
+          example: "cluster-123456789"
+        cpu_usage_percentage:
+          type: number
+          format: float
+          example: 45.5
+        memory_usage_mib:
+          type: integer
+          example: 4096
+        disk_usage_gb:
+          type: number
+          format: float
+          example: 25.2
+        network_rx_bytes:
+          type: integer
+          example: 5120000
+        network_tx_bytes:
+          type: integer
+          example: 2560000
+        timestamp:
+          type: integer
+          example: 1677723600
+        members:
+          type: array
+          items:
+            $ref: '#/components/schemas/ClusterMemberMetrics'
+      required:
+        - cluster_id
+        - cpu_usage_percentage
+        - memory_usage_mib
+        - disk_usage_gb
+        - network_rx_bytes
+        - network_tx_bytes
+        - timestamp
+        - members
+
+    Node:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "node-123456789"
+        name:
+          type: string
+          example: "Worker-1"
+        public_key:
+          type: string
+          example: "WFmc3ixj8Ue4qZEQRTH+GYKJmUFQd2H4UBW5BJdXpXE="
+        endpoint:
+          type: string
+          example: "203.0.113.10:51820"
+        total_vcpus:
+          type: integer
+          example: 16
+        total_memory_mib:
+          type: integer
+          example: 32768
+        total_disk_gb:
+          type: integer
+          example: 1000
+        available_vcpus:
+          type: integer
+          example: 12
+        available_memory_mib:
+          type: integer
+          example: 28672
+        available_disk_gb:
+          type: integer
+          example: 900
+        operator_id:
+          type: string
+          example: "user-123456789"
+        state:
+          type: string
+          enum: [online, offline, maintenance, provisioning]
+          example: "online"
+        created_at:
+          type: integer
+          example: 1677721600
+        updated_at:
+          type: integer
+          example: 1677721600
+      required:
+        - id
+        - name
+        - public_key
+        - endpoint
+        - total_vcpus
+        - total_memory_mib
+        - total_disk_gb
+        - available_vcpus
+        - available_memory_mib
+        - available_disk_gb
+        - operator_id
+        - state
+        - created_at
+        - updated_at
+
+    NodeMetrics:
+      type: object
+      properties:
+        node_id:
+          type: string
+          example: "node-123456789"
+        cpu_usage_percentage:
+          type: number
+          format: float
+          example: 45.5
+        memory_usage_mib:
+          type: integer
+          example: 16384
+        disk_usage_gb:
+          type: number
+          format: float
+          example: 500
+        network_rx_bytes:
+          type: integer
+          example: 10240000
+        network_tx_bytes:
+          type: integer
+          example: 5120000
+        timestamp:
+          type: integer
+          example: 1677723600
+        load_average:
+          type: array
+          items:
+            type: number
+            format: float
+          example: [1.2, 1.5, 1.8]
+      required:
+        - node_id
+        - cpu_usage_percentage
+        - memory_usage_mib
+        - disk_usage_gb
+        - network_rx_bytes
+        - network_tx_bytes
+        - timestamp
+        - load_average
+
+    Account:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "account-123456789"
+        name:
+          type: string
+          example: "Alice"
+        ethereum_address:
+          type: string
+          example: "0x1234567890abcdef1234567890abcdef12345678"
+        email:
+          type: string
+          example: "alice@example.com"
+        role:
+          type: string
+          enum: [user, admin]
+          example: "user"
+        created_at:
+          type: integer
+          example: 1677721600
+        updated_at:
+          type: integer
+          example: 1677721600
+      required:
+        - id
+        - name
+        - ethereum_address
+        - role
+        - created_at
+        - updated_at
+
+    # Response schemas
+    UserResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/User'
+      required:
+        - success
+        - data
+
+    UserListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/User'
+      required:
+        - success
+        - data
+
+    CidrResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/Cidr'
+      required:
+        - success
+        - data
+
+    CidrListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Cidr'
+      required:
+        - success
+        - data
+
+    AssociationListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Association'
+      required:
+        - success
+        - data
+
+    RelationshipResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/CidrRelationship'
+      required:
+        - success
+        - data
+
+    DnsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/DnsRecord'
+      required:
+        - success
+        - data
+
+    DnsListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/DnsRecord'
+      required:
+        - success
+        - data
+
+    InstanceResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/Instance'
+      required:
+        - success
+        - data
+
+    InstanceListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Instance'
+      required:
+        - success
+        - data
+
+    IpAddressResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            type: string
+          example: ["192.168.100.10", "192.168.100.11"]
+      required:
+        - success
+        - data
+
+    InstanceMetricsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/InstanceMetrics'
+      required:
+        - success
+        - data
+
+    InstanceMetricsListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/InstanceMetrics'
+      required:
+        - success
+        - data
+
+    ClusterMetricsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/ClusterMetrics'
+      required:
+        - success
+        - data
+
+    NodeResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/Node'
+      required:
+        - success
+        - data
+
+    NodeListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Node'
+      required:
+        - success
+        - data
+
+    NodeMetricsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/NodeMetrics'
+      required:
+        - success
+        - data
+
+    NodeMetricsListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/NodeMetrics'
+      required:
+        - success
+        - data
+
+    AccountResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/Account'
+      required:
+        - success
+        - data
+
+    AccountListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Account'
+      required:
+        - success
+        - data
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
+          example: "Descriptive error message"
+        code:
+          type: string
+          example: "ERROR_CODE"
+      required:
+        - success
+        - error
+        - code 
