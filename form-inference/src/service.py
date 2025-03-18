@@ -1,5 +1,6 @@
-from fastapi import BackgroundTasks, FastAPI
+from fastapi import FastAPI
 from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 import asyncio
 import requests
 import signal
@@ -14,8 +15,8 @@ load_dotenv()
 MOCK_URL = f"http://{os.getenv('MOCK_API_URL')}:{os.getenv('MOCK_API_PORT')}"
 executor = ProcessPoolExecutor()
 
-def broadcast_execute(input_data):
-    """Standalone function to execute in a separate process."""
+def broadcast_execute(input_data, world_size):
+    """Broadcasts the execute request to all nodes and ensures parallel execution."""
     response = requests.get(f"{MOCK_URL}/nodes")
     if response.status_code != 200:
         return {"error": "Failed to retrieve active nodes."}
@@ -23,20 +24,36 @@ def broadcast_execute(input_data):
     nodes = response.json()
     responses = {}
 
-    for node in nodes:
-        node_id = node["id"]
-        node_host = node.get("host", "127.0.0.1")
-        node_port = 8000 + nodes.index(node)
+    # Create thread pool with the exact number of nodes
+    with ThreadPoolExecutor(max_workers=world_size) as thread_executor:
+        futures = {}
 
-        try:
-            print(f"Service: Sending /execute request to {node_host}:{node_port} (Node {node_id})")
-            resp = requests.post(
-                f"http://{node_host}:{node_port}/execute",
-                json={"input_data": input_data}
-            )
-            responses[node_id] = resp.json() if resp.status_code == 200 else "Failed"
-        except Exception as e:
-            responses[node_id] = f"Error: {str(e)}"
+        for node in nodes:
+            node_id = node["id"]
+            node_host = node.get("host", "127.0.0.1")
+            node_port = 8000 + nodes.index(node)
+
+            try:
+                print(f"Service: Sending /execute request to {node_host}:{node_port} (Node {node_id})")
+                
+                # Submit request to each node in a separate thread
+                future = thread_executor.submit(
+                    requests.post,
+                    f"http://{node_host}:{node_port}/execute",
+                    json={"input_data": input_data}
+                )
+                futures[node_id] = future
+
+            except Exception as e:
+                responses[node_id] = f"Error: {str(e)}"
+
+        # Wait for all nodes to finish execution
+        for node_id, future in futures.items():
+            try:
+                resp = future.result()  # Wait for the response from each node
+                responses[node_id] = resp.json() if resp.status_code == 200 else "Failed"
+            except Exception as e:
+                responses[node_id] = f"Error while processing: {str(e)}"
 
     print("Service: Broadcast completed.")
     return responses
@@ -53,26 +70,28 @@ class Service:
             """Ensure a fresh process every time generate is called."""
             print(f"Service: Received generate request. Broadcasting prompt: {request.input_data}")
 
+            rank, world_size = self.get_rank_and_world_size()
+
             # Create a new executor every time
-            executor = ProcessPoolExecutor(max_workers=1)
+            process_executor = ProcessPoolExecutor(max_workers=1)
             loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(executor, broadcast_execute, request.input_data)
+            result = await loop.run_in_executor(process_executor, broadcast_execute, request.input_data, world_size)
 
             # Forcefully terminate the process pool to avoid reuse
-            executor.shutdown(wait=True, cancel_futures=True)
+            process_executor.shutdown(wait=True, cancel_futures=True)
 
-            return {"status": "Broadcast execution completed", "result": result}
+            return result[self.node_id]
 
         @self.app.post("/execute")
-        def execute(request: GenerateRequest, background_tasks: BackgroundTasks):
-            """Each node executes the worker process asynchronously."""
+        def execute(request: GenerateRequest):
+            """Each node directly runs its worker inside the request handler."""
             print(f"Service: Node {self.node_id} executing with prompt: {request.input_data}")
             rank, world_size = self.get_rank_and_world_size()
 
-            # Run worker in the background
-            background_tasks.add_task(run_worker, rank, world_size, request.input_data)
+            # Directly run the worker (no additional threading needed)
+            result = run_worker(rank, world_size, request.input_data)
 
-            return {"status": f"Node {self.node_id} started execution asynchronously"}
+            return result
 
         self.initialize()
 
@@ -131,5 +150,3 @@ class Service:
 class GenerateRequest(BaseModel):
     input_data: str
 
-if __name__ == "__main__":
-    service = Service()

@@ -1,3 +1,4 @@
+import time
 import torch
 import torch.distributed as dist
 from transformers import GPT2LMHeadModel, GPT2Tokenizer
@@ -14,6 +15,7 @@ def init_distributed(rank, world_size):
 
 
 def run_worker(rank, world_size, input_data):
+    start_time = time.time()
     try:
         # Set CPU affinity dynamically based on rank
         p = psutil.Process(os.getpid())
@@ -63,17 +65,17 @@ def run_worker(rank, world_size, input_data):
             dist.send(input_ids, 1)
             print("Worker 0: Data sent to Worker 1.")
 
-            # Wait for final processed text from last worker
-            recv_buffer = torch.zeros(1024, dtype=torch.uint8).to(
-                device
-            )  # Allocate large enough buffer
+            # Receive the length of the incoming text
+            text_length = torch.zeros(1, dtype=torch.int64).to(device)
+            dist.recv(text_length, world_size - 1)
+
+            # Allocate buffer dynamically based on received length
+            recv_buffer = torch.zeros(text_length.item(), dtype=torch.uint8).to(device)
             dist.recv(recv_buffer, world_size - 1)
 
             # Decode received text
-            received_text = (
-                recv_buffer.cpu().numpy().tobytes().decode("utf-8").strip("\x00")
-            )
-            print(f"Worker 0: Received generated text: {received_text}")
+            received_text = recv_buffer.cpu().numpy().tobytes().decode("utf-8")
+            print(f"Worker 0: Received generated text ({text_length.item()} bytes): {received_text}")
 
         elif rank > 0:
             print(f"Worker {rank}: Waiting for hidden states from Worker {rank - 1}...")
@@ -92,7 +94,7 @@ def run_worker(rank, world_size, input_data):
                 generated_ids = model.generate(
                     input_ids=recv_input_ids,
                     attention_mask=attention_mask,
-                    max_length=recv_input_ids.shape[1] + 50,
+                    max_length=recv_input_ids.shape[1] + 300,
                     do_sample=True,
                     top_k=50,
                     pad_token_id=tokenizer.eos_token_id,
@@ -100,11 +102,17 @@ def run_worker(rank, world_size, input_data):
                 generated_sentence = tokenizer.decode(
                     generated_ids.squeeze().tolist(), skip_special_tokens=True
                 )
+                
+                # Convert generated text to bytes
                 encoded_text = torch.tensor(
                     list(generated_sentence.encode("utf-8")), dtype=torch.uint8
                 ).to(device)
+                
+                # Send the length first
+                text_length = torch.tensor([encoded_text.shape[0]], dtype=torch.int64).to(device)
+                dist.send(text_length, 0)
 
-                print(f"Worker {rank}: Sending final generated text to Worker 0...")
+                print(f"Worker {rank}: Sending {text_length.item()} bytes of text to Worker 0...")
                 dist.send(encoded_text, 0)
             else:
                 print(
@@ -115,4 +123,6 @@ def run_worker(rank, world_size, input_data):
     finally:
         dist.destroy_process_group()
         print(f"Worker {rank}: Process group destroyed.")
+        end_time = time.time()
+        print(f"Worker {rank}: Execution time: {end_time - start_time:.2f} seconds")
         return received_text
