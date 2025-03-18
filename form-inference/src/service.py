@@ -1,16 +1,45 @@
+from fastapi import BackgroundTasks, FastAPI
+from concurrent.futures import ProcessPoolExecutor
+import asyncio
 import requests
 import signal
-import psutil
-from fastapi import FastAPI, BackgroundTasks
+import os
 from pydantic import BaseModel
 import uvicorn
-import os
 from dotenv import load_dotenv
 from worker import run_worker
 
 load_dotenv()
 
 MOCK_URL = f"http://{os.getenv('MOCK_API_URL')}:{os.getenv('MOCK_API_PORT')}"
+executor = ProcessPoolExecutor()
+
+def broadcast_execute(input_data):
+    """Standalone function to execute in a separate process."""
+    response = requests.get(f"{MOCK_URL}/nodes")
+    if response.status_code != 200:
+        return {"error": "Failed to retrieve active nodes."}
+
+    nodes = response.json()
+    responses = {}
+
+    for node in nodes:
+        node_id = node["id"]
+        node_host = node.get("host", "127.0.0.1")
+        node_port = 8000 + nodes.index(node)
+
+        try:
+            print(f"Service: Sending /execute request to {node_host}:{node_port} (Node {node_id})")
+            resp = requests.post(
+                f"http://{node_host}:{node_port}/execute",
+                json={"input_data": input_data}
+            )
+            responses[node_id] = resp.json() if resp.status_code == 200 else "Failed"
+        except Exception as e:
+            responses[node_id] = f"Error: {str(e)}"
+
+    print("Service: Broadcast completed.")
+    return responses
 
 class Service:
     def __init__(self, host='127.0.0.1'):
@@ -20,10 +49,19 @@ class Service:
         self.app = FastAPI()
 
         @self.app.post("/generate")
-        def generate(request: GenerateRequest):
-            """Broadcast the request to all nodes."""
+        async def generate(request: GenerateRequest):
+            """Ensure a fresh process every time generate is called."""
             print(f"Service: Received generate request. Broadcasting prompt: {request.input_data}")
-            return self.broadcast_execute(request.input_data)
+
+            # Create a new executor every time
+            executor = ProcessPoolExecutor(max_workers=1)
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(executor, broadcast_execute, request.input_data)
+
+            # Forcefully terminate the process pool to avoid reuse
+            executor.shutdown(wait=True, cancel_futures=True)
+
+            return {"status": "Broadcast execution completed", "result": result}
 
         @self.app.post("/execute")
         def execute(request: GenerateRequest, background_tasks: BackgroundTasks):
@@ -31,12 +69,12 @@ class Service:
             print(f"Service: Node {self.node_id} executing with prompt: {request.input_data}")
             rank, world_size = self.get_rank_and_world_size()
 
-            # Run worker asynchronously
+            # Run worker in the background
             background_tasks.add_task(run_worker, rank, world_size, request.input_data)
 
             return {"status": f"Node {self.node_id} started execution asynchronously"}
 
-        self.initialize()  # Call initialize in the constructor
+        self.initialize()
 
     def initialize(self):
         if not self.node_id:
@@ -75,33 +113,6 @@ class Service:
         except KeyboardInterrupt:
             print("Service: Stopping due to keyboard interrupt.")
             self.cleanup()
-
-    def broadcast_execute(self, input_data):
-        """Broadcasts the request to all nodes in the network to call /execute."""
-        response = requests.get(f"{MOCK_URL}/nodes")
-        if response.status_code != 200:
-            return {"error": "Failed to retrieve active nodes."}
-
-        nodes = response.json()
-        responses = {}
-
-        for node in nodes:
-            node_id = node["id"]
-            node_host = node.get("host", "127.0.0.1")
-            node_port = 8000 + nodes.index(node)
-
-            try:
-                print(f"Service: Sending /execute request to {node_host}:{node_port} (Node {node_id})")
-                resp = requests.post(
-                    f"http://{node_host}:{node_port}/execute",
-                    json={"input_data": input_data}
-                )
-                responses[node_id] = resp.json() if resp.status_code == 200 else "Failed"
-            except Exception as e:
-                responses[node_id] = f"Error: {str(e)}"
-
-        print("Service: Broadcast completed.")
-        return responses
 
     def _handle_interrupt(self, sig, frame):
         print("Service: Caught Ctrl+C, cleaning up...")
