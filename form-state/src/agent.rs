@@ -216,12 +216,6 @@ pub struct AgentUsageTracking {
     /// Whether to track requests
     pub track_requests: bool,
     
-    /// Whether to compute royalties
-    pub enable_royalties: bool,
-    
-    /// Percentage of revenue that goes to the creator (0-100)
-    pub royalty_percentage: u8,
-    
     /// Additional usage metrics to track
     pub custom_metrics: Vec<String>,
 }
@@ -250,8 +244,6 @@ impl Default for AgentUsageTracking {
     fn default() -> Self {
         Self {
             track_requests: true,
-            enable_royalties: false,
-            royalty_percentage: 0,
             custom_metrics: Vec::new(),
         }
     }
