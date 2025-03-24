@@ -18,9 +18,9 @@ def run_worker(rank, world_size, input_data):
     start_time = time.time()
     try:
         # Set CPU affinity dynamically based on rank
-        p = psutil.Process(os.getpid())
-        p.cpu_affinity([rank])
-        print(f"Worker {rank}: Running on CPU core {p.cpu_affinity()}")
+        # p = psutil.Process(os.getpid())
+        # p.cpu_affinity([rank])
+        # print(f"Worker {rank}: Running on CPU core {p.cpu_affinity()}")
 
         init_distributed(rank, world_size)
         device = torch.device("cpu")
@@ -61,9 +61,16 @@ def run_worker(rank, world_size, input_data):
             print(
                 "Worker 0: Sending processed hidden states and input IDs to Worker 1..."
             )
-            dist.send(hidden_states, 1)
-            dist.send(input_ids, 1)
-            print("Worker 0: Data sent to Worker 1.")
+            hidden_states_shape = torch.tensor(hidden_states.shape, dtype=torch.int64).to(device)
+            print(f"Worker 0: Sending hidden_states with shape {hidden_states.shape}")
+            dist.send(hidden_states_shape, 1)  # Send the shape first
+            dist.send(hidden_states, 1)        # Then send the actual data
+
+            # Send input IDs
+            input_ids_shape = torch.tensor(input_ids.shape, dtype=torch.int64).to(device)
+            print(f"Worker 0: Sending input_ids with shape {input_ids.shape}")
+            dist.send(input_ids_shape, 1)      # Send the shape first
+            dist.send(input_ids, 1)            # Then send the actual data
 
             # Receive the length of the incoming text
             text_length = torch.zeros(1, dtype=torch.int64).to(device)
@@ -80,11 +87,21 @@ def run_worker(rank, world_size, input_data):
         elif rank > 0:
             print(f"Worker {rank}: Waiting for hidden states from Worker {rank - 1}...")
 
-            recv_hidden_states = torch.zeros(1, 128, model.config.n_embd).to(device)
-            dist.recv(recv_hidden_states, rank - 1)
+            hidden_states_shape = torch.zeros(3, dtype=torch.int64).to(device)  # Assuming 3D tensor
+            print(f"Worker {rank}: Waiting to receive hidden_states shape from Worker {rank - 1}")
+            dist.recv(hidden_states_shape, rank - 1)  # Receive the shape
+            print(f"Worker {rank}: Expecting hidden_states with shape {hidden_states_shape.tolist()} from Worker {rank - 1}")
+            recv_hidden_states = torch.zeros(tuple(hidden_states_shape.tolist()), device=device)  # Allocate buffer
+            dist.recv(recv_hidden_states, rank - 1)  # Receive the actual data
+            print(f"Worker {rank}: Received hidden states with shape {recv_hidden_states.shape}")
 
-            recv_input_ids = torch.zeros((1, 10), dtype=torch.long).to(device)
-            dist.recv(recv_input_ids, rank - 1)
+            # Receive input IDs
+            input_ids_shape = torch.zeros(2, dtype=torch.int64).to(device)  # Assuming 2D tensor
+            print(f"Worker {rank}: Expecting input_ids with shape {input_ids_shape.tolist()} from Worker {rank - 1}")
+            dist.recv(input_ids_shape, rank - 1)  # Receive the shape
+            recv_input_ids = torch.zeros(tuple(input_ids_shape.tolist()), dtype=torch.long, device=device)  # Allocate buffer
+            dist.recv(recv_input_ids, rank - 1)  # Receive the actual data
+            print(f"Worker {rank}: Received input IDs with shape {recv_input_ids.shape}")
 
             for i in range(start_layer, end_layer):
                 recv_hidden_states = model.transformer.h[i](recv_hidden_states)[0]
@@ -118,8 +135,15 @@ def run_worker(rank, world_size, input_data):
                 print(
                     f"Worker {rank}: Forwarding hidden states and input IDs to Worker {rank + 1}..."
                 )
-                dist.send(recv_hidden_states, rank + 1)
-                dist.send(recv_input_ids, rank + 1)
+                hidden_states_shape = torch.tensor(recv_hidden_states.shape, dtype=torch.int64).to(device)
+                print(f"Worker {rank}: Sending hidden_states with shape {hidden_states_shape.tolist()} to Worker {rank + 1}")
+                dist.send(hidden_states_shape, rank + 1)  # Send the shape first
+                dist.send(recv_hidden_states, rank + 1)   # Then send the actual data
+
+                input_ids_shape = torch.tensor(recv_input_ids.shape, dtype=torch.int64).to(device)
+                print(f"Worker {rank}: Sending input_ids with shape {input_ids_shape.tolist()} to Worker {rank + 1}")
+                dist.send(input_ids_shape, rank + 1)      # Send the shape first
+                dist.send(recv_input_ids, rank + 1)       # Then send the actual data
     finally:
         dist.destroy_process_group()
         print(f"Worker {rank}: Process group destroyed.")
