@@ -1,10 +1,8 @@
 use std::collections::BTreeMap;
-use std::net::{IpAddr, SocketAddr};
-use log::{debug, info, warn, error};
+use log::{debug, info, warn};
 use chrono;
 use form_dns::store::FormDnsRecord;
 use crate::instances::{InstanceCluster, ClusterMember};
-use crate::scaling::ScalingError;
 
 /// Result of a state restoration verification step
 #[derive(Debug, Clone)]

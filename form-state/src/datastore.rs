@@ -14,7 +14,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use crdts::{bft_reg::Update, map::Op, BFTReg, CvRDT, Map, CmRDT};
 use trust_dns_proto::rr::RecordType;
 use url::Host;
-use crate::{db::{open_db, write_datastore, store_map, DbHandle}, instances::{ClusterMember, Instance, InstanceOp, InstanceState, InstanceStatus}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}, accounts::{Account, AccountOp, AccountState, AuthorizationLevel}};
+use crate::{accounts::{Account, AccountOp, AccountState, AuthorizationLevel}, agent::{AgentMap, AgentState}, db::{open_db, store_map, write_datastore, DbHandle}, instances::{ClusterMember, Instance, InstanceOp, InstanceState, InstanceStatus}, model::{ModelMap, ModelState}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}};
 use form_types::state::{Response, Success};
 use lazy_static::lazy_static;
 
@@ -57,7 +57,9 @@ pub struct MergeableState {
     dns: DnsMap,
     instances: InstanceMap,
     nodes: NodeMap,
-    accounts: AccountMap
+    accounts: AccountMap,
+    agents: AgentMap,
+    models: ModelMap
 }
 
 impl From<DataStore> for MergeableState {
@@ -70,6 +72,8 @@ impl From<DataStore> for MergeableState {
             instances: value.instance_state.map.clone(),
             nodes: value.node_state.map.clone(),
             accounts: value.account_state.map.clone(),
+            agents: value.agent_state.map.clone(),
+            models: value.model_state.map.clone()
         }
     }
 }
@@ -80,6 +84,8 @@ pub struct DataStore {
     pub instance_state: InstanceState,
     pub node_state: NodeState,
     pub account_state: AccountState,
+    pub agent_state: AgentState,
+    pub model_state: ModelState
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -173,8 +179,19 @@ impl DataStore {
         let network_state = NetworkState::new(node_id.clone(), pk.clone());
         let instance_state = InstanceState::new(node_id.clone(), pk.clone());
         let node_state = NodeState::new(node_id.clone(), pk.clone());
+        let account_state = AccountState::new(node_id, pk.clone());
+        let agent_state = AgentState::new();
+        let model_state = ModelState::new();
 
-        Self { network_state, instance_state, node_state, account_state: AccountState::new(node_id, pk) } 
+
+        Self { 
+            network_state,
+            instance_state,
+            node_state,
+            account_state,
+            agent_state,
+            model_state,
+        } 
     }
 
     pub fn new_from_state(
@@ -191,6 +208,8 @@ impl DataStore {
         local.instance_state.map.merge(other.instances);
         local.node_state.map.merge(other.nodes);
         local.account_state.map.merge(other.accounts);
+        local.agent_state.map.merge(other.agents);
+        local.model_state.map.merge(other.models);
         log::info!("Built new datastore from state... Returning...");
         local
     }
@@ -851,12 +870,12 @@ impl DataStore {
 
     async fn handle_account_delete(&mut self, delete: String) -> Result<(), Box<dyn std::error::Error>> {
         // Check if account exists
-        let account = match self.account_state.get_account(&delete) {
-            Some(account) => account,
+        match self.account_state.get_account(&delete) {
             None => return Err(Box::new(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 format!("Account with address {} does not exist", delete)
             ))),
+            _ => {}
         };
         
         // Delete the account (remove it from the map)

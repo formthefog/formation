@@ -1,11 +1,12 @@
-use crdts::{bft_reg::Update, map::Op, merkle_reg::Sha3Hash, BFTReg, CmRDT, Map};
+use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, Map};
 use crate::Actor;
 use serde::{Serialize, Deserialize};
-use tiny_keccak::{Hasher, Sha3};
-use std::collections::BTreeMap;
+use tiny_keccak::Hasher;
+use std::collections::{BTreeMap, HashMap};
 use crate::model::{ModelType, ModelLicense};
 
 pub type AgentOp = Op<String, BFTReg<AIAgent, Actor>, Actor>; 
+pub type AgentMap = Map<String, BFTReg<AIAgent, String>, String>;
 
 /// Represents the framework/platform used to build the agent
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -304,5 +305,39 @@ impl Default for AIAgent {
             usage_tracking: AgentUsageTracking::default(),
             config_schema: None,
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentState {
+    pub map: AgentMap,
+}
+
+impl AgentState {
+    pub fn new() -> Self {
+        Self {
+            map: Map::new(),
+        }
+    }
+
+    pub fn get_agent(&self, agent_id: &String) -> Option<AIAgent> {
+        if let Some(reg) = self.map.get(agent_id).val {
+            match reg.val() {
+                Some(node) => return Some(node.value()),
+                None => return None
+            }
+        }
+
+        None
+    }
+
+    pub fn list_agents(&self) -> HashMap<String, AIAgent> {
+        self.map.iter().filter_map(|ctx| {
+            let (id, reg) = ctx.val;
+            match reg.val() {
+                Some(node) => Some((id.clone(), node.value())),
+                None => None
+            }
+        }).collect()
     }
 }

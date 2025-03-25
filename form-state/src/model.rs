@@ -1,10 +1,11 @@
-use crdts::{bft_reg::Update, map::Op, merkle_reg::Sha3Hash, BFTReg, CmRDT, Map};
+use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, Map};
 use crate::Actor;
 use serde::{Serialize, Deserialize};
-use tiny_keccak::{Hasher, Sha3};
-use std::collections::BTreeMap;
+use tiny_keccak::Hasher;
+use std::collections::{BTreeMap, HashMap};
 
 pub type ModelOp = Op<String, BFTReg<AIModel, Actor>, Actor>; 
+pub type ModelMap = Map<String, BFTReg<AIModel, String>, String>;
 
 /// Represents the type/category of AI model
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -55,6 +56,7 @@ pub enum QuantizationType {
 }
 
 /// Represents licensing options for models
+#[allow(non_camel_case_types)]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ModelLicense {
     MIT,
@@ -331,5 +333,39 @@ impl Default for AIModel {
             price_per_1m_tokens: None,
             usage_tracking: ModelUsageTracking::default(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelState {
+    pub map: ModelMap,
+}
+
+impl ModelState {
+    pub fn new() -> Self {
+        Self {
+            map: Map::new()
+        }
+    }
+
+    pub fn get_model(&self, model_id: &String) -> Option<AIModel> {
+        if let Some(reg) = self.map.get(model_id).val {
+            match reg.val() {
+                Some(node) => return Some(node.value()),
+                None => return None
+            }
+        }
+
+        None
+    }
+
+    pub fn list_agents(&self) -> HashMap<String, AIModel> {
+        self.map.iter().filter_map(|ctx| {
+            let (id, reg) = ctx.val;
+            match reg.val() {
+                Some(node) => Some((id.clone(), node.value())),
+                None => None
+            }
+        }).collect()
     }
 }

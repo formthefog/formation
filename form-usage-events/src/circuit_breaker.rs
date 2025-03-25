@@ -2,7 +2,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::RwLock;
-use tokio::time::sleep;
 
 /// The possible states of a circuit breaker
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -13,6 +13,7 @@ pub enum IpHealthStatus {
 }
 
 /// Repository for tracking IP health status
+#[allow(unused)]
 #[derive(Debug)]
 pub struct IpHealthRepository {
     /// Map of IP addresses to their health status
