@@ -5,8 +5,7 @@ use reqwest::Client;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use form_types::state::{Response, Success};
-use serde::{Serialize, Deserialize};
-use axum::{extract::{State, Path}, Json, Router};
+use axum::{extract::{State, Path}, Json};
 use form_vm_metrics::system::SystemMetrics;
 use std::net::IpAddr;
 

@@ -2,9 +2,9 @@ use crate::datastore::{DataStore, NodeRequest, DB_HANDLE};
 use crate::db::write_datastore;
 use crate::nodes::Node;
 use std::sync::Arc;
-use form_node_metrics::{capabilities::NodeCapabilities, capacity::NodeCapacity, metrics::NodeMetrics, NodeMetricsRequest};
+use form_node_metrics::metrics::NodeMetrics;
 use tokio::sync::Mutex;
-use axum::{extract::{State, Path}, routing::{get, post}, Json, Router};
+use axum::{extract::{State, Path}, Json};
 use form_types::state::{Response, Success};
 
 pub async fn create_node(

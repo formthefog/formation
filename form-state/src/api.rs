@@ -1,4 +1,4 @@
-use crate::datastore::{DataStore, pong, complete_bootstrap, request_full_state, process_message, full_state};
+use crate::datastore::{DataStore, pong, complete_bootstrap, process_message, full_state};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;

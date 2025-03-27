@@ -1,20 +1,17 @@
 use std::{collections::{HashMap, HashSet}, path::PathBuf, sync::Arc};
-use axum::{extract::{State, Path}, routing::{get, post}, Json, Router};
+use axum::{extract::State, Json};
 use form_dns::{api::{DomainRequest, DomainResponse}, store::FormDnsRecord};
 use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
 use rand::{seq::SliceRandom, thread_rng};
 use reqwest::Client;
 use form_node_metrics::{capabilities::NodeCapabilities, capacity::NodeCapacity, metrics::NodeMetrics, NodeMetricsRequest};
 use serde_json::Value;
-use shared::{Association, AssociationContents, Cidr, CidrContents, Peer, PeerContents};
+use shared::{AssociationContents, Cidr, CidrContents, PeerContents};
 use tiny_keccak::{Hasher, Sha3};
-use tokio::{net::TcpListener, sync::Mutex};
+use tokio::sync::Mutex;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use crdts::{bft_reg::Update, map::Op, BFTReg, CvRDT, Map, CmRDT};
-use trust_dns_proto::rr::RecordType;
-use url::Host;
-use crate::{accounts::{Account, AccountOp, AccountState, AuthorizationLevel}, agent::{AgentMap, AgentState}, db::{open_db, store_map, write_datastore, DbHandle}, instances::{ClusterMember, Instance, InstanceOp, InstanceState, InstanceStatus}, model::{ModelMap, ModelState}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}};
-use form_types::state::{Response, Success};
+use crdts::{map::Op, BFTReg, CvRDT, Map, CmRDT};
+use crate::{accounts::{Account, AccountOp, AccountState, AuthorizationLevel}, agent::{AgentMap, AgentState}, db::{open_db, write_datastore, DbHandle}, instances::{ClusterMember, Instance, InstanceOp, InstanceState}, model::{ModelMap, ModelState}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}};
 use lazy_static::lazy_static;
 
 lazy_static! {

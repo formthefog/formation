@@ -1,11 +1,11 @@
-use crdts::{bft_reg::Update, map::Op, BFTReg, CvRDT, Map, CmRDT};
+use crdts::{bft_reg::Update, BFTReg, Map};
 use crate::db::{store_map, write_datastore};
 use reqwest::Client;
 use crate::datastore::{DataStore, PeerRequest, CidrRequest, DnsRequest, AssocRequest, DB_HANDLE, InstanceRequest}; 
-use crate::network::{NetworkState, CrdtPeer, CrdtCidr, CrdtAssociation, CrdtDnsRecord, PeerOp, CidrOp, AssocOp, DnsOp};
+use crate::network::{NetworkState, CrdtPeer, CrdtCidr, CrdtAssociation, CrdtDnsRecord};
 use form_types::state::{Response, Success};
 use serde::{Serialize, Deserialize};
-use axum::{extract::{State, Path}, routing::{get, post}, Json, Router};
+use axum::{extract::{State, Path}, Json};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use form_dns::{store::FormDnsRecord, api::{DomainResponse, DomainRequest}};

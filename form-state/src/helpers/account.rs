@@ -3,7 +3,7 @@ use crate::db::write_datastore;
 use crate::accounts::*;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use axum::{extract::{State, Path}, routing::{get, post}, Json, Router};
+use axum::{extract::{State, Path}, Json};
 use form_types::state::{Response, Success};
 
 pub async fn list_accounts(
