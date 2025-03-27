@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use axum::{Router, routing::{post, get}};
-use crate::helpers::{network::*, nodes::*, instances::*, account::*};
+use crate::helpers::{network::*, nodes::*, instances::*, account::*, agent::*, model::*};
 use tokio::net::TcpListener;
 
 pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
@@ -67,6 +67,16 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/account/update", post(update_account))
         .route("/account/delete", post(delete_account))
         .route("/account/transfer-ownership", post(transfer_instance_ownership))
+        .route("/agent/create", post(create_agent))
+        .route("/agent/update", post(update_agent))
+        .route("/agent/delete", post(delete_agent))
+        .route("/agent/:id/get", get(get_agent))
+        .route("/agent/list", get(list_agent))
+        .route("/model/create", post(create_model))
+        .route("/model/update", post(update_model))
+        .route("/model/delete", post(delete_model))
+        .route("/model/:id/get", get(get_model))
+        .route("/model/list", get(list_model))
         .with_state(state)
 }
 
