@@ -8,5 +8,7 @@ pub mod scaling;
 pub mod verification;
 pub mod model;
 pub mod agent;
+pub mod helpers;
+pub mod api;
 
 pub type Actor = String;

@@ -5,6 +5,9 @@ use form_state::datastore::{request_full_state, DataStore};
 use form_config::OperatorConfig;
 use clap::Parser;
 use k256::ecdsa::SigningKey;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use form_state::api::run;
 
 #[derive(Clone, Debug, Parser)]
 pub struct Cli {
@@ -101,7 +104,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (tx, rx) = tokio::sync::broadcast::channel(1024); 
 
     let handle = tokio::spawn(async move {
-        if let Err(e) = datastore.unwrap().run(rx).await {
+        if let Err(e) = run(Arc::new(Mutex::new(datastore.unwrap())), rx).await {
             eprintln!("Error running datastore: {e}");
         }
     });
