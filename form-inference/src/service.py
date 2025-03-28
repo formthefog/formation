@@ -8,14 +8,15 @@ import os
 from pydantic import BaseModel
 import uvicorn
 from dotenv import load_dotenv
-from worker import run_worker
+from factory import create_worker
+from model import Model
 
 load_dotenv()
 
 MOCK_URL = f"http://{os.getenv('MOCK_API_URL')}:{os.getenv('MOCK_API_PORT')}"
 executor = ProcessPoolExecutor()
 
-def broadcast_execute(input_data, world_size):
+def broadcast_execute(input_data, world_size, model=None):
     """Broadcasts the execute request to all nodes and ensures parallel execution."""
     response = requests.get(f"{MOCK_URL}/nodes")
     if response.status_code != 200:
@@ -35,12 +36,11 @@ def broadcast_execute(input_data, world_size):
 
             try:
                 print(f"Service: Sending /execute request to {node_host}:{node_port} (Node {node_id})")
-                
                 # Submit request to each node in a separate thread
                 future = thread_executor.submit(
                     requests.post,
                     f"http://{node_host}:{node_port}/execute",
-                    json={"input_data": input_data}
+                    json={"input_data": input_data, "model": model if model else ""}
                 )
                 futures[node_id] = future
 
@@ -75,7 +75,7 @@ class Service:
             # Create a new executor every time
             process_executor = ProcessPoolExecutor(max_workers=1)
             loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(process_executor, broadcast_execute, request.input_data, world_size)
+            result = await loop.run_in_executor(process_executor, broadcast_execute, request.input_data, world_size, request.model)
 
             # Forcefully terminate the process pool to avoid reuse
             process_executor.shutdown(wait=True, cancel_futures=True)
@@ -89,7 +89,9 @@ class Service:
             rank, world_size = self.get_rank_and_world_size()
 
             # Directly run the worker (no additional threading needed)
-            result = run_worker(rank, world_size, request.input_data)
+            worker = create_worker(rank, Model(request.model))
+            print(f"Worker {rank}: {worker.model}")
+            result = worker.run(world_size, request.input_data)
 
             return result
 
@@ -115,7 +117,7 @@ class Service:
             node_ids = [node["id"] for node in nodes]
             rank = node_ids.index(self.node_id)
             world_size = len(node_ids)
-            print(f"Service: Rank: {rank}, World Size: {world_size}")
+            print(f"Service: Rank: {rank}")
         else:
             print("Service: Failed to retrieve active nodes.")
             return None
@@ -149,4 +151,4 @@ class Service:
 
 class GenerateRequest(BaseModel):
     input_data: str
-
+    model: str = None
