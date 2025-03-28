@@ -1,7 +1,8 @@
-use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, Map};
+use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, Map, bft_reg::Update, CmRDT};
 use crate::Actor;
 use serde::{Serialize, Deserialize};
 use tiny_keccak::Hasher;
+use k256::ecdsa::SigningKey;
 use std::collections::{BTreeMap, HashMap};
 use crate::model::{ModelType, ModelLicense};
 
@@ -311,13 +312,79 @@ impl Default for AIAgent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentState {
     pub map: AgentMap,
+    pub pk: String,
+    pub node_id: String,
 }
 
 impl AgentState {
-    pub fn new() -> Self {
+    pub fn new(pk: String, node_id: String) -> Self {
         Self {
             map: Map::new(),
+            pk,
+            node_id
         }
+    }
+
+    pub fn map(&self) -> &AgentMap {
+        &self.map
+    }
+
+    /// Update an account locally and return the operation
+    pub fn update_agent_local(&mut self, agent: AIAgent) -> AgentOp {
+        let add_ctx = self.map.read_ctx().derive_add_ctx(self.node_id.clone());
+        let signing_key = SigningKey::from_slice(
+            &hex::decode(self.pk.clone())
+                .expect("PANIC: Invalid SigningKey Cannot Decode from Hex"))
+                .expect("PANIC: Invalid SigningKey cannot recover from Bytes");
+                
+        self.map.update(agent.agent_id.clone(), add_ctx, |reg, _ctx| {
+            reg.update(agent, self.node_id.clone(), signing_key)
+                .expect("PANIC: Unable to sign updates")
+        })
+    }
+    
+    pub fn agent_op(&mut self, op: AgentOp) -> Option<(String, String)> {
+        log::info!("Applying agent op");
+        self.map.apply(op.clone());
+        match op {
+            Op::Up { dot, key, op: _ } => Some((dot.actor, key)),
+            Op::Rm { .. } => None
+        }
+    }
+
+    pub fn agent_op_success(&self, key: String, update: Update<AIAgent, String>) -> (bool, AIAgent) {
+        if let Some(reg) = self.map.get(&key).val {
+            if let Some(v) = reg.val() {
+                // If the in the updated register equals the value in the Op it
+                // succeeded
+                if v.value() == update.op().value {
+                    return (true, v.value()) 
+                // Otherwise, it could be that it's a concurrent update and was added
+                // to the DAG as a head
+                } else if reg.dag_contains(&update.hash()) && reg.is_head(&update.hash()) {
+                    return (true, v.value()) 
+                // Otherwise, we could be missing a child, and this particular update
+                // is orphaned, if so we should requst the child we are missing from
+                // the actor who shared this update
+                } else if reg.is_orphaned(&update.hash()) {
+                    return (true, v.value())
+                // Otherwise it was a no-op for some reason
+                } else {
+                    return (false, v.value()) 
+                }
+            } else {
+                return (false, update.op().value) 
+            }
+        } else {
+            return (false, update.op().value);
+        }
+    }
+
+    pub fn remove_agent_local(&mut self, agent_id: String) -> AgentOp {
+        log::info!("Acquiring remove context for agent {}...", agent_id);
+        let rm_ctx = self.map.read_ctx().derive_rm_ctx();
+        log::info!("Building Rm Op for account deletion...");
+        self.map.rm(agent_id, rm_ctx)
     }
 
     pub fn get_agent(&self, agent_id: &String) -> Option<AIAgent> {

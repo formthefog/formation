@@ -11,7 +11,7 @@ use tiny_keccak::{Hasher, Sha3};
 use tokio::sync::Mutex;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use crdts::{map::Op, BFTReg, CvRDT, Map, CmRDT};
-use crate::{accounts::{Account, AccountOp, AccountState, AuthorizationLevel}, agent::{AgentMap, AgentState}, db::{open_db, write_datastore, DbHandle}, instances::{ClusterMember, Instance, InstanceOp, InstanceState}, model::{ModelMap, ModelState}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}};
+use crate::{accounts::{Account, AccountOp, AccountState, AuthorizationLevel}, agent::{AIAgent, AgentMap, AgentOp, AgentState}, db::{open_db, write_datastore, DbHandle}, instances::{ClusterMember, Instance, InstanceOp, InstanceState}, model::{AIModel, ModelMap, ModelOp, ModelState}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}};
 use lazy_static::lazy_static;
 
 lazy_static! {
@@ -170,14 +170,31 @@ pub enum AccountRequest {
     },
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum AgentRequest {
+    Op(AgentOp),
+    Create(AIAgent),
+    Update(AIAgent),
+    Delete(String),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ModelRequest {
+    Op(ModelOp),
+    Create(AIModel),
+    Update(AIModel),
+    Delete(String),
+}
+
+
 impl DataStore {
     pub fn new(node_id: String, pk: String) -> Self {
         let network_state = NetworkState::new(node_id.clone(), pk.clone());
         let instance_state = InstanceState::new(node_id.clone(), pk.clone());
         let node_state = NodeState::new(node_id.clone(), pk.clone());
-        let account_state = AccountState::new(node_id, pk.clone());
-        let agent_state = AgentState::new();
-        let model_state = ModelState::new();
+        let account_state = AccountState::new(node_id.clone(), pk.clone());
+        let agent_state = AgentState::new(node_id.clone(), pk.clone());
+        let model_state = ModelState::new(node_id.clone(), pk.clone());
 
 
         Self { 
@@ -850,7 +867,30 @@ impl DataStore {
     }
 
     pub async fn handle_account_op(&mut self, account_op: AccountOp) -> Result<(), Box<dyn std::error::Error>> {
-        self.account_state.map.apply(account_op);
+        match &account_op {
+            Op::Up { dot: _, key, op } => {
+                self.account_state.account_op(account_op.clone());
+                if let (true, _) = self.account_state.account_op_success(key.clone(), op.clone()) {
+                    log::info!("Account Op succesffully applied...");
+                    DataStore::write_to_queue(AccountRequest::Op(account_op.clone()), 7).await?;
+                    write_datastore(&DB_HANDLE, &self.clone())?;
+                } else {
+                    log::info!("Account Op rejected...");
+                    return Err(
+                        Box::new(
+                            std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                "update was rejected".to_string()
+                            )
+                        )
+                    )
+                }
+            }
+            Op::Rm { .. } => {
+                self.account_state.account_op(account_op.clone());
+                return Ok(());
+            }
+        }
         Ok(())
     }
 
@@ -946,6 +986,119 @@ impl DataStore {
         Ok(())
     }
 
+    pub async fn handle_agent_request(&mut self, account_request: AgentRequest) -> Result<(), Box<dyn std::error::Error>> {
+        match account_request {
+            AgentRequest::Op(op) => {
+                self.handle_agent_op(op).await?;
+            }
+            AgentRequest::Create(create) => {
+                self.handle_agent_create(create).await?;
+            }
+            AgentRequest::Update(update) => {
+                self.handle_agent_update(update).await?;
+            }
+            AgentRequest::Delete(delete) => {
+                self.handle_agent_delete(delete).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn handle_agent_create(&mut self, create: AIAgent) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.agent_state.update_agent_local(create);
+        self.handle_agent_op(op).await
+    }
+
+    pub async fn handle_agent_update(&mut self, update: AIAgent) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.agent_state.update_agent_local(update);
+        self.handle_agent_op(op).await
+    }
+
+    pub async fn handle_agent_delete(&mut self, delete: String) -> Result<(), Box<dyn std::error::Error>> {
+        // Check if account exists
+        match self.agent_state.get_agent(&delete) {
+            None => return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Account with address {} does not exist", delete)
+            ))),
+            _ => {}
+        };
+        
+        // Delete the account (remove it from the map)
+        let op = self.agent_state.remove_agent_local(delete);
+        // Apply the operation directly
+        self.agent_state.map.apply(op.clone());
+        
+        // Write to queue
+        if let Err(e) = DataStore::write_to_queue(AgentRequest::Op(op), 8).await {
+            log::error!("Error writing to queue: {}", e);
+        }
+
+        Ok(())
+    }
+
+    pub async fn handle_agent_op(&mut self, agent_op: AgentOp) -> Result<(), Box<dyn std::error::Error>> {
+        self.agent_state.map.apply(agent_op);
+        Ok(())
+    }
+
+    pub async fn handle_model_request(&mut self, model_request: ModelRequest) -> Result<(), Box<dyn std::error::Error>> {
+        match model_request {
+            ModelRequest::Op(op) => {
+                self.handle_model_op(op).await?;
+            }
+            ModelRequest::Create(create) => {
+                self.handle_model_create(create).await?;
+            }
+            ModelRequest::Update(update) => {
+                self.handle_model_update(update).await?;
+            }
+            ModelRequest::Delete(delete) => {
+                self.handle_model_delete(delete).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn handle_model_create(&mut self, create: AIModel) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.model_state.update_model_local(create);
+        self.handle_model_op(op).await
+    }
+
+    pub async fn handle_model_update(&mut self, update: AIModel) -> Result<(), Box<dyn std::error::Error>> {
+        let op = self.model_state.update_model_local(update);
+        self.handle_model_op(op).await
+    }
+
+    pub async fn handle_model_delete(&mut self, delete: String) -> Result<(), Box<dyn std::error::Error>> {
+        // Check if account exists
+        match self.model_state.get_model(&delete) {
+            None => return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Account with address {} does not exist", delete)
+            ))),
+            _ => {}
+        };
+        
+        // Delete the account (remove it from the map)
+        let op = self.model_state.remove_model_local(delete);
+        // Apply the operation directly
+        self.model_state.map.apply(op.clone());
+        
+        // Write to queue
+        if let Err(e) = DataStore::write_to_queue(ModelRequest::Op(op), 9).await {
+            log::error!("Error writing to queue: {}", e);
+        }
+
+        Ok(())
+    }
+
+    pub async fn handle_model_op(&mut self, agent_op: ModelOp) -> Result<(), Box<dyn std::error::Error>> {
+        self.model_state.map.apply(agent_op);
+        Ok(())
+    }
     pub async fn write_to_queue(
         message: impl Serialize + Clone,
         sub_topic: u8,
@@ -1128,22 +1281,27 @@ pub async fn process_message(message: Vec<u8>, state: Arc<Mutex<DataStore>>) -> 
             guard.handle_cidr_request(cidr_request).await?;
         },
         2 => {
+            log::info!("Pulled assoc request from queue, processing...");
             let assoc_request: AssocRequest = serde_json::from_slice(payload)?;
             guard.handle_assoc_request(assoc_request).await?;
         },
         3 => {
+            log::info!("Pulled dns request from queue, processing...");
             let dns_request: DnsRequest = serde_json::from_slice(payload)?;
             guard.handle_dns_request(dns_request).await?;
         },
         4 => {
+            log::info!("Pulled instance request from queue, processing...");
             let instance_request: InstanceRequest = serde_json::from_slice(payload)?;
             guard.handle_instance_request(instance_request).await?;
         },
         5 => {
+            log::info!("Pulled node request from queue, processing...");
             let node_request: NodeRequest = serde_json::from_slice(payload)?;
             guard.handle_node_request(node_request).await?;
         },
         6 => {
+            log::info!("Pulled node metrics request from queue, processing...");
             let node_metrics_request: NodeMetricsRequest = serde_json::from_slice(payload)?;
             guard.handle_node_metrics_request(node_metrics_request).await?;
         },
@@ -1152,6 +1310,16 @@ pub async fn process_message(message: Vec<u8>, state: Arc<Mutex<DataStore>>) -> 
             let account_request: AccountRequest = serde_json::from_slice(payload)?;
             guard.handle_account_request(account_request).await?;
         },
+        8 => {
+            log::info!("Pulled agent request from queue, processing...");
+            let agent_request: AgentRequest = serde_json::from_slice(payload)?;
+            guard.handle_agent_request(agent_request).await?;
+        },
+        9 => {
+            log::info!("Pulled model request from queue, processing...");
+            let model_request: ModelRequest = serde_json::from_slice(payload)?;
+            guard.handle_model_request(model_request).await?;
+        }
         _ => unreachable!()
     }
 

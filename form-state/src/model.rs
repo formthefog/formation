@@ -1,6 +1,7 @@
-use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, Map};
+use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, Map, bft_reg::Update, CmRDT};
 use crate::Actor;
 use serde::{Serialize, Deserialize};
+use k256::ecdsa::SigningKey;
 use tiny_keccak::Hasher;
 use std::collections::{BTreeMap, HashMap};
 
@@ -339,13 +340,79 @@ impl Default for AIModel {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelState {
     pub map: ModelMap,
+    pub pk: String,
+    pub node_id: String,
 }
 
 impl ModelState {
-    pub fn new() -> Self {
+    pub fn new(pk: String, node_id: String) -> Self {
         Self {
-            map: Map::new()
+            map: Map::new(),
+            pk,
+            node_id
         }
+    }
+
+    pub fn map(&self) -> &ModelMap {
+        &self.map
+    }
+
+    /// Update an mode locally and return the operation
+    pub fn update_model_local(&mut self, model: AIModel) -> ModelOp {
+        let add_ctx = self.map.read_ctx().derive_add_ctx(self.node_id.clone());
+        let signing_key = SigningKey::from_slice(
+            &hex::decode(self.pk.clone())
+                .expect("PANIC: Invalid SigningKey Cannot Decode from Hex"))
+                .expect("PANIC: Invalid SigningKey cannot recover from Bytes");
+                
+        self.map.update(model.model_id.clone(), add_ctx, |reg, _ctx| {
+            reg.update(model, self.node_id.clone(), signing_key)
+                .expect("PANIC: Unable to sign updates")
+        })
+    }
+    
+    pub fn model_op(&mut self, op: ModelOp) -> Option<(String, String)> {
+        log::info!("Applying model op");
+        self.map.apply(op.clone());
+        match op {
+            Op::Up { dot, key, op: _ } => Some((dot.actor, key)),
+            Op::Rm { .. } => None
+        }
+    }
+
+    pub fn model_op_success(&self, key: String, update: Update<AIModel, String>) -> (bool, AIModel) {
+        if let Some(reg) = self.map.get(&key).val {
+            if let Some(v) = reg.val() {
+                // If the in the updated register equals the value in the Op it
+                // succeeded
+                if v.value() == update.op().value {
+                    return (true, v.value()) 
+                // Otherwise, it could be that it's a concurrent update and was added
+                // to the DAG as a head
+                } else if reg.dag_contains(&update.hash()) && reg.is_head(&update.hash()) {
+                    return (true, v.value()) 
+                // Otherwise, we could be missing a child, and this particular update
+                // is orphaned, if so we should requst the child we are missing from
+                // the actor who shared this update
+                } else if reg.is_orphaned(&update.hash()) {
+                    return (true, v.value())
+                // Otherwise it was a no-op for some reason
+                } else {
+                    return (false, v.value()) 
+                }
+            } else {
+                return (false, update.op().value) 
+            }
+        } else {
+            return (false, update.op().value);
+        }
+    }
+
+    pub fn remove_model_local(&mut self, model_id: String) -> ModelOp {
+        log::info!("Acquiring remove context for model {}...", model_id);
+        let rm_ctx = self.map.read_ctx().derive_rm_ctx();
+        log::info!("Building Rm Op for account deletion...");
+        self.map.rm(model_id, rm_ctx)
     }
 
     pub fn get_model(&self, model_id: &String) -> Option<AIModel> {
@@ -359,7 +426,7 @@ impl ModelState {
         None
     }
 
-    pub fn list_agents(&self) -> HashMap<String, AIModel> {
+    pub fn list_models(&self) -> HashMap<String, AIModel> {
         self.map.iter().filter_map(|ctx| {
             let (id, reg) = ctx.val;
             match reg.val() {

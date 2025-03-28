@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use serde::{Serialize, Deserialize};
 use k256::ecdsa::SigningKey;
-use crdts::{Map, BFTReg, map::Op};
+use crdts::{Map, BFTReg, map::Op, bft_reg::Update, CmRDT};
 use chrono::Utc;
 
 use crate::Actor;
@@ -139,6 +139,50 @@ impl AccountState {
         })
     }
     
+    pub fn account_op(&mut self, op: AccountOp) -> Option<(String, String)> {
+        log::info!("Applying peer op");
+        self.map.apply(op.clone());
+        match op {
+            Op::Up { dot, key, op: _ } => Some((dot.actor, key)),
+            Op::Rm { .. } => None
+        }
+    }
+
+    pub fn account_op_success(&self, key: String, update: Update<Account, String>) -> (bool, Account) {
+        if let Some(reg) = self.map.get(&key).val {
+            if let Some(v) = reg.val() {
+                // If the in the updated register equals the value in the Op it
+                // succeeded
+                if v.value() == update.op().value {
+                    return (true, v.value()) 
+                // Otherwise, it could be that it's a concurrent update and was added
+                // to the DAG as a head
+                } else if reg.dag_contains(&update.hash()) && reg.is_head(&update.hash()) {
+                    return (true, v.value()) 
+                // Otherwise, we could be missing a child, and this particular update
+                // is orphaned, if so we should requst the child we are missing from
+                // the actor who shared this update
+                } else if reg.is_orphaned(&update.hash()) {
+                    return (true, v.value())
+                // Otherwise it was a no-op for some reason
+                } else {
+                    return (false, v.value()) 
+                }
+            } else {
+                return (false, update.op().value) 
+            }
+        } else {
+            return (false, update.op().value);
+        }
+    }
+
+    pub fn remove_instance_local(&mut self, id: String) -> AccountOp {
+        log::info!("Acquiring remove context...");
+        let rm_ctx = self.map.read_ctx().derive_rm_ctx();
+        log::info!("Building Rm Op...");
+        self.map.rm(id, rm_ctx)
+    }
+
     /// Get an account by address
     pub fn get_account(&self, address: &str) -> Option<Account> {
         let read_ctx = self.map.get(&address.to_string());
