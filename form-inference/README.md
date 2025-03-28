@@ -27,3 +27,34 @@ curl -X POST "http://127.0.0.1:8000/generate" -H "Content-Type: application/json
 | **Worker Role**        | Final worker performs generation, earlier workers only refine hidden states | All workers participate in both processing and generation |
 | **Generation Execution** | Only the final worker runs `model.generate()`            | All workers contribute to `model.generate()` in parallel     |
 | **Best Use Case**      | Large transformer models that don’t fit on a single device | Faster distributed generation when multiple GPUs are available |fff
+
+## Models Supported
+
+### Large
+
+- [DeepSeek-V3-0324](https://huggingface.co/deepseek-ai/DeepSeek-V3-0324)
+  - Parameters: 685B
+
+- [Qwen-QwQ-32B](https://huggingface.co/Qwen/QwQ-32B)
+  - Parameters: 32.8B
+
+- [Llama-3.3-70B-Instruct](https://huggingface.co/meta-llama/Llama-3.3-70B-Instruct)
+  - Parameters: 70.6B
+
+- [Gemma3:27b](https://ollama.com/library/gemma3:27b)
+  - Parameters: 27.4B
+
+- [InfiniteYou](https://huggingface.co/ByteDance/InfiniteYou)
+  - Parameters: 10B
+
+- [FLUX.1-schnell](https://huggingface.co/black-forest-labs/FLUX.1-schnell)
+  - Parameters: 12B
+
+- [Starvector-8b-im2svg](https://huggingface.co/starvector/starvector-8b-im2svg)
+  - Parameters: 7.51B
+
+### Small
+
+### Tiny
+
+- 
