@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.pem
 
 # C extensions
 *.so
@@ -172,3 +173,9 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Terraform files
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
