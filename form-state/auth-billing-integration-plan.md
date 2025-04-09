@@ -13,9 +13,9 @@ This document outlines the step-by-step plan for integrating authentication (usi
   - [x] Define project field for project-scoping
   - [x] Define role field for role-based access
   - [x] Add any additional required claims
-- [ ] Implement JWT verification utilities
-  - [ ] Set up key refreshing and caching
-  - [ ] Configure token validation parameters (exp, iss, aud)
+- [x] Implement JWT verification utilities
+  - [x] Set up key refreshing and caching
+  - [x] Configure token validation parameters (exp, iss, aud)
 
 ### 2. Implement Authentication Middleware
 - [ ] Create Axum middleware for JWT validation
