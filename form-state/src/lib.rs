@@ -10,5 +10,6 @@ pub mod model;
 pub mod agent;
 pub mod helpers;
 pub mod api;
+pub mod auth;
 
 pub type Actor = String;

@@ -13,6 +13,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use crdts::{map::Op, BFTReg, CvRDT, Map, CmRDT};
 use crate::{accounts::{Account, AccountOp, AccountState, AuthorizationLevel}, agent::{AIAgent, AgentMap, AgentOp, AgentState}, db::{open_db, write_datastore, DbHandle}, instances::{ClusterMember, Instance, InstanceOp, InstanceState}, model::{AIModel, ModelMap, ModelOp, ModelState}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}};
 use lazy_static::lazy_static;
+use url::Host;
 
 lazy_static! {
     pub static ref DB_HANDLE: DbHandle = open_db(PathBuf::from("/var/lib/formation/db/form.db"));

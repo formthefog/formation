@@ -38,3 +38,5 @@ bincode = "1"
 lazy_static = "1.5.0"
 chrono = "0.4"
 uuid = { version = "1.4", features = ["v4"] }
+jwt-authorizer = "0.15.0"
+jsonwebtoken = "9.1.0"
