@@ -1,0 +1,9 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+
+You will always check the implementation guide:
+
+[auth-billing-integration.md](mdc:auth-billing-integration.md)
