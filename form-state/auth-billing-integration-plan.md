@@ -18,16 +18,16 @@ This document outlines the step-by-step plan for integrating authentication (usi
   - [x] Configure token validation parameters (exp, iss, aud)
 
 ### 2. Implement Authentication Middleware
-- [ ] Create Axum middleware for JWT validation
-  - [ ] Extract Bearer token from Authorization header
-  - [ ] Validate token against JWKS endpoint
-  - [ ] Handle validation errors with appropriate status codes
-- [ ] Store validated claims in request extensions
-  - [ ] Set up extractors for accessing claims in handlers
-  - [ ] Create helper functions for common claim operations
-- [ ] Create public and protected route groups
-  - [ ] Apply auth middleware to protected routes only
-  - [ ] Define authentication-exempt routes
+- [x] Create Axum middleware for JWT validation
+  - [x] Extract Bearer token from Authorization header
+  - [x] Validate token against JWKS endpoint
+  - [x] Handle validation errors with appropriate status codes
+- [x] Store validated claims in request extensions
+  - [x] Set up extractors for accessing claims in handlers
+  - [x] Create helper functions for common claim operations
+- [x] Organize routes into public and protected groups
+  - [x] Create public route group (no auth required)
+  - [x] Create protected route group with JWT middleware
 
 ## Phase 2: Authorization Implementation
 

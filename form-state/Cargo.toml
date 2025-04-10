@@ -7,6 +7,10 @@ edition = "2021"
 name = "request_full_state"
 path = "examples/request-full-state.rs"
 
+[[example]]
+name = "auth_example"
+path = "examples/auth-example.rs"
+
 [dependencies]
 clap = { version = "4", features = ["derive"]}
 tokio = { version = "1", features = ["full"] } 
@@ -40,3 +44,7 @@ chrono = "0.4"
 uuid = { version = "1.4", features = ["v4"] }
 jwt-authorizer = "0.15.0"
 jsonwebtoken = "9.1.0"
+
+[features]
+default = ["axum"]
+axum = []
