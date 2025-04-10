@@ -32,15 +32,15 @@ This document outlines the step-by-step plan for integrating authentication (usi
 ## Phase 2: Authorization Implementation
 
 ### 3. Define Role-Based Access System
-- [ ] Create UserRole enum
-  - [ ] Define Admin, Developer, and User roles
-  - [ ] Implement serialization/deserialization for roles
-- [ ] Implement role-based extractors
-  - [ ] Create AdminOnly extractor
-  - [ ] Create DeveloperOrAdmin extractor
-  - [ ] Create custom rejection handlers for unauthorized access
-- [ ] Set up role validation functions
-  - [ ] Create helpers to check role permissions for specific operations
+- [x] Create UserRole enum
+  - [x] Define Admin, Developer, and User roles
+  - [x] Implement serialization/deserialization for roles
+- [x] Implement role-based extractors
+  - [x] Create AdminOnly extractor
+  - [x] Create DeveloperOrAdmin extractor
+  - [x] Create custom rejection handlers for unauthorized access
+- [x] Set up role validation functions
+  - [x] Create helpers to check role permissions for specific operations
 
 ### 4. Add Project-Based Resource Control
 - [ ] Modify agent operations to verify project ownership
