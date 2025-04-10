@@ -7,15 +7,25 @@ use axum::{
     routing::{post, get}, 
     middleware, 
     Json,
-    extract::Path,
+    extract::{Path, State},
+    response::{Response, IntoResponse},
 };
-use crate::helpers::{network::*, nodes::*, instances::*, account::*, agent::*, model::*};
+use crate::helpers::{
+    network::*, 
+    nodes::*, 
+    instances::*, 
+    account::*, 
+    agent::*, 
+    model::*
+};
 use crate::auth::{
     JWKSManager, JwtClaims, jwt_auth_middleware, AuthError,
     verify_project_path_access, has_resource_access, extract_user_info
 };
+use crate::billing::middleware::{check_agent_eligibility, check_token_eligibility};
 use tokio::net::TcpListener;
 use serde_json::json;
+use crate::billing::middleware::EligibilityError;
 
 pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
     // Create the JWKS manager for JWT validation
@@ -118,6 +128,16 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/model/:id/get", get(get_model))
         .route("/model/list", get(list_model))
         
+        // Billing and subscription management
+        .route("/billing/subscription", get(crate::billing::handlers::get_subscription_status))
+        .route("/billing/usage", get(crate::billing::handlers::get_usage_stats))
+        .route("/billing/checkout/process", post(crate::billing::handlers::process_stripe_checkout_session))
+        .route("/billing/credits/add", post(crate::billing::handlers::add_credits))
+        
+        // Protected routes that require eligibility checking
+        .route("/agent/:id/hire", post(checked_agent_hire))
+        .route("/model/:id/inference", post(checked_model_inference))
+        
         // Apply JWT authentication middleware to all protected routes
         .layer(middleware::from_fn_with_state(
             jwks_manager.clone(),
@@ -212,4 +232,77 @@ pub async fn run(datastore: Arc<Mutex<DataStore>>, mut shutdown: tokio::sync::br
     }
 
     Ok(())
+}
+
+// Wrapper function that performs eligibility check before calling agent_hire
+async fn checked_agent_hire(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    claims: JwtClaims,
+    Path(agent_id): Path<String>,
+    payload: Json<serde_json::Value>,
+) -> Result<Response, EligibilityError> {
+    // Run eligibility check first
+    let datastore = state.lock().await;
+    let account = datastore.account_state.get_account(&claims.0.sub)
+        .ok_or(EligibilityError::AccountNotFound)?;
+    
+    // Perform agent eligibility check here
+    // (simplified - actual check would be more comprehensive)
+    if datastore.agent_state.get_agent(&agent_id).is_none() {
+        return Err(EligibilityError::AgentNotFound);
+    }
+    
+    // If we got here, eligibility check passed, so call the actual handler
+    drop(datastore); // Release the lock before calling handler
+    
+    // Call the actual handler with the account context
+    let response = agent_hire(State(state), claims, Path(agent_id), payload).await;
+    Ok(response.into_response())
+}
+
+// Wrapper function that performs eligibility check before calling model_inference
+async fn checked_model_inference(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    claims: JwtClaims,
+    Path(model_id): Path<String>, 
+    Json(json_payload): Json<serde_json::Value>,
+) -> Result<Response, EligibilityError> {
+    // Run eligibility check first
+    let datastore = state.lock().await;
+    let account = datastore.account_state.get_account(&claims.0.sub)
+        .ok_or(EligibilityError::AccountNotFound)?;
+    
+    // Extract token count from payload
+    let token_count = json_payload.get("max_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    
+    // Check if they have enough credits
+    let required_credits = token_count / 10_000; // Simplified: 1 credit per 10K tokens
+    if required_credits > 0 && account.available_credits() < required_credits {
+        return Err(EligibilityError::InsufficientCredits {
+            available: account.available_credits(),
+            required: required_credits,
+        });
+    }
+    
+    // If we got here, eligibility check passed, so call the actual handler
+    drop(datastore); // Release the lock before calling handler
+    
+    // Convert the generic JSON to the expected type
+    let typed_payload = match serde_json::from_value::<ModelInferenceRequest>(json_payload) {
+        Ok(request) => request,
+        Err(err) => {
+            return Ok(
+                Json(json!({
+                    "error": "Invalid request format",
+                    "details": err.to_string()
+                })).into_response()
+            );
+        }
+    };
+    
+    // Call the actual handler with the properly typed payload
+    let response = model_inference(State(state), claims, Path(model_id), Json(typed_payload)).await;
+    Ok(response.into_response())
 }

@@ -42,94 +42,82 @@ This document outlines the step-by-step plan for integrating authentication (usi
 - [x] Set up role validation functions
   - [x] Create helpers to check role permissions for specific operations
 
-### 4. Add Project-Based Resource Control
-- [ ] Modify agent operations to verify project ownership
-  - [ ] Add project ID to AIAgent struct
-  - [ ] Update AgentState to validate project access
-  - [ ] Implement project validation in agent routes
-- [ ] Modify model operations to verify project ownership
-  - [ ] Add project ID to AIModel struct
-  - [ ] Update ModelState to validate project access
-  - [ ] Implement project validation in model routes
-- [ ] Implement cross-project sharing (if required)
-  - [ ] Create access control model for shared resources
-  - [ ] Add shared access validation to state operations
-
 ## Phase 3: Stripe Billing Integration
 
-### 5. Set Up Stripe Client
+### 4. Set Up Stripe Client for Verification
 - [ ] Add Stripe crate dependencies
   - [ ] Select appropriate Stripe library (async-stripe recommended)
   - [ ] Configure with environment variables
 - [ ] Create Stripe client configuration
-  - [ ] Set up API key handling
-  - [ ] Configure webhooks and event handling
-- [ ] Implement customer and subscription management
-  - [ ] Create function to register new Stripe customers
-  - [ ] Implement subscription creation and plan selection
-  - [ ] Set up database for tracking customer/subscription IDs
+  - [ ] Set up API key handling for verification purposes
+  - [ ] Configure webhooks for subscription status updates
+- [ ] Implement subscription status tracking
+  - [ ] Create endpoints to verify subscription status
+  - [ ] Set up database for tracking subscription status and tier
+  - [ ] Implement mechanism to receive subscription status updates from frontend/Stripe
+  - [ ] Note: All payment processing and method management will happen via Stripe and frontend
 
-### 6. Implement Usage Tracking
+### 5. Implement Usage Tracking
 - [ ] Extend ModelState with usage tracking
   - [ ] Add counters for token consumption
   - [ ] Track request counts and other metrics
   - [ ] Implement atomic increment operations
 - [ ] Extend AgentState with usage tracking
   - [ ] Track agent invocations and runtime
-  - [ ] Add metering for API calls
+  - [ ] Track how many agents are currently hired
   - [ ] Implement time-windowed usage stats
 - [ ] Create usage reporting system
-  - [ ] Set up periodic batch reporting to Stripe
+  - [ ] Set up credit deduction for token usage
   - [ ] Implement background task for usage aggregation
-  - [ ] Add retry logic for failed reporting
+  - [ ] Track remaining credits for pay-as-you-go users
 
-### 7. Add Quota Enforcement
-- [ ] Implement quota checking middleware
-  - [ ] Create usage limits based on subscription tiers
-  - [ ] Add project-level quota tracking
-  - [ ] Implement token bucket rate limiting if needed
+### 6. Add Eligibility Enforcement
+- [ ] Implement eligibility checking middleware
+  - [ ] Check available credits before processing token consumption
+  - [ ] Verify available agent slots before hiring
+  - [ ] Enforce subscription tier limits
 - [ ] Create plan-based limits
-  - [ ] Define subscription tiers and their quotas
-  - [ ] Implement quota checking before processing requests
+  - [ ] Define subscription tiers and their quotas (agent slots and credits)
+  - [ ] Implement eligibility checking before processing requests
   - [ ] Create usage projection utilities
 - [ ] Set up rejection handling
-  - [ ] Create standardized responses for quota exceeded
-  - [ ] Add upgrade prompts in quota exceeded responses
-  - [ ] Implement graceful degradation for near-limit usage
+  - [ ] Create standardized responses for insufficient credits
+  - [ ] Add upgrade prompts in limit exceeded responses
+  - [ ] Implement graceful handling for users at their limits
 
 ## Phase 4: API Enhancements
 
-### 8. Upgrade Existing API Endpoints
+### 7. Upgrade Existing API Endpoints
 - [ ] Refactor model endpoints
   - [ ] Add auth middleware to all protected routes
-  - [ ] Integrate usage tracking and reporting
-  - [ ] Add project context to requests and responses
+  - [ ] Integrate usage tracking and credit deduction
+  - [ ] Add eligibility checking before processing requests
 - [ ] Refactor agent endpoints
   - [ ] Secure all protected operations
-  - [ ] Add billing integration to agent operations
+  - [ ] Add hiring slot verification
   - [ ] Implement usage metering for agent calls
 - [ ] Update API response formats
-  - [ ] Add usage information to relevant responses
-  - [ ] Include quota status in response metadata
-  - [ ] Standardize error responses for auth/billing failures
+  - [ ] Add credit balance to relevant responses
+  - [ ] Include subscription status in response metadata
+  - [ ] Standardize error responses for eligibility failures
 
-### 9. Create Admin and Billing Management APIs
-- [ ] Add subscription management endpoints
-  - [ ] Create endpoints for viewing/changing plans
-  - [ ] Implement payment method management
-  - [ ] Add invoice and payment history access
+### 8. Create Account and Usage Management APIs
+- [ ] Add subscription status endpoints
+  - [ ] Create endpoints for viewing current plan
+  - [ ] Implement endpoints to check available credits/slots
+  - [ ] Add usage history access
 - [ ] Create usage reporting APIs
   - [ ] Add endpoints for usage statistics
-  - [ ] Implement project-level usage aggregation
+  - [ ] Implement credit consumption history
   - [ ] Create usage forecasting endpoints
-- [ ] Implement Stripe webhook handlers
-  - [ ] Add handlers for payment events
-  - [ ] Create subscription status change handlers
-  - [ ] Implement invoice event processing
+- [ ] Implement webhook handlers
+  - [ ] Add handlers for subscription status changes
+  - [ ] Create credit balance update handlers
+  - [ ] Implement event processing for plan changes
 
 ## Phase 5: Testing and Documentation
 
-### 10. Create Comprehensive Tests
+### 9. Create Comprehensive Tests
 - [ ] Create authentication unit tests
   - [ ] Test JWT validation with mock tokens
   - [ ] Test role-based access control
@@ -143,7 +131,7 @@ This document outlines the step-by-step plan for integrating authentication (usi
   - [ ] Test rate limiting and quota enforcement
   - [ ] Verify usage reporting accuracy
 
-### 11. Update Documentation
+### 10. Update Documentation
 - [ ] Add authentication documentation
   - [ ] Document token requirements and format
   - [ ] Create examples for authenticated requests
@@ -156,3 +144,23 @@ This document outlines the step-by-step plan for integrating authentication (usi
   - [ ] Add auth and billing parameters to all endpoints
   - [ ] Document rate limits and quota constraints
   - [ ] Add sample responses for various scenarios 
+
+## Future Enhancements
+
+### Project-Based Resource Control
+- [ ] Implement project-resource access control
+  - [ ] Create ProjectResourceAccess association model
+  - [ ] Implement API to manage project access to resources
+  - [ ] Add permission checking to agent and model routes
+- [ ] Modify agent operations to verify project access permissions
+  - [ ] Add access control to agent route handlers
+  - [ ] Implement resource-level permission logic
+  - [ ] Add authorized project list to agent responses
+- [ ] Modify model operations to verify project access permissions
+  - [ ] Add access control to model route handlers
+  - [ ] Implement resource-level permission logic
+  - [ ] Add authorized project list to model responses
+- [ ] Implement cross-project sharing mechanism
+  - [ ] Create access control model for resource sharing
+  - [ ] Add sharing permissions management API
+  - [ ] Implement access validation for shared resources 

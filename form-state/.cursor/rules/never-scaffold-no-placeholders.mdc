@@ -1,0 +1,6 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+Never write placeholder code or scaffold code, never write TODOs, always implement full business logic for implementations as if this is going into production.

@@ -4,6 +4,7 @@ use k256::ecdsa::SigningKey;
 use crdts::{Map, BFTReg, map::Op, bft_reg::Update, CmRDT};
 use chrono::Utc;
 
+use crate::billing::{SubscriptionInfo, UsageTracker};
 use crate::Actor;
 
 pub type AccountOp = Op<String, BFTReg<Account, Actor>, Actor>;
@@ -19,6 +20,14 @@ pub struct Account {
     pub owned_instances: BTreeSet<String>,
     /// Map of instance IDs to authorization level for instances where this account has access
     pub authorized_instances: BTreeMap<String, AuthorizationLevel>,
+    /// Subscription information
+    pub subscription: Option<SubscriptionInfo>,
+    /// Usage tracking information
+    pub usage: Option<UsageTracker>,
+    /// Available credits for pay-as-you-go usage
+    pub credits: u64,
+    /// Set of agent IDs that are currently hired by this account
+    pub hired_agents: BTreeSet<String>,
     /// Creation timestamp
     pub created_at: i64,
     /// Last update timestamp
@@ -56,6 +65,10 @@ impl Account {
             name: None,
             owned_instances: BTreeSet::new(),
             authorized_instances: BTreeMap::new(),
+            subscription: None,
+            usage: None,
+            credits: 0,
+            hired_agents: BTreeSet::new(),
             created_at: now,
             updated_at: now,
         }
@@ -99,6 +112,69 @@ impl Account {
         }
         // Otherwise, check the authorized_instances map
         self.authorized_instances.get(instance_id)
+    }
+
+    /// Get available credits (either from subscription or pay-as-you-go)
+    pub fn available_credits(&self) -> u64 {
+        // Get credits from subscription if available
+        let subscription_credits = if let Some(sub) = &self.subscription {
+            use crate::billing::SubscriptionStatus;
+            match sub.status {
+                SubscriptionStatus::Active | 
+                SubscriptionStatus::Trial | 
+                SubscriptionStatus::PastDue => sub.inference_credits_per_period,
+                _ => 0,
+            }
+        } else {
+            0
+        };
+        
+        // Pay-as-you-go credits
+        let payg_credits = self.credits;
+        
+        // Use subscription credits first, then pay-as-you-go
+        if subscription_credits > 0 {
+            subscription_credits
+        } else {
+            payg_credits
+        }
+    }
+    
+    /// Count the number of hired agents
+    pub fn hired_agent_count(&self) -> usize {
+        self.hired_agents.len()
+    }
+    
+    /// Add a hired agent
+    pub fn hire_agent(&mut self, agent_id: String) {
+        self.hired_agents.insert(agent_id);
+        self.updated_at = Utc::now().timestamp();
+    }
+    
+    /// Remove a hired agent
+    pub fn fire_agent(&mut self, agent_id: &str) -> bool {
+        let removed = self.hired_agents.remove(agent_id);
+        if removed {
+            self.updated_at = Utc::now().timestamp();
+        }
+        removed
+    }
+    
+    /// Add credits to the account
+    pub fn add_credits(&mut self, amount: u64) {
+        self.credits = self.credits.saturating_add(amount);
+        self.updated_at = Utc::now().timestamp();
+    }
+    
+    /// Deduct credits from the account
+    pub fn deduct_credits(&mut self, amount: u64) -> bool {
+        if self.credits >= amount {
+            self.credits -= amount;
+            self.updated_at = Utc::now().timestamp();
+            true
+        } else {
+            false
+        }
     }
 }
 

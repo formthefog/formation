@@ -1,10 +1,14 @@
 use crate::datastore::{AccountRequest, AgentRequest, DataStore, DB_HANDLE};
 use crate::db::write_datastore;
 use crate::agent::*;
+use crate::auth::JwtClaims;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use axum::{extract::{State, Path}, Json};
 use form_types::state::{Response, Success};
+use axum::http::StatusCode;
+use serde_json::json;
+use axum::response::IntoResponse;
 
 pub async fn create_agent(
     State(state): State<Arc<Mutex<DataStore>>>,
@@ -82,3 +86,67 @@ pub async fn get_agent(
 pub async fn list_agent(
     State(datatore): State<Arc<Mutex<DataStore>>>
 ) {}
+
+/// Handler for hiring an agent
+pub async fn agent_hire(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    JwtClaims(claims): JwtClaims,
+    Path(agent_id): Path<String>,
+    Json(payload): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    log::info!("User {} is attempting to hire agent {}", claims.sub, agent_id);
+    
+    let mut datastore = state.lock().await;
+    
+    // Check if the agent exists
+    if let Some(agent) = datastore.agent_state.get_agent(&agent_id) {
+        // Get the user's account
+        if let Some(mut account) = datastore.account_state.get_account(&claims.sub) {
+            // Add the agent to the hired agents
+            account.hire_agent(agent_id.clone());
+            
+            // Update the account
+            let op = datastore.account_state.update_account_local(account.clone());
+            if let Err(err) = datastore.handle_account_op(op).await {
+                log::error!("Failed to update account after hiring agent: {}", err);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "success": false,
+                        "error": "Failed to update account after hiring agent"
+                    }))
+                );
+            }
+            
+            // Return success
+            return (
+                StatusCode::OK,
+                Json(json!({
+                    "success": true,
+                    "message": format!("Successfully hired agent {}", agent_id),
+                    "agent": {
+                        "id": agent_id,
+                        "name": agent.name,
+                        "description": agent.description
+                    }
+                }))
+            );
+        } else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "success": false,
+                    "error": "Account not found"
+                }))
+            );
+        }
+    } else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "success": false,
+                "error": format!("Agent {} not found", agent_id)
+            }))
+        );
+    }
+}
