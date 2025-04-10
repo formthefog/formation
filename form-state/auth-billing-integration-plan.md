@@ -42,43 +42,48 @@ This document outlines the step-by-step plan for integrating authentication (usi
 - [x] Set up role validation functions
   - [x] Create helpers to check role permissions for specific operations
 
-## Phase 3: Stripe Billing Integration
+## Phase 3: Billing Integration (Frontend-Driven)
 
-### 4. Set Up Stripe Client for Verification
-- [ ] Add Stripe crate dependencies
-  - [ ] Select appropriate Stripe library (async-stripe recommended)
-  - [ ] Configure with environment variables
-- [ ] Create Stripe client configuration
-  - [ ] Set up API key handling for verification purposes
-  - [ ] Configure webhooks for subscription status updates
-- [ ] Implement subscription status tracking
-  - [ ] Create endpoints to verify subscription status
-  - [ ] Set up database for tracking subscription status and tier
-  - [ ] Implement mechanism to receive subscription status updates from frontend/Stripe
-  - [ ] Note: All payment processing and method management will happen via Stripe and frontend
+### 4. Create Subscription Data Storage
+- [x] Design subscription data structures
+  - [x] Define SubscriptionInfo, SubscriptionTier, and SubscriptionStatus types
+  - [x] Create BillingConfig for default pricing and limits
+  - [x] Implement serialization/deserialization for storage
+- [x] Create API endpoints for receiving subscription data
+  - [x] Implement endpoint for subscription status updates
+  - [x] Create handlers for credit purchases
+  - [x] Add validation for incoming subscription data
+- [x] Set up secure reception of billing data
+  - [x] Add validation of incoming requests
+  - [x] Implement proper authorization checks on billing endpoints
+  - [x] Store received subscription data in accounts
+  - [x] Note: All payment processing and Stripe interactions happen exclusively in the frontend
 
-### 5. Implement Usage Tracking
-- [ ] Extend ModelState with usage tracking
-  - [ ] Add counters for token consumption
-  - [ ] Track request counts and other metrics
-  - [ ] Implement atomic increment operations
-- [ ] Extend AgentState with usage tracking
-  - [ ] Track agent invocations and runtime
-  - [ ] Track how many agents are currently hired
+### 5. Implement Usage Tracking (Account-Centric)
+- [ ] Extend Account with comprehensive usage tracking
+  - [ ] Add token consumption tracking structure
+  - [ ] Track agent invocations and request counts
   - [ ] Implement time-windowed usage stats
-- [ ] Create usage reporting system
-  - [ ] Set up credit deduction for token usage
-  - [ ] Implement background task for usage aggregation
-  - [ ] Track remaining credits for pay-as-you-go users
+  - [ ] Store per-model and per-agent metrics within Account
+- [ ] Create account-based usage recording API
+  - [ ] Implement `record_token_usage(model_id, token_count)`
+  - [ ] Implement `record_agent_usage(agent_id, operation_type)`
+  - [ ] Add atomic increment operations for thread safety
+  - [ ] Create usage aggregation methods
+- [ ] Implement credit management within Account
+  - [ ] Set up credit tracking and balance management
+  - [ ] Implement credit transaction history
+  - [ ] Create methods for credit consumption and addition
+  - [ ] Add reporting for available credits
 
 ### 6. Add Eligibility Enforcement
-- [ ] Implement eligibility checking middleware
-  - [ ] Check available credits before processing token consumption
-  - [ ] Verify available agent slots before hiring
-  - [ ] Enforce subscription tier limits
+- [ ] Implement account-based eligibility checking
+  - [ ] Create `can_use_tokens(model_id, token_count)` method on Account
+  - [ ] Create `can_hire_agent(agent_id)` method on Account 
+  - [ ] Implement credit checking for operations
 - [ ] Create plan-based limits
   - [ ] Define subscription tiers and their quotas (agent slots and credits)
-  - [ ] Implement eligibility checking before processing requests
+  - [ ] Implement tier-based eligibility rules
   - [ ] Create usage projection utilities
 - [ ] Set up rejection handling
   - [ ] Create standardized responses for insufficient credits
@@ -90,12 +95,12 @@ This document outlines the step-by-step plan for integrating authentication (usi
 ### 7. Upgrade Existing API Endpoints
 - [ ] Refactor model endpoints
   - [ ] Add auth middleware to all protected routes
-  - [ ] Integrate usage tracking and credit deduction
+  - [ ] Integrate account-based usage tracking
   - [ ] Add eligibility checking before processing requests
 - [ ] Refactor agent endpoints
   - [ ] Secure all protected operations
-  - [ ] Add hiring slot verification
-  - [ ] Implement usage metering for agent calls
+  - [ ] Add account-based hiring slot verification
+  - [ ] Implement usage metering via account methods
 - [ ] Update API response formats
   - [ ] Add credit balance to relevant responses
   - [ ] Include subscription status in response metadata
@@ -110,8 +115,8 @@ This document outlines the step-by-step plan for integrating authentication (usi
   - [ ] Add endpoints for usage statistics
   - [ ] Implement credit consumption history
   - [ ] Create usage forecasting endpoints
-- [ ] Implement webhook handlers
-  - [ ] Add handlers for subscription status changes
+- [ ] Implement data reception endpoints
+  - [ ] Add handlers for receiving subscription updates from frontend
   - [ ] Create credit balance update handlers
   - [ ] Implement event processing for plan changes
 
@@ -123,9 +128,9 @@ This document outlines the step-by-step plan for integrating authentication (usi
   - [ ] Test role-based access control
   - [ ] Test extractors and middleware components
 - [ ] Implement billing integration tests
-  - [ ] Test usage tracking accuracy
-  - [ ] Verify quota enforcement
-  - [ ] Test Stripe API integration with test mode
+  - [ ] Test account-based usage tracking accuracy
+  - [ ] Verify quota enforcement through account methods
+  - [ ] Test data reception endpoints with mock subscription data
 - [ ] Set up end-to-end testing
   - [ ] Create test scenarios covering auth and billing
   - [ ] Test rate limiting and quota enforcement
@@ -138,8 +143,9 @@ This document outlines the step-by-step plan for integrating authentication (usi
   - [ ] Document error codes and troubleshooting
 - [ ] Create billing integration docs
   - [ ] Document subscription plans and features
-  - [ ] Explain usage-based billing model
-  - [ ] Create integration examples for client applications
+  - [ ] Explain frontend-driven billing model
+  - [ ] Document API endpoints for receiving billing data 
+  - [ ] Outline usage tracking and eligibility enforcement
 - [ ] Update API reference
   - [ ] Add auth and billing parameters to all endpoints
   - [ ] Document rate limits and quota constraints
