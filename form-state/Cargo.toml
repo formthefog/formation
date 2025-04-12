@@ -52,3 +52,4 @@ dotenv = "0.15.0"
 [features]
 default = ["axum"]
 axum = []
+devnet = []

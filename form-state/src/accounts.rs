@@ -68,14 +68,18 @@ impl Account {
     /// Create a new account with the given address
     pub fn new(address: String) -> Self {
         let now = Utc::now().timestamp();
+        
+        // Initialize with free tier credits (enough for basic usage)
+        let initial_credits = 100; // $100 worth of credits
+        
         Self {
             address,
             name: None,
             owned_instances: BTreeSet::new(),
             authorized_instances: BTreeMap::new(),
             subscription: None,
-            usage: None,
-            credits: 0,
+            usage: Some(UsageTracker::new()), // Initialize with default usage tracker
+            credits: initial_credits,
             hired_agents: BTreeSet::new(),
             created_at: now,
             updated_at: now,
@@ -183,6 +187,241 @@ impl Account {
         } else {
             false
         }
+    }
+
+    /// Get the usage tracker, initializing if needed
+    pub fn usage_tracker(&mut self) -> &mut UsageTracker {
+        if self.usage.is_none() {
+            self.usage = Some(UsageTracker::new());
+        }
+        self.usage.as_mut().unwrap()
+    }
+    
+    /// Get the usage tracker as a reference without modifying
+    pub fn get_usage(&self) -> Option<&UsageTracker> {
+        self.usage.as_ref()
+    }
+    
+    /// Get maximum allowed agents based on subscription or free tier
+    pub fn max_allowed_agents(&self) -> u32 {
+        if let Some(sub) = &self.subscription {
+            sub.max_agents
+        } else {
+            1 // Free tier: 1 agent
+        }
+    }
+    
+    /// Check if the account can hire an additional agent
+    pub fn can_hire_additional_agent(&self) -> bool {
+        let current = self.hired_agent_count() as u32;
+        let max_allowed = self.max_allowed_agents();
+        
+        current < max_allowed || self.credits >= 10 // Cost per additional agent
+    }
+    
+    /// Get total token usage for all time
+    pub fn total_token_usage(&self) -> u64 {
+        match &self.usage {
+            Some(usage) => usage.total_tokens_consumed(),
+            None => 0,
+        }
+    }
+    
+    /// Get token usage for the current billing period
+    pub fn current_period_token_usage(&self) -> u64 {
+        match &self.usage {
+            Some(usage) => usage.current_period_tokens(),
+            None => 0,
+        }
+    }
+    
+    /// Get today's token usage
+    pub fn today_token_usage(&self) -> u64 {
+        match &self.usage {
+            Some(usage) => usage.today_usage().total_tokens,
+            None => 0,
+        }
+    }
+    
+    /// Check if account has sufficient credits for token consumption
+    pub fn has_sufficient_credits_for_tokens(&self, token_count: u64, token_cost_per_1k: f64) -> bool {
+        let cost = (token_count as f64 / 1000.0) * token_cost_per_1k;
+        let cost_in_credits = cost.ceil() as u64;
+        
+        self.available_credits() >= cost_in_credits
+    }
+    
+    /// Check if the account can use the specified tokens for the given model
+    /// 
+    /// This checks both if:
+    /// 1. The account has sufficient credits for the operation
+    /// 2. The account hasn't exceeded any token quotas or rate limits
+    /// 
+    /// Returns true if the tokens can be used, false otherwise
+    pub fn can_use_tokens(&self, model_id: &str, input_tokens: u64, output_tokens: u64) -> bool {
+        // First check if we have a usage tracker
+        let usage = match &self.usage {
+            Some(tracker) => tracker,
+            None => return self.available_credits() > 0, // If no tracker, just check if we have any credits
+        };
+        
+        // Calculate the cost in credits
+        let required_credits = usage.estimate_token_cost(model_id, input_tokens, output_tokens);
+        
+        // Check against the user's credit balance
+        if self.available_credits() < required_credits {
+            return false;
+        }
+        
+        // Check rate limits and subscription tier restrictions
+        if let Some(subscription) = &self.subscription {
+            // Get the quota for this subscription tier
+            let quota = subscription.quota();
+            
+            // Check model access restrictions
+            let model_tier = model_id.split("_").next().unwrap_or("basic");
+            if !quota.model_access.iter().any(|tier| tier == model_tier) {
+                return false; // Model tier not allowed for this subscription
+            }
+            
+            // Check if this is a premium model
+            let is_premium = model_id.contains("premium") || model_tier == "enterprise" || model_tier == "expert";
+            
+            // Count existing premium models
+            let premium_count = self.get_usage()
+                .map(|u| u.model_usage.keys()
+                    .filter(|m| m.contains("premium") || 
+                           m.split("_").next().unwrap_or("") == "enterprise" || 
+                           m.split("_").next().unwrap_or("") == "expert")
+                    .count() as u32)
+                .unwrap_or(0);
+            
+            // Check premium model limit if this is a premium model
+            if is_premium && premium_count >= quota.max_premium_models {
+                return false;
+            }
+            
+            // Check daily token limits if applicable
+            if let Some(daily_limit) = quota.daily_token_limit {
+                let today_usage = usage.today_usage().total_tokens;
+                
+                if today_usage + input_tokens + output_tokens > daily_limit {
+                    return false;
+                }
+            }
+        }
+        
+        // If we reach here, the account can use the tokens
+        true
+    }
+    
+    /// Check if the account can hire a specific agent
+    /// 
+    /// This checks:
+    /// 1. If the agent is already hired (prevents duplicate hiring)
+    /// 2. If the account has reached its agent limit
+    /// 3. If the account has sufficient credits to hire the agent
+    /// 4. If the agent type is allowed for the account's subscription tier
+    ///
+    /// Returns true if the agent can be hired, false otherwise
+    pub fn can_hire_agent(&self, agent_id: &str) -> bool {
+        // Check if agent is already hired
+        if self.hired_agents.contains(agent_id) {
+            return false; // Already hired this agent
+        }
+        
+        // Get subscription quota if available
+        let quota = self.subscription.as_ref().map(|sub| sub.quota());
+        
+        // Get current and max agent counts
+        let current_agent_count = self.hired_agent_count() as u32;
+        let max_allowed = self.max_allowed_agents();
+        
+        // If we're under the limit, check agent type eligibility
+        if current_agent_count < max_allowed {
+            // Check if this is a premium agent
+            let is_premium = agent_id.contains("premium_") || agent_id.contains("expert_");
+            
+            // If it's a premium agent, check subscription permissions
+            if is_premium {
+                // Free tier and tiers without premium_agent_access cannot use premium agents
+                if let Some(quota) = &quota {
+                    if !quota.premium_agent_access {
+                        return false;
+                    }
+                } else {
+                    return false; // No subscription means no premium agents
+                }
+            }
+            
+            return true; // Non-premium agents can be hired if under limit
+        }
+        
+        // If we're at or over the limit, check if we have credits for an additional agent
+        // Base cost is 10 credits per additional agent beyond the subscription limit
+        let base_cost: u64 = 10;
+        
+        // Apply any discount from the subscription
+        let additional_agent_cost = if let Some(quota) = quota.clone() {
+            if quota.additional_agent_discount > 0 {
+                let discount = (base_cost as f64 * (quota.additional_agent_discount as f64 / 100.0)).ceil() as u64;
+                base_cost.saturating_sub(discount)
+            } else {
+                base_cost
+            }
+        } else {
+            base_cost
+        };
+        
+        // Check credit balance
+        if self.available_credits() < additional_agent_cost {
+            return false;
+        }
+        
+        // Check subscription tier restrictions
+        if let Some(quota) = quota.clone() {
+            // Check if this is a premium agent
+            let is_premium = agent_id.contains("premium_") || agent_id.contains("expert_");
+            
+            // Premium agents require premium_agent_access
+            if is_premium && !quota.premium_agent_access {
+                return false;
+            }
+            
+            // Hard caps on total agents by tier
+            // Free tier users are limited to a maximum of 2 agents total (1 included + 1 extra)
+            if self.subscription.as_ref().map_or(false, |s| s.tier == crate::billing::SubscriptionTier::Free) 
+                && current_agent_count >= 2 {
+                return false;
+            }
+            
+            // Pro tier users can hire up to 5 agents total (included + extra)
+            if self.subscription.as_ref().map_or(false, |s| s.tier == crate::billing::SubscriptionTier::Pro) 
+                && current_agent_count >= 5 {
+                return false;
+            }
+            
+            // ProPlus users can hire up to 10 agents total
+            if self.subscription.as_ref().map_or(false, |s| s.tier == crate::billing::SubscriptionTier::ProPlus) 
+                && current_agent_count >= 10 {
+                return false;
+            }
+            
+            // Power users can hire up to 20 agents total
+            if self.subscription.as_ref().map_or(false, |s| s.tier == crate::billing::SubscriptionTier::Power) 
+                && current_agent_count >= 20 {
+                return false;
+            }
+            
+            // PowerPlus users can hire up to 50 agents total
+            if self.subscription.as_ref().map_or(false, |s| s.tier == crate::billing::SubscriptionTier::PowerPlus) 
+                && current_agent_count >= 50 {
+                return false;
+            }
+        }
+        
+        // If we've passed all checks, the user can hire this agent
+        true
     }
 }
 

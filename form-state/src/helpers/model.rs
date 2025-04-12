@@ -55,36 +55,20 @@ pub async fn model_inference(
             let output_tokens = payload.output_tokens.unwrap_or(0);
             let total_tokens = input_tokens + output_tokens;
             
-            // Update usage tracking
+            // Record token usage in the usage tracker
             if let Some(ref mut usage) = account.usage {
-                // Update token usage for current period
-                let period_key = usage.current_period_start.format("%Y-%m").to_string();
-                let period_usage = usage.token_usage
-                    .entry(period_key)
-                    .or_insert_with(PeriodUsage::default);
-                period_usage.tokens_consumed += total_tokens;
-                
-                // Update model-specific usage
-                *usage.model_usage.entry(model_id.clone()).or_insert(0) += total_tokens;
+                // Record usage using the proper method
+                let cost = usage.record_token_usage(&model_id, input_tokens, output_tokens);
+                log::info!("Recorded {} tokens ({}+{}) for model {}, cost: {} credits", 
+                    total_tokens, input_tokens, output_tokens, model_id, cost);
             } else {
                 // Create new usage tracker if none exists
-                let mut token_usage = BTreeMap::new();
-                let mut model_usage = BTreeMap::new();
-                let period_key = Utc::now().format("%Y-%m").to_string();
-                
-                token_usage.insert(period_key, PeriodUsage {
-                    tokens_consumed: total_tokens,
-                    agent_requests: 0,
-                });
-                
-                model_usage.insert(model_id.clone(), total_tokens);
-                
-                account.usage = Some(UsageTracker {
-                    token_usage,
-                    agent_requests: BTreeMap::new(),
-                    model_usage,
-                    current_period_start: Utc::now(),
-                });
+                account.usage = Some(UsageTracker::new());
+                if let Some(ref mut usage) = account.usage {
+                    let cost = usage.record_token_usage(&model_id, input_tokens, output_tokens);
+                    log::info!("Created new usage tracker and recorded {} tokens for model {}, cost: {} credits", 
+                        total_tokens, model_id, cost);
+                }
             }
             
             // Update the account

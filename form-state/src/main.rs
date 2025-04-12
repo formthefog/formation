@@ -32,6 +32,9 @@ pub struct Cli {
     jwt_leeway: Option<String>,
     #[clap(long)]
     env_file: Option<PathBuf>,
+    #[clap(long, default_value = "full")]
+    /// Execution mode: "full" (API + queue), "api-only", or "queue-only"
+    execution_mode: String,
 }
 
 #[tokio::main]
@@ -85,6 +88,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log::info!("  Issuer: {:?}", env::var("DYNAMIC_JWT_ISSUER").ok());
     log::info!("  JWKS URL: {:?}", env::var("DYNAMIC_JWKS_URL").ok());
     log::info!("  Leeway: {:?}", env::var("DYNAMIC_JWT_LEEWAY").ok());
+
+    // Log execution mode
+    #[cfg(feature = "devnet")]
+    log::info!("Running in DEVNET mode (no actual queue operations)");
+    
+    #[cfg(not(feature = "devnet"))]
+    log::info!("Running in PRODUCTION mode (real queue operations)");
+    
+    log::info!("Execution mode: {}", parser.execution_mode);
 
     let config = OperatorConfig::from_file(parser.config_path, parser.encrypted, parser.password.as_deref()).ok(); 
     let private_key = if let Some(pk) = &parser.secret_key {
@@ -155,13 +167,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     log::info!("Built data store, running...");
     
-    let (tx, rx) = tokio::sync::broadcast::channel(1024); 
-
-    let handle = tokio::spawn(async move {
-        if let Err(e) = run(Arc::new(Mutex::new(datastore.unwrap())), rx).await {
-            eprintln!("Error running datastore: {e}");
+    let (tx, rx) = tokio::sync::broadcast::channel(1024);
+    
+    // Handle different execution modes
+    let handle = match parser.execution_mode.as_str() {
+        "api-only" => {
+            log::info!("Starting in API-only mode");
+            tokio::spawn(async move {
+                if let Err(e) = form_state::api::run_api(Arc::new(Mutex::new(datastore.unwrap()))).await {
+                    eprintln!("Error running API server: {e}");
+                }
+            })
+        },
+        "queue-only" => {
+            log::info!("Starting in queue-only mode");
+            tokio::spawn(async move {
+                if let Err(e) = form_state::api::run_queue_reader(Arc::new(Mutex::new(datastore.unwrap())), rx).await {
+                    eprintln!("Error running queue reader: {e}");
+                }
+            })
+        },
+        // Default to full mode (both API and queue)
+        _ => {
+            log::info!("Starting in full mode (API + queue)");
+            tokio::spawn(async move {
+                if let Err(e) = form_state::api::run(Arc::new(Mutex::new(datastore.unwrap())), rx).await {
+                    eprintln!("Error running datastore: {e}");
+                }
+            })
         }
-    });
+    };
 
     tokio::signal::ctrl_c().await?;
     tx.send(())?;

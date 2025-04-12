@@ -197,16 +197,65 @@ async fn project_resource_handler(
     })))
 }
 
+/// Run the API server without queue processing
+pub async fn run_api(datastore: Arc<Mutex<DataStore>>) -> Result<(), Box<dyn std::error::Error>> {
+    let router = app(datastore.clone());
+    let listener = TcpListener::bind("0.0.0.0:3004").await?;
+    log::info!("Running API server only...");
+    
+    if let Err(e) = axum::serve(listener, router).await {
+        eprintln!("Error serving State API Server: {e}");
+        return Err(Box::new(e));
+    }
+    
+    Ok(())
+}
+
+/// Run the queue reader without the API server
+pub async fn run_queue_reader(datastore: Arc<Mutex<DataStore>>, mut shutdown: tokio::sync::broadcast::Receiver<()>) -> Result<(), Box<dyn std::error::Error>> {
+    log::info!("Running queue reader only...");
+    
+    let mut n = 0;
+    let polling_interval = 100;
+    loop {
+        tokio::select! {
+            Ok(messages) = DataStore::read_from_queue(Some(n), None) => {
+                n += messages.len();
+                for message in messages {
+                    log::info!("pulled message from queue");
+                    let ds = datastore.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = process_message(message, ds).await {
+                            eprintln!("Error processing message: {e}");
+                        }
+                    });
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_millis(polling_interval)) => {
+            }
+            _ = shutdown.recv() => {
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Run both the API server and queue reader
 pub async fn run(datastore: Arc<Mutex<DataStore>>, mut shutdown: tokio::sync::broadcast::Receiver<()>) -> Result<(), Box<dyn std::error::Error>> {
     let router = app(datastore.clone());
     let listener = TcpListener::bind("0.0.0.0:3004").await?;
-    log::info!("Running datastore server...");
+    log::info!("Running datastore server with API and queue reader...");
+    
+    // Start API server
     tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, router).await {
             eprintln!("Error serving State API Server: {e}");
         }
     });
 
+    // Start queue reader
     let mut n = 0;
     let polling_interval = 100;
     loop {
@@ -244,13 +293,18 @@ async fn checked_agent_hire(
     // Run eligibility check first
     let datastore = state.lock().await;
     let account = datastore.account_state.get_account(&claims.0.sub)
-        .ok_or(EligibilityError::AccountNotFound)?;
+        .ok_or(EligibilityError::AccountNotFound(claims.0.sub.clone()))?;
     
-    // Perform agent eligibility check here
-    // (simplified - actual check would be more comprehensive)
+    // Check if the agent exists
     if datastore.agent_state.get_agent(&agent_id).is_none() {
-        return Err(EligibilityError::AgentNotFound);
+        return Err(EligibilityError::OperationNotAllowed(format!("Agent not found: {}", agent_id)));
     }
+    
+    // Use the new centralized credit checking function
+    use crate::billing::middleware::{check_operation_credits, OperationType};
+    check_operation_credits(&account, OperationType::AgentHire { 
+        agent_id: agent_id.clone() 
+    })?;
     
     // If we got here, eligibility check passed, so call the actual handler
     drop(datastore); // Release the lock before calling handler
@@ -270,21 +324,24 @@ async fn checked_model_inference(
     // Run eligibility check first
     let datastore = state.lock().await;
     let account = datastore.account_state.get_account(&claims.0.sub)
-        .ok_or(EligibilityError::AccountNotFound)?;
+        .ok_or(EligibilityError::AccountNotFound(claims.0.sub.clone()))?;
     
     // Extract token count from payload
-    let token_count = json_payload.get("max_tokens")
+    let input_tokens = json_payload.get("input_tokens")
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
     
-    // Check if they have enough credits
-    let required_credits = token_count / 10_000; // Simplified: 1 credit per 10K tokens
-    if required_credits > 0 && account.available_credits() < required_credits {
-        return Err(EligibilityError::InsufficientCredits {
-            available: account.available_credits(),
-            required: required_credits,
-        });
-    }
+    let output_tokens = json_payload.get("output_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    
+    // Use the new centralized credit checking function
+    use crate::billing::middleware::{check_operation_credits, OperationType};
+    check_operation_credits(&account, OperationType::TokenConsumption { 
+        model_id: model_id.clone(),
+        input_tokens,
+        output_tokens
+    })?;
     
     // If we got here, eligibility check passed, so call the actual handler
     drop(datastore); // Release the lock before calling handler

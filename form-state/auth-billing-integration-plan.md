@@ -60,39 +60,91 @@ This document outlines the step-by-step plan for integrating authentication (usi
   - [x] Note: All payment processing and Stripe interactions happen exclusively in the frontend
 
 ### 5. Implement Usage Tracking (Account-Centric)
-- [ ] Extend Account with comprehensive usage tracking
-  - [ ] Add token consumption tracking structure
-  - [ ] Track agent invocations and request counts
-  - [ ] Implement time-windowed usage stats
-  - [ ] Store per-model and per-agent metrics within Account
-- [ ] Create account-based usage recording API
-  - [ ] Implement `record_token_usage(model_id, token_count)`
-  - [ ] Implement `record_agent_usage(agent_id, operation_type)`
-  - [ ] Add atomic increment operations for thread safety
-  - [ ] Create usage aggregation methods
-- [ ] Implement credit management within Account
-  - [ ] Set up credit tracking and balance management
-  - [ ] Implement credit transaction history
-  - [ ] Create methods for credit consumption and addition
-  - [ ] Add reporting for available credits
+- [x] Extend Account with comprehensive usage tracking
+  - [x] Add token consumption tracking structure
+  - [x] Track agent invocations and request counts
+  - [x] Implement time-windowed usage stats
+  - [x] Store per-model and per-agent metrics within Account
+- [x] Create account-based usage recording API
+  - [x] Implement `record_token_usage(model_id, token_count)`
+  - [x] Implement `record_agent_usage(agent_id, operation_type)`
+  - [x] Add atomic increment operations for thread safety
+  - [x] Create usage aggregation methods
+- [x] Implement credit management within Account
+  - [x] Set up credit tracking and balance management
+  - [x] Implement credit transaction history
+  - [x] Create methods for credit consumption and addition
+  - [x] Add reporting for available credits
 
 ### 6. Add Eligibility Enforcement
-- [ ] Implement account-based eligibility checking
-  - [ ] Create `can_use_tokens(model_id, token_count)` method on Account
-  - [ ] Create `can_hire_agent(agent_id)` method on Account 
-  - [ ] Implement credit checking for operations
-- [ ] Create plan-based limits
-  - [ ] Define subscription tiers and their quotas (agent slots and credits)
-  - [ ] Implement tier-based eligibility rules
-  - [ ] Create usage projection utilities
-- [ ] Set up rejection handling
-  - [ ] Create standardized responses for insufficient credits
-  - [ ] Add upgrade prompts in limit exceeded responses
-  - [ ] Implement graceful handling for users at their limits
+- [x] Implement account-based eligibility checking
+  - [x] Create `can_use_tokens(model_id, token_count)` method on Account
+  - [x] Create `can_hire_agent(agent_id)` method on Account 
+  - [x] Implement credit checking for operations
+- [x] Create plan-based limits
+  - [x] Define subscription tiers and their quotas (agent slots and credits)
+  - [x] Implement tier-based eligibility rules
+  - [x] Create usage projection utilities
+- [x] Set up rejection handling
+  - [x] Create standardized responses for insufficient credits
+  - [x] Add upgrade prompts in limit exceeded responses
+  - [x] Implement graceful handling for users at their limits
 
-## Phase 4: API Enhancements
+## Phase 4: Mock Datastore Server
 
-### 7. Upgrade Existing API Endpoints
+### 7. Create Devnet Execution Mode
+- [ ] Implement feature flagging system
+  - [ ] Add `devnet` Cargo feature flag
+  - [ ] Create conditional compilation paths throughout the codebase
+  - [ ] Configure default feature settings in `Cargo.toml`
+- [ ] Refactor core components for devnet mode
+  - [ ] Create mock versions of critical services that depend on distributed components
+  - [ ] Implement in-memory storage for devnet mode
+  - [ ] Add configuration options to enable/disable message queue integration
+
+### 8. Split API and Queue Processing Components
+- [ ] Refactor `run` function in `api.rs`
+  - [ ] Extract API server into separate `run_api` function
+  - [ ] Move queue processing loop into dedicated `run_queue_reader` function
+  - [ ] Ensure both components can be started independently
+- [ ] Update `main.rs` with execution modes
+  - [ ] Add command-line flag to control execution mode (api-only, queue-only, or both)
+  - [ ] Create configuration for message queue connection in production
+  - [ ] Add logic to conditionally start components based on mode
+
+### 9. Implement Conditional Write-to-Queue
+- [ ] Refactor `write_to_queue` method in `datastore.rs`
+  - [ ] Add conditional execution based on runtime mode or compile-time feature flag
+  - [ ] Create no-op implementation for devnet mode
+  - [ ] Log write operations in devnet mode without actual queue writes
+- [ ] Modify message handlers for devnet
+  - [ ] Create direct application of operations in devnet mode
+  - [ ] Bypass queue for immediate state changes in single-instance mode
+  - [ ] Maintain operational parity between modes
+
+### 10. Create Mock Services
+- [ ] Implement mock model and agent services
+  - [ ] Create `mock_models.rs` with sample AI models
+  - [ ] Create `mock_agents.rs` with example agent configurations
+  - [ ] Implement deterministic response generation for testing
+- [ ] Add mock data initialization
+  - [ ] Create function to populate datastore with mock entities
+  - [ ] Add sample accounts with different permissions
+  - [ ] Create realistic test dataset for development
+
+### 11. Add Testing and Development Tools
+- [ ] Create development script
+  - [ ] Implement `scripts/run_devnet.sh` for easy local testing
+  - [ ] Add options for data persistence between runs
+  - [ ] Create parameter passing for various configurations
+- [ ] Add documentation for devnet mode
+  - [ ] Document all devnet features and limitations
+  - [ ] Create quick-start guide for local development
+  - [ ] Add examples of common development workflows
+
+## Phase 5: API Enhancements and API Key Management
+
+### 12. Upgrade Existing API Endpoints
 - [ ] Refactor model endpoints
   - [ ] Add auth middleware to all protected routes
   - [ ] Integrate account-based usage tracking
@@ -106,7 +158,7 @@ This document outlines the step-by-step plan for integrating authentication (usi
   - [ ] Include subscription status in response metadata
   - [ ] Standardize error responses for eligibility failures
 
-### 8. Create Account and Usage Management APIs
+### 13. Create Account and Usage Management APIs
 - [ ] Add subscription status endpoints
   - [ ] Create endpoints for viewing current plan
   - [ ] Implement endpoints to check available credits/slots
@@ -120,40 +172,7 @@ This document outlines the step-by-step plan for integrating authentication (usi
   - [ ] Create credit balance update handlers
   - [ ] Implement event processing for plan changes
 
-## Phase 5: Testing and Documentation
-
-### 9. Create Comprehensive Tests
-- [ ] Create authentication unit tests
-  - [ ] Test JWT validation with mock tokens
-  - [ ] Test role-based access control
-  - [ ] Test extractors and middleware components
-- [ ] Implement billing integration tests
-  - [ ] Test account-based usage tracking accuracy
-  - [ ] Verify quota enforcement through account methods
-  - [ ] Test data reception endpoints with mock subscription data
-- [ ] Set up end-to-end testing
-  - [ ] Create test scenarios covering auth and billing
-  - [ ] Test rate limiting and quota enforcement
-  - [ ] Verify usage reporting accuracy
-
-### 10. Update Documentation
-- [ ] Add authentication documentation
-  - [ ] Document token requirements and format
-  - [ ] Create examples for authenticated requests
-  - [ ] Document error codes and troubleshooting
-- [ ] Create billing integration docs
-  - [ ] Document subscription plans and features
-  - [ ] Explain frontend-driven billing model
-  - [ ] Document API endpoints for receiving billing data 
-  - [ ] Outline usage tracking and eligibility enforcement
-- [ ] Update API reference
-  - [ ] Add auth and billing parameters to all endpoints
-  - [ ] Document rate limits and quota constraints
-  - [ ] Add sample responses for various scenarios 
-
-## Phase 6: API Key Management
-
-### 11. Define API Key Infrastructure
+### 14. Define API Key Infrastructure
 - [ ] Design API key data structures
   - [ ] Create `ApiKey` struct with name, key ID, hashed secret, creation date, expiration date, and permissions
   - [ ] Define API key permission scopes (read-only, read-write, admin, etc.)
@@ -163,7 +182,7 @@ This document outlines the step-by-step plan for integrating authentication (usi
   - [ ] Implement hash-based storage for API key secrets (never store in plaintext)
   - [ ] Create database table/CRDT structure for persistent storage
 
-### 12. Implement API Key Generation
+### 15. Implement API Key Generation
 - [ ] Create secure key generation system
   - [ ] Implement cryptographically secure random generation for API key secrets
   - [ ] Design key format with prefixes for identification (e.g., `fs_live_` for production keys)
@@ -177,7 +196,7 @@ This document outlines the step-by-step plan for integrating authentication (usi
   - [ ] Store only the hashed version in the database
   - [ ] Add clear warnings about the inability to retrieve the secret later
 
-### 13. Create API Key Authentication Middleware
+### 16. Create API Key Authentication and Management
 - [ ] Implement API key authentication middleware
   - [ ] Create an extraction method for API key from Authorization header
   - [ ] Support both Bearer token format and custom X-API-Key header
@@ -190,8 +209,6 @@ This document outlines the step-by-step plan for integrating authentication (usi
   - [ ] Implement per-key rate limiting middleware
   - [ ] Set up tiered rate limits based on account subscription
   - [ ] Add headers for rate limit status in responses
-
-### 14. Add API Key Management Endpoints
 - [ ] Create API key management endpoints
   - [ ] Implement listing all keys for an account (`GET /api-keys`)
   - [ ] Add endpoint to view a specific key's metadata (`GET /api-keys/:id`)
@@ -205,57 +222,36 @@ This document outlines the step-by-step plan for integrating authentication (usi
   - [ ] Log all API key actions (creation, revocation, usage)
   - [ ] Implement API key usage reporting
 
-## Phase 7: Mock Datastore Server
+## Phase 6: Testing and Documentation
 
-### 15. Create Devnet Execution Mode
-- [ ] Implement feature flagging system
-  - [ ] Add `devnet` Cargo feature flag
-  - [ ] Create conditional compilation paths throughout the codebase
-  - [ ] Configure default feature settings in `Cargo.toml`
-- [ ] Refactor core components for devnet mode
-  - [ ] Create mock versions of critical services that depend on distributed components
-  - [ ] Implement in-memory storage for devnet mode
-  - [ ] Add configuration options to enable/disable message queue integration
+### 17. Create Comprehensive Tests
+- [ ] Create authentication unit tests
+  - [ ] Test JWT validation with mock tokens
+  - [ ] Test role-based access control
+  - [ ] Test extractors and middleware components
+- [ ] Implement billing integration tests
+  - [ ] Test account-based usage tracking accuracy
+  - [ ] Verify quota enforcement through account methods
+  - [ ] Test data reception endpoints with mock subscription data
+- [ ] Set up end-to-end testing
+  - [ ] Create test scenarios covering auth and billing
+  - [ ] Test rate limiting and quota enforcement
+  - [ ] Verify usage reporting accuracy
 
-### 16. Split API and Queue Processing Components
-- [ ] Refactor `run` function in `api.rs`
-  - [ ] Extract API server into separate `run_api` function
-  - [ ] Move queue processing loop into dedicated `run_queue_reader` function
-  - [ ] Ensure both components can be started independently
-- [ ] Update `main.rs` with execution modes
-  - [ ] Add command-line flag to control execution mode (api-only, queue-only, or both)
-  - [ ] Create configuration for message queue connection in production
-  - [ ] Add logic to conditionally start components based on mode
-
-### 17. Implement Conditional Write-to-Queue
-- [ ] Refactor `write_to_queue` method in `datastore.rs`
-  - [ ] Add conditional execution based on runtime mode or compile-time feature flag
-  - [ ] Create no-op implementation for devnet mode
-  - [ ] Log write operations in devnet mode without actual queue writes
-- [ ] Modify message handlers for devnet
-  - [ ] Create direct application of operations in devnet mode
-  - [ ] Bypass queue for immediate state changes in single-instance mode
-  - [ ] Maintain operational parity between modes
-
-### 18. Create Mock Services
-- [ ] Implement mock model and agent services
-  - [ ] Create `mock_models.rs` with sample AI models
-  - [ ] Create `mock_agents.rs` with example agent configurations
-  - [ ] Implement deterministic response generation for testing
-- [ ] Add mock data initialization
-  - [ ] Create function to populate datastore with mock entities
-  - [ ] Add sample accounts with different permissions
-  - [ ] Create realistic test dataset for development
-
-### 19. Add Testing and Development Tools
-- [ ] Create development script
-  - [ ] Implement `scripts/run_devnet.sh` for easy local testing
-  - [ ] Add options for data persistence between runs
-  - [ ] Create parameter passing for various configurations
-- [ ] Add documentation for devnet mode
-  - [ ] Document all devnet features and limitations
-  - [ ] Create quick-start guide for local development
-  - [ ] Add examples of common development workflows
+### 18. Update Documentation
+- [ ] Add authentication documentation
+  - [ ] Document token requirements and format
+  - [ ] Create examples for authenticated requests
+  - [ ] Document error codes and troubleshooting
+- [ ] Create billing integration docs
+  - [ ] Document subscription plans and features
+  - [ ] Explain frontend-driven billing model
+  - [ ] Document API endpoints for receiving billing data 
+  - [ ] Outline usage tracking and eligibility enforcement
+- [ ] Update API reference
+  - [ ] Add auth and billing parameters to all endpoints
+  - [ ] Document rate limits and quota constraints
+  - [ ] Add sample responses for various scenarios
 
 ## Future Enhancements
 

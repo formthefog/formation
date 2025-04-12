@@ -1100,6 +1100,8 @@ impl DataStore {
         self.model_state.map.apply(agent_op);
         Ok(())
     }
+
+    #[cfg(not(feature = "devnet"))]
     pub async fn write_to_queue(
         message: impl Serialize + Clone,
         sub_topic: u8,
@@ -1126,6 +1128,20 @@ impl DataStore {
         }
     }
 
+    #[cfg(feature = "devnet")]
+    pub async fn write_to_queue(
+        message: impl Serialize + Clone,
+        sub_topic: u8,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Log operation details without actually writing to the queue
+        log::info!("DEVNET MODE: Skipping queue write for subtopic {}", sub_topic);
+        log::debug!("DEVNET MODE: Would have written message: {:?}", serde_json::to_string(&message));
+        
+        // Success with no-op in devnet mode
+        Ok(())
+    }
+
+    #[cfg(not(feature = "devnet"))]
     pub async fn read_from_queue(
         last: Option<usize>,
         n: Option<usize>,
@@ -1160,6 +1176,18 @@ impl DataStore {
                 },
                 _ => Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Invalid response variant for {endpoint}")))) 
         }
+    }
+
+    #[cfg(feature = "devnet")]
+    pub async fn read_from_queue(
+        _last: Option<usize>,
+        _n: Option<usize>,
+    ) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error>> {
+        // In devnet mode, the queue reader doesn't process any messages
+        log::info!("DEVNET MODE: Skipping queue read operation");
+        
+        // Return an empty list since there are no messages to process in devnet mode
+        Ok(Vec::new())
     }
 
     pub async fn broadcast<R: DeserializeOwned>(

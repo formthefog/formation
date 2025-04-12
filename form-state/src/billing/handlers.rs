@@ -229,7 +229,7 @@ pub async fn get_usage_stats(
         for (model_id, tokens) in &usage.model_usage {
             response.model_usage.push(ModelUsage {
                 model_id: model_id.clone(),
-                tokens: *tokens,
+                tokens: tokens.input_tokens + tokens.output_tokens,
             });
         }
         
