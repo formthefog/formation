@@ -44,8 +44,10 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.4", features = ["v4", "serde"] }
 jwt-authorizer = "0.15.0"
 jsonwebtoken = "9.1.0"
+base64 = "0.21"
 async-stripe = { version = "0.41.0", features = ["runtime-tokio-hyper", "checkout", "webhook-endpoints", "billing"] }
 thiserror = "1.0"
+dotenv = "0.15.0"
 
 [features]
 default = ["axum"]

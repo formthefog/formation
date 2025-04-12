@@ -151,6 +151,112 @@ This document outlines the step-by-step plan for integrating authentication (usi
   - [ ] Document rate limits and quota constraints
   - [ ] Add sample responses for various scenarios 
 
+## Phase 6: API Key Management
+
+### 11. Define API Key Infrastructure
+- [ ] Design API key data structures
+  - [ ] Create `ApiKey` struct with name, key ID, hashed secret, creation date, expiration date, and permissions
+  - [ ] Define API key permission scopes (read-only, read-write, admin, etc.)
+  - [ ] Create API key status enum (active, revoked, expired)
+- [ ] Set up API key storage
+  - [ ] Extend `Account` struct to store associated API keys
+  - [ ] Implement hash-based storage for API key secrets (never store in plaintext)
+  - [ ] Create database table/CRDT structure for persistent storage
+
+### 12. Implement API Key Generation
+- [ ] Create secure key generation system
+  - [ ] Implement cryptographically secure random generation for API key secrets
+  - [ ] Design key format with prefixes for identification (e.g., `fs_live_` for production keys)
+  - [ ] Generate unique key IDs that are separate from the secret parts
+- [ ] Develop key issuance endpoints
+  - [ ] Create API endpoint for generating new API keys (`POST /api-keys/create`)
+  - [ ] Add required parameters (name, permissions, expiration)
+  - [ ] Limit the number of API keys per account based on tier
+- [ ] Implement one-time secret display
+  - [ ] Set up secure one-time transmission of the secret key
+  - [ ] Store only the hashed version in the database
+  - [ ] Add clear warnings about the inability to retrieve the secret later
+
+### 13. Create API Key Authentication Middleware
+- [ ] Implement API key authentication middleware
+  - [ ] Create an extraction method for API key from Authorization header
+  - [ ] Support both Bearer token format and custom X-API-Key header
+  - [ ] Verify API key using time-constant comparison
+- [ ] Integrate with existing auth system
+  - [ ] Set up API key middleware as an alternative to JWT
+  - [ ] Create middleware chain to try both auth methods
+  - [ ] Prioritize API key auth for programmatic endpoints
+- [ ] Add rate limiting for API keys
+  - [ ] Implement per-key rate limiting middleware
+  - [ ] Set up tiered rate limits based on account subscription
+  - [ ] Add headers for rate limit status in responses
+
+### 14. Add API Key Management Endpoints
+- [ ] Create API key management endpoints
+  - [ ] Implement listing all keys for an account (`GET /api-keys`)
+  - [ ] Add endpoint to view a specific key's metadata (`GET /api-keys/:id`)
+  - [ ] Create endpoints for updating key metadata (`PATCH /api-keys/:id`)
+- [ ] Implement key revocation system
+  - [ ] Add endpoint to revoke API keys (`DELETE /api-keys/:id`)
+  - [ ] Create key rotation endpoint for seamless key updates
+  - [ ] Build temporary dual-auth periods during rotation
+- [ ] Add audit logging for API key usage
+  - [ ] Create `ApiKeyEvent` struct for tracking key usage
+  - [ ] Log all API key actions (creation, revocation, usage)
+  - [ ] Implement API key usage reporting
+
+## Phase 7: Mock Datastore Server
+
+### 15. Create Devnet Execution Mode
+- [ ] Implement feature flagging system
+  - [ ] Add `devnet` Cargo feature flag
+  - [ ] Create conditional compilation paths throughout the codebase
+  - [ ] Configure default feature settings in `Cargo.toml`
+- [ ] Refactor core components for devnet mode
+  - [ ] Create mock versions of critical services that depend on distributed components
+  - [ ] Implement in-memory storage for devnet mode
+  - [ ] Add configuration options to enable/disable message queue integration
+
+### 16. Split API and Queue Processing Components
+- [ ] Refactor `run` function in `api.rs`
+  - [ ] Extract API server into separate `run_api` function
+  - [ ] Move queue processing loop into dedicated `run_queue_reader` function
+  - [ ] Ensure both components can be started independently
+- [ ] Update `main.rs` with execution modes
+  - [ ] Add command-line flag to control execution mode (api-only, queue-only, or both)
+  - [ ] Create configuration for message queue connection in production
+  - [ ] Add logic to conditionally start components based on mode
+
+### 17. Implement Conditional Write-to-Queue
+- [ ] Refactor `write_to_queue` method in `datastore.rs`
+  - [ ] Add conditional execution based on runtime mode or compile-time feature flag
+  - [ ] Create no-op implementation for devnet mode
+  - [ ] Log write operations in devnet mode without actual queue writes
+- [ ] Modify message handlers for devnet
+  - [ ] Create direct application of operations in devnet mode
+  - [ ] Bypass queue for immediate state changes in single-instance mode
+  - [ ] Maintain operational parity between modes
+
+### 18. Create Mock Services
+- [ ] Implement mock model and agent services
+  - [ ] Create `mock_models.rs` with sample AI models
+  - [ ] Create `mock_agents.rs` with example agent configurations
+  - [ ] Implement deterministic response generation for testing
+- [ ] Add mock data initialization
+  - [ ] Create function to populate datastore with mock entities
+  - [ ] Add sample accounts with different permissions
+  - [ ] Create realistic test dataset for development
+
+### 19. Add Testing and Development Tools
+- [ ] Create development script
+  - [ ] Implement `scripts/run_devnet.sh` for easy local testing
+  - [ ] Add options for data persistence between runs
+  - [ ] Create parameter passing for various configurations
+- [ ] Add documentation for devnet mode
+  - [ ] Document all devnet features and limitations
+  - [ ] Create quick-start guide for local development
+  - [ ] Add examples of common development workflows
+
 ## Future Enhancements
 
 ### Project-Based Resource Control

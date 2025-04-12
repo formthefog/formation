@@ -17,20 +17,28 @@ pub struct Account {
     /// Optional human-readable name for the account
     pub name: Option<String>,
     /// Set of instance IDs owned by this account
+    #[serde(default)]
     pub owned_instances: BTreeSet<String>,
     /// Map of instance IDs to authorization level for instances where this account has access
+    #[serde(default)]
     pub authorized_instances: BTreeMap<String, AuthorizationLevel>,
     /// Subscription information
+    #[serde(default)]
     pub subscription: Option<SubscriptionInfo>,
     /// Usage tracking information
+    #[serde(default)]
     pub usage: Option<UsageTracker>,
     /// Available credits for pay-as-you-go usage
+    #[serde(default)]
     pub credits: u64,
     /// Set of agent IDs that are currently hired by this account
+    #[serde(default)]
     pub hired_agents: BTreeSet<String>,
     /// Creation timestamp
+    #[serde(default)]
     pub created_at: i64,
     /// Last update timestamp
+    #[serde(default)]
     pub updated_at: i64,
 }
 

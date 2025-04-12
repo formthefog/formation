@@ -8,6 +8,7 @@ use k256::ecdsa::SigningKey;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use form_state::api::run;
+use std::env;
 
 #[derive(Clone, Debug, Parser)]
 pub struct Cli {
@@ -20,8 +21,17 @@ pub struct Cli {
     #[clap(long, short, default_value="true")]
     encrypted: bool, 
     #[clap(long, short)]
-    password: Option<String>
-
+    password: Option<String>,
+    #[clap(long)]
+    jwt_audience: Option<String>,
+    #[clap(long)]
+    jwt_issuer: Option<String>,
+    #[clap(long)]
+    jwks_url: Option<String>,
+    #[clap(long, default_value="60")]
+    jwt_leeway: Option<String>,
+    #[clap(long)]
+    env_file: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -31,6 +41,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     log::info!("Parsing CLI...");
     let parser = Cli::parse();
+
+    // Load from .env file if specified
+    if let Some(env_path) = &parser.env_file {
+        log::info!("Loading environment from file: {:?}", env_path);
+        match dotenv::from_path(env_path) {
+            Ok(_) => log::info!("Successfully loaded environment from file"),
+            Err(e) => log::warn!("Failed to load environment from file: {}", e),
+        }
+    } else {
+        // Try to load from default .env file if it exists
+        match dotenv::dotenv() {
+            Ok(_) => log::info!("Loaded environment from .env file"),
+            Err(_) => log::debug!("No .env file found or failed to load it"),
+        }
+    }
+
+    // Configure JWT authentication environment variables
+    // CLI arguments take precedence over environment variables
+    if let Some(audience) = &parser.jwt_audience {
+        log::info!("Setting JWT audience to: {}", audience);
+        env::set_var("DYNAMIC_JWT_AUDIENCE", audience);
+    }
+    
+    if let Some(issuer) = &parser.jwt_issuer {
+        log::info!("Setting JWT issuer to: {}", issuer);
+        env::set_var("DYNAMIC_JWT_ISSUER", issuer);
+    }
+    
+    if let Some(jwks_url) = &parser.jwks_url {
+        log::info!("Setting JWKS URL to: {}", jwks_url);
+        env::set_var("DYNAMIC_JWKS_URL", jwks_url);
+    }
+    
+    if let Some(leeway) = &parser.jwt_leeway {
+        log::info!("Setting JWT leeway to: {}", leeway);
+        env::set_var("DYNAMIC_JWT_LEEWAY", leeway);
+    }
+
+    // Log the final JWT configuration
+    log::info!("JWT Configuration:");
+    log::info!("  Audience: {:?}", env::var("DYNAMIC_JWT_AUDIENCE").ok());
+    log::info!("  Issuer: {:?}", env::var("DYNAMIC_JWT_ISSUER").ok());
+    log::info!("  JWKS URL: {:?}", env::var("DYNAMIC_JWKS_URL").ok());
+    log::info!("  Leeway: {:?}", env::var("DYNAMIC_JWT_LEEWAY").ok());
 
     let config = OperatorConfig::from_file(parser.config_path, parser.encrypted, parser.password.as_deref()).ok(); 
     let private_key = if let Some(pk) = &parser.secret_key {

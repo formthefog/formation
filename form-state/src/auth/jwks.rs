@@ -1,5 +1,6 @@
 use crate::auth::config::AuthConfig;
 use crate::auth::claims::DynamicClaims;
+use crate::auth::middleware::decode_jwt_claims;
 use jwt_authorizer::{AuthorizerBuilder, Validation};
 use jsonwebtoken::{jwk::JwkSet, DecodingKey, decode, Algorithm, Validation as JwtValidation, TokenData};
 use std::sync::Arc;
@@ -328,13 +329,29 @@ impl JWKSManager {
             .map_err(|e| format!("Failed to create JWT authorizer: {}", e))
     }
     
+    /// Get the configured audience (if any)
+    pub fn get_audience(&self) -> Option<&String> {
+        self.config.audience.as_ref()
+    }
+    
+    /// Get the configured issuer (if any)
+    pub fn get_issuer(&self) -> Option<&String> {
+        self.config.issuer.as_ref()
+    }
+    
     /// Validate a JWT token directly using the cached keys
     pub async fn validate_token(&self, token: &str) -> Result<TokenData<DynamicClaims>, String> {
         // Extract the key ID from the token header
         let header = jsonwebtoken::decode_header(token)
             .map_err(|e| format!("Failed to decode token header: {}", e))?;
         
-        let kid = header.kid.ok_or_else(|| "Token missing key ID (kid)".to_string())?;
+        let kid = match header.kid {
+            Some(kid) => kid,
+            None => {
+                log::warn!("Token missing key ID (kid)");
+                return Err("Token missing key ID (kid)".to_string());
+            }
+        };
         
         // Try to validate with the current cache first
         let validation_result = {
@@ -344,16 +361,53 @@ impl JWKSManager {
                 // Create validation parameters
                 let validation = self.create_jwt_validation();
                 
+                // Log validation parameters for debugging
+                if let Some(aud) = &validation.aud {
+                    log::info!("Validating with audience: {:?}", aud);
+                }
+                if let Some(iss) = &validation.iss {
+                    log::info!("Validating with issuer: {:?}", iss);
+                }
+                log::info!("Validation parameters - exp: {}, nbf: {}, leeway: {}s", 
+                    validation.validate_exp, validation.validate_nbf, validation.leeway);
+                
                 // Decode and validate the token
                 decode::<DynamicClaims>(token, &decoding_key, &validation)
             } else {
                 // No key found for this kid, need to refresh
+                log::warn!("No key found for kid: {}. Will attempt refresh.", kid);
                 Err(jsonwebtoken::errors::Error::from(jsonwebtoken::errors::ErrorKind::InvalidToken))
             }
         };
         
         // If validation fails or the key isn't found, try refreshing the keys and validating again
-        if validation_result.is_err() {
+        if let Err(e) = &validation_result {
+            log::error!("Token validation failed with error: {:?}", e);
+            
+            match e.kind() {
+                jsonwebtoken::errors::ErrorKind::InvalidAudience => {
+                    log::error!("JWT validation failed due to invalid audience");
+                    
+                    // Decode token payload for debugging
+                    if let Ok(claims) = decode_jwt_claims(token) {
+                        if let Some(aud) = claims.get("aud") {
+                            log::error!("Token audience: {:?}, Expected: {:?}", aud, self.config.audience);
+                        }
+                    }
+                },
+                jsonwebtoken::errors::ErrorKind::InvalidIssuer => {
+                    log::error!("JWT validation failed due to invalid issuer");
+                    
+                    // Decode token payload for debugging
+                    if let Ok(claims) = decode_jwt_claims(token) {
+                        if let Some(iss) = claims.get("iss") {
+                            log::error!("Token issuer: {:?}, Expected: {:?}", iss, self.config.issuer);
+                        }
+                    }
+                },
+                _ => log::error!("JWT validation failed: {:?}", e.kind()),
+            }
+            
             // Force refresh of keys
             if let Err(e) = self.refresh_keys().await {
                 log::warn!("Failed to refresh keys during token validation: {}", e);

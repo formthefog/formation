@@ -13,6 +13,7 @@ use axum::{
 use std::sync::Arc;
 use jsonwebtoken::TokenData;
 use serde_json::{self, json};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 
 /// Custom error type for authentication errors
 #[derive(Debug)]
@@ -116,35 +117,185 @@ pub async fn jwt_auth_middleware(
     mut request: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    // Extract the token from the Authorization header
-    let auth_header = request
-        .headers()
-        .get(header::AUTHORIZATION)
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+    log::info!("JWT auth middleware called");
     
-    let auth_header_str = auth_header
-        .to_str()
-        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    // Log request path and method
+    log::info!("Request path: {:?}, method: {:?}", request.uri().path(), request.method());
+    
+    // Log headers for CORS debugging
+    log::info!("Request headers:");
+    for (name, value) in request.headers() {
+        if let Ok(value_str) = value.to_str() {
+            log::info!("  {} = {}", name, value_str);
+        }
+    }
+    
+    // Check for CORS preflight request
+    if request.method() == axum::http::Method::OPTIONS {
+        log::info!("CORS preflight request detected, allowing through");
+        return Ok(next.run(request).await);
+    }
+    
+    // Extract the token from the Authorization header
+    let auth_header = match request.headers().get(header::AUTHORIZATION) {
+        Some(header) => header,
+        None => {
+            log::warn!("No Authorization header found");
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+    };
+    
+    log::info!("Auth header: {:?}", auth_header);
+    
+    let auth_header_str = match auth_header.to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!("Failed to convert Authorization header to string: {:?}", e);
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+    };
     
     // Check if it's a Bearer token
+    log::info!("Auth header string: {:?}", auth_header_str);
     if !auth_header_str.starts_with("Bearer ") {
+        log::warn!("Authorization header is not a Bearer token");
         return Err(StatusCode::UNAUTHORIZED);
     }
     
     // Extract the token without the "Bearer " prefix
     let token = &auth_header_str[7..];
+    log::info!("Token extracted: length={}", token.len());
     
-    // Validate the token
-    let token_data = jwks_manager
-        .validate_token(token)
-        .await
-        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    // Log JWKS manager state before validation
+    let jwks_url = jwks_manager.get_jwks_url();
+    log::info!("JWKS URL: {}", jwks_url);
+    
+    let key_count = jwks_manager.cached_key_count().await;
+    log::info!("Cached keys count before validation: {}", key_count);
+    
+    let is_refreshing = jwks_manager.is_refreshing();
+    log::info!("JWKS is currently refreshing: {}", is_refreshing);
+    
+    // Log token header for debugging
+    match jsonwebtoken::decode_header(token) {
+        Ok(header) => {
+            log::info!("Token header - alg: {:?}, typ: {:?}, kid: {:?}", 
+                header.alg, header.typ, header.kid);
+            
+            // Check if the key ID exists in our cache
+            if let Some(kid) = &header.kid {
+                log::info!("Checking if key ID '{}' exists in cache", kid);
+                let key_exists = jwks_manager.get_key_by_id(kid).await.is_some();
+                log::info!("Key ID '{}' exists in cache: {}", kid, key_exists);
+                
+                if !key_exists {
+                    log::info!("Key not found in cache, will attempt to refresh");
+                }
+            } else {
+                log::warn!("Token has no key ID (kid) in header");
+            }
+        },
+        Err(e) => {
+            log::warn!("Failed to decode token header: {:?}", e);
+        }
+    }
+    
+    // Log JWT claims for debugging audience issues
+    match decode_jwt_claims(token) {
+        Ok(claims) => {
+            if let Some(aud) = claims.get("aud") {
+                log::info!("JWT aud claim: {:?}", aud);
+            } else {
+                log::warn!("JWT has no audience claim");
+            }
+            
+            if let Some(iss) = claims.get("iss") {
+                log::info!("JWT iss claim: {:?}", iss);
+            }
+        },
+        Err(e) => {
+            log::warn!("Failed to decode JWT claims: {:?}", e);
+        }
+    }
+    
+    // Log the configured audience in our application
+    if let Some(audience) = &jwks_manager.get_audience() {
+        log::info!("Configured audience: {:?}", audience);
+    } else {
+        log::info!("No audience configured in application");
+    }
+    
+    // Attempt to validate the token and log the result
+    log::info!("Attempting to validate token...");
+    let token_data = match jwks_manager.validate_token(token).await {
+        Ok(data) => {
+            log::info!("Token validated successfully!");
+            data
+        },
+        Err(err) => {
+            log::error!("Token validation failed: {}", err);
+            // Try forcing a refresh of JWKS keys and validate again
+            log::info!("Forcing JWKS refresh and trying again...");
+            
+            if let Err(refresh_err) = jwks_manager.refresh_keys().await {
+                log::error!("JWKS refresh failed: {}", refresh_err);
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+            
+            log::info!("JWKS refreshed, cached keys count: {}", jwks_manager.cached_key_count().await);
+            
+            // Try validating again after refresh
+            match jwks_manager.validate_token(token).await {
+                Ok(data) => {
+                    log::info!("Token validated successfully after JWKS refresh!");
+                    data
+                },
+                Err(retry_err) => {
+                    log::error!("Token validation still failed after JWKS refresh: {}", retry_err);
+                    return Err(StatusCode::UNAUTHORIZED);
+                }
+            }
+        }
+    };
+    
+    // Log token claims for debugging
+    log::info!("Token validated for subject: {}", token_data.claims.sub);
+    if let Some(email) = token_data.claims.email() {
+        log::info!("User email: {}", email);
+    }
+    log::info!("User role: {:?}", token_data.claims.user_role());
     
     // Store the validated claims in request extensions for handlers to access
     request.extensions_mut().insert(token_data);
+    log::info!("Added token data to request extensions");
     
     // Pass the request with the validated claims to the next middleware/handler
+    log::info!("Passing request to next middleware/handler");
     Ok(next.run(request).await)
+}
+
+/// Decode JWT claims without verification for debugging purposes
+pub fn decode_jwt_claims(token: &str) -> Result<serde_json::Value, String> {
+    // JWT format is header.payload.signature
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 3 {
+        return Err("Invalid JWT format".to_string());
+    }
+    
+    // Decode the payload (middle part)
+    let payload = parts[1];
+    
+    // The base64 in JWT is URL-safe, may need padding
+    let payload = match URL_SAFE_NO_PAD.decode(payload) {
+        Ok(bytes) => bytes,
+        Err(e) => return Err(format!("Failed to decode base64: {}", e)),
+    };
+    
+    // Parse JSON
+    match serde_json::from_slice(&payload) {
+        Ok(claims) => Ok(claims),
+        Err(e) => Err(format!("Failed to parse claims JSON: {}", e)),
+    }
 }
 
 /// Extractor for getting the JWT claims from a request

@@ -206,7 +206,15 @@ pub async fn check_agent_eligibility(
     } else {
         // No subscription, check if it's a free agent or they have credits
         // For simplicity, we'll assume they can access it
-        // A proper implementation would check if they have enough credits
+        // Check for credits
+        let available_credits = account.available_credits();
+        if available_credits < 10 {
+            // Frontend should trigger a modal to tell them they need to add credits
+            return Err(EligibilityError::InsufficientCredits {
+                available: available_credits,
+                required: 10,
+            });
+        }
     }
     
     // Add the account to request extensions for use in the handler
