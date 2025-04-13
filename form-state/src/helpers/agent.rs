@@ -2,6 +2,7 @@ use crate::datastore::{AccountRequest, AgentRequest, DataStore, DB_HANDLE};
 use crate::db::write_datastore;
 use crate::agent::*;
 use crate::auth::JwtClaims;
+use crate::api_keys::ApiKeyAuth;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use axum::{extract::{State, Path}, Json};
@@ -90,56 +91,50 @@ pub async fn list_agent(
 /// Handler for hiring an agent
 pub async fn agent_hire(
     State(state): State<Arc<Mutex<DataStore>>>,
-    JwtClaims(claims): JwtClaims,
+    auth: ApiKeyAuth,
     Path(agent_id): Path<String>,
     Json(payload): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    log::info!("User {} is attempting to hire agent {}", claims.sub, agent_id);
+    log::info!("User {} is attempting to hire agent {}", auth.account.address, agent_id);
     
     let mut datastore = state.lock().await;
     
     // Check if the agent exists
     if let Some(agent) = datastore.agent_state.get_agent(&agent_id) {
-        // Get the user's account
-        if let Some(mut account) = datastore.account_state.get_account(&claims.sub) {
-            // Add the agent to the hired agents
-            account.hire_agent(agent_id.clone());
-            
-            // Update the account
-            let op = datastore.account_state.update_account_local(account.clone());
-            if let Err(err) = datastore.handle_account_op(op).await {
-                log::error!("Failed to update account after hiring agent: {}", err);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({
-                        "success": false,
-                        "error": "Failed to update account after hiring agent"
-                    }))
-                );
-            }
-            
-            // Return success
+        // Get the account from ApiKeyAuth
+        let mut account = auth.account.clone();
+        
+        // Add the agent to the hired agents
+        account.hire_agent(agent_id.clone());
+        
+        // Update the account
+        let op = datastore.account_state.update_account_local(account.clone());
+        if let Err(err) = datastore.handle_account_op(op).await {
+            log::error!("Failed to update account after hiring agent: {}", err);
             return (
-                StatusCode::OK,
-                Json(json!({
-                    "success": true,
-                    "message": format!("Successfully hired agent {}", agent_id),
-                    "agent": {
-                        "id": agent_id,
-                        "name": agent.name,
-                        "description": agent.description
-                    }
-                }))
-            );
-        } else {
-            return (
-                StatusCode::NOT_FOUND,
+                StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
                     "success": false,
-                    "error": "Account not found"
+                    "error": "Failed to update account after hiring agent"
                 }))
             );
         }
+        
+        // Return success
+        return (
+            StatusCode::OK,
+            Json(json!({
+                "success": true,
+                "message": format!("Successfully hired agent {}", agent_id),
+                "agent": {
+                    "id": agent_id,
+                    "name": agent.name,
+                    "description": agent.description
+                },
+                "credits_remaining": account.available_credits(),
+                "hired_agent_count": account.hired_agent_count()
+            }))
+        );
     } else {
         return (
             StatusCode::NOT_FOUND,

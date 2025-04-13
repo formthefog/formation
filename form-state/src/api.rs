@@ -123,6 +123,8 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/api-keys/create", post(create_api_key_handler))
         .route("/api-keys/:id", get(get_api_key_handler))
         .route("/api-keys/:id/revoke", post(revoke_api_key_handler))
+        .route("/api-keys/:id/audit-logs", get(get_api_key_audit_logs))
+        .route("/api-keys/audit-logs", get(get_account_api_key_audit_logs))
         
         // Billing and subscription management
         .route("/billing/subscription", get(crate::billing::handlers::get_subscription_status))
@@ -303,14 +305,13 @@ pub async fn run(datastore: Arc<Mutex<DataStore>>, mut shutdown: tokio::sync::br
 // Wrapper function that performs eligibility check before calling agent_hire
 async fn checked_agent_hire(
     State(state): State<Arc<Mutex<DataStore>>>,
-    claims: JwtClaims,
+    auth: ApiKeyAuth,
     Path(agent_id): Path<String>,
     payload: Json<serde_json::Value>,
 ) -> Result<Response, EligibilityError> {
     // Run eligibility check first
     let datastore = state.lock().await;
-    let account = datastore.account_state.get_account(&claims.0.sub)
-        .ok_or(EligibilityError::AccountNotFound(claims.0.sub.clone()))?;
+    let account = auth.account.clone();
     
     // Check if the agent exists
     if datastore.agent_state.get_agent(&agent_id).is_none() {
@@ -327,7 +328,7 @@ async fn checked_agent_hire(
     drop(datastore); // Release the lock before calling handler
     
     // Call the actual handler with the account context
-    let response = agent_hire(State(state), claims, Path(agent_id), payload).await;
+    let response = agent_hire(State(state), auth, Path(agent_id), payload).await;
     Ok(response.into_response())
 }
 

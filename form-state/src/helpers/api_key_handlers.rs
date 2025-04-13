@@ -1,17 +1,19 @@
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use axum::{
-    extract::{State, Path},
+    extract::{State, Path, Query},
     response::IntoResponse,
     Json,
     http::StatusCode,
 };
 use serde::{Serialize, Deserialize};
 use chrono::{DateTime, Utc, Duration};
+use serde_json::json;
 
 use crate::datastore::DataStore;
 use crate::auth::JwtClaims;
-use crate::api_keys::{ApiKeyScope, ApiKeyMetadata, create_api_key};
+use crate::api_keys::{ApiKeyScope, ApiKeyMetadata, create_api_key, ApiKeyAuth};
+use crate::api_keys::audit::{ApiKeyEvent, API_KEY_AUDIT_LOG};
 
 /// Request to create a new API key
 #[derive(Debug, Serialize, Deserialize)]
@@ -61,115 +63,128 @@ pub struct ListApiKeysResponse {
     pub max_allowed: u32,
 }
 
-/// Create a new API key
+/// Request to revoke an API key
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RevokeApiKeyRequest {
+    /// Reason for revoking the API key
+    pub reason: String,
+}
+
+/// Handler for creating a new API key
 pub async fn create_api_key_handler(
     State(state): State<Arc<Mutex<DataStore>>>,
-    JwtClaims(claims): JwtClaims,
+    claims: JwtClaims,
     Json(request): Json<CreateApiKeyRequest>,
 ) -> impl IntoResponse {
-    // Get the user's account
-    let mut datastore = state.lock().await;
+    log::info!("Creating new API key for user: {}", claims.0.sub);
     
-    // Find the account by the user's ID
-    let account = match datastore.account_state.get_account(&claims.sub) {
+    // Get the account from the database
+    let mut datastore = state.lock().await;
+    let account_id = claims.0.sub.clone();
+    
+    let mut account = match datastore.account_state.get_account(&account_id) {
         Some(account) => account,
         None => {
             return (
                 StatusCode::NOT_FOUND,
-                Json(ApiKeyResponse {
-                    success: false,
-                    api_key: None,
-                    secret: None,
-                    error: Some("Account not found".to_string()),
-                }),
+                Json(serde_json::json!({
+                    "success": false,
+                    "error": "Account not found"
+                }))
             );
         }
     };
     
-    // Check if the name is unique
-    let key_count = account.api_keys.len();
-    let name_exists = account.api_keys.values().any(|key| key.name == request.name);
-    if name_exists {
+    // Validate the request
+    if request.name.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(ApiKeyResponse {
-                success: false,
-                api_key: None,
-                secret: None,
-                error: Some("An API key with this name already exists".to_string()),
-            }),
+            Json(serde_json::json!({
+                "success": false,
+                "error": "API key name cannot be empty"
+            }))
         );
     }
     
-    // Check if the account has reached its API key limit
+    // Check if the account has reached the API key limit
     let max_allowed = account.max_allowed_api_keys();
-    if key_count >= max_allowed as usize {
+    let current_count = account.list_active_api_keys().len() as u32;
+    
+    if current_count >= max_allowed {
         return (
-            StatusCode::BAD_REQUEST,
-            Json(ApiKeyResponse {
-                success: false,
-                api_key: None,
-                secret: None,
-                error: Some(format!("API key limit reached ({}/{})", key_count, max_allowed)),
-            }),
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "success": false,
+                "error": format!("API key limit reached ({}/{})", current_count, max_allowed)
+            }))
         );
     }
     
-    // Create a new API key
-    let mut account_clone = account.clone();
-    let result = create_api_key(
-        &mut account_clone,
-        request.name,
-        request.scope,
-        request.description,
+    // Create the API key
+    let scope = request.scope;
+    
+    let (key_metadata, secret) = match create_api_key(&mut account, request.name.clone(), scope, request.description.clone()) {
+        Ok((metadata, secret)) => (metadata, secret),
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "success": false,
+                    "error": err
+                }))
+            );
+        }
+    };
+    
+    // Update the account in the database
+    let op = datastore.account_state.update_account_local(account.clone());
+    if let Err(err) = datastore.handle_account_op(op).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "success": false,
+                "error": format!("Failed to update account: {}", err)
+            }))
+        );
+    }
+    
+    // Log API key creation event
+    let ip_address = None; // In a real implementation, extract from request
+    let user_agent = None; // In a real implementation, extract from request
+    
+    let event = ApiKeyEvent::new_creation(
+        key_metadata.id.clone(),
+        account_id.clone(),
+        ip_address,
+        user_agent,
     );
     
-    match result {
-        Ok((metadata, secret)) => {
-            // Apply expiration if provided
-            if let Some(expires_at) = request.expires_at {
-                if let Some(key) = account_clone.api_keys.get_mut(&metadata.id) {
-                    key.expires_at = Some(expires_at);
-                }
+    // Record the event
+    API_KEY_AUDIT_LOG.record(event.clone()).await;
+    
+    // Persist the event to permanent storage (in background to not block response)
+    let state_clone = state.clone();
+    tokio::spawn(async move {
+        crate::api_keys::audit::ApiKeyAuditLog::persist_event(event, state_clone).await;
+    });
+    
+    // Return success with the API key details
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "success": true,
+            "message": "API key created successfully",
+            "api_key": {
+                "id": key_metadata.id,
+                "name": key_metadata.name,
+                "scope": format!("{:?}", key_metadata.scope),
+                "created_at": key_metadata.created_at,
+                "expires_at": key_metadata.expires_at,
+                // Only show the secret once, when the key is created
+                "secret": secret
             }
-            
-            // Update the account in the datastore
-            let op = datastore.account_state.update_account_local(account_clone);
-            if let Err(err) = datastore.handle_account_op(op).await {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR, 
-                    Json(ApiKeyResponse {
-                        success: false,
-                        api_key: None,
-                        secret: None,
-                        error: Some(format!("Failed to update account: {}", err)),
-                    }),
-                );
-            }
-            
-            // Return success with the key
-            (
-                StatusCode::CREATED,
-                Json(ApiKeyResponse {
-                    success: true,
-                    api_key: Some(metadata),
-                    secret: Some(secret),
-                    error: None,
-                }),
-            )
-        },
-        Err(error) => {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ApiKeyResponse {
-                    success: false,
-                    api_key: None,
-                    secret: None,
-                    error: Some(error),
-                }),
-            )
-        }
-    }
+        }))
+    )
 }
 
 /// List all API keys for the authenticated user
@@ -269,27 +284,28 @@ pub async fn get_api_key_handler(
     )
 }
 
-/// Revoke an API key
+/// Handler for revoking an API key
 pub async fn revoke_api_key_handler(
     State(state): State<Arc<Mutex<DataStore>>>,
-    JwtClaims(claims): JwtClaims,
+    claims: JwtClaims,
     Path(key_id): Path<String>,
+    Json(request): Json<RevokeApiKeyRequest>,
 ) -> impl IntoResponse {
-    // Get the user's account
-    let mut datastore = state.lock().await;
+    log::info!("Revoking API key: {}", key_id);
     
-    // Find the account by the user's ID
-    let account = match datastore.account_state.get_account(&claims.sub) {
+    // Get the account from the database
+    let mut datastore = state.lock().await;
+    let account_id = claims.0.sub.clone();
+    
+    let mut account = match datastore.account_state.get_account(&account_id) {
         Some(account) => account,
         None => {
             return (
                 StatusCode::NOT_FOUND,
-                Json(ApiKeyResponse {
-                    success: false,
-                    api_key: None,
-                    secret: None,
-                    error: Some("Account not found".to_string()),
-                }),
+                Json(serde_json::json!({
+                    "success": false,
+                    "error": "Account not found"
+                }))
             );
         }
     };
@@ -298,56 +314,167 @@ pub async fn revoke_api_key_handler(
     if account.get_api_key(&key_id).is_none() {
         return (
             StatusCode::NOT_FOUND,
-            Json(ApiKeyResponse {
-                success: false,
-                api_key: None,
-                secret: None,
-                error: Some(format!("API key with ID {} not found", key_id)),
-            }),
+            Json(serde_json::json!({
+                "success": false,
+                "error": format!("API key with ID {} not found", key_id)
+            }))
         );
     }
-    
-    // Clone and update the account
-    let mut account_clone = account.clone();
     
     // Revoke the API key
-    if !account_clone.revoke_api_key(&key_id) {
+    if !account.revoke_api_key(&key_id) {
         return (
-            StatusCode::BAD_REQUEST,
-            Json(ApiKeyResponse {
-                success: false,
-                api_key: None,
-                secret: None,
-                error: Some("Failed to revoke API key".to_string()),
-            }),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "success": false,
+                "error": "Failed to revoke API key"
+            }))
         );
     }
     
-    // Update the account in the datastore
-    let op = datastore.account_state.update_account_local(account_clone.clone());
+    // Update the account in the database
+    let op = datastore.account_state.update_account_local(account.clone());
     if let Err(err) = datastore.handle_account_op(op).await {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiKeyResponse {
-                success: false,
-                api_key: None,
-                secret: None,
-                error: Some(format!("Failed to update account: {}", err)),
-            }),
+            Json(serde_json::json!({
+                "success": false,
+                "error": format!("Failed to update account: {}", err)
+            }))
         );
     }
     
-    // Get the updated API key
-    let api_key = account_clone.get_api_key(&key_id).unwrap();
+    // Log API key revocation event
+    let ip_address = None; // In a real implementation, extract from request
+    let user_agent = None; // In a real implementation, extract from request
+    
+    let event = ApiKeyEvent::new_revocation(
+        key_id.clone(),
+        account_id.clone(),
+        Some(request.reason.clone()),
+        ip_address,
+        user_agent,
+    );
+    
+    // Record the event
+    API_KEY_AUDIT_LOG.record(event.clone()).await;
+    
+    // Persist the event to permanent storage (in background to not block response)
+    let state_clone = state.clone();
+    tokio::spawn(async move {
+        crate::api_keys::audit::ApiKeyAuditLog::persist_event(event, state_clone).await;
+    });
     
     // Return success
     (
         StatusCode::OK,
-        Json(ApiKeyResponse {
-            success: true,
-            api_key: Some(ApiKeyMetadata::from(api_key)),
-            secret: None,
-            error: None,
-        }),
+        Json(serde_json::json!({
+            "success": true,
+            "message": format!("API key {} successfully revoked", key_id)
+        }))
     )
+}
+
+/// Handler for retrieving API key audit logs
+pub async fn get_api_key_audit_logs(
+    auth: ApiKeyAuth,
+    Path(api_key_id): Path<String>,
+) -> impl IntoResponse {
+    log::info!("Getting audit logs for API key: {}", api_key_id);
+    
+    // Check operation permission
+    if !auth.api_key.can_perform_operation("api_keys.view") {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "success": false,
+                "error": "API key does not have permission to view API key audit logs"
+            }))
+        );
+    }
+    
+    // Verify ownership - only the account owner can view its API key logs
+    if !auth.account.get_api_key(&api_key_id).is_some() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "success": false,
+                "error": "You do not have permission to view audit logs for this API key"
+            }))
+        );
+    }
+    
+    // Get the audit logs for this API key
+    let logs = API_KEY_AUDIT_LOG.get_events_for_key(&api_key_id).await;
+    
+    // Return the logs
+    (
+        StatusCode::OK,
+        Json(json!({
+            "success": true,
+            "api_key_id": api_key_id,
+            "total_events": logs.len(),
+            "events": logs
+        }))
+    )
+}
+
+/// Handler for retrieving all API key audit logs for an account
+pub async fn get_account_api_key_audit_logs(
+    auth: ApiKeyAuth,
+    Query(params): Query<PaginationParams>,
+) -> impl IntoResponse {
+    log::info!("Getting all API key audit logs for account: {}", auth.account.address);
+    
+    // Check operation permission
+    if !auth.api_key.can_perform_operation("api_keys.view") {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "success": false,
+                "error": "API key does not have permission to view API key audit logs"
+            }))
+        );
+    }
+    
+    // Get the pagination parameters
+    let limit = params.limit.unwrap_or(100);
+    let offset = params.offset.unwrap_or(0);
+    
+    // Get all audit logs for this account
+    let logs = API_KEY_AUDIT_LOG.get_events_for_account(&auth.account.address).await;
+    
+    // Apply pagination
+    let total = logs.len();
+    let logs = if offset < logs.len() {
+        let end = std::cmp::min(offset + limit, logs.len());
+        logs[offset..end].to_vec()
+    } else {
+        Vec::new()
+    };
+    
+    // Return the logs
+    (
+        StatusCode::OK,
+        Json(json!({
+            "success": true,
+            "account_id": auth.account.address,
+            "total_events": total,
+            "events": logs,
+            "pagination": {
+                "limit": limit,
+                "offset": offset,
+                "has_more": offset + logs.len() < total
+            }
+        }))
+    )
+}
+
+/// Query parameters for pagination
+#[derive(Debug, Deserialize)]
+pub struct PaginationParams {
+    /// Maximum number of items to return
+    pub limit: Option<usize>,
+    /// Number of items to skip
+    pub offset: Option<usize>,
 } 

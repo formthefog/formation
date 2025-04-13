@@ -1,6 +1,10 @@
 pub mod middleware;
+pub mod rate_limiter;
+pub mod audit;
 
 pub use middleware::{api_key_auth_middleware, ApiKeyAuth, api_key_error_response};
+pub use rate_limiter::{ApiKeyRateLimiter, RateLimitCheckResult, get_rate_limit_headers};
+pub use audit::{ApiKeyEvent, ApiKeyEventType, ApiKeyAuditLog, API_KEY_AUDIT_LOG};
 
 use crate::accounts::Account;
 use chrono::{DateTime, Utc};

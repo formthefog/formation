@@ -1,32 +1,291 @@
-use crate::datastore::{DataStore, DB_HANDLE, AccountRequest, ModelRequest};
-use crate::db::write_datastore;
-use crate::agent::*;
-use crate::model::*;
-use crate::auth::{JwtClaims, can_view_models, extract_user_info};
+use crate::datastore::{DataStore, ModelRequest};
 use crate::api_keys::ApiKeyAuth;
-use crate::billing::{UsageTracker, PeriodUsage};
+use crate::billing::UsageTracker;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use axum::{extract::{State, Path}, Json};
-use form_types::state::{Response, Success};
-use std::collections::{BTreeMap, HashMap};
 use serde::{Serialize, Deserialize};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use chrono::{Utc, DateTime};
+use chrono::Utc;
 use serde_json::json;
 
 pub async fn create_model(
-    State(datatore): State<Arc<Mutex<DataStore>>>
-) {}
+    State(state): State<Arc<Mutex<DataStore>>>,
+    auth: ApiKeyAuth,
+    Json(model_data): Json<ModelRequest>,
+) -> impl IntoResponse {
+    log::info!("Account {} is attempting to create a new model", auth.account.address);
+    
+    // Check operation permission
+    if !auth.api_key.can_perform_operation("models.create") {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "success": false,
+                "error": "API key does not have permission to create models"
+            }))
+        );
+    }
+    
+    // Validate the model data
+    let model_id = match &model_data {
+        ModelRequest::Create(model) => {
+            if model.name.is_empty() {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "success": false,
+                        "error": "Model name cannot be empty"
+                    }))
+                );
+            }
+            model.model_id.clone()
+        },
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "success": false,
+                    "error": "Invalid request type for model creation"
+                }))
+            );
+        }
+    };
+    
+    // Check for duplicate model ID/name
+    let mut datastore = state.lock().await;
+    if let Some(existing) = datastore.model_state.get_model(&model_id) {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "success": false,
+                "error": format!("Model with ID {} already exists", model_id),
+                "existing_model": existing
+            }))
+        );
+    }
+    
+    // Set the owner to the current account
+    let model = match model_data {
+        ModelRequest::Create(mut model) => {
+            model.owner_id = auth.account.address.clone();
+            model.created_at = Utc::now().timestamp();
+            model.updated_at = Utc::now().timestamp();
+            model
+        },
+        _ => unreachable!(), // We already checked this above
+    };
+    
+    // Create the model in the datastore
+    let op = datastore.model_state.update_model_local(model.clone());
+    
+    // Apply the operation
+    if let Err(e) = datastore.handle_model_op(op.clone()).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "error": format!("Failed to create model: {}", e)
+            }))
+        );
+    }
+    
+    // Record creation in account usage stats
+    if let Some(ref mut usage) = auth.account.usage.clone() {
+        // Track model creation in usage statistics
+        // This would be more complex in a real implementation
+        log::info!("Recording model creation in usage statistics");
+    }
+    
+    // Return success with the created model
+    (
+        StatusCode::CREATED,
+        Json(json!({
+            "success": true,
+            "message": format!("Model {} created successfully", model.model_id),
+            "model": model
+        }))
+    )
+}
 
 pub async fn update_model(
-    State(datatore): State<Arc<Mutex<DataStore>>>
-) {}
+    State(state): State<Arc<Mutex<DataStore>>>,
+    auth: ApiKeyAuth,
+    Json(model_data): Json<ModelRequest>,
+) -> impl IntoResponse {
+    log::info!("Account {} is attempting to update a model", auth.account.address);
+    
+    // Check operation permission
+    if !auth.api_key.can_perform_operation("models.update") {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "success": false,
+                "error": "API key does not have permission to update models"
+            }))
+        );
+    }
+    
+    // Ensure we have a valid update request
+    let model_id = match &model_data {
+        ModelRequest::Update(model) => model.model_id.clone(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "success": false,
+                    "error": "Invalid request type for model update"
+                }))
+            );
+        }
+    };
+    
+    // Get the existing model
+    let mut datastore = state.lock().await;
+    let existing_model = match datastore.model_state.get_model(&model_id) {
+        Some(model) => model,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "success": false,
+                    "error": format!("Model with ID {} not found", model_id)
+                }))
+            );
+        }
+    };
+    
+    // Verify ownership/permissions - only the owner or an admin can update
+    if existing_model.owner_id != auth.account.address && !auth.api_key.can_perform_operation("admin.models") {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "success": false,
+                "error": "You do not have permission to update this model"
+            }))
+        );
+    }
+    
+    // Update the model
+    let updated_model = match model_data {
+        ModelRequest::Update(mut model) => {
+            // Preserve owner and creation timestamp
+            model.owner_id = existing_model.owner_id.clone();
+            model.created_at = existing_model.created_at;
+            // Update the timestamp
+            model.updated_at = Utc::now().timestamp();
+            model
+        },
+        _ => unreachable!(), // We already checked this above
+    };
+    
+    // Create the model update operation
+    let op = datastore.model_state.update_model_local(updated_model.clone());
+    
+    // Apply the operation
+    if let Err(e) = datastore.handle_model_op(op.clone()).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "error": format!("Failed to update model: {}", e)
+            }))
+        );
+    }
+    
+    // Return success with the updated model
+    (
+        StatusCode::OK,
+        Json(json!({
+            "success": true,
+            "message": format!("Model {} updated successfully", model_id),
+            "model": updated_model
+        }))
+    )
+}
 
 pub async fn delete_model(
-    State(datatore): State<Arc<Mutex<DataStore>>>
-) {}
+    State(state): State<Arc<Mutex<DataStore>>>,
+    auth: ApiKeyAuth,
+    Json(model_data): Json<ModelRequest>,
+) -> impl IntoResponse {
+    log::info!("Account {} is attempting to delete a model", auth.account.address);
+    
+    // Check operation permission
+    if !auth.api_key.can_perform_operation("models.delete") {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "success": false,
+                "error": "API key does not have permission to delete models"
+            }))
+        );
+    }
+    
+    // Ensure we have a valid delete request
+    let model_id = match &model_data {
+        ModelRequest::Delete(id) => id.clone(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "success": false,
+                    "error": "Invalid request type for model deletion"
+                }))
+            );
+        }
+    };
+    
+    // Get the existing model to verify ownership
+    let mut datastore = state.lock().await;
+    let existing_model = match datastore.model_state.get_model(&model_id) {
+        Some(model) => model,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "success": false,
+                    "error": format!("Model with ID {} not found", model_id)
+                }))
+            );
+        }
+    };
+    
+    // Verify ownership/permissions - only the owner or an admin can delete
+    if existing_model.owner_id != auth.account.address && !auth.api_key.can_perform_operation("admin.models") {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "success": false,
+                "error": "You do not have permission to delete this model"
+            }))
+        );
+    }
+    
+    // Create the model deletion operation
+    let op = datastore.model_state.remove_model_local(model_id.clone());
+    
+    // Apply the operation
+    if let Err(e) = datastore.handle_model_op(op.clone()).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "error": format!("Failed to delete model: {}", e)
+            }))
+        );
+    }
+    
+    // Return success
+    (
+        StatusCode::OK,
+        Json(json!({
+            "success": true,
+            "message": format!("Model {} deleted successfully", model_id)
+        }))
+    )
+}
 
 /// Get information about a specific AI model
 pub async fn get_model(

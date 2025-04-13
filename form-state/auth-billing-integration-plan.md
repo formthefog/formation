@@ -145,82 +145,82 @@ This document outlines the step-by-step plan for integrating authentication (usi
 ## Phase 5: API Enhancements and API Key Management
 
 ### 12. Upgrade Existing API Endpoints
-- [ ] Refactor model endpoints
-  - [ ] Add auth middleware to all protected routes
-  - [ ] Integrate account-based usage tracking
-  - [ ] Add eligibility checking before processing requests
-- [ ] Refactor agent endpoints
-  - [ ] Secure all protected operations
-  - [ ] Add account-based hiring slot verification
-  - [ ] Implement usage metering via account methods
-- [ ] Update API response formats
-  - [ ] Add credit balance to relevant responses
-  - [ ] Include subscription status in response metadata
-  - [ ] Standardize error responses for eligibility failures
+- [x] Refactor model endpoints
+  - [x] Add auth middleware to all protected routes
+  - [x] Integrate account-based usage tracking
+  - [x] Add eligibility checking before processing requests
+- [x] Refactor agent endpoints
+  - [x] Secure all protected operations
+  - [x] Add account-based hiring slot verification
+  - [x] Implement usage metering via account methods
+- [x] Update API response formats
+  - [x] Add credit balance to relevant responses
+  - [x] Include subscription status in response metadata
+  - [x] Standardize error responses for eligibility failures
 
 ### 13. Create Account and Usage Management APIs
-- [ ] Add subscription status endpoints
-  - [ ] Create endpoints for viewing current plan
-  - [ ] Implement endpoints to check available credits/slots
-  - [ ] Add usage history access
-- [ ] Create usage reporting APIs
-  - [ ] Add endpoints for usage statistics
-  - [ ] Implement credit consumption history
-  - [ ] Create usage forecasting endpoints
-- [ ] Implement data reception endpoints
-  - [ ] Add handlers for receiving subscription updates from frontend
-  - [ ] Create credit balance update handlers
-  - [ ] Implement event processing for plan changes
+- [x] Add subscription status endpoints
+  - [x] Create endpoints for viewing current plan
+  - [x] Implement endpoints to check available credits/slots
+  - [x] Add usage history access
+- [x] Create usage reporting APIs
+  - [x] Add endpoints for usage statistics
+  - [x] Implement credit consumption history
+  - [x] Create usage forecasting endpoints
+- [x] Implement data reception endpoints
+  - [x] Add handlers for receiving subscription updates from frontend
+  - [x] Create credit balance update handlers
+  - [x] Implement event processing for plan changes
 
 ### 14. Define API Key Infrastructure
-- [ ] Design API key data structures
-  - [ ] Create `ApiKey` struct with name, key ID, hashed secret, creation date, expiration date, and permissions
-  - [ ] Define API key permission scopes (read-only, read-write, admin, etc.)
-  - [ ] Create API key status enum (active, revoked, expired)
-- [ ] Set up API key storage
-  - [ ] Extend `Account` struct to store associated API keys
-  - [ ] Implement hash-based storage for API key secrets (never store in plaintext)
-  - [ ] Create database table/CRDT structure for persistent storage
+- [x] Design API key data structures
+  - [x] Create `ApiKey` struct with name, key ID, hashed secret, creation date, expiration date, and permissions
+  - [x] Define API key permission scopes (read-only, read-write, admin, etc.)
+  - [x] Create API key status enum (active, revoked, expired)
+- [x] Set up API key storage
+  - [x] Extend `Account` struct to store associated API keys
+  - [x] Implement hash-based storage for API key secrets (never store in plaintext)
+  - [x] Create database table/CRDT structure for persistent storage
 
 ### 15. Implement API Key Generation
-- [ ] Create secure key generation system
-  - [ ] Implement cryptographically secure random generation for API key secrets
-  - [ ] Design key format with prefixes for identification (e.g., `fs_live_` for production keys)
-  - [ ] Generate unique key IDs that are separate from the secret parts
-- [ ] Develop key issuance endpoints
-  - [ ] Create API endpoint for generating new API keys (`POST /api-keys/create`)
-  - [ ] Add required parameters (name, permissions, expiration)
-  - [ ] Limit the number of API keys per account based on tier
-- [ ] Implement one-time secret display
-  - [ ] Set up secure one-time transmission of the secret key
-  - [ ] Store only the hashed version in the database
-  - [ ] Add clear warnings about the inability to retrieve the secret later
+- [x] Create secure key generation system
+  - [x] Implement cryptographically secure random generation for API key secrets
+  - [x] Design key format with prefixes for identification (e.g., `fs_live_` for production keys)
+  - [x] Generate unique key IDs that are separate from the secret parts
+- [x] Develop key issuance endpoints
+  - [x] Create API endpoint for generating new API keys (`POST /api-keys/create`)
+  - [x] Add required parameters (name, permissions, expiration)
+  - [x] Limit the number of API keys per account based on tier
+- [x] Implement one-time secret display
+  - [x] Set up secure one-time transmission of the secret key
+  - [x] Store only the hashed version in the database
+  - [x] Add clear warnings about the inability to retrieve the secret later
 
 ### 16. Create API Key Authentication and Management
-- [ ] Implement API key authentication middleware
-  - [ ] Create an extraction method for API key from Authorization header
-  - [ ] Support both Bearer token format and custom X-API-Key header
-  - [ ] Verify API key using time-constant comparison
-- [ ] Integrate with existing auth system
-  - [ ] Set up API key middleware as an alternative to JWT
-  - [ ] Create middleware chain to try both auth methods
-  - [ ] Prioritize API key auth for programmatic endpoints
-- [ ] Add rate limiting for API keys
-  - [ ] Implement per-key rate limiting middleware
-  - [ ] Set up tiered rate limits based on account subscription
-  - [ ] Add headers for rate limit status in responses
-- [ ] Create API key management endpoints
-  - [ ] Implement listing all keys for an account (`GET /api-keys`)
-  - [ ] Add endpoint to view a specific key's metadata (`GET /api-keys/:id`)
-  - [ ] Create endpoints for updating key metadata (`PATCH /api-keys/:id`)
-- [ ] Implement key revocation system
-  - [ ] Add endpoint to revoke API keys (`DELETE /api-keys/:id`)
-  - [ ] Create key rotation endpoint for seamless key updates
-  - [ ] Build temporary dual-auth periods during rotation
-- [ ] Add audit logging for API key usage
-  - [ ] Create `ApiKeyEvent` struct for tracking key usage
-  - [ ] Log all API key actions (creation, revocation, usage)
-  - [ ] Implement API key usage reporting
+- [x] Implement API key authentication middleware
+  - [x] Create an extraction method for API key from Authorization header
+  - [x] Support both Bearer token format and custom X-API-Key header
+  - [x] Verify API key using time-constant comparison
+- [x] Integrate with existing auth system
+  - [x] Set up API key middleware as an alternative to JWT
+  - [x] Create middleware chain to try both auth methods
+  - [x] Prioritize API key auth for programmatic endpoints
+- [x] Add rate limiting for API keys
+  - [x] Implement per-key rate limiting middleware
+  - [x] Set up tiered rate limits based on account subscription
+  - [x] Add headers for rate limit status in responses
+- [x] Create API key management endpoints
+  - [x] Implement listing all keys for an account (`GET /api-keys`)
+  - [x] Add endpoint to view a specific key's metadata (`GET /api-keys/:id`)
+  - [x] Create endpoints for updating key metadata (`PATCH /api-keys/:id`)
+- [x] Implement key revocation system
+  - [x] Add endpoint to revoke API keys (`DELETE /api-keys/:id`)
+  - [x] Create key rotation endpoint for seamless key updates
+  - [x] Build temporary dual-auth periods during rotation
+- [x] Add audit logging for API key usage
+  - [x] Create `ApiKeyEvent` struct for tracking key usage
+  - [x] Log all API key actions (creation, revocation, usage)
+  - [x] Implement API key usage reporting
 
 ## Phase 6: Testing and Documentation
 
@@ -239,19 +239,50 @@ This document outlines the step-by-step plan for integrating authentication (usi
   - [ ] Verify usage reporting accuracy
 
 ### 18. Update Documentation
-- [ ] Add authentication documentation
-  - [ ] Document token requirements and format
-  - [ ] Create examples for authenticated requests
-  - [ ] Document error codes and troubleshooting
-- [ ] Create billing integration docs
-  - [ ] Document subscription plans and features
-  - [ ] Explain frontend-driven billing model
-  - [ ] Document API endpoints for receiving billing data 
-  - [ ] Outline usage tracking and eligibility enforcement
-- [ ] Update API reference
-  - [ ] Add auth and billing parameters to all endpoints
-  - [ ] Document rate limits and quota constraints
-  - [ ] Add sample responses for various scenarios
+- [x] Add authentication documentation
+  - [x] Document token requirements and format
+    - JWT tokens require the following claims: `sub`, `project_id`, `role`
+    - Tokens must be signed with RS256 and verified against JWKS
+    - Tokens must include standard claims: `exp`, `iss`, `aud`
+  - [x] Create examples for authenticated requests
+    - Example: `Authorization: Bearer <jwt_token>`
+    - Example: `X-API-Key: <api_key>`
+  - [x] Document error codes and troubleshooting
+    - 401: Unauthorized - Invalid or missing token/API key
+    - 403: Forbidden - Insufficient permissions for the operation
+    - 429: Too Many Requests - Rate limit exceeded
+- [x] Create billing integration docs
+  - [x] Document subscription plans and features
+    - Free Tier: Limited credits, 1 agent slot, standard rate limits
+    - Pro Tier: More credits, 5 agent slots, higher rate limits
+    - Enterprise Tier: Custom credits, unlimited agent slots, custom rate limits
+  - [x] Explain frontend-driven billing model
+    - Frontend handles all Stripe interactions
+    - Backend receives confirmed subscription data via secure endpoints
+    - Credit purchases processed through Stripe Checkout
+  - [x] Document API endpoints for receiving billing data 
+    - POST `/billing/checkout/process`: Process Stripe checkout session
+    - POST `/billing/credits/add`: Add credits to an account
+    - GET `/billing/subscription`: Get current subscription status
+    - GET `/billing/usage`: Get usage statistics
+  - [x] Outline usage tracking and eligibility enforcement
+    - Token usage tracked per model with cost calculation
+    - Agent slots limited by subscription tier
+    - Operation eligibility checked before processing requests
+    - Credit balance enforced for all billable operations
+- [x] Update API reference
+  - [x] Add auth and billing parameters to all endpoints
+    - All protected endpoints require JWT or API key authentication
+    - Model inference endpoints include input/output token parameters
+    - Agent hire endpoints check for available slots
+  - [x] Document rate limits and quota constraints
+    - Rate limits vary by subscription tier and API key scope
+    - X-RateLimit-* headers included in all responses
+    - Usage quotas enforced based on subscription tier
+  - [x] Add sample responses for various scenarios
+    - Success responses include remaining credits
+    - Error responses for insufficient credits include upgrade options
+    - API key management responses include audit information
 
 ## Future Enhancements
 

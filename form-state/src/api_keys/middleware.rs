@@ -10,11 +10,26 @@ use axum::{
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use serde_json::json;
-use std::net::IpAddr;
+use once_cell::sync::Lazy;
 
 use crate::datastore::DataStore;
-use crate::api_keys::{ApiKey, ApiKeyError};
+use crate::api_keys::{ApiKey, ApiKeyError, ApiKeyRateLimiter, RateLimitCheckResult, get_rate_limit_headers};
+use crate::api_keys::audit::{ApiKeyEvent, ApiKeyAuditLog, API_KEY_AUDIT_LOG};
 use crate::accounts::Account;
+
+// Global rate limiter instance
+static RATE_LIMITER: Lazy<ApiKeyRateLimiter> = Lazy::new(|| {
+    // Start a background task to periodically clean up expired entries
+    tokio::spawn(async {
+        let rate_limiter = RATE_LIMITER.clone();
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await; // Every hour
+            rate_limiter.cleanup_expired();
+        }
+    });
+    
+    ApiKeyRateLimiter::new()
+});
 
 /// Structure containing validated API key and account
 #[derive(Clone)]
@@ -34,7 +49,16 @@ pub async fn api_key_auth_middleware(
     log::info!("API key auth middleware called");
     
     // Log request path and method
-    log::info!("Request path: {:?}, method: {:?}", request.uri().path(), request.method());
+    let path = request.uri().path().to_string();
+    let method = request.method().clone();
+    log::info!("Request path: {:?}, method: {:?}", path, method);
+    
+    // Get client IP address and user agent
+    let ip_address = get_client_ip(&request);
+    let user_agent = request.headers()
+        .get(header::USER_AGENT)
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_string());
     
     // Extract the API key from either the X-API-Key header or Authorization header
     let api_key_str = extract_api_key_from_request(&request);
@@ -95,11 +119,102 @@ pub async fn api_key_auth_middleware(
     
     log::info!("API key validated for account: {}", auth_data.account.address);
     
+    // Check rate limits
+    let subscription_tier = auth_data.account.subscription
+        .as_ref()
+        .map(|sub| sub.tier)
+        .unwrap_or_default();
+        
+    let rate_limit_result = RATE_LIMITER.check_rate_limit(&auth_data.api_key.id, &subscription_tier);
+    
+    // If rate limit exceeded, return 429 Too Many Requests and log the event
+    let is_rate_limited = match &rate_limit_result {
+        RateLimitCheckResult::Allowed { .. } => {
+            // Rate limit not exceeded, continue processing
+            false
+        },
+        _ => {
+            // Rate limit exceeded, return 429 with appropriate headers
+            log::warn!("Rate limit exceeded for API key: {}", auth_data.api_key.id);
+            
+            // Log rate limit event
+            let event = ApiKeyEvent::new_usage(
+                auth_data.api_key.id.clone(),
+                auth_data.account.address.clone(),
+                path.clone(),
+                method.clone(),
+                StatusCode::TOO_MANY_REQUESTS.as_u16(),
+                ip_address.clone(),
+                user_agent.clone(),
+                true, // rate limited
+            );
+            
+            // Record the event
+            API_KEY_AUDIT_LOG.record(event.clone()).await;
+            
+            // Persist the event to permanent storage (in background to not block response)
+            let state_clone = state.clone();
+            tokio::spawn(async move {
+                ApiKeyAuditLog::persist_event(event, state_clone).await;
+            });
+            
+            let headers = get_rate_limit_headers(&rate_limit_result);
+            let mut response = api_key_error_response(ApiKeyError::RateLimitExceeded);
+            
+            // Add rate limit headers to response
+            let response_headers = response.headers_mut();
+            for (key, value) in headers {
+                if let Ok(name) = header::HeaderName::from_bytes(key.as_bytes()) {
+                    if let Ok(val) = header::HeaderValue::from_str(&value) {
+                        response_headers.insert(name, val);
+                    }
+                }
+            }
+            
+            return Ok(response);
+        }
+    };
+    
     // Store the validated API key and account in request extensions
-    request.extensions_mut().insert(auth_data);
+    request.extensions_mut().insert(auth_data.clone());
     
     // Continue with the request
-    Ok(next.run(request).await)
+    let mut response = next.run(request).await;
+    
+    // Log successful API key usage event
+    let status_code = response.status().as_u16();
+    let event = ApiKeyEvent::new_usage(
+        auth_data.api_key.id.clone(),
+        auth_data.account.address.clone(),
+        path,
+        method,
+        status_code,
+        ip_address,
+        user_agent,
+        is_rate_limited,
+    );
+    
+    // Record the event
+    API_KEY_AUDIT_LOG.record(event.clone()).await;
+    
+    // Persist the event to permanent storage (in background to not block response)
+    let state_clone = state.clone();
+    tokio::spawn(async move {
+        ApiKeyAuditLog::persist_event(event, state_clone).await;
+    });
+    
+    // Add rate limit headers to the response
+    let headers = get_rate_limit_headers(&rate_limit_result);
+    let response_headers = response.headers_mut();
+    for (key, value) in headers {
+        if let Ok(name) = header::HeaderName::from_bytes(key.as_bytes()) {
+            if let Ok(val) = header::HeaderValue::from_str(&value) {
+                response_headers.insert(name, val);
+            }
+        }
+    }
+    
+    Ok(response)
 }
 
 /// Extract API key from either X-API-Key header or Authorization header
