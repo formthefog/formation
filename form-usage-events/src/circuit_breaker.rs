@@ -237,7 +237,7 @@ mod tests {
         assert_eq!(cb.get_state().await, CircuitState::Open);
         
         // Wait for timeout
-        sleep(Duration::from_millis(150)).await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
         
         // Should transition to half-open and allow one request
         assert!(cb.allow_request().await);
@@ -259,7 +259,7 @@ mod tests {
         assert_eq!(cb.get_state().await, CircuitState::Open);
         
         // Wait for timeout
-        sleep(Duration::from_millis(150)).await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
         
         // Transition to half-open
         assert!(cb.allow_request().await);
@@ -287,7 +287,7 @@ mod tests {
         assert_eq!(cb.get_state().await, CircuitState::Open);
         
         // Wait for timeout
-        sleep(Duration::from_millis(150)).await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
         
         // Transition to half-open
         assert!(cb.allow_request().await);
