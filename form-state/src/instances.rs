@@ -1,4 +1,4 @@
-use std::{collections::{btree_map::{Iter, IterMut}, BTreeMap, HashSet}, fmt::Display, net::{IpAddr, Ipv4Addr}, time::{Duration, SystemTime, UNIX_EPOCH}};
+use std::{collections::{btree_map::{Iter, IterMut}, BTreeMap, HashSet}, fmt::Display, net::IpAddr, time::{Duration, SystemTime, UNIX_EPOCH}};
 use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, CmRDT, Map, bft_reg::Update};
 use form_dns::store::FormDnsRecord;
 use form_types::state::{Response, Success};
@@ -8,9 +8,6 @@ use serde::{Serialize, Deserialize};
 use tiny_keccak::Hasher;
 use crate::Actor;
 use crate::scaling::{ScalingManager, ScalingPhase, ScalingOperation, ScalingError, ScalingMetrics, ScalingResources};
-use crate::verification::RestorationVerificationResult;
-use log::{debug, info, warn, error};
-use chrono;
 
 pub type InstanceOp = Op<String, BFTReg<Instance, Actor>, Actor>; 
 
@@ -1555,7 +1552,7 @@ impl InstanceCluster {
                         
                         // Get storage info
                         let mut total_disk_space = 0;
-                        for disk in &metrics.disks {
+                        for _ in &metrics.disks {
                             total_disk_space += 10u64 * 1024 * 1024 * 1024;
                         }
                         if total_disk_space > 0 {
@@ -1640,7 +1637,7 @@ impl InstanceCluster {
                                 
                                 // Get actual storage
                                 let mut total_disk_space = 0;
-                                for disk in &metrics.disks {
+                                for _ in &metrics.disks {
                                     total_disk_space += 10u64 * 1024 * 1024 * 1024;
                                 }
                                 if total_disk_space > 0 {
@@ -1730,7 +1727,7 @@ impl InstanceCluster {
                         
                         // Get storage info
                         let mut total_disk_space = 0;
-                        for disk in &metrics.disks {
+                        for _ in &metrics.disks {
                             total_disk_space += 10u64 * 1024 * 1024 * 1024;
                         }
                         if total_disk_space > 0 {
@@ -1962,9 +1959,7 @@ impl InstanceCluster {
                 
                 let temp_cpu_needed = resources.cpu_cores / 10;
                 let temp_memory_needed = resources.memory_mb / 10;
-                let temp_storage_needed = resources.storage_gb / 10;
-                let temp_bandwidth_needed = resources.network_bandwidth_mbps / 10;
-                
+
                 // Check if temporary resources are available
                 if temp_cpu_needed > available_resources.cpu_cores {
                     return Err(ScalingError {
@@ -2434,7 +2429,7 @@ impl InstanceCluster {
                     .as_secs() as i64;
                 
                 // Create replacement instances
-                for (i, (old_id, old_ip)) in old_instances_data.iter().enumerate() {
+                for (_, (old_id, old_ip)) in old_instances_data.iter().enumerate() {
                     // Generate a unique ID for the replacement instance
                     let new_id = format!("replacement-{}-{}", old_id, now);
                     

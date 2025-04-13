@@ -48,6 +48,7 @@ pub struct FormStateResponse {
 }
 
 /// Health tracker service that monitors node health and updates the IP health repository
+#[allow(unused)]
 pub struct HealthTracker {
     /// Form-state API endpoint
     form_state_api: String,

@@ -7,6 +7,10 @@ edition = "2021"
 name = "request_full_state"
 path = "examples/request-full-state.rs"
 
+[[example]]
+name = "auth_example"
+path = "examples/auth-example.rs"
+
 [dependencies]
 clap = { version = "4", features = ["derive"]}
 tokio = { version = "1", features = ["full"] } 
@@ -18,7 +22,7 @@ ipnet = { version = "2.4", features = ["serde"] }
 axum = "0.7"
 reqwest = { version = "0.12", features = ["json", "blocking"]}
 tiny-keccak = { version = "2.0.2", features = ["sha3"] }
-k256 = "0.13.4"
+k256 = { version = "0.13.4", features = ["serde", "ecdsa"] }
 hex = "0.4"
 log = "0.4"
 simple_logger = "5"
@@ -36,5 +40,19 @@ url = "2"
 redb = "1.3.0"
 bincode = "1"
 lazy_static = "1.5.0"
-chrono = "0.4"
-uuid = { version = "1.4", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.4", features = ["v4", "serde"] }
+jwt-authorizer = "0.15.0"
+jsonwebtoken = "9.1.0"
+base64 = "0.21"
+async-stripe = { version = "0.41.0", features = ["runtime-tokio-hyper", "checkout", "webhook-endpoints", "billing"] }
+thiserror = "1.0"
+dotenv = "0.15.0"
+sha2 = "0.10"
+subtle = "2.5"
+once_cell = "1.19"
+
+[features]
+default = ["axum"]
+axum = []
+devnet = []

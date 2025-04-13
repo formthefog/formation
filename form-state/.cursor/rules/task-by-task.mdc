@@ -1,0 +1,7 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+
+You will always ONLY work on a single small subtask at a time. If you find that a given subtask needs to implement more than 1 custom data type, touch more than 1 module, write more than 1 method or function, or implement a trait on more than one type, you will break the task down into sub-subtasks and only implement one at a time. You will always run `cargo-check` to make sure that any code written compiles after each small sub-subtask is written.

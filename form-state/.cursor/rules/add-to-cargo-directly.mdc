@@ -1,0 +1,7 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+
+Never run the `cargo add` command, and always add dependencies to [Cargo.toml](mdc:Cargo.toml) directly

@@ -2,7 +2,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::RwLock;
-use tokio::time::sleep;
 
 /// The possible states of a circuit breaker
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -238,7 +237,7 @@ mod tests {
         assert_eq!(cb.get_state().await, CircuitState::Open);
         
         // Wait for timeout
-        sleep(Duration::from_millis(150)).await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
         
         // Should transition to half-open and allow one request
         assert!(cb.allow_request().await);
@@ -260,7 +259,7 @@ mod tests {
         assert_eq!(cb.get_state().await, CircuitState::Open);
         
         // Wait for timeout
-        sleep(Duration::from_millis(150)).await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
         
         // Transition to half-open
         assert!(cb.allow_request().await);
@@ -288,7 +287,7 @@ mod tests {
         assert_eq!(cb.get_state().await, CircuitState::Open);
         
         // Wait for timeout
-        sleep(Duration::from_millis(150)).await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
         
         // Transition to half-open
         assert!(cb.allow_request().await);
