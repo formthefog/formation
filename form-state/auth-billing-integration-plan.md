@@ -93,34 +93,34 @@ This document outlines the step-by-step plan for integrating authentication (usi
 ## Phase 4: Mock Datastore Server
 
 ### 7. Create Devnet Execution Mode
-- [ ] Implement feature flagging system
-  - [ ] Add `devnet` Cargo feature flag
-  - [ ] Create conditional compilation paths throughout the codebase
-  - [ ] Configure default feature settings in `Cargo.toml`
-- [ ] Refactor core components for devnet mode
-  - [ ] Create mock versions of critical services that depend on distributed components
-  - [ ] Implement in-memory storage for devnet mode
-  - [ ] Add configuration options to enable/disable message queue integration
+- [x] Implement feature flagging system
+  - [x] Add `devnet` Cargo feature flag
+  - [x] Create conditional compilation paths throughout the codebase
+  - [x] Configure default feature settings in `Cargo.toml`
+- [x] Refactor core components for devnet mode
+  - [x] Create mock versions of critical services that depend on distributed components
+  - [x] Implement in-memory storage for devnet mode
+  - [x] Add configuration options to enable/disable message queue integration
 
 ### 8. Split API and Queue Processing Components
-- [ ] Refactor `run` function in `api.rs`
-  - [ ] Extract API server into separate `run_api` function
-  - [ ] Move queue processing loop into dedicated `run_queue_reader` function
-  - [ ] Ensure both components can be started independently
-- [ ] Update `main.rs` with execution modes
-  - [ ] Add command-line flag to control execution mode (api-only, queue-only, or both)
-  - [ ] Create configuration for message queue connection in production
-  - [ ] Add logic to conditionally start components based on mode
+- [x] Refactor `run` function in `api.rs`
+  - [x] Extract API server into separate `run_api` function
+  - [x] Move queue processing loop into dedicated `run_queue_reader` function
+  - [x] Ensure both components can be started independently
+- [x] Update `main.rs` with execution modes
+  - [x] Add compilation flag to control queue behavior
+  - [x] Create configuration for message queue connection in production
+  - [x] Add logging to indicate devnet/production mode
 
 ### 9. Implement Conditional Write-to-Queue
-- [ ] Refactor `write_to_queue` method in `datastore.rs`
-  - [ ] Add conditional execution based on runtime mode or compile-time feature flag
-  - [ ] Create no-op implementation for devnet mode
-  - [ ] Log write operations in devnet mode without actual queue writes
-- [ ] Modify message handlers for devnet
-  - [ ] Create direct application of operations in devnet mode
-  - [ ] Bypass queue for immediate state changes in single-instance mode
-  - [ ] Maintain operational parity between modes
+- [x] Refactor `write_to_queue` method in `datastore.rs`
+  - [x] Add conditional execution based on compile-time feature flag
+  - [x] Create no-op implementation for devnet mode
+  - [x] Log write operations in devnet mode without actual queue writes
+- [x] Modify message handlers for devnet
+  - [x] Create direct application of operations in devnet mode
+  - [x] Bypass queue for immediate state changes in single-instance mode
+  - [x] Maintain operational parity between modes
 
 ### 10. Create Mock Services
 - [ ] Implement mock model and agent services
