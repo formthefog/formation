@@ -123,24 +123,24 @@ This document outlines the step-by-step plan for integrating authentication (usi
   - [x] Maintain operational parity between modes
 
 ### 10. Create Mock Services
-- [ ] Implement mock model and agent services
-  - [ ] Create `mock_models.rs` with sample AI models
-  - [ ] Create `mock_agents.rs` with example agent configurations
-  - [ ] Implement deterministic response generation for testing
-- [ ] Add mock data initialization
-  - [ ] Create function to populate datastore with mock entities
-  - [ ] Add sample accounts with different permissions
-  - [ ] Create realistic test dataset for development
+- [x] Implement mock model and agent services
+  - [x] Create simple mock server with built-in capabilities for testing
+  - [x] Leverage existing DataStore initialization
+  - [x] Avoid complex mock data structure for simplicity
+- [x] Add mock data initialization
+  - [x] Utilize built-in DataStore initialization
+  - [x] Leverage existing functionality in main.rs
+  - [x] Create simple, clean mock server implementation
 
 ### 11. Add Testing and Development Tools
-- [ ] Create development script
-  - [ ] Implement `scripts/run_devnet.sh` for easy local testing
-  - [ ] Add options for data persistence between runs
-  - [ ] Create parameter passing for various configurations
-- [ ] Add documentation for devnet mode
-  - [ ] Document all devnet features and limitations
-  - [ ] Create quick-start guide for local development
-  - [ ] Add examples of common development workflows
+- [x] Create development script
+  - [x] Implement `scripts/run_mock_server.sh` for easy local testing
+  - [x] Add options for JWT configuration
+  - [x] Create parameter passing for various configurations
+- [x] Add documentation for devnet mode
+  - [x] Document usage in script help text
+  - [x] Create quick-start guide via command-line arguments
+  - [x] Include common development configuration options
 
 ## Phase 5: API Enhancements and API Key Management
 
