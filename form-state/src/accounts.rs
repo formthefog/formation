@@ -5,6 +5,7 @@ use crdts::{Map, BFTReg, map::Op, bft_reg::Update, CmRDT};
 use chrono::Utc;
 
 use crate::billing::{SubscriptionInfo, UsageTracker};
+use crate::api_keys::ApiKey;
 use crate::Actor;
 
 pub type AccountOp = Op<String, BFTReg<Account, Actor>, Actor>;
@@ -34,6 +35,9 @@ pub struct Account {
     /// Set of agent IDs that are currently hired by this account
     #[serde(default)]
     pub hired_agents: BTreeSet<String>,
+    /// Collection of API keys associated with this account
+    #[serde(default)]
+    pub api_keys: BTreeMap<String, ApiKey>,
     /// Creation timestamp
     #[serde(default)]
     pub created_at: i64,
@@ -81,6 +85,7 @@ impl Account {
             usage: Some(UsageTracker::new()), // Initialize with default usage tracker
             credits: initial_credits,
             hired_agents: BTreeSet::new(),
+            api_keys: BTreeMap::new(),
             created_at: now,
             updated_at: now,
         }
@@ -423,6 +428,88 @@ impl Account {
         // If we've passed all checks, the user can hire this agent
         true
     }
+
+    /// Add a new API key to the account
+    pub fn add_api_key(&mut self, api_key: ApiKey) -> Result<(), String> {
+        // Check if we're at the limit for API keys
+        let max_allowed = self.max_allowed_api_keys();
+        let current_count = self.api_keys.len() as u32;
+        
+        if current_count >= max_allowed {
+            return Err(format!("API key limit reached ({}/{})", current_count, max_allowed));
+        }
+        
+        // Add the key to the account
+        self.api_keys.insert(api_key.id.clone(), api_key);
+        self.updated_at = Utc::now().timestamp();
+        
+        Ok(())
+    }
+    
+    /// Remove an API key from the account
+    pub fn remove_api_key(&mut self, key_id: &str) -> bool {
+        let removed = self.api_keys.remove(key_id).is_some();
+        if removed {
+            self.updated_at = Utc::now().timestamp();
+        }
+        return removed;
+    }
+    
+    /// Get an API key by ID
+    pub fn get_api_key(&self, key_id: &str) -> Option<&ApiKey> {
+        self.api_keys.get(key_id)
+    }
+    
+    /// Get an API key by (key prefix + secret)
+    pub fn get_api_key_by_secret(&self, full_key: &str) -> Option<&ApiKey> {
+        // Extract the prefix and secret
+        let parts: Vec<&str> = full_key.splitn(2, '_').collect();
+        if parts.len() < 2 {
+            return None;
+        }
+        
+        // Check each key to find a matching one
+        for key in self.api_keys.values() {
+            if key.verify_secret(full_key) {
+                return Some(key);
+            }
+        }
+        
+        None
+    }
+    
+    /// List all API keys (active only)
+    pub fn list_active_api_keys(&self) -> Vec<&ApiKey> {
+        self.api_keys.values()
+            .filter(|key| key.is_valid())
+            .collect()
+    }
+    
+    /// List all API keys (including revoked/expired)
+    pub fn list_all_api_keys(&self) -> Vec<&ApiKey> {
+        self.api_keys.values().collect()
+    }
+    
+    /// Revoke an API key
+    pub fn revoke_api_key(&mut self, key_id: &str) -> bool {
+        if let Some(key) = self.api_keys.get_mut(key_id) {
+            key.revoke();
+            self.updated_at = Utc::now().timestamp();
+            return true;
+        }
+        false
+    }
+    
+    /// Get the maximum number of API keys allowed for this account
+    pub fn max_allowed_api_keys(&self) -> u32 {
+        if let Some(subscription) = &self.subscription {
+            // Get the quota from the subscription tier
+            subscription.tier.quota().max_api_keys
+        } else {
+            // Default for accounts without a subscription
+            5 // Free tier gets 5 API keys
+        }
+    }
 }
 
 /// State container for accounts
@@ -515,6 +602,18 @@ impl AccountState {
             }
         }
         None
+    }
+    
+    /// Get all accounts
+    pub fn list_accounts(&self) -> Vec<Account> {
+        let mut accounts = Vec::new();
+        for ctx in self.map.iter() {
+            let (_, reg) = ctx.val;
+            if let Some(val) = reg.val() {
+                accounts.push(val.value());
+            }
+        }
+        accounts
     }
     
     /// Get all accounts that have ownership of an instance

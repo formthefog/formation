@@ -16,11 +16,15 @@ use crate::helpers::{
     instances::*, 
     account::*, 
     agent::*, 
-    model::*
+    model::*,
+    api_key_handlers::*,
 };
 use crate::auth::{
     JWKSManager, JwtClaims, jwt_auth_middleware, AuthError,
     verify_project_path_access, has_resource_access, extract_user_info
+};
+use crate::api_keys::{
+    api_key_auth_middleware, ApiKeyAuth
 };
 use crate::billing::middleware::{check_agent_eligibility, check_token_eligibility};
 use tokio::net::TcpListener;
@@ -42,8 +46,8 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/bootstrap/cidr_state", get(cidr_state))
         .route("/bootstrap/assoc_state", get(assoc_state));
     
-    // Define protected routes that require authentication
-    let protected_api = Router::new()
+    // Define account/user management routes (JWT authentication required)
+    let account_api = Router::new()
         // Authentication test endpoints
         .route("/auth/test", get(protected_handler))
         .route("/projects/:project_id/resources/:resource_id", get(project_resource_handler))
@@ -114,19 +118,11 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/account/delete", post(delete_account))
         .route("/account/transfer-ownership", post(transfer_instance_ownership))
         
-        // Agent management
-        .route("/agent/create", post(create_agent))
-        .route("/agent/update", post(update_agent))
-        .route("/agent/delete", post(delete_agent))
-        .route("/agent/:id/get", get(get_agent))
-        .route("/agent/list", get(list_agent))
-        
-        // Model management
-        .route("/model/create", post(create_model))
-        .route("/model/update", post(update_model))
-        .route("/model/delete", post(delete_model))
-        .route("/model/:id/get", get(get_model))
-        .route("/model/list", get(list_model))
+        // API key management
+        .route("/api-keys", get(list_api_keys_handler))
+        .route("/api-keys/create", post(create_api_key_handler))
+        .route("/api-keys/:id", get(get_api_key_handler))
+        .route("/api-keys/:id/revoke", post(revoke_api_key_handler))
         
         // Billing and subscription management
         .route("/billing/subscription", get(crate::billing::handlers::get_subscription_status))
@@ -134,20 +130,41 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/billing/checkout/process", post(crate::billing::handlers::process_stripe_checkout_session))
         .route("/billing/credits/add", post(crate::billing::handlers::add_credits))
         
-        // Protected routes that require eligibility checking
-        .route("/agent/:id/hire", post(checked_agent_hire))
-        .route("/model/:id/inference", post(checked_model_inference))
-        
-        // Apply JWT authentication middleware to all protected routes
+        // Apply JWT authentication middleware to all account management routes
         .layer(middleware::from_fn_with_state(
             jwks_manager.clone(),
             jwt_auth_middleware,
         ));
     
-    // Merge public and protected routes into a single router
+    // Define API routes (primarily for developers, using API key authentication)
+    let api_routes = Router::new()
+        // Agent management
+        .route("/agents/create", post(create_agent))
+        .route("/agents/update", post(update_agent))
+        .route("/agents/delete", post(delete_agent))
+        .route("/agents/:id", get(get_agent))
+        .route("/agents", get(list_agent))
+        .route("/agents/:id/hire", post(checked_agent_hire))
+        
+        // Model management
+        .route("/models/create", post(create_model))
+        .route("/models/update", post(update_model))
+        .route("/models/delete", post(delete_model))
+        .route("/models/:id", get(get_model))
+        .route("/models", get(list_model))
+        .route("/models/:id/inference", post(checked_model_inference))
+        
+        // Apply API key authentication middleware to all API routes
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            api_key_auth_middleware,
+        ));
+    
+    // Merge all route groups into a single router
     Router::new()
         .merge(public_api)
-        .merge(protected_api)
+        .merge(account_api)
+        .merge(api_routes)
         .with_state(state)
 }
 
@@ -317,14 +334,13 @@ async fn checked_agent_hire(
 // Wrapper function that performs eligibility check before calling model_inference
 async fn checked_model_inference(
     State(state): State<Arc<Mutex<DataStore>>>,
-    claims: JwtClaims,
+    auth: ApiKeyAuth,
     Path(model_id): Path<String>, 
     Json(json_payload): Json<serde_json::Value>,
 ) -> Result<Response, EligibilityError> {
     // Run eligibility check first
     let datastore = state.lock().await;
-    let account = datastore.account_state.get_account(&claims.0.sub)
-        .ok_or(EligibilityError::AccountNotFound(claims.0.sub.clone()))?;
+    let account = auth.account.clone();
     
     // Extract token count from payload
     let input_tokens = json_payload.get("input_tokens")
@@ -360,6 +376,6 @@ async fn checked_model_inference(
     };
     
     // Call the actual handler with the properly typed payload
-    let response = model_inference(State(state), claims, Path(model_id), Json(typed_payload)).await;
+    let response = model_inference(State(state), auth, Path(model_id), Json(typed_payload)).await;
     Ok(response.into_response())
 }
