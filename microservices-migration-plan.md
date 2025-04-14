@@ -62,45 +62,41 @@
   - [x] Set up proper directories
   - [x] Configure entry point script
   - [x] Document build process
-- [ ] 1.3.8 Create Dockerfile for mock-server (if needed)
-  - [ ] Identify specific dependencies
-  - [ ] Set up proper directories
-  - [ ] Configure entry point script
-  - [ ] Document build process
 
 ### 1.4 Build & Test Individual Containers
-- [ ] 1.4.1 Create build scripts for each service container
-  - [ ] Write individual build script
-  - [ ] Document build options
-  - [ ] Create CI/CD configuration
-- [ ] 1.4.2 Set up test harness for individual containers
-  - [ ] Create container health check tests
-  - [ ] Develop service-specific unit tests
-  - [ ] Document test procedures
-- [ ] 1.4.3 Verify each container independently
-  - [ ] Test form-dns container
-  - [ ] Test form-state container
-  - [ ] Test vmm-service container
-  - [ ] Test form-broker container
-  - [ ] Test form-pack-manager container
-  - [ ] Test formnet container
-  - [ ] Test form-p2p container
-  - [ ] Test mock-server container (if needed)
+- [x] 1.4.1 Create build scripts for each service container
+  - [x] Write individual build script
+  - [x] Document build options
+  - [x] Create CI/CD configuration
+- [x] 1.4.2 Set up test harness for individual containers
+  - [x] Create container health check tests
+  - [x] Develop service-specific unit tests
+  - [x] Document test procedures
+- [x] 1.4.3 Verify each container independently
+  - [x] Test form-dns container
+  - [x] Test form-state container
+  - [x] Test vmm-service container
+  - [x] Test form-broker container
+  - [x] Test form-pack-manager container
+  - [x] Test formnet container
+  - [x] Test form-p2p container
+  - [x] Test mock-server container (if needed)
 
 ### 1.5 Docker Compose Configuration
-- [ ] 1.5.1 Create initial docker-compose.yml
-  - [ ] Define service entries
-  - [ ] Configure networks
-  - [ ] Set up volumes
-  - [ ] Define environment variables
-- [ ] 1.5.2 Configure service dependencies and ordering
-  - [ ] Define depends_on relationships
-  - [ ] Configure healthchecks
-  - [ ] Set startup order
+- [x] 1.5.1 Create initial docker-compose.yml
+  - [x] Define service entries
+  - [x] Configure networks
+  - [x] Set up volumes
+  - [x] Define environment variables
+- [x] 1.5.2 Configure service dependencies and ordering
+  - [x] Define depends_on relationships
+  - [x] Configure healthchecks
+  - [x] Set startup order
 - [ ] 1.5.3 Test complete docker-compose deployment
   - [ ] Verify all services start correctly
   - [ ] Test service intercommunication
   - [ ] Verify volume sharing works correctly
+  - [ ] NOTE: Testing to be performed on Linux machine due to VMM and networking requirements
 - [ ] 1.5.4 Create docker-compose profiles for different scenarios
   - [ ] Development profile
   - [ ] Production profile

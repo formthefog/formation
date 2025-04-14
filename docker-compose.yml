@@ -1,0 +1,214 @@
+version: '3.8'
+
+# Formation platform docker-compose configuration
+services:
+  # DNS Service
+  form-dns:
+    image: formation/form-dns:latest
+    container_name: formation-dns
+    ports:
+      - "53:53/tcp"
+      - "53:53/udp"
+    volumes:
+      - dns-data:/var/lib/formation/dns
+    environment:
+      - DNS_LOG_LEVEL=info
+      - DNS_UPSTREAM_SERVERS=8.8.8.8,1.1.1.1
+    healthcheck:
+      test: ["CMD", "dig", "@localhost", "-p", "53", "localhost", "||", "exit", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      formation-net:
+        ipv4_address: 172.28.0.2
+
+  # State Service
+  form-state:
+    image: formation/form-state:latest
+    container_name: formation-state
+    ports:
+      - "3004:3004"
+    volumes:
+      - state-data:/var/lib/formation/db
+    environment:
+      - STATE_LOG_LEVEL=info
+      - STATE_DB_PATH=/var/lib/formation/db/formation.db
+      - STATE_API_PORT=3004
+      - AUTH_MODE=development
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3004/health", "||", "exit", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      formation-net:
+        ipv4_address: 172.28.0.3
+
+  # Virtual Machine Manager Service
+  vmm-service:
+    image: formation/vmm-service:latest
+    container_name: formation-vmm
+    depends_on:
+      - form-state
+    ports:
+      - "3002:3002"
+    volumes:
+      - vm-images:/var/lib/formation/vm-images
+      - kernel-data:/var/lib/formation/kernel
+      - /run/form-vm:/run/form-vm
+    environment:
+      - VMM_LOG_LEVEL=info
+      - VMM_STATE_URL=http://form-state:3004
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3002/health", "||", "exit", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    privileged: true
+    restart: unless-stopped
+    networks:
+      formation-net:
+        ipv4_address: 172.28.0.4
+
+  # Message Broker Service
+  form-broker:
+    image: formation/form-broker:latest
+    container_name: formation-broker
+    depends_on:
+      - form-state
+    ports:
+      - "3005:3005"  # API
+      - "5672:5672"  # AMQP
+      - "1883:1883"  # MQTT
+    volumes:
+      - broker-data:/var/lib/formation/broker
+    environment:
+      - BROKER_LOG_LEVEL=info
+      - BROKER_STATE_URL=http://form-state:3004
+      - BROKER_API_PORT=3005
+      - BROKER_AMQP_PORT=5672
+      - BROKER_MQTT_PORT=1883
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3005/health", "||", "exit", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      formation-net:
+        ipv4_address: 172.28.0.5
+
+  # Package Manager Service
+  form-pack-manager:
+    image: formation/form-pack-manager:latest
+    container_name: formation-pack-manager
+    depends_on:
+      - form-state
+    ports:
+      - "3003:3003"
+    volumes:
+      - pack-data:/var/lib/formation/packs
+    environment:
+      - PACK_MANAGER_LOG_LEVEL=info
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3003/health", "||", "exit", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      formation-net:
+        ipv4_address: 172.28.0.6
+
+  # Network Service
+  formnet:
+    image: formation/formnet:latest
+    container_name: formation-network
+    depends_on:
+      - form-state
+    ports:
+      - "51820:51820/udp"  # WireGuard
+    volumes:
+      - net-data:/var/lib/formation/formnet
+    environment:
+      - FORMNET_LOG_LEVEL=info
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv4.conf.all.src_valid_mark=1
+    restart: unless-stopped
+    networks:
+      formation-net:
+        ipv4_address: 172.28.0.7
+
+  # P2P Service
+  form-p2p:
+    image: formation/form-p2p:latest
+    container_name: formation-p2p
+    depends_on:
+      - form-state
+    ports:
+      - "53333:53333"  # P2P API
+    environment:
+      - P2P_LOG_LEVEL=info
+      - P2P_STATE_URL=http://form-state:3004
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:53333/health", "||", "exit", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      formation-net:
+        ipv4_address: 172.28.0.8
+
+# Networks configuration
+networks:
+  formation-net:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.0.0/16
+
+# Volumes configuration
+volumes:
+  # DNS volumes
+  dns-data:
+    driver: local
+  
+  # State volumes
+  state-data:
+    driver: local
+  
+  # VM volumes
+  vm-images:
+    driver: local
+  kernel-data:
+    driver: local
+  
+  # Broker volumes
+  broker-data:
+    driver: local
+  
+  # Package manager volumes
+  pack-data:
+    driver: local
+  
+  # Network volumes
+  net-data:
+    driver: local
+  
+  # P2P volumes
+  p2p-data:
+    driver: local 
