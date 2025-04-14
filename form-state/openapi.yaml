@@ -1,0 +1,912 @@
+openapi: 3.0.3
+info:
+  title: Formation State API
+  description: |
+    API for the Formation State component - a vertically integrated 2-sided marketplace for AI Agents & Models.
+    This API provides access to the distributed state system, authentication, billing, and marketplace features.
+  version: 1.0.0
+  contact:
+    name: Formation Team
+    url: https://formation.cloud
+servers:
+  - url: https://api.formation.cloud/v1
+    description: Production API Server
+  - url: http://localhost:3004
+    description: Local Development Server
+
+# Security schemes
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JSON Web Token (JWT) authentication. 
+        Tokens must be obtained from the authentication provider and included in the Authorization header.
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: |
+        API Key authentication for developer access.
+        API Keys can be created through the account management endpoints.
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        details:
+          type: string
+          
+    # Authentication and Authorization
+    UserRole:
+      type: string
+      enum: [admin, developer, user]
+      
+    AuthorizationLevel:
+      type: string
+      enum: [owner, manager, operator, readonly]
+      
+    # Account and User schemas
+    Account:
+      type: object
+      properties:
+        address:
+          type: string
+          description: Ethereum-style address derived from the user's public key
+        name:
+          type: string
+          nullable: true
+        owned_instances:
+          type: array
+          items:
+            type: string
+        authorized_instances:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/AuthorizationLevel'
+        subscription:
+          $ref: '#/components/schemas/SubscriptionInfo'
+          nullable: true
+        usage:
+          $ref: '#/components/schemas/UsageTracker'
+          nullable: true
+        credits:
+          type: integer
+          format: int64
+        hired_agents:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: integer
+          format: int64
+        updated_at:
+          type: integer
+          format: int64
+          
+    # Billing schemas
+    SubscriptionTier:
+      type: string
+      enum: [free, pro, pro_plus, power, power_plus]
+      
+    SubscriptionStatus:
+      type: string
+      enum: [active, trial, past_due, canceled, expired, error]
+      
+    SubscriptionInfo:
+      type: object
+      properties:
+        stripe_customer_id:
+          type: string
+          nullable: true
+        stripe_subscription_id:
+          type: string
+          nullable: true
+        tier:
+          $ref: '#/components/schemas/SubscriptionTier'
+        status:
+          $ref: '#/components/schemas/SubscriptionStatus'
+        created_at:
+          type: string
+          format: date-time
+        current_period_start:
+          type: string
+          format: date-time
+        current_period_end:
+          type: string
+          format: date-time
+        auto_renew:
+          type: boolean
+        max_agents:
+          type: integer
+        inference_credits_per_period:
+          type: integer
+          format: int64
+          
+    UsageTracker:
+      type: object
+      properties:
+        current_period_credits_used:
+          type: integer
+          format: int64
+        token_usage:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/PeriodUsage'
+        model_usage:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ModelUsage'
+            
+    PeriodUsage:
+      type: object
+      properties:
+        tokens_consumed:
+          type: integer
+          format: int64
+        input_tokens:
+          type: integer
+          format: int64
+        output_tokens:
+          type: integer
+          format: int64
+        agent_requests:
+          type: integer
+          format: int64
+        last_activity:
+          type: string
+          format: date-time
+          
+    ModelUsage:
+      type: object
+      properties:
+        input_tokens:
+          type: integer
+          format: int64
+        output_tokens:
+          type: integer
+          format: int64
+        request_count:
+          type: integer
+          format: int64
+        last_used:
+          type: string
+          format: date-time
+      
+    # API Key schemas
+    ApiKeyScope:
+      type: string
+      enum: [read_only, read_write, admin]
+      
+    ApiKeyStatus:
+      type: string
+      enum: [active, revoked, expired]
+      
+    ApiKeyMetadata:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        scope:
+          $ref: '#/components/schemas/ApiKeyScope'
+        status:
+          $ref: '#/components/schemas/ApiKeyStatus'
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        description:
+          type: string
+          nullable: true
+          
+    CreateApiKeyRequest:
+      type: object
+      required:
+        - name
+        - scope
+      properties:
+        name:
+          type: string
+        scope:
+          $ref: '#/components/schemas/ApiKeyScope'
+        description:
+          type: string
+          nullable: true
+        expires_in_days:
+          type: integer
+          nullable: true
+          
+    CreateApiKeyResponse:
+      type: object
+      properties:
+        metadata:
+          $ref: '#/components/schemas/ApiKeyMetadata'
+        key:
+          type: string
+          description: The full API key (only returned once during creation)
+          
+    # AI Model schemas
+    ModelType:
+      type: string
+      enum: [LLM, Embedding, Multimodal, AudioProcessing, ImageGeneration, ComputerVision, Diffusion]
+      
+    ModelFramework:
+      type: string
+      enum: [PyTorch, TensorFlow, ONNX, JAX, CoreML, TensorRT]
+      
+    QuantizationType:
+      type: string
+      enum: [FP32, FP16, BF16, INT8, INT4, GPTQ, GGUF, AWQ, GGML]
+      
+    ModelLicense:
+      type: string
+      enum: [MIT, Apache2, GPL3, BSD, CC_BY, CC_BY_SA, CC_BY_NC, CC_BY_NC_SA, Proprietary]
+      
+    ModelIOMode:
+      type: string
+      enum: [TextToText, TextToImage, ImageToText, TextToAudio, AudioToText, ImageToImage]
+      
+    AIModel:
+      type: object
+      required:
+        - model_id
+        - name
+        - owner_id
+        - version
+        - description
+        - license
+        - model_type
+        - framework
+        - io_modes
+        - parameters
+        - formfile_template
+        - resource_requirements
+      properties:
+        model_id:
+          type: string
+        name:
+          type: string
+        owner_id:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        documentation:
+          type: string
+          nullable: true
+        license:
+          $ref: '#/components/schemas/ModelLicense'
+        model_type:
+          $ref: '#/components/schemas/ModelType'
+        framework:
+          $ref: '#/components/schemas/ModelFramework'
+        io_modes:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModelIOMode'
+        parameters:
+          type: integer
+          format: int64
+        quantization:
+          $ref: '#/components/schemas/QuantizationType'
+          nullable: true
+        context_length:
+          type: integer
+          nullable: true
+        formfile_template:
+          type: string
+        resource_requirements:
+          $ref: '#/components/schemas/ModelResourceRequirements'
+        price_per_1m_tokens:
+          type: integer
+          format: int64
+          nullable: true
+          
+    ModelResourceRequirements:
+      type: object
+      properties:
+        min_vcpus:
+          type: integer
+        recommended_vcpus:
+          type: integer
+        min_memory_mb:
+          type: integer
+          format: int64
+        recommended_memory_mb:
+          type: integer
+          format: int64
+        min_disk_gb:
+          type: integer
+          format: int64
+        recommended_disk_gb:
+          type: integer
+          format: int64
+        requires_gpu:
+          type: boolean
+        min_vram_gb:
+          type: integer
+          nullable: true
+          
+    ModelInferenceRequest:
+      type: object
+      required:
+        - input
+      properties:
+        input:
+          type: string
+        input_tokens:
+          type: integer
+          format: int64
+        max_tokens:
+          type: integer
+        temperature:
+          type: number
+          format: float
+          
+    ModelInferenceResponse:
+      type: object
+      properties:
+        output:
+          type: string
+        input_tokens:
+          type: integer
+          format: int64
+        output_tokens:
+          type: integer
+          format: int64
+        tokens_used:
+          type: integer
+          format: int64
+        credits_used:
+          type: integer
+          format: int64
+          
+    # AI Agent schemas
+    AgentType:
+      type: string
+      enum: [Chatbot, Assistant, DataAnalyst, CodeGenerator, ContentCreator, Researcher, AutomationAgent, MultiAgent, Copilot]
+      
+    AgentFramework:
+      type: string
+      enum: [LangChain, AutoGPT, CrewAI, LlamaIndex, BabyAGI, AgentGPT, FormationAgent, CustomRust, CustomPython, CustomJS]
+      
+    AgentRuntime:
+      type: string
+      enum: [Python, NodeJS, Rust, Go, Java, Docker, WebAssembly]
+      
+    AIAgent:
+      type: object
+      required:
+        - agent_id
+        - name
+        - owner_id
+        - version
+        - description
+        - license
+        - agent_type
+        - framework
+        - runtime
+        - formfile_template
+        - resource_requirements
+      properties:
+        agent_id:
+          type: string
+        name:
+          type: string
+        owner_id:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        documentation:
+          type: string
+          nullable: true
+        license:
+          $ref: '#/components/schemas/ModelLicense'
+        agent_type:
+          $ref: '#/components/schemas/AgentType'
+        framework:
+          $ref: '#/components/schemas/AgentFramework'
+        runtime:
+          $ref: '#/components/schemas/AgentRuntime'
+        compatible_model_types:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModelType'
+        preferred_models:
+          type: array
+          items:
+            type: string
+        formfile_template:
+          type: string
+        resource_requirements:
+          $ref: '#/components/schemas/AgentResourceRequirements'
+        price_per_request:
+          type: integer
+          format: int64
+          nullable: true
+          
+    AgentResourceRequirements:
+      type: object
+      properties:
+        min_vcpus:
+          type: integer
+        recommended_vcpus:
+          type: integer
+        min_memory_mb:
+          type: integer
+          format: int64
+        recommended_memory_mb:
+          type: integer
+          format: int64
+        min_disk_gb:
+          type: integer
+          format: int64
+        recommended_disk_gb:
+          type: integer
+          format: int64
+        requires_gpu:
+          type: boolean
+          
+    AgentHireRequest:
+      type: object
+      properties:
+        configuration:
+          type: object
+          description: Agent-specific configuration parameters
+          
+    AgentHireResponse:
+      type: object
+      properties:
+        session_id:
+          type: string
+        agent_id:
+          type: string
+        status:
+          type: string
+          enum: [starting, running, error]
+        credits_reserved:
+          type: integer
+          format: int64
+
+# Paths (API Endpoints)
+paths:
+  # Public endpoints (no authentication required)
+  /ping:
+    get:
+      summary: Health check endpoint
+      description: Returns a simple response indicating the API is reachable
+      operationId: ping
+      responses:
+        '200':
+          description: API is up and running
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+  
+  /bootstrap/full_state:
+    get:
+      summary: Get full state
+      description: Retrieves the complete state of the network (bootstrap use only)
+      operationId: getFullState
+      responses:
+        '200':
+          description: Full state retrieved successfully
+  
+  # User Management (JWT auth)
+  /user/create:
+    post:
+      summary: Create a new user
+      description: Creates a new user account in the system
+      operationId: createUser
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: User created successfully
+        '401':
+          description: Unauthorized
+  
+  /user/list:
+    get:
+      summary: List users
+      description: Lists all user accounts
+      operationId: listUsers
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Users list retrieved successfully
+        '401':
+          description: Unauthorized
+  
+  # Account Management (JWT auth)
+  /account/{address}/get:
+    get:
+      summary: Get account details
+      description: Retrieves account details for the specified address
+      operationId: getAccount
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Account retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '401':
+          description: Unauthorized
+        '404':
+          description: Account not found
+  
+  /account/create:
+    post:
+      summary: Create a new account
+      description: Creates a new account in the system
+      operationId: createAccount
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - address
+              properties:
+                address:
+                  type: string
+                name:
+                  type: string
+      responses:
+        '200':
+          description: Account created successfully
+        '401':
+          description: Unauthorized
+  
+  # API Key Management (JWT auth)
+  /api-keys:
+    get:
+      summary: List API keys
+      description: Lists all API keys associated with the authenticated account
+      operationId: listApiKeys
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: API keys retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ApiKeyMetadata'
+        '401':
+          description: Unauthorized
+  
+  /api-keys/create:
+    post:
+      summary: Create a new API key
+      description: Creates a new API key for the authenticated account
+      operationId: createApiKey
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateApiKeyRequest'
+      responses:
+        '200':
+          description: API key created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateApiKeyResponse'
+        '401':
+          description: Unauthorized
+  
+  /api-keys/{id}/revoke:
+    post:
+      summary: Revoke API key
+      description: Revokes the specified API key
+      operationId: revokeApiKey
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: API key revoked successfully
+        '401':
+          description: Unauthorized
+        '404':
+          description: API key not found
+  
+  # Billing and Subscription (JWT auth)
+  /billing/subscription:
+    get:
+      summary: Get subscription status
+      description: Retrieves the current subscription status
+      operationId: getSubscriptionStatus
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Subscription status retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionInfo'
+        '401':
+          description: Unauthorized
+  
+  /billing/usage:
+    get:
+      summary: Get usage statistics
+      description: Retrieves usage statistics for the authenticated account
+      operationId: getUsageStats
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Usage statistics retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageTracker'
+        '401':
+          description: Unauthorized
+  
+  /billing/credits/add:
+    post:
+      summary: Add credits
+      description: Adds credits to the authenticated account
+      operationId: addCredits
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - amount
+              properties:
+                amount:
+                  type: integer
+                  format: int64
+      responses:
+        '200':
+          description: Credits added successfully
+        '401':
+          description: Unauthorized
+  
+  # Model Management (API Key auth)
+  /models:
+    get:
+      summary: List models
+      description: Lists all available AI models
+      operationId: listModels
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Models retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AIModel'
+        '401':
+          description: Unauthorized
+  
+  /models/{id}:
+    get:
+      summary: Get model details
+      description: Retrieves details for the specified AI model
+      operationId: getModel
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Model retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIModel'
+        '401':
+          description: Unauthorized
+        '404':
+          description: Model not found
+  
+  /models/create:
+    post:
+      summary: Create a new model
+      description: Creates a new AI model
+      operationId: createModel
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AIModel'
+      responses:
+        '200':
+          description: Model created successfully
+        '401':
+          description: Unauthorized
+  
+  /models/{id}/inference:
+    post:
+      summary: Run model inference
+      description: Performs inference using the specified AI model
+      operationId: modelInference
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ModelInferenceRequest'
+      responses:
+        '200':
+          description: Inference completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelInferenceResponse'
+        '401':
+          description: Unauthorized
+        '402':
+          description: Payment Required - Insufficient credits
+        '404':
+          description: Model not found
+  
+  # Agent Management (API Key auth)
+  /agents:
+    get:
+      summary: List agents
+      description: Lists all available AI agents
+      operationId: listAgents
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Agents retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AIAgent'
+        '401':
+          description: Unauthorized
+  
+  /agents/{id}:
+    get:
+      summary: Get agent details
+      description: Retrieves details for the specified AI agent
+      operationId: getAgent
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Agent retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIAgent'
+        '401':
+          description: Unauthorized
+        '404':
+          description: Agent not found
+  
+  /agents/create:
+    post:
+      summary: Create a new agent
+      description: Creates a new AI agent
+      operationId: createAgent
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AIAgent'
+      responses:
+        '200':
+          description: Agent created successfully
+        '401':
+          description: Unauthorized
+  
+  /agents/{id}/hire:
+    post:
+      summary: Hire an agent
+      description: Hires the specified AI agent for the authenticated account
+      operationId: hireAgent
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentHireRequest'
+      responses:
+        '200':
+          description: Agent hired successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentHireResponse'
+        '401':
+          description: Unauthorized
+        '402':
+          description: Payment Required - Insufficient credits
+        '404':
+          description: Agent not found 
