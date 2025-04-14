@@ -1,0 +1,104 @@
+FROM ubuntu:22.04
+
+# Install system dependencies
+RUN apt-get update -y 
+RUN apt-get upgrade -y
+RUN apt-get install -y protobuf-compiler libprotobuf-dev build-essential \
+    clang llvm pkg-config iputils-ping wget curl \
+    linux-headers-$(uname -r) qemu-kvm libvirt-dev \
+    protobuf-compiler libprotobuf-dev libdbus-1-dev \
+    libudev-dev libfuse-dev libseccomp-dev cloud-utils \
+    libnetfilter-queue-dev libnl-3-dev libnl-route-3-dev \
+    zlib1g-dev libbpf-dev liburing-dev libssl-dev \
+    iproute2 bridge-utils ssh socat libguestfs-tools \
+    qemu-utils libnss3-tools mkcert \
+    # New dependencies for authentication and billing
+    libsqlite3-dev
+
+# Create required directories
+RUN mkdir -p /usr/local/bin
+RUN mkdir -p /var/lib/formation/formnet
+RUN mkdir -p /var/lib/formation/kernel
+RUN mkdir -p /var/lib/formation/vm-images
+RUN mkdir -p /var/lib/formation/marketplace
+RUN mkdir -p /var/lib/formation/db
+RUN mkdir -p /run/form-vm
+RUN mkdir -p /var/log/formation
+RUN mkdir -p /etc/formation/auth
+RUN mkdir -p /etc/formation/billing
+
+# Copy VPS kernel
+COPY ./artifacts/hypervisor-fw /var/lib/formation/kernel/hypervisor-fw
+
+# Copy DNS binary
+COPY ./target/release/form-dns /usr/local/bin/form-dns
+
+# Copy State binary with auth and billing support
+COPY ./target/release/form-state /usr/local/bin/form-state
+
+# Copy VM management binary
+COPY ./target/release/vmm-service /usr/local/bin/vmm-service
+
+# Copy message broker binary
+COPY ./target/release/form-broker /usr/local/bin/form-broker
+
+# Copy pack manager binary
+COPY ./target/release/form-pack-manager /usr/local/bin/form-pack-manager
+
+# Copy formnet binary
+COPY ./target/release/formnet /usr/local/bin/formnet
+
+# Copy P2P binary
+COPY ./target/release/form-p2p /usr/local/bin/form-p2p
+
+# Copy Node Metrics binary (newly added)
+COPY ./target/release/form-node-metrics /usr/local/bin/form-node-metrics
+
+# Copy run scripts
+COPY ./scripts/run-form-state.sh /usr/local/bin/run-form-state.sh
+COPY ./scripts/run-form-dns.sh /usr/local/bin/run-form-dns.sh
+COPY ./scripts/run-vmm-service.sh /usr/local/bin/run-vmm-service.sh
+COPY ./scripts/run-formnet.sh /usr/local/bin/run-formnet.sh
+COPY ./scripts/run-pack-manager.sh /usr/local/bin/run-pack-manager.sh
+COPY ./scripts/run-form-p2p.sh /usr/local/bin/run-form-p2p.sh
+COPY ./scripts/run-form-node-metrics.sh /usr/local/bin/run-form-node-metrics.sh
+
+# Copy entrypoint script
+COPY ./scripts/formation-marketplace-entrypoint.sh /entrypoint.sh
+
+# Make scripts executable
+RUN chmod +x /usr/local/bin/run-vmm-service.sh
+RUN chmod +x /usr/local/bin/run-formnet.sh
+RUN chmod +x /usr/local/bin/run-pack-manager.sh
+RUN chmod +x /usr/local/bin/run-form-state.sh
+RUN chmod +x /usr/local/bin/run-form-p2p.sh
+RUN chmod +x /usr/local/bin/run-form-dns.sh
+RUN chmod +x /usr/local/bin/run-form-node-metrics.sh
+RUN chmod +x /entrypoint.sh
+
+# Copy formnet CLI to provision VMs
+COPY ./target/release/formnet /var/lib/formation/formnet/formnet
+
+# Copy OpenAPI specification
+COPY ./form-state/openapi.yaml /var/lib/formation/marketplace/openapi.yaml
+
+# Copy default configuration files
+COPY ./form-state/.env.example /etc/formation/auth/.env.example
+
+# Expose API ports
+EXPOSE 3002  # vmm-service
+EXPOSE 3003  # form-pack-manager
+EXPOSE 3004  # form-state
+EXPOSE 3005  # form-node-metrics
+EXPOSE 53333 # form-p2p
+EXPOSE 51820 # formnet
+EXPOSE 443   # HTTPS for marketplace
+
+# Set environment variables
+ENV AUTH_MODE=production
+ENV MARKETPLACE_ENABLED=true
+ENV BILLING_ENABLED=true
+ENV API_KEYS_ENABLED=true
+
+WORKDIR /app
+ENTRYPOINT ["/entrypoint.sh"]
