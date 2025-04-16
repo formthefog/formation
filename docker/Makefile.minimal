@@ -74,7 +74,7 @@ formnet:
 		-t $(REGISTRY)/formnet:latest \
 		-t $(REGISTRY)/formnet:$(TAG) \
 		-t $(REGISTRY)/formnet:$(MAJOR_VERSION).$(MINOR_VERSION) \
-		-f ../form-net/formnet/Dockerfile \
+		-f ../form-net/Dockerfile \
 		..
 	@echo "✅ formnet image built successfully"
 
