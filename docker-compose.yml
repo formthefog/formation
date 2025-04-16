@@ -61,9 +61,14 @@ services:
       - vm-images:/var/lib/formation/vm-images
       - kernel-data:/var/lib/formation/kernel
       - /run/form-vm:/run/form-vm
+      - /lib/modules:/lib/modules:ro
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - VMM_LOG_LEVEL=info
       - VMM_STATE_URL=http://form-state:3004
+      # You'll need to customize these for your environment:
+      - SECRET_PATH=/var/lib/formation/secrets/config
+      - PASSWORD=your-secure-password
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3002/health", "||", "exit", "1"]
       interval: 30s
@@ -71,6 +76,19 @@ services:
       retries: 3
       start_period: 10s
     privileged: true
+    network_mode: "host" # Use host networking for better VM performance
+    devices:
+      - /dev/kvm
+      - /dev/vhost-net
+      - /dev/null 
+      - /dev/zero
+      - /dev/random
+      - /dev/urandom
+    tmpfs:
+      - /dev/hugepages:mode=1770
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv6.conf.all.forwarding=1
     restart: unless-stopped
     networks:
       formation-net:
@@ -86,6 +104,7 @@ services:
       - "3003:3003"
     volumes:
       - pack-data:/var/lib/formation/packs
+      - /var/run/docker.sock:/var/run/docker.sock  # Needed for image building
     environment:
       - PACK_MANAGER_LOG_LEVEL=info
     healthcheck:
@@ -94,6 +113,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
+    privileged: true  # Needed for image building
     restart: unless-stopped
     networks:
       formation-net:
@@ -152,4 +172,12 @@ volumes:
   
   # Network volumes
   net-data:
-    driver: local 
+    driver: local
+  
+  # Secrets volume (create this directory on your host)
+  secrets:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /path/to/your/secrets  # Update this path 
