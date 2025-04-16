@@ -1,10 +1,10 @@
 version: '3.8'
 
-# Formation platform docker-compose configuration
+# Formation platform minimal docker-compose configuration
 services:
   # DNS Service
   form-dns:
-    image: formation/form-dns:latest
+    image: formationai/form-dns:latest
     container_name: formation-dns
     ports:
       - "53:53/tcp"
@@ -27,7 +27,7 @@ services:
 
   # State Service
   form-state:
-    image: formation/form-state:latest
+    image: formationai/form-state:latest
     container_name: formation-state
     ports:
       - "3004:3004"
@@ -51,7 +51,7 @@ services:
 
   # Virtual Machine Manager Service
   vmm-service:
-    image: formation/vmm-service:latest
+    image: formationai/vmm-service:latest
     container_name: formation-vmm
     depends_on:
       - form-state
@@ -76,38 +76,9 @@ services:
       formation-net:
         ipv4_address: 172.28.0.4
 
-  # Message Broker Service
-  form-broker:
-    image: formation/form-broker:latest
-    container_name: formation-broker
-    depends_on:
-      - form-state
-    ports:
-      - "3005:3005"  # API
-      - "5672:5672"  # AMQP
-      - "1883:1883"  # MQTT
-    volumes:
-      - broker-data:/var/lib/formation/broker
-    environment:
-      - BROKER_LOG_LEVEL=info
-      - BROKER_STATE_URL=http://form-state:3004
-      - BROKER_API_PORT=3005
-      - BROKER_AMQP_PORT=5672
-      - BROKER_MQTT_PORT=1883
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3005/health", "||", "exit", "1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    restart: unless-stopped
-    networks:
-      formation-net:
-        ipv4_address: 172.28.0.5
-
   # Package Manager Service
   form-pack-manager:
-    image: formation/form-pack-manager:latest
+    image: formationai/form-pack-manager:latest
     container_name: formation-pack-manager
     depends_on:
       - form-state
@@ -130,7 +101,7 @@ services:
 
   # Network Service
   formnet:
-    image: formation/formnet:latest
+    image: formationai/formnet:latest
     container_name: formation-network
     depends_on:
       - form-state
@@ -149,28 +120,6 @@ services:
     networks:
       formation-net:
         ipv4_address: 172.28.0.7
-
-  # P2P Service
-  form-p2p:
-    image: formation/form-p2p:latest
-    container_name: formation-p2p
-    depends_on:
-      - form-state
-    ports:
-      - "53333:53333"  # P2P API
-    environment:
-      - P2P_LOG_LEVEL=info
-      - P2P_STATE_URL=http://form-state:3004
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:53333/health", "||", "exit", "1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    restart: unless-stopped
-    networks:
-      formation-net:
-        ipv4_address: 172.28.0.8
 
 # Networks configuration
 networks:
@@ -197,18 +146,10 @@ volumes:
   kernel-data:
     driver: local
   
-  # Broker volumes
-  broker-data:
-    driver: local
-  
   # Package manager volumes
   pack-data:
     driver: local
   
   # Network volumes
   net-data:
-    driver: local
-  
-  # P2P volumes
-  p2p-data:
     driver: local 

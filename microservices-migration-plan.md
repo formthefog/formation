@@ -104,26 +104,26 @@
 
 ## Phase 2: Admin Tool Development
 
-### 2.1 API Design & Planning
-- [ ] 2.1.1 Define requirements for admin tool
-  - [ ] List required management capabilities
-  - [ ] Define user roles and permissions
-  - [ ] Document security requirements
-- [ ] 2.1.2 Design admin API specification
-  - [ ] Define API endpoints
-  - [ ] Document request/response formats
-  - [ ] Create OpenAPI/Swagger specification
-  - [ ] Define error handling strategy
-- [ ] 2.1.3 Design authentication system
-  - [ ] Select authentication method
-  - [ ] Define token format and lifecycle
-  - [ ] Document key management
-  - [ ] Plan authorization mechanism
-- [ ] 2.1.4 Plan service discovery implementation
-  - [ ] Select service discovery approach
-  - [ ] Document service registration process
-  - [ ] Define health check requirements
-  - [ ] Plan fallback mechanisms
+### 2.1 API Design & Planning ✅
+- [x] 2.1.1 Define requirements for admin tool
+  - [x] List required management capabilities
+  - [x] Define user roles and permissions
+  - [x] Document security requirements
+- [x] 2.1.2 Design admin API specification
+  - [x] Define API endpoints
+  - [x] Document request/response formats
+  - [x] Create OpenAPI/Swagger specification
+  - [x] Define error handling strategy
+- [x] 2.1.3 Design authentication system
+  - [x] Select authentication method
+  - [x] Define token format and lifecycle
+  - [x] Document key management
+  - [x] Plan authorization mechanism
+- [x] 2.1.4 Plan service discovery implementation
+  - [x] Select service discovery approach
+  - [x] Document service registration process
+  - [x] Define health check requirements
+  - [x] Plan fallback mechanisms
 
 ### 2.2 Service Modifications
 - [ ] 2.2.1 Add startup conditioning to form-dns
