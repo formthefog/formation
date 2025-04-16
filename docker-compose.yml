@@ -11,9 +11,12 @@ services:
       - "53:53/udp"
     volumes:
       - dns-data:/var/lib/formation/dns
+      - secrets:/var/lib/formation/secrets:ro
     environment:
       - DNS_LOG_LEVEL=info
       - DNS_UPSTREAM_SERVERS=8.8.8.8,1.1.1.1
+      - SECRET_PATH=/var/lib/formation/secrets/config
+      - PASSWORD=${PASSWORD:-your-secure-password}
     healthcheck:
       test: ["CMD", "dig", "@localhost", "-p", "53", "localhost", "||", "exit", "1"]
       interval: 30s
@@ -33,11 +36,14 @@ services:
       - "3004:3004"
     volumes:
       - state-data:/var/lib/formation/db
+      - secrets:/var/lib/formation/secrets:ro
     environment:
       - STATE_LOG_LEVEL=info
       - STATE_DB_PATH=/var/lib/formation/db/formation.db
       - STATE_API_PORT=3004
       - AUTH_MODE=development
+      - SECRET_PATH=/var/lib/formation/secrets/config
+      - PASSWORD=${PASSWORD:-your-secure-password}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3004/health", "||", "exit", "1"]
       interval: 30s
@@ -63,12 +69,12 @@ services:
       - /run/form-vm:/run/form-vm
       - /lib/modules:/lib/modules:ro
       - /var/run/docker.sock:/var/run/docker.sock
+      - secrets:/var/lib/formation/secrets:ro
     environment:
       - VMM_LOG_LEVEL=info
       - VMM_STATE_URL=http://form-state:3004
-      # You'll need to customize these for your environment:
       - SECRET_PATH=/var/lib/formation/secrets/config
-      - PASSWORD=your-secure-password
+      - PASSWORD=${PASSWORD:-your-secure-password}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3002/health", "||", "exit", "1"]
       interval: 30s
@@ -105,8 +111,11 @@ services:
     volumes:
       - pack-data:/var/lib/formation/packs
       - /var/run/docker.sock:/var/run/docker.sock  # Needed for image building
+      - secrets:/var/lib/formation/secrets:ro
     environment:
       - PACK_MANAGER_LOG_LEVEL=info
+      - SECRET_PATH=/var/lib/formation/secrets/config
+      - PASSWORD=${PASSWORD:-your-secure-password}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3003/health", "||", "exit", "1"]
       interval: 30s
@@ -129,8 +138,11 @@ services:
       - "51820:51820/udp"  # WireGuard
     volumes:
       - net-data:/var/lib/formation/formnet
+      - secrets:/var/lib/formation/secrets:ro
     environment:
       - FORMNET_LOG_LEVEL=info
+      - SECRET_PATH=/var/lib/formation/secrets/config
+      - PASSWORD=${PASSWORD:-your-secure-password}
     cap_add:
       - NET_ADMIN
     sysctls:
