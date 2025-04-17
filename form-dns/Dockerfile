@@ -4,14 +4,14 @@ FROM ubuntu:22.04
 
 # Install runtime dependencies
 RUN apt-get update && \
-    apt-get install -y \
+    apt-get install -y --no-install-recommends \
+    ca-certificates \
+    libssl1.1 \
     dnsutils \
     bind9-utils \
     iputils-ping \
     systemd \
-    ca-certificates && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
 
 # Create required directories
 RUN mkdir -p /var/lib/formation/dns/zones && \

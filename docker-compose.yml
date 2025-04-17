@@ -6,44 +6,45 @@ services:
   form-dns:
     image: formationai/form-dns:latest
     container_name: formation-dns
-    ports:
-      - "53:53/tcp"
-      - "53:53/udp"
+    privileged: true
+    restart: unless-stopped
+    network_mode: host
     volumes:
       - dns-data:/var/lib/formation/dns
-      - secrets:/var/lib/formation/secrets:ro
+      - ./secrets/.operator-config.json:/etc/formation/operator-config.json
+      - /var/run/dbus:/var/run/dbus
+      - /etc/resolv.conf:/etc/resolv.conf
     environment:
       - DNS_LOG_LEVEL=info
-      - DNS_UPSTREAM_SERVERS=8.8.8.8,1.1.1.1
-      - SECRET_PATH=/var/lib/formation/secrets/config
-      - PASSWORD=${PASSWORD:-your-secure-password}
+      - DNS_API_PORT=5354
+      - DNS_ROOT_DOMAIN=formation
+      - DNS_STATE_URL=http://localhost:3004
+      - DNS_OPERATOR_CONFIG=/etc/formation/operator-config.json
+      - DNS_USE_RESOLVECTL=false
+    command: ["form-dns", "run", "--dns-port", "5354"]
     healthcheck:
-      test: ["CMD", "dig", "@localhost", "-p", "53", "localhost", "||", "exit", "1"]
-      interval: 30s
+      test: ["CMD", "dig", "@127.0.0.1", "-p", "5354", "formation"]
+      interval: 5s
       timeout: 10s
       retries: 3
-      start_period: 10s
-    restart: unless-stopped
-    networks:
-      formation-net:
-        ipv4_address: 172.28.0.2
 
   # State Service
   form-state:
     image: formationai/form-state:latest
     container_name: formation-state
-    ports:
-      - "3004:3004"
+    network_mode: host
     volumes:
       - state-data:/var/lib/formation/db
-      - secrets:/var/lib/formation/secrets:ro
+      - ./secrets/.operator-config.json:/etc/formation/operator-config.json
     environment:
       - STATE_LOG_LEVEL=info
       - STATE_DB_PATH=/var/lib/formation/db/formation.db
       - STATE_API_PORT=3004
+      - STATE_CONFIG_PATH=/etc/formation/operator-config.json
+      - STATE_PASSWORD=${FORMATION_PASSWORD:-formation-password}
       - AUTH_MODE=development
-      - SECRET_PATH=/var/lib/formation/secrets/config
-      - PASSWORD=${PASSWORD:-your-secure-password}
+      - DYNAMIC_JWKS_URL=https://app.dynamic.xyz/api/v0/sdk/3f53e601-17c7-419b-8a13-4c5e25c0bde9/.well-known/jwks
+    command: ["/usr/local/bin/form-state", "--config", "/etc/formation/operator-config.json", "--encrypted", "--password", "${FORMATION_PASSWORD:-formation-password}"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3004/health", "||", "exit", "1"]
       interval: 30s
@@ -51,9 +52,6 @@ services:
       retries: 3
       start_period: 10s
     restart: unless-stopped
-    networks:
-      formation-net:
-        ipv4_address: 172.28.0.3
 
   # Virtual Machine Manager Service
   vmm-service:
@@ -61,22 +59,25 @@ services:
     container_name: formation-vmm
     depends_on:
       - form-state
-    ports:
-      - "3002:3002"
+    network_mode: host
     volumes:
       - vm-images:/var/lib/formation/vm-images
       - kernel-data:/var/lib/formation/kernel
       - /run/form-vm:/run/form-vm
-      - /lib/modules:/lib/modules:ro
-      - /var/run/docker.sock:/var/run/docker.sock
-      - secrets:/var/lib/formation/secrets:ro
+      - ./secrets/.operator-config.json:/etc/formation/operator-config.json
     environment:
       - VMM_LOG_LEVEL=info
-      - VMM_STATE_URL=http://form-state:3004
-      - SECRET_PATH=/var/lib/formation/secrets/config
-      - PASSWORD=${PASSWORD:-your-secure-password}
+      - VMM_STATE_URL=http://localhost:3004
+      - VMM_API_PORT=3003
+      - VMM_CONFIG_PATH=/etc/formation/operator-config.json
+      - VMM_PASSWORD=${FORMATION_PASSWORD:-formation-password}
+      - VMM_KERNEL_PATH=/var/lib/formation/kernel/hypervisor-fw
+      - VMM_VM_DIR=/run/form-vm
+      - VMM_IMAGES_DIR=/var/lib/formation/vm-images
+      - RUST_BACKTRACE=1
+    command: ["vmm-service", "run"]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3002/health", "||", "exit", "1"]
+      test: ["CMD", "curl", "-f", "http://localhost:3003/health", "||", "exit", "1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -96,9 +97,6 @@ services:
       - net.ipv4.ip_forward=1
       - net.ipv6.conf.all.forwarding=1
     restart: unless-stopped
-    networks:
-      formation-net:
-        ipv4_address: 172.28.0.4
 
   # Package Manager Service
   form-pack-manager:
@@ -106,27 +104,27 @@ services:
     container_name: formation-pack-manager
     depends_on:
       - form-state
-    ports:
-      - "3003:3003"
+    network_mode: host
     volumes:
-      - pack-data:/var/lib/formation/packs
-      - /var/run/docker.sock:/var/run/docker.sock  # Needed for image building
-      - secrets:/var/lib/formation/secrets:ro
+      - pack-data:/var/lib/formation/pack-manager
+      - ./secrets/.operator-config.json:/etc/formation/pack-manager/config.json
     environment:
       - PACK_MANAGER_LOG_LEVEL=info
-      - SECRET_PATH=/var/lib/formation/secrets/config
-      - PASSWORD=${PASSWORD:-your-secure-password}
+      - PACK_MANAGER_PORT=8080
+      - PACK_MANAGER_INTERFACE=all
+      - PACK_MANAGER_CONFIG_PATH=/etc/formation/pack-manager/config.json
+      - PACK_MANAGER_PASSWORD=${FORMATION_PASSWORD:-formation-password}
+      - PACK_MANAGER_DATA_DIR=/var/lib/formation/pack-manager
+      - PACK_MANAGER_ENCRYPTED=true
+    command: ["form-pack-manager", "--interface", "all", "--port", "8080", "--config", "/etc/formation/pack-manager/config.json", "--password", "${FORMATION_PASSWORD:-formation-password}"]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3003/health", "||", "exit", "1"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health", "||", "exit", "1"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 10s
     privileged: true  # Needed for image building
     restart: unless-stopped
-    networks:
-      formation-net:
-        ipv4_address: 172.28.0.6
 
   # Network Service
   formnet:
@@ -134,33 +132,23 @@ services:
     container_name: formation-network
     depends_on:
       - form-state
-    ports:
-      - "51820:51820/udp"  # WireGuard
+    network_mode: host
     volumes:
-      - net-data:/var/lib/formation/formnet
-      - secrets:/var/lib/formation/secrets:ro
+      - net-data:/var/lib/formnet
+      - ./secrets/.operator-config.json:/etc/formnet/config.json
     environment:
       - FORMNET_LOG_LEVEL=info
-      - SECRET_PATH=/var/lib/formation/secrets/config
-      - PASSWORD=${PASSWORD:-your-secure-password}
+      - FORMNET_CONFIG_DIR=/etc/formnet
+      - FORMNET_DATA_DIR=/var/lib/formnet
+      - FORMNET_NETWORK_NAME=formnet
+      - FORMNET_SERVER_PORT=8080
+      - FORMNET_LISTEN_PORT=51820
+      - FORMNET_EXTERNAL_ENDPOINT=auto
+    command: ["formnet", "operator", "join", "--config-path", "/etc/formnet/config.json"]
     cap_add:
       - NET_ADMIN
-    sysctls:
-      - net.ipv4.ip_forward=1
-      - net.ipv4.conf.all.src_valid_mark=1
+    privileged: true
     restart: unless-stopped
-    networks:
-      formation-net:
-        ipv4_address: 172.28.0.7
-
-# Networks configuration
-networks:
-  formation-net:
-    driver: bridge
-    ipam:
-      driver: default
-      config:
-        - subnet: 172.28.0.0/16
 
 # Volumes configuration
 volumes:
