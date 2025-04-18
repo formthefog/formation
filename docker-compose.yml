@@ -40,14 +40,21 @@ services:
       - ./secrets:/etc/formation
       - /var/run/dbus:/var/run/dbus
       - /etc/resolv.conf:/etc/resolv.conf
+      - /etc/hosts:/etc/hosts
+      - ${HOME}/.config/formation/certs:${HOME}/.config/formation/certs
     environment:
-      - DNS_LOG_LEVEL=info
+      - DNS_LOG_LEVEL=trace
+      - RUST_LOG=trace
+      - RUST_BACKTRACE=full
       - DNS_PORT=53
       - STATE_URL=http://localhost:3004
       - WAIT_FOR_STATE=true
+    cap_add:
+      - NET_ADMIN
+      - SYS_PTRACE
     command: ["/usr/local/bin/run-form-dns.sh"]
     healthcheck:
-      test: ["CMD", "dig", "@127.0.0.1", "formation", "||", "exit", "1"]
+      test: ["CMD", "dig", "@localhost", "formation", "+short", "||", "exit", "1"]
       interval: 30s
       timeout: 10s
       retries: 3
