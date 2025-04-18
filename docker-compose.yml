@@ -60,6 +60,47 @@ services:
       retries: 3
       start_period: 10s
 
+  # Network Service
+  formnet:
+    image: formationai/formnet:latest
+    container_name: formation-network
+    depends_on:
+      - form-state
+      - form-dns
+    network_mode: host
+    volumes:
+      - net-data:/var/lib/formnet
+      - ./secrets:/etc/formnet
+      - ${HOME}/.config/formation/certs:${HOME}/.config/formation/certs
+    environment:
+      - FORMNET_LOG_LEVEL=${FORMNET_LOG_LEVEL:-debug}
+      - RUST_LOG=${FORMNET_RUST_LOG:-debug}
+      - RUST_BACKTRACE=${RUST_BACKTRACE:-1}
+      - FORMNET_CONFIG_DIR=/etc/formnet
+      - FORMNET_DATA_DIR=/var/lib/formnet
+      - FORMNET_NETWORK_NAME=${FORMNET_NETWORK_NAME:-formnet}
+      - FORMNET_SERVER_PORT=${FORMNET_SERVER_PORT:-8080}
+      - FORMNET_LISTEN_PORT=${FORMNET_LISTEN_PORT:-51820}
+      - FORMNET_EXTERNAL_ENDPOINT=${FORMNET_EXTERNAL_ENDPOINT:-auto}
+      - STATE_URL=${STATE_URL:-http://localhost:3004}
+      - SECRET_PATH=${SECRET_PATH:-/etc/formation/operator-config.json}
+      - PASSWORD=${PASSWORD:-formation-password}
+      - WAIT_FOR_STATE=true
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv4.conf.all.src_valid_mark=1
+    cap_add:
+      - NET_ADMIN
+    privileged: true
+    restart: unless-stopped
+    command: ["/usr/local/bin/run-formnet.sh"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health", "||", "exit", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
   # Virtual Machine Manager Service - Commented out for minimal startup
   # vmm-service:
   #   image: formationai/vmm-service:latest
@@ -132,30 +173,6 @@ services:
   #   privileged: true
   #   restart: unless-stopped
 
-  # Network Service - Commented out for minimal startup
-  # formnet:
-  #   image: formationai/formnet:latest
-  #   container_name: formation-network
-  #   depends_on:
-  #     - form-state
-  #   network_mode: host
-  #   volumes:
-  #     - net-data:/var/lib/formnet
-  #     - ./secrets:/etc/formnet
-  #   environment:
-  #     - FORMNET_LOG_LEVEL=info
-  #     - FORMNET_CONFIG_DIR=/etc/formnet
-  #     - FORMNET_DATA_DIR=/var/lib/formnet
-  #     - FORMNET_NETWORK_NAME=formnet
-  #     - FORMNET_SERVER_PORT=8080
-  #     - FORMNET_LISTEN_PORT=51820
-  #     - FORMNET_EXTERNAL_ENDPOINT=auto
-  #   command: ["formnet", "operator", "join", "--config-path", "/etc/formnet/operator-config.json"]
-  #   cap_add:
-  #     - NET_ADMIN
-  #   privileged: true
-  #   restart: unless-stopped
-
 # Volumes configuration
 volumes:
   # State volumes
@@ -166,6 +183,10 @@ volumes:
   dns-data:
     driver: local
   
+  # Network volumes
+  net-data:
+    driver: local
+
   # Commented out volumes for minimal setup
   # VM volumes
   # vm-images:
@@ -175,8 +196,4 @@ volumes:
   
   # Package manager volumes
   # pack-data:
-  #   driver: local
-  
-  # Network volumes
-  # net-data:
   #   driver: local
