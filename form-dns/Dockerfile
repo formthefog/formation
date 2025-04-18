@@ -10,19 +10,32 @@ RUN apt-get update && \
     dnsutils \
     bind9-utils \
     iputils-ping \
-    systemd \
+    iproute2 \
+    dnsmasq \
+    netcat \
     curl \
+    libnss3-tools \
+    wget \
     && rm -rf /var/lib/apt/lists/*
+
+RUN wget https://github.com/FiloSottile/mkcert/releases/download/v1.4.3/mkcert-v1.4.3-linux-amd64
+
+RUN mv mkcert-v1.4.3-linux-amd64 /usr/bin/mkcert
+
+RUN chmod +x /usr/bin/mkcert
+
 
 # Create required directories
 RUN mkdir -p /var/lib/formation/dns/zones && \
     mkdir -p /etc/formation/dns
 
 # Copy the pre-compiled binary
-COPY ./target/release/form-dns /usr/local/bin/
+COPY ./target/release/form-dns /usr/local/bin/form-dns
+
+COPY ./artifacts/resolvectl /usr/local/bin/resolvectl
 
 # Copy internal run script
-COPY ./scripts/run-form-dns.sh /usr/local/bin/
+COPY ./scripts/run-form-dns.sh /usr/local/bin/run-form-dns.sh
 RUN chmod +x /usr/local/bin/run-form-dns.sh
 
 # Expose DNS ports

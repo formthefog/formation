@@ -11,7 +11,8 @@ if [ -z "$PASSWORD" ]; then
 fi
 
 # Run form-state container
-docker run --rm --name formation-state -p 3004:3004 \
+docker run -d --rm --name formation-state -p 3004:3004 \
+  --network host \
   -v $(pwd)/state-data:/var/lib/formation/db \
   -v $(pwd)/secrets:/etc/formation \
   -e DB_PATH=/var/lib/formation/db/formation.db \
@@ -21,8 +22,3 @@ docker run --rm --name formation-state -p 3004:3004 \
   -e AUTH_MODE=development \
   -e DYNAMIC_JWKS_URL=$DYNAMIC_JWKS_URL \
   formationai/form-state:latest
-
-# Verify service is running
-echo "Checking form-state health..."
-sleep 5
-curl http://localhost:3004/health

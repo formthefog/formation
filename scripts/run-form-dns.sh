@@ -16,7 +16,7 @@ echo "State URL: $STATE_URL"
 # Check dependent services
 if [ ! -z "$WAIT_FOR_STATE" ] && [ "$WAIT_FOR_STATE" = "true" ]; then
     echo "Waiting for form-state service..."
-    until curl -s -f $STATE_URL/health >/dev/null 2>&1; do
+    until curl -s -f $STATE_URL/ping >/dev/null 2>&1; do
         echo "Waiting for form-state at $STATE_URL..."
         sleep 2
     done

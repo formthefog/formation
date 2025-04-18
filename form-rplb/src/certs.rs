@@ -138,6 +138,7 @@ pub fn load_certs(path: impl AsRef<Path>) -> std::io::Result<Vec<CertificateDer<
 }
 
 pub fn mkcert(domain: &str) -> std::io::Result<FormDomainCert> {
+    log::info!("attempting to make certs");
     let home = std::env::var("HOME").unwrap_or(".".to_string());
     let cert_output = PathBuf::from(home).join(CERT_OUTPUT_DIR);
     log::info!("Attempting to create cert output dir: {}", cert_output.display());
@@ -156,7 +157,11 @@ pub fn mkcert(domain: &str) -> std::io::Result<FormDomainCert> {
         return Err(std::io::Error::last_os_error())
     }
 
+    log::warn!("Loading certs");
     let certs = load_certs(cert_output.join(domain).with_extension("pem"))?;
+    log::warn!("Loaded certs");
+    log::warn!("Loading private key");
     let key = load_private_key(cert_output.join(&format!("{domain}-key")).with_extension("pem"))?;
+    log::warn!("Loaded private key");
     Ok(FormDomainCert::new(certs, key))
 }

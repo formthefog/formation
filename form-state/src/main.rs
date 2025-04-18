@@ -162,11 +162,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     log::info!("Built data store, running...");
     
-    let (tx, rx) = tokio::sync::broadcast::channel(1024);
+    let (tx, _rx) = tokio::sync::broadcast::channel(1024);
     
     // Always run in full mode, devnet feature controls queue behavior
     let handle = tokio::spawn(async move {
-        if let Err(e) = form_state::api::run(Arc::new(Mutex::new(datastore.unwrap())), rx).await {
+        if let Err(e) = form_state::api::run_api(Arc::new(Mutex::new(datastore.unwrap()))).await {
             eprintln!("Error running datastore: {e}");
         }
     });
