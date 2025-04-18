@@ -4,7 +4,7 @@
 set -e
 
 # Default configuration
-CONFIG_PATH=/etc/formation/operator-config.json
+CONFIG_PATH=/etc/formation/.operator-config.json
 DB_PATH=${DB_PATH:-/var/lib/formation/db/formation.db}
 DEV_MODE=${DEV_MODE:-false}
 
