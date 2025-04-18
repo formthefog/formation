@@ -1184,8 +1184,6 @@ impl DataStore {
         _n: Option<usize>,
     ) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error>> {
         // In devnet mode, the queue reader doesn't process any messages
-        log::info!("DEVNET MODE: Skipping queue read operation");
-        
         // Return an empty list since there are no messages to process in devnet mode
         Ok(Vec::new())
     }

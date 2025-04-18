@@ -21,6 +21,10 @@ COPY ./target/release/form-state /usr/local/bin/
 # Copy default configuration
 COPY ./form-state/.env.example /etc/formation/auth/.env.example
 
+COPY ./scripts/run-form-state.sh /usr/local/bin/run-form-state.sh
+
+RUN chmod +x /usr/local/bin/run-form-state.sh 
+
 # Expose API port
 EXPOSE 3004
 
@@ -33,4 +37,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
   CMD curl -f http://localhost:3004/health || exit 1
 
 # Run the service
-CMD ["/usr/local/bin/form-state"] 
+CMD ["/usr/local/bin/run-form-state.sh"] 
