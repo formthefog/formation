@@ -12,8 +12,8 @@ docker run --name formation-state -p 3004:3004 \
   -e STATE_DB_PATH=/var/lib/formation/db/formation.db \
   -e STATE_API_PORT=3004 \
   -e AUTH_MODE=development \
-  -e SECRET_PATH=/var/lib/formation/secrets/config \
-  -e PASSWORD=test-password \
+  -e SECRET_PATH=/var/lib/formation/secrets/.operator-config.json \
+  -e PASSWORD=$PASSWORD \
   formationai/form-state:latest
 
 # Verify service is running

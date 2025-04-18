@@ -162,14 +162,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     log::info!("Built data store, running...");
     
-    #[cfg(feature = "devnet")]
-    {
-        log::info!("Initializing mock data for DevNet mode");
-        let mut guard = datastore.as_ref().unwrap().lock().await;
-        guard.initialize_mock_data();
-        drop(guard);
-    }
-    
     let (tx, rx) = tokio::sync::broadcast::channel(1024);
     
     // Always run in full mode, devnet feature controls queue behavior
