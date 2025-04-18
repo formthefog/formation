@@ -14,7 +14,9 @@ RUN apt-get update && \
 RUN mkdir -p /var/lib/formation/formnet
 
 # Copy the pre-compiled binary
-COPY ./target/release/formnet /usr/local/bin/
+COPY ./target/release/formnet /usr/local/bin/formnet
+
+COPY ./scripts/run-formnet.sh /usr/local/bin/run-formnet.sh
 
 # Expose ports
 EXPOSE 51820/udp
@@ -23,4 +25,4 @@ EXPOSE 51820/udp
 ENV FORMENT_LOG_LEVEL=info
 
 # Run the service
-CMD ["/usr/local/bin/formnet"] 
+CMD ["/usr/local/bin/run-formnet.sh"] 

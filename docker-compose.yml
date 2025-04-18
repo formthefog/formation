@@ -61,8 +61,8 @@ services:
       start_period: 10s
 
   # Network Service
-  formnet:
-    image: formationai/formnet:latest
+  form-net:
+    image: formationai/form-net:latest
     container_name: formation-network
     depends_on:
       - form-state
@@ -70,7 +70,7 @@ services:
     network_mode: host
     volumes:
       - net-data:/var/lib/formnet
-      - ./secrets:/etc/formnet
+      - ./secrets:/etc/formation
       - ${HOME}/.config/formation/certs:${HOME}/.config/formation/certs
     environment:
       - FORMNET_LOG_LEVEL=${FORMNET_LOG_LEVEL:-debug}
@@ -83,12 +83,9 @@ services:
       - FORMNET_LISTEN_PORT=${FORMNET_LISTEN_PORT:-51820}
       - FORMNET_EXTERNAL_ENDPOINT=${FORMNET_EXTERNAL_ENDPOINT:-auto}
       - STATE_URL=${STATE_URL:-http://localhost:3004}
-      - SECRET_PATH=${SECRET_PATH:-/etc/formation/operator-config.json}
+      - SECRET_PATH=${SECRET_PATH:-/etc/formation/.operator-config.json}
       - PASSWORD=${PASSWORD:-formation-password}
       - WAIT_FOR_STATE=true
-    sysctls:
-      - net.ipv4.ip_forward=1
-      - net.ipv4.conf.all.src_valid_mark=1
     cap_add:
       - NET_ADMIN
     privileged: true
