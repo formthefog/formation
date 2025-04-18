@@ -9,6 +9,8 @@ use axum::{
     Json,
     extract::{Path, State},
     response::{Response, IntoResponse},
+    http::{Request, StatusCode},
+    body::Body,
 };
 use crate::helpers::{
     network::*, 
@@ -31,6 +33,42 @@ use tokio::net::TcpListener;
 use serde_json::json;
 use crate::billing::middleware::EligibilityError;
 
+// Simple node auth middleware to verify formation node key
+// This will later be enhanced to check against trusted_operator_keys
+async fn node_auth_middleware(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    req: Request<Body>,
+    next: middleware::Next,
+) -> Result<Response, StatusCode> {
+    // Check if we're running in dev mode with internal endpoints allowed
+    let allow_internal = std::env::var("ALLOW_INTERNAL_ENDPOINTS")
+        .unwrap_or_default()
+        .to_lowercase() == "true";
+        
+    if allow_internal {
+        // In dev mode, skip authentication
+        log::info!("Dev mode: Skipping node authentication");
+        return Ok(next.run(req).await);
+    }
+    
+    // Extract the node key from header
+    let node_key = req.headers()
+        .get("X-Formation-Node-Key")
+        .and_then(|v| v.to_str().ok());
+        
+    if let Some(key) = node_key {
+        // TODO: Implement proper key verification against trusted_operator_keys
+        log::info!("Node authentication received with key: {}", key);
+        
+        // For now, accept any key in the header (will be restricted later)
+        return Ok(next.run(req).await);
+    }
+    
+    // No key provided
+    log::warn!("Node authentication failed: No X-Formation-Node-Key header");
+    Err(StatusCode::UNAUTHORIZED)
+}
+
 pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
     // Create the JWKS manager for JWT validation
     let jwks_manager = Arc::new(JWKSManager::new());
@@ -46,13 +84,10 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/bootstrap/cidr_state", get(cidr_state))
         .route("/bootstrap/assoc_state", get(assoc_state));
     
-    // Define account/user management routes (JWT authentication required)
-    let account_api = Router::new()
-        // Authentication test endpoints
-        .route("/auth/test", get(protected_handler))
-        .route("/projects/:project_id/resources/:resource_id", get(project_resource_handler))
-        
-        // User management
+    // Define network/infrastructure routes (node authentication)
+    // These routes are only accessible to Formation nodes via operator key auth
+    let network_api = Router::new()
+        // User management for networking
         .route("/user/create", post(create_user))
         .route("/user/update", post(update_user))
         .route("/user/disable", post(disable_user))
@@ -89,6 +124,27 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/dns/:node_ip/list", get(get_dns_records_by_node_ip))
         .route("/dns/list", get(list_dns_records))
         
+        // Node management
+        .route("/node/create", post(create_node))
+        .route("/node/update", post(update_node))
+        .route("/node/:id/get", get(get_node))
+        .route("/node/:id/delete", post(delete_node))
+        .route("/node/list", get(list_nodes))
+        .route("/node/:id/metrics", get(get_node_metrics))
+        .route("/node/list/metrics", get(list_node_metrics))
+        
+        // Apply node authentication middleware
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            node_auth_middleware,
+        ));
+    
+    // Define account/user management routes (JWT authentication required)
+    let account_api = Router::new()
+        // Authentication test endpoints
+        .route("/auth/test", get(protected_handler))
+        .route("/projects/:project_id/resources/:resource_id", get(project_resource_handler))
+        
         // Instance management
         .route("/instance/create", post(create_instance))
         .route("/instance/update", post(update_instance))
@@ -100,15 +156,6 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/instance/list/metrics", get(list_instance_metrics))
         .route("/cluster/:build_id/metrics", get(get_cluster_metrics))
         .route("/instance/list", get(list_instances))
-        
-        // Node management
-        .route("/node/create", post(create_node))
-        .route("/node/update", post(update_node))
-        .route("/node/:id/get", get(get_node))
-        .route("/node/:id/delete", post(delete_node))
-        .route("/node/list", get(list_nodes))
-        .route("/node/:id/metrics", get(get_node_metrics))
-        .route("/node/list/metrics", get(list_node_metrics))
         
         // Account management
         .route("/account/:address/get", get(get_account))
@@ -165,6 +212,7 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
     // Merge all route groups into a single router
     Router::new()
         .merge(public_api)
+        .merge(network_api)  // Add the node-authenticated network API
         .merge(account_api)
         .merge(api_routes)
         .with_state(state)

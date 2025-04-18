@@ -12,11 +12,13 @@ services:
       - ./secrets:/etc/formation
     environment:
       - DB_PATH=/var/lib/formation/db/formation.db
-      - SECRET_PATH=${SECRET_PATH:-/etc/formation/operator-config.json}
+      - SECRET_PATH=${SECRET_PATH:-/etc/formation/.operator-config.json}
       - PASSWORD=${PASSWORD:-formation-password}
       - DEV_MODE=true
       - AUTH_MODE=development
       - DYNAMIC_JWKS_URL=${DYNAMIC_JWKS_URL:-https://app.dynamic.xyz/api/v0/sdk/3f53e601-17c7-419b-8a13-4c5e25c0bde9/.well-known/jwks}
+      - TRUSTED_OPERATOR_KEYS=${TRUSTED_OPERATOR_KEYS:-}
+      - ALLOW_INTERNAL_ENDPOINTS=true
     command: ["/usr/local/bin/run-form-state.sh"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3004/health", "||", "exit", "1"]
@@ -76,7 +78,7 @@ services:
       - FORMNET_LOG_LEVEL=${FORMNET_LOG_LEVEL:-debug}
       - RUST_LOG=${FORMNET_RUST_LOG:-debug}
       - RUST_BACKTRACE=${RUST_BACKTRACE:-1}
-      - FORMNET_CONFIG_DIR=/etc/formnet
+      - FORMNET_CONFIG_DIR=/etc/formation
       - FORMNET_DATA_DIR=/var/lib/formnet
       - FORMNET_NETWORK_NAME=${FORMNET_NETWORK_NAME:-formnet}
       - FORMNET_SERVER_PORT=${FORMNET_SERVER_PORT:-8080}
@@ -86,6 +88,7 @@ services:
       - SECRET_PATH=${SECRET_PATH:-/etc/formation/.operator-config.json}
       - PASSWORD=${PASSWORD:-formation-password}
       - WAIT_FOR_STATE=true
+      - API_KEY=${API_KEY:-}
     cap_add:
       - NET_ADMIN
     privileged: true
