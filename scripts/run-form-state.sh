@@ -4,13 +4,12 @@
 set -e
 
 # Default configuration
-CONFIG_PATH=${CONFIG_PATH:-/etc/formation/operator-config.json}
+CONFIG_PATH=/etc/formation/operator-config.json
 DB_PATH=${DB_PATH:-/var/lib/formation/db/formation.db}
-PASSWORD=${PASSWORD:-formation-password}
 DEV_MODE=${DEV_MODE:-false}
 
 echo "Starting form-state service..."
-echo "Config path: $CONFIG_PATH"
+echo "Config path: $SECRET_PATH"
 echo "Database path: $DB_PATH"
 echo "Dev mode: $DEV_MODE"
 
@@ -22,7 +21,7 @@ if [ ! -d "$DB_DIR" ]; then
 fi
 
 # Build command arguments
-ARGS="--config $CONFIG_PATH -p $PASSWORD --encrypted"
+ARGS="-C $CONFIG_PATH -p $PASSWORD --encrypted"
 
 # Add dev mode flag if enabled
 if [ "$DEV_MODE" = "true" ]; then

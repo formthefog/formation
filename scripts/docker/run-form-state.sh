@@ -4,23 +4,25 @@
 mkdir -p $(pwd)/state-data
 mkdir -p $(pwd)/secrets
 
+# Check for a password in the environment
+if [ -z "$PASSWORD" ]; then
+  echo "WARNING: No PASSWORD environment variable set. Using default password."
+  echo "For production use, please set the PASSWORD environment variable."
+fi
+
 # Run form-state container
-docker run --name formation-state -p 3004:3004 \
+docker run --rm --name formation-state -p 3004:3004 \
   -v $(pwd)/state-data:/var/lib/formation/db \
-  -v $(pwd)/secrets:/var/lib/formation/secrets:ro \
-  -e STATE_LOG_LEVEL=info \
-  -e STATE_DB_PATH=/var/lib/formation/db/formation.db \
-  -e STATE_API_PORT=3004 \
-  -e AUTH_MODE=development \
-<<<<<<< Updated upstream
-  -e SECRET_PATH=/var/lib/formation/secrets/.operator-config.json \
-=======
-  -e SECRET_PATH=/var/lib/formation/secrets/config \
->>>>>>> Stashed changes
+  -v $(pwd)/secrets:/etc/formation \
+  -e DB_PATH=/var/lib/formation/db/formation.db \
+  -e SECRET_PATH=$SECRET_PATH \
   -e PASSWORD=$PASSWORD \
+  -e DEV_MODE=true \
+  -e AUTH_MODE=development \
+  -e DYNAMIC_JWKS_URL=$DYNAMIC_JWKS_URL \
   formationai/form-state:latest
 
 # Verify service is running
 echo "Checking form-state health..."
 sleep 5
-curl http://localhost:3004/health 
+curl http://localhost:3004/health
