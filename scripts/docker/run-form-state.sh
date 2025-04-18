@@ -12,7 +12,11 @@ docker run --name formation-state -p 3004:3004 \
   -e STATE_DB_PATH=/var/lib/formation/db/formation.db \
   -e STATE_API_PORT=3004 \
   -e AUTH_MODE=development \
+<<<<<<< Updated upstream
   -e SECRET_PATH=/var/lib/formation/secrets/.operator-config.json \
+=======
+  -e SECRET_PATH=/var/lib/formation/secrets/config \
+>>>>>>> Stashed changes
   -e PASSWORD=$PASSWORD \
   formationai/form-state:latest
 

@@ -12,6 +12,9 @@ RUN apt-get update && \
 RUN mkdir -p /var/lib/formation/db && \
     mkdir -p /etc/formation/auth
 
+# Add cache bust argument to invalidate cache for binary copy
+ARG CACHE_BUST=1
+
 # Copy the pre-compiled binary
 COPY ./target/release/form-state /usr/local/bin/
 

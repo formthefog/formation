@@ -17,15 +17,27 @@ REGISTRY ?= formationai
 # TAG: Specific tag used, derived from VERSION.
 TAG ?= $(VERSION)
 
+# FEATURES: Rust features to include when building binaries
+FEATURES ?= 
+
+# CACHE_BUST: Used to invalidate Docker cache when needed
+CACHE_BUST ?= $(shell date +%s)
+
 # --- Config ---
 # List of minimal services
 SERVICES = form-dns form-state vmm-service form-pack-manager formnet
 
-.PHONY: all $(SERVICES) clean push help
+.PHONY: all $(SERVICES) clean push help build-form-state
 
 # --- Targets ---
 # Build all images
 all: $(SERVICES)
+
+# Build form-state binary with specified features
+build-form-state:
+	@echo "Building form-state binary with features: $(FEATURES)"
+	@cd .. && cargo build --release $(if $(FEATURES),--features "$(FEATURES)",)
+	@echo "✅ form-state binary built successfully"
 
 # Build individual service images
 form-dns:
@@ -38,9 +50,10 @@ form-dns:
 		..
 	@echo "✅ form-dns image built successfully"
 
-form-state:
+form-state: build-form-state
 	@echo "Building form-state image"
 	@docker build \
+		--build-arg CACHE_BUST=$(CACHE_BUST) \
 		-t $(REGISTRY)/form-state:latest \
 		-t $(REGISTRY)/form-state:$(TAG) \
 		-t $(REGISTRY)/form-state:$(MAJOR_VERSION).$(MINOR_VERSION) \
@@ -106,6 +119,7 @@ help:
 	@echo "Available targets:"
 	@echo "  all                Build images for minimal services: $(SERVICES)"
 	@echo "  <service_name>     Build image for a specific service (e.g., make form-dns)"
+	@echo "  build-form-state   Build the form-state binary with specified features"
 	@echo "  clean              Remove all locally built Formation images tagged with registry '$(REGISTRY)'"
 	@echo "  push               Build and push all images to registry '$(REGISTRY)'"
 	@echo "  help               Show this help message"
@@ -113,4 +127,6 @@ help:
 	@echo "Available variables:"
 	@echo "  VERSION=x.y.z      Set specific version tag (default: $(VERSION))"
 	@echo "  REGISTRY=name      Set registry/organization prefix (default: $(REGISTRY))"
+	@echo "  FEATURES=feature1,feature2   Set Rust features for binary builds (default: none)"
+	@echo "  CACHE_BUST=value   Set a value to invalidate Docker cache (default: current timestamp)"
 	@echo "" 
