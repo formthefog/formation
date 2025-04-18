@@ -26,31 +26,32 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  # DNS Service - Commented out for minimal startup
-  # form-dns:
-  #   image: formationai/form-dns:latest
-  #   container_name: formation-dns
-  #   privileged: true
-  #   restart: unless-stopped
-  #   network_mode: host
-  #   volumes:
-  #     - dns-data:/var/lib/formation/dns
-  #     - ./secrets:/etc/formation
-  #     - /var/run/dbus:/var/run/dbus
-  #     - /etc/resolv.conf:/etc/resolv.conf
-  #   environment:
-  #     - DNS_LOG_LEVEL=info
-  #     - DNS_API_PORT=5354
-  #     - DNS_ROOT_DOMAIN=formation
-  #     - DNS_STATE_URL=http://localhost:3004
-  #     - DNS_OPERATOR_CONFIG=/etc/formation/operator-config.json
-  #     - DNS_USE_RESOLVECTL=false
-  #   command: ["form-dns", "run", "--dns-port", "5354"]
-  #   healthcheck:
-  #     test: ["CMD", "dig", "@127.0.0.1", "-p", "5354", "formation"]
-  #     interval: 5s
-  #     timeout: 10s
-  #     retries: 3
+  # DNS Service
+  form-dns:
+    image: formationai/form-dns:latest
+    container_name: formation-dns
+    depends_on:
+      - form-state
+    privileged: true
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - dns-data:/var/lib/formation/dns
+      - ./secrets:/etc/formation
+      - /var/run/dbus:/var/run/dbus
+      - /etc/resolv.conf:/etc/resolv.conf
+    environment:
+      - DNS_LOG_LEVEL=info
+      - DNS_PORT=53
+      - STATE_URL=http://localhost:3004
+      - WAIT_FOR_STATE=true
+    command: ["/usr/local/bin/run-form-dns.sh"]
+    healthcheck:
+      test: ["CMD", "dig", "@127.0.0.1", "formation", "||", "exit", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
   # Virtual Machine Manager Service - Commented out for minimal startup
   # vmm-service:
@@ -154,11 +155,11 @@ volumes:
   state-data:
     driver: local
   
-  # Commented out volumes for minimal setup
   # DNS volumes
-  # dns-data:
-  #   driver: local
+  dns-data:
+    driver: local
   
+  # Commented out volumes for minimal setup
   # VM volumes
   # vm-images:
   #   driver: local
