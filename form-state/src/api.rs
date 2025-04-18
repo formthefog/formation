@@ -34,7 +34,6 @@ use serde_json::json;
 use crate::billing::middleware::EligibilityError;
 
 // Simple node auth middleware to verify formation node key
-// This will later be enhanced to check against trusted_operator_keys
 async fn node_auth_middleware(
     State(state): State<Arc<Mutex<DataStore>>>,
     req: Request<Body>,
@@ -57,11 +56,43 @@ async fn node_auth_middleware(
         .and_then(|v| v.to_str().ok());
         
     if let Some(key) = node_key {
-        // TODO: Implement proper key verification against trusted_operator_keys
-        log::info!("Node authentication received with key: {}", key);
+        // Get trusted operator keys from environment variable
+        let trusted_keys = std::env::var("TRUSTED_OPERATOR_KEYS")
+            .unwrap_or_default();
+            
+        // Split comma-separated list of keys
+        let trusted_keys: Vec<&str> = trusted_keys
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+            
+        // If no trusted keys are configured, log a warning but allow the request in non-production
+        if trusted_keys.is_empty() {
+            log::warn!("No TRUSTED_OPERATOR_KEYS configured in environment. This is insecure in production!");
+            
+            // Check if we're in production
+            let is_production = std::env::var("ENVIRONMENT")
+                .unwrap_or_default()
+                .to_lowercase() == "production";
+                
+            if is_production {
+                log::error!("Rejecting node authentication in production with no trusted keys configured");
+                return Err(StatusCode::UNAUTHORIZED);
+            } else {
+                log::warn!("Allowing request despite missing trusted keys (non-production environment)");
+                return Ok(next.run(req).await);
+            }
+        }
         
-        // For now, accept any key in the header (will be restricted later)
-        return Ok(next.run(req).await);
+        // Verify the key against trusted keys
+        if trusted_keys.contains(&key) {
+            log::info!("Node authentication successful with key: {}", key);
+            return Ok(next.run(req).await);
+        } else {
+            log::warn!("Node authentication failed: Invalid key provided");
+            return Err(StatusCode::UNAUTHORIZED);
+        }
     }
     
     // No key provided
