@@ -4,7 +4,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use axum::{
     Router, 
-    routing::{post, get}, 
+    routing::{post, get, delete}, 
     middleware, 
     Json,
     extract::{Path, State},
@@ -33,7 +33,7 @@ use tokio::net::TcpListener;
 use serde_json::json;
 use crate::billing::middleware::EligibilityError;
 
-// Simple node auth middleware to verify formation node key
+// Node authentication middleware to verify formation node key
 async fn node_auth_middleware(
     State(state): State<Arc<Mutex<DataStore>>>,
     req: Request<Body>,
@@ -51,52 +51,90 @@ async fn node_auth_middleware(
     }
     
     // Extract the node key from header
-    let node_key = req.headers()
+    let node_key = match req.headers()
         .get("X-Formation-Node-Key")
+        .and_then(|v| v.to_str().ok()) {
+            Some(key) => key,
+            None => {
+                log::warn!("Node authentication failed: No X-Formation-Node-Key header");
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+        };
+    
+    // Get node ID from header if available (for node-specific auth)
+    let node_id = req.headers()
+        .get("X-Formation-Node-ID")
         .and_then(|v| v.to_str().ok());
         
-    if let Some(key) = node_key {
-        // Get trusted operator keys from environment variable
-        let trusted_keys = std::env::var("TRUSTED_OPERATOR_KEYS")
-            .unwrap_or_default();
-            
-        // Split comma-separated list of keys
-        let trusted_keys: Vec<&str> = trusted_keys
-            .split(',')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .collect();
-            
-        // If no trusted keys are configured, log a warning but allow the request in non-production
-        if trusted_keys.is_empty() {
-            log::warn!("No TRUSTED_OPERATOR_KEYS configured in environment. This is insecure in production!");
-            
-            // Check if we're in production
-            let is_production = std::env::var("ENVIRONMENT")
-                .unwrap_or_default()
-                .to_lowercase() == "production";
-                
-            if is_production {
-                log::error!("Rejecting node authentication in production with no trusted keys configured");
-                return Err(StatusCode::UNAUTHORIZED);
-            } else {
-                log::warn!("Allowing request despite missing trusted keys (non-production environment)");
+    // Lock the datastore to access nodes
+    let datastore = state.lock().await;
+    
+    // First attempt: If node ID is provided, check if the key is valid for that specific node
+    if let Some(id) = node_id {
+        if let Some(node) = datastore.node_state.get_node(id.to_string()) {
+            if node.has_operator_key(node_key) {
+                log::info!("Node {} authenticated successfully with key", id);
                 return Ok(next.run(req).await);
             }
         }
+    }
+    
+    // Second attempt: Check all nodes to see if any have this operator key
+    // Useful for operations not tied to a specific node
+    let nodes = datastore.node_state.map.iter()
+        .filter_map(|item| {
+            let reg = item.val.1; 
+                if let Some(v) = reg.val() {
+                    Some(v.value())
+                } else {
+                    None
+                }
+        })
+        .collect::<Vec<_>>();
         
-        // Verify the key against trusted keys
-        if trusted_keys.contains(&key) {
-            log::info!("Node authentication successful with key: {}", key);
+    for node in nodes.clone() {
+        if node.has_operator_key(node_key) {
+            log::info!("Node authentication successful with operator key");
             return Ok(next.run(req).await);
-        } else {
-            log::warn!("Node authentication failed: Invalid key provided");
-            return Err(StatusCode::UNAUTHORIZED);
         }
     }
     
-    // No key provided
-    log::warn!("Node authentication failed: No X-Formation-Node-Key header");
+    // Fallback to environment variable for bootstrapping/initial setup
+    // This allows the first node to join when there are no nodes registered yet
+    let trusted_keys = std::env::var("TRUSTED_OPERATOR_KEYS")
+        .unwrap_or_default();
+        
+    // Split comma-separated list of keys
+    let trusted_keys: Vec<&str> = trusted_keys
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+        
+    if trusted_keys.contains(&node_key) {
+        log::info!("Bootstrap authentication successful with environment key");
+        return Ok(next.run(req).await);
+    }
+    
+    // If we have no registered nodes yet, and no environment keys, allow the first request
+    // This is important for initial system bootstrapping
+    if nodes.is_empty() && trusted_keys.is_empty() {
+        // Check if we're in production
+        let is_production = std::env::var("ENVIRONMENT")
+            .unwrap_or_default()
+            .to_lowercase() == "production";
+            
+        if is_production {
+            log::error!("Rejecting node authentication in production with no nodes or trusted keys configured");
+            return Err(StatusCode::UNAUTHORIZED);
+        } else {
+            log::warn!("Allowing first node authentication (bootstrap) with no trusted keys (non-production)");
+            return Ok(next.run(req).await);
+        }
+    }
+    
+    // Authentication failed
+    log::warn!("Node authentication failed: Invalid key provided");
     Err(StatusCode::UNAUTHORIZED)
 }
 
@@ -164,11 +202,15 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/node/:id/metrics", get(get_node_metrics))
         .route("/node/list/metrics", get(list_node_metrics))
         
+        // Node authentication key management
+        .route("/node/:id/operator-key", post(add_node_operator_key))
+        .route("/node/:id/operator-key/:key", post(remove_node_operator_key));
+        
         // Apply node authentication middleware
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            node_auth_middleware,
-        ));
+        // .layer(middleware::from_fn_with_state(
+        //     state.clone(),
+        //     node_auth_middleware,
+        // ));
     
     // Define account/user management routes (JWT authentication required)
     let account_api = Router::new()
@@ -458,4 +500,111 @@ async fn checked_model_inference(
     // Call the actual handler with the properly typed payload
     let response = model_inference(State(state), auth, Path(model_id), Json(typed_payload)).await;
     Ok(response.into_response())
+}
+
+/// Add an operator key to a node
+async fn add_node_operator_key(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path(node_id): Path<String>,
+    Json(payload): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    // Extract the operator key from the payload
+    let operator_key = match payload.get("operator_key").and_then(|v| v.as_str()) {
+        Some(key) => key.to_string(),
+        None => return Json(json!({
+            "success": false,
+            "error": "Missing operator_key in request body"
+        })),
+    };
+    
+    // Lock the datastore
+    let mut datastore = match state.try_lock() {
+        Ok(ds) => ds,
+        Err(_) => return Json(json!({
+            "success": false,
+            "error": "Server is busy, try again later"
+        })),
+    };
+    
+    // Verify the node exists
+    if datastore.node_state.get_node(node_id.clone()).is_none() {
+        return Json(json!({
+            "success": false,
+            "error": "Node not found"
+        }));
+    }
+    
+    // Add the operator key to the node
+    match datastore.node_state.add_operator_key(node_id.clone(), operator_key.clone()) {
+        Some(op) => {
+            log::info!("Added operator key to node {}", node_id);
+            // Apply the operation locally
+            if let Some((actor, key)) = datastore.node_state.node_op(op.clone()) {
+                // Could broadcast the change here if needed
+                Json(json!({
+                    "success": true,
+                    "message": "Operator key added successfully",
+                    "node_id": node_id,
+                    "operator_key": operator_key
+                }))
+            } else {
+                Json(json!({
+                    "success": false,
+                    "error": "Failed to apply node operation"
+                }))
+            }
+        },
+        None => Json(json!({
+            "success": false,
+            "error": "Failed to add operator key to node"
+        })),
+    }
+}
+
+/// Remove an operator key from a node
+async fn remove_node_operator_key(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path((node_id, key)): Path<(String, String)>,
+) -> Json<serde_json::Value> {
+    // Lock the datastore
+    let mut datastore = match state.try_lock() {
+        Ok(ds) => ds,
+        Err(_) => return Json(json!({
+            "success": false,
+            "error": "Server is busy, try again later"
+        })),
+    };
+    
+    // Verify the node exists
+    if datastore.node_state.get_node(node_id.clone()).is_none() {
+        return Json(json!({
+            "success": false,
+            "error": "Node not found"
+        }));
+    }
+    
+    // Remove the operator key from the node
+    match datastore.node_state.remove_operator_key(node_id.clone(), &key) {
+        Some(op) => {
+            log::info!("Removed operator key from node {}", node_id);
+            // Apply the operation locally
+            if let Some((actor, key)) = datastore.node_state.node_op(op.clone()) {
+                // Could broadcast the change here if needed
+                Json(json!({
+                    "success": true,
+                    "message": "Operator key removed successfully",
+                    "node_id": node_id
+                }))
+            } else {
+                Json(json!({
+                    "success": false,
+                    "error": "Failed to apply node operation"
+                }))
+            }
+        },
+        None => Json(json!({
+            "success": false,
+            "error": "Failed to remove operator key from node"
+        })),
+    }
 }

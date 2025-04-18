@@ -20,7 +20,8 @@ pub struct Node {
     pub capacity: NodeCapacity,
     pub metrics: NodeMetrics,
     pub metadata: NodeMetadata,
-    pub host: Host
+    pub host: Host,
+    pub operator_keys: Vec<String> // Array of operator keys that can authenticate this node
 }
 
 impl Default for Node {
@@ -37,7 +38,8 @@ impl Default for Node {
             capacity: Default::default(),
             metrics: Default::default(),
             metadata: Default::default(),
-            host: Host::Domain(Default::default())
+            host: Host::Domain(Default::default()),
+            operator_keys: Vec::new()
         }
     }
 }
@@ -85,6 +87,24 @@ impl Node {
 
     pub fn metadata(&self) -> &NodeMetadata {
         &self.metadata
+    }
+
+    pub fn operator_keys(&self) -> &[String] {
+        &self.operator_keys
+    }
+    
+    pub fn has_operator_key(&self, key: &str) -> bool {
+        self.operator_keys.contains(&key.to_string())
+    }
+    
+    pub fn add_operator_key(&mut self, key: String) {
+        if !self.operator_keys.contains(&key) {
+            self.operator_keys.push(key);
+        }
+    }
+    
+    pub fn remove_operator_key(&mut self, key: &str) {
+        self.operator_keys.retain(|k| k != key);
     }
 }
 
@@ -279,6 +299,30 @@ impl NodeState {
         if let Some(reg) = self.map.get(&key).val {
             if let Some(v) = reg.val() {
                 return Some(v.value());
+            }
+        }
+        None
+    }
+
+    /// Add an operator key to a node
+    pub fn add_operator_key(&mut self, node_id: String, key: String) -> Option<NodeOp> {
+        if let Some(node_reg) = self.map.get(&node_id).val {
+            if let Some(node_val) = node_reg.val() {
+                let mut node = node_val.value();
+                node.add_operator_key(key);
+                return Some(self.update_node_local(node));
+            }
+        }
+        None
+    }
+    
+    /// Remove an operator key from a node
+    pub fn remove_operator_key(&mut self, node_id: String, key: &str) -> Option<NodeOp> {
+        if let Some(node_reg) = self.map.get(&node_id).val {
+            if let Some(node_val) = node_reg.val() {
+                let mut node = node_val.value();
+                node.remove_operator_key(key);
+                return Some(self.update_node_local(node));
             }
         }
         None
