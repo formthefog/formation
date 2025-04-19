@@ -109,29 +109,62 @@ impl DatabasePeer<String, CrdtMap> {
         }
 
         log::info!("ip is assignable");
-        let request = Self::build_peer_queue_request(PeerRequest::Join(contents.clone()))
-            .map_err(|_| ServerError::InvalidQuery)?;
+        
+        #[cfg(feature = "devnet")]
+        {
+            // Direct API call to form-state for devnet
+            log::info!("Devnet mode: Using direct API call for peer creation");
+            let peer_request = PeerRequest::Join(contents.clone());
+            
+            let resp = reqwest::Client::new()
+                .post("http://127.0.0.1:3004/user/create")
+                .json(&peer_request)
+                .send()
+                .await.map_err(|e| {
+                    log::error!("API request failed: {}", e);
+                    ServerError::InvalidQuery
+                })?
+                .json::<Response<Peer<String>>>()
+                .await.map_err(|e| {
+                    log::error!("Failed to parse API response: {}", e);
+                    ServerError::NotFound
+                })?;
 
-        log::info!("Writing create peer to queue...");
-        let resp = reqwest::Client::new()
-            .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
-            .json(&request)
-            .send()
-            .await.map_err(|_| ServerError::NotFound)?
-            .json::<QueueResponse>()
-            .await.map_err(|_| ServerError::NotFound)?;
+            match resp {
+                Response::Success(Success::Some(peer)) => {
+                    return Ok(peer.into());
+                }
+                _ => return Err(ServerError::NotFound),
+            }
+        }
 
-        let id = contents.name.to_string();
-        let db_peer = DatabasePeer {
-            inner: Peer {
-                id,
-                contents,
-            },
-            marker: PhantomData,
-        };
-        match resp {
-            QueueResponse::OpSuccess => Ok(db_peer),
-            _ => Err(ServerError::NotFound),
+        #[cfg(not(feature = "devnet"))]
+        {
+            // Original queue-based implementation
+            let request = Self::build_peer_queue_request(PeerRequest::Join(contents.clone()))
+                .map_err(|_| ServerError::InvalidQuery)?;
+
+            log::info!("Writing create peer to queue...");
+            let resp = reqwest::Client::new()
+                .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
+                .json(&request)
+                .send()
+                .await.map_err(|_| ServerError::NotFound)?
+                .json::<QueueResponse>()
+                .await.map_err(|_| ServerError::NotFound)?;
+
+            let id = contents.name.to_string();
+            let db_peer = DatabasePeer {
+                inner: Peer {
+                    id,
+                    contents,
+                },
+                marker: PhantomData,
+            };
+            match resp {
+                QueueResponse::OpSuccess => Ok(db_peer),
+                _ => Err(ServerError::NotFound),
+            }
         }
     }
 
@@ -167,25 +200,57 @@ impl DatabasePeer<String, CrdtMap> {
             ..self.contents.clone()
         };
 
-        let request = Self::build_peer_queue_request(PeerRequest::Update(new_contents.clone()))
-            .map_err(|_| ServerError::InvalidQuery)?;
+        #[cfg(feature = "devnet")]
+        {
+            // Direct API call to form-state for devnet
+            log::info!("Devnet mode: Using direct API call for peer update");
+            let peer_request = PeerRequest::Update(new_contents.clone());
+            
+            let resp = reqwest::Client::new()
+                .post("http://127.0.0.1:3004/user/update")
+                .json(&peer_request)
+                .send()
+                .await.map_err(|e| {
+                    log::error!("API request failed: {}", e);
+                    ServerError::InvalidQuery
+                })?
+                .json::<Response<Peer<String>>>()
+                .await.map_err(|e| {
+                    log::error!("Failed to parse API response: {}", e);
+                    ServerError::NotFound
+                })?;
 
-        let resp = reqwest::Client::new()
-            .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
-            .json(&request)
-            .send()
-            .await.map_err(|_| ServerError::NotFound)?
-            .json::<QueueResponse>()
-            .await.map_err(|_| ServerError::NotFound)?;
-
-        match resp {
-            QueueResponse::OpSuccess => {
-                self.contents = new_contents;
-                Ok(())
-            },
-            _ => Err(ServerError::NotFound),
+            match resp {
+                Response::Success(_) => {
+                    self.contents = new_contents;
+                    return Ok(());
+                }
+                _ => return Err(ServerError::NotFound),
+            }
         }
 
+        #[cfg(not(feature = "devnet"))]
+        {
+            // Original queue-based implementation
+            let request = Self::build_peer_queue_request(PeerRequest::Update(new_contents.clone()))
+                .map_err(|_| ServerError::InvalidQuery)?;
+
+            let resp = reqwest::Client::new()
+                .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
+                .json(&request)
+                .send()
+                .await.map_err(|_| ServerError::NotFound)?
+                .json::<QueueResponse>()
+                .await.map_err(|_| ServerError::NotFound)?;
+
+            match resp {
+                QueueResponse::OpSuccess => {
+                    self.contents = new_contents;
+                    Ok(())
+                },
+                _ => Err(ServerError::NotFound),
+            }
+        }
     }
 
     pub async fn disable(id: String) -> Result<(), ServerError> {
@@ -210,22 +275,54 @@ impl DatabasePeer<String, CrdtMap> {
             ..peer_contents.clone()
         };
 
-        let request = Self::build_peer_queue_request(PeerRequest::Update(new_contents.clone()))
-            .map_err(|_| ServerError::InvalidQuery)?;
+        #[cfg(feature = "devnet")]
+        {
+            // Direct API call to form-state for devnet
+            log::info!("Devnet mode: Using direct API call for peer disable");
+            let peer_request = PeerRequest::Update(new_contents.clone());
+            
+            let resp = reqwest::Client::new()
+                .post("http://127.0.0.1:3004/user/disable")
+                .json(&peer_request)
+                .send()
+                .await.map_err(|e| {
+                    log::error!("API request failed: {}", e);
+                    ServerError::InvalidQuery
+                })?
+                .json::<Response<Peer<String>>>()
+                .await.map_err(|e| {
+                    log::error!("Failed to parse API response: {}", e);
+                    ServerError::NotFound
+                })?;
 
-        let resp = reqwest::Client::new()
-            .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
-            .json(&request)
-            .send()
-            .await.map_err(|_| ServerError::NotFound)?
-            .json::<QueueResponse>()
-            .await.map_err(|_| ServerError::NotFound)?;
+            match resp {
+                Response::Success(_) => {
+                    return Ok(());
+                }
+                _ => return Err(ServerError::NotFound),
+            }
+        }
 
-        match resp {
-            QueueResponse::OpSuccess => {
-                Ok(())
-            },
-            _ => Err(ServerError::NotFound),
+        #[cfg(not(feature = "devnet"))]
+        {
+            // Original queue-based implementation
+            let request = Self::build_peer_queue_request(PeerRequest::Update(new_contents.clone()))
+                .map_err(|_| ServerError::InvalidQuery)?;
+
+            let resp = reqwest::Client::new()
+                .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
+                .json(&request)
+                .send()
+                .await.map_err(|_| ServerError::NotFound)?
+                .json::<QueueResponse>()
+                .await.map_err(|_| ServerError::NotFound)?;
+
+            match resp {
+                QueueResponse::OpSuccess => {
+                    Ok(())
+                },
+                _ => Err(ServerError::NotFound),
+            }
         }
     }
 
@@ -235,27 +332,59 @@ impl DatabasePeer<String, CrdtMap> {
             ..self.contents.clone()
         };
 
-        log::info!("Building peer queue request to update peer as redeemed");
-        let request = Self::build_peer_queue_request(PeerRequest::Update(new_contents.clone()))
-            .map_err(|_| ServerError::InvalidQuery)?;
+        #[cfg(feature = "devnet")]
+        {
+            // Direct API call to form-state for devnet
+            log::info!("Devnet mode: Using direct API call for peer redeem");
+            let peer_request = PeerRequest::Update(new_contents.clone());
+            
+            let resp = reqwest::Client::new()
+                .post("http://127.0.0.1:3004/user/redeem")
+                .json(&peer_request)
+                .send()
+                .await.map_err(|e| {
+                    log::error!("API request failed: {}", e);
+                    ServerError::InvalidQuery
+                })?
+                .json::<Response<Peer<String>>>()
+                .await.map_err(|e| {
+                    log::error!("Failed to parse API response: {}", e);
+                    ServerError::NotFound
+                })?;
 
-        log::info!("Sending queue request {:?} to queue", request);
-        let resp = reqwest::Client::new()
-            .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
-            .json(&request)
-            .send()
-            .await.map_err(|_| ServerError::NotFound)?
-            .json::<QueueResponse>()
-            .await.map_err(|_| ServerError::NotFound)?;
+            match resp {
+                Response::Success(_) => {
+                    return Ok(());
+                }
+                _ => return Err(ServerError::NotFound),
+            }
+        }
 
-        match resp {
-            QueueResponse::OpSuccess => {
-                log::info!("Response OpSuccess");
-                Ok(())
-            },
-            _ => {
-                log::error!("Response was error...");
-                return Err(ServerError::NotFound)
+        #[cfg(not(feature = "devnet"))]
+        {
+            // Original queue-based implementation
+            log::info!("Building peer queue request to update peer as redeemed");
+            let request = Self::build_peer_queue_request(PeerRequest::Update(new_contents.clone()))
+                .map_err(|_| ServerError::InvalidQuery)?;
+
+            log::info!("Sending queue request {:?} to queue", request);
+            let resp = reqwest::Client::new()
+                .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
+                .json(&request)
+                .send()
+                .await.map_err(|_| ServerError::NotFound)?
+                .json::<QueueResponse>()
+                .await.map_err(|_| ServerError::NotFound)?;
+
+            match resp {
+                QueueResponse::OpSuccess => {
+                    log::info!("Response OpSuccess");
+                    Ok(())
+                },
+                _ => {
+                    log::error!("Response was error...");
+                    return Err(ServerError::NotFound)
+                }
             }
         }
     }
@@ -334,16 +463,45 @@ impl DatabasePeer<String, CrdtMap> {
     }
 
     pub async fn delete_expired_invites() -> Result<(), ServerError> {
-        let resp = reqwest::Client::new()
-            .get("http://127.0.0.1:3004/user/delete_expired")
-            .send()
-            .await.map_err(|_| ServerError::NotFound)?
-            .json::<Response<Peer<String>>>()
-            .await.map_err(|_| ServerError::NotFound)?;
+        #[cfg(feature = "devnet")]
+        {
+            // Direct API call to form-state for devnet
+            log::info!("Devnet mode: Using direct API call for deleting expired invites");
+            
+            let resp = reqwest::Client::new()
+                .post("http://127.0.0.1:3004/user/delete_expired")
+                .json(&serde_json::json!({})) // Empty body for this endpoint
+                .send()
+                .await.map_err(|e| {
+                    log::error!("API request failed: {}", e);
+                    ServerError::InvalidQuery
+                })?
+                .json::<Response<Peer<String>>>()
+                .await.map_err(|e| {
+                    log::error!("Failed to parse API response: {}", e);
+                    ServerError::NotFound
+                })?;
 
-        match resp {
-            Response::Success(Success::List(_)) => Ok(()),
-            _ => Err(ServerError::NotFound)
+            match resp {
+                Response::Success(_) => Ok(()),
+                _ => Err(ServerError::NotFound)
+            }
+        }
+
+        #[cfg(not(feature = "devnet"))]
+        {
+            // Original direct API call implementation since this doesn't use the queue
+            let resp = reqwest::Client::new()
+                .get("http://127.0.0.1:3004/user/delete_expired")
+                .send()
+                .await.map_err(|_| ServerError::NotFound)?
+                .json::<Response<Peer<String>>>()
+                .await.map_err(|_| ServerError::NotFound)?;
+
+            match resp {
+                Response::Success(Success::List(_)) => Ok(()),
+                _ => Err(ServerError::NotFound)
+            }
         }
     }
 }
