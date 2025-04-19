@@ -1,0 +1,12 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+DRY: Don't Repeat Yourself.
+
+Always check the codebase before implementing a task to make sure the work we are about to do needs to be done and has not been done before.
+
+Write code in a way that it can be reused in the future for other things that it might apply to if possible, sometimes it is not possible.
+
+Check the codebase to make sure that the task you are working on has not been completed yet before implementing it.

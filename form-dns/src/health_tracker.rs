@@ -121,7 +121,7 @@ impl HealthTracker {
     
     /// Fetch nodes from form-state API
     async fn fetch_nodes(&self) -> Result<Vec<NodeHeartbeat>, Box<dyn std::error::Error + Send + Sync>> {
-        let url = format!("{}/api/nodes", self.form_state_api);
+        let url = format!("{}/node/list", self.form_state_api);
         let response = self.http_client
             .get(&url)
             .send()

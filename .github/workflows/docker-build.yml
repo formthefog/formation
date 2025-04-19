@@ -1,0 +1,93 @@
+name: Docker Build
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'form-*/Dockerfile'
+      - 'form-*/vmm-service/Dockerfile'
+      - 'form-net/Dockerfile'
+      - 'docker/Makefile'
+      - 'docker/health-checks/**'
+      - 'docker/test-containers.sh'
+  pull_request:
+    branches: [ main, master ]
+    paths:
+      - 'form-*/Dockerfile'
+      - 'form-*/vmm-service/Dockerfile'
+      - 'form-net/Dockerfile'
+      - 'docker/Makefile'
+      - 'docker/health-checks/**'
+      - 'docker/test-containers.sh'
+  # Allow manual trigger
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Needed for VERSION from git describe
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker images
+        working-directory: ./docker
+        run: |
+          make all
+      
+      - name: List built images
+        run: |
+          docker images | grep formation
+
+      # Uncomment the following sections if you want to push to a Docker registry
+      # - name: Login to Docker Hub
+      #   uses: docker/login-action@v3
+      #   with:
+      #     username: ${{ secrets.DOCKERHUB_USERNAME }}
+      #     password: ${{ secrets.DOCKERHUB_TOKEN }}
+      
+      # - name: Push Docker images
+      #   working-directory: ./docker
+      #   run: |
+      #     make push
+
+  test:
+    name: Test Docker Images
+    needs: build
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        service: [form-dns, form-state, vmm-service, form-broker, form-pack-manager, formnet, form-p2p]
+      fail-fast: false  # Continue testing other services if one fails
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Run single service
+        working-directory: ./docker
+        run: |
+          chmod +x test-containers.sh
+          ./test-containers.sh run ${{ matrix.service }}
+          
+      - name: Wait for service to start
+        run: sleep 10
+        
+      - name: Test service health
+        working-directory: ./docker
+        run: |
+          chmod +x health-checks/run-all-checks.sh
+          ./health-checks/run-all-checks.sh -v -s ${{ matrix.service }}
+      
+      - name: Clean up service
+        if: always()  # Run even if previous steps failed
+        working-directory: ./docker
+        run: |
+          ./test-containers.sh clean ${{ matrix.service }} 

@@ -1,0 +1,1366 @@
+openapi: 3.0.3
+info:
+  title: Formation Admin API
+  description: API specification for Formation platform administration
+  version: 1.0.0
+  contact:
+    name: Formation Platform Team
+    url: https://formation.local/contact
+  license:
+    name: Proprietary
+    url: https://formation.local/license
+
+servers:
+  - url: 'https://admin.formation.local/api/v1'
+    description: Production environment
+  - url: 'https://admin-dev.formation.local/api/v1'
+    description: Development environment
+
+tags:
+  - name: Authentication
+    description: User authentication operations
+  - name: Users
+    description: User management operations
+  - name: Services
+    description: Service management operations
+  - name: Configuration
+    description: Configuration management operations
+  - name: Monitoring
+    description: System monitoring operations
+  - name: Logs
+    description: Log retrieval and management operations
+  - name: Health
+    description: API health check
+
+paths:
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Check API health
+      description: Returns the health status of the API
+      operationId: getHealth
+      responses:
+        '200':
+          description: API is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: API is unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/login:
+    post:
+      tags:
+        - Authentication
+      summary: User login
+      description: Authenticates a user and returns a JWT token
+      operationId: loginUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Successful login
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/refresh:
+    post:
+      tags:
+        - Authentication
+      summary: Refresh token
+      description: Refreshes an existing JWT token
+      operationId: refreshToken
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Token refreshed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          description: Invalid or expired token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/logout:
+    post:
+      tags:
+        - Authentication
+      summary: User logout
+      description: Invalidates the user's current token
+      operationId: logoutUser
+      security:
+        - BearerAuth: []
+      responses:
+        '204':
+          description: Successfully logged out
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /users:
+    get:
+      tags:
+        - Users
+      summary: List users
+      description: Returns a list of all users
+      operationId: getUsers
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/LimitParam'
+        - name: role
+          in: query
+          description: Filter users by role
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of users
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsersResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      tags:
+        - Users
+      summary: Create user
+      description: Creates a new user
+      operationId: createUser
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+      responses:
+        '201':
+          description: User created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: User already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /users/{userId}:
+    get:
+      tags:
+        - Users
+      summary: Get user
+      description: Returns a specific user by ID
+      operationId: getUser
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          description: User ID
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: User details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      tags:
+        - Users
+      summary: Update user
+      description: Updates an existing user
+      operationId: updateUser
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          description: User ID
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserRequest'
+      responses:
+        '200':
+          description: User updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags:
+        - Users
+      summary: Delete user
+      description: Deletes a user
+      operationId: deleteUser
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          description: User ID
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: User deleted successfully
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /services:
+    get:
+      tags:
+        - Services
+      summary: List services
+      description: Returns a list of all services
+      operationId: getServices
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/LimitParam'
+        - name: status
+          in: query
+          description: Filter by service status
+          required: false
+          schema:
+            type: string
+            enum: [running, stopped, error, unknown]
+      responses:
+        '200':
+          description: List of services
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServicesResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /services/{serviceId}:
+    get:
+      tags:
+        - Services
+      summary: Get service
+      description: Returns details of a specific service
+      operationId: getService
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: serviceId
+          in: path
+          description: Service ID
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Service details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Service not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /services/{serviceId}/status:
+    get:
+      tags:
+        - Services
+      summary: Get service status
+      description: Returns the current status of a service
+      operationId: getServiceStatus
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: serviceId
+          in: path
+          description: Service ID
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Service status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceStatusResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Service not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /services/{serviceId}/start:
+    post:
+      tags:
+        - Services
+      summary: Start service
+      description: Starts a service
+      operationId: startService
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: serviceId
+          in: path
+          description: Service ID
+          required: true
+          schema:
+            type: string
+      responses:
+        '202':
+          description: Service start initiated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceStatusResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Service not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Service already running
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /services/{serviceId}/stop:
+    post:
+      tags:
+        - Services
+      summary: Stop service
+      description: Stops a service
+      operationId: stopService
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: serviceId
+          in: path
+          description: Service ID
+          required: true
+          schema:
+            type: string
+      responses:
+        '202':
+          description: Service stop initiated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceStatusResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Service not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Service already stopped
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /services/{serviceId}/restart:
+    post:
+      tags:
+        - Services
+      summary: Restart service
+      description: Restarts a service
+      operationId: restartService
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: serviceId
+          in: path
+          description: Service ID
+          required: true
+          schema:
+            type: string
+      responses:
+        '202':
+          description: Service restart initiated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceStatusResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Service not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /services/{serviceId}/logs:
+    get:
+      tags:
+        - Logs
+      summary: Get service logs
+      description: Returns logs for a specific service
+      operationId: getServiceLogs
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: serviceId
+          in: path
+          description: Service ID
+          required: true
+          schema:
+            type: string
+        - name: start
+          in: query
+          description: Start timestamp (ISO8601)
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: end
+          in: query
+          description: End timestamp (ISO8601)
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          description: Maximum number of log entries
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10000
+            default: 100
+        - name: level
+          in: query
+          description: Minimum log level
+          required: false
+          schema:
+            type: string
+            enum: [debug, info, warn, error]
+            default: info
+      responses:
+        '200':
+          description: Service logs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogsResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Service not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /services/{serviceId}/config:
+    get:
+      tags:
+        - Configuration
+      summary: Get service configuration
+      description: Returns the configuration for a specific service
+      operationId: getServiceConfig
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: serviceId
+          in: path
+          description: Service ID
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Service configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Service not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      tags:
+        - Configuration
+      summary: Update service configuration
+      description: Updates the configuration for a specific service
+      operationId: updateServiceConfig
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: serviceId
+          in: path
+          description: Service ID
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfigUpdateRequest'
+      responses:
+        '200':
+          description: Configuration updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigResponse'
+        '400':
+          description: Invalid configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Service not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /services/{serviceId}/metrics:
+    get:
+      tags:
+        - Monitoring
+      summary: Get service metrics
+      description: Returns metrics for a specific service
+      operationId: getServiceMetrics
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: serviceId
+          in: path
+          description: Service ID
+          required: true
+          schema:
+            type: string
+        - name: start
+          in: query
+          description: Start timestamp (ISO8601)
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: end
+          in: query
+          description: End timestamp (ISO8601)
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: metrics
+          in: query
+          description: Metrics to include (comma-separated)
+          required: false
+          schema:
+            type: string
+            default: 'cpu,memory,disk,network'
+        - name: interval
+          in: query
+          description: Sampling interval in seconds
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 3600
+            default: 60
+      responses:
+        '200':
+          description: Service metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Service not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /system/metrics:
+    get:
+      tags:
+        - Monitoring
+      summary: Get system metrics
+      description: Returns system-wide metrics
+      operationId: getSystemMetrics
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: start
+          in: query
+          description: Start timestamp (ISO8601)
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: end
+          in: query
+          description: End timestamp (ISO8601)
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: metrics
+          in: query
+          description: Metrics to include (comma-separated)
+          required: false
+          schema:
+            type: string
+            default: 'cpu,memory,disk,network'
+        - name: interval
+          in: query
+          description: Sampling interval in seconds
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 3600
+            default: 60
+      responses:
+        '200':
+          description: System metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemMetricsResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    PageParam:
+      name: page
+      in: query
+      description: Page number
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    LimitParam:
+      name: limit
+      in: query
+      description: Number of items per page
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy]
+        version:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        code:
+          type: integer
+        details:
+          type: object
+
+    LoginRequest:
+      type: object
+      required:
+        - username
+        - password
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+        twoFactorCode:
+          type: string
+
+    LoginResponse:
+      type: object
+      required:
+        - token
+        - expiresAt
+      properties:
+        token:
+          type: string
+        refreshToken:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+        user:
+          $ref: '#/components/schemas/UserDetails'
+
+    UserDetails:
+      type: object
+      required:
+        - id
+        - username
+        - role
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        email:
+          type: string
+          format: email
+        firstName:
+          type: string
+        lastName:
+          type: string
+        role:
+          type: string
+          enum: [super_admin, service_admin, monitoring, developer]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        lastLoginAt:
+          type: string
+          format: date-time
+
+    UsersResponse:
+      type: object
+      required:
+        - users
+        - total
+      properties:
+        users:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserDetails'
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+
+    UserResponse:
+      type: object
+      required:
+        - user
+      properties:
+        user:
+          $ref: '#/components/schemas/UserDetails'
+
+    CreateUserRequest:
+      type: object
+      required:
+        - username
+        - password
+        - email
+        - role
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 50
+        password:
+          type: string
+          minLength: 8
+        email:
+          type: string
+          format: email
+        firstName:
+          type: string
+        lastName:
+          type: string
+        role:
+          type: string
+          enum: [super_admin, service_admin, monitoring, developer]
+        permissions:
+          type: array
+          items:
+            type: string
+
+    UpdateUserRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        firstName:
+          type: string
+        lastName:
+          type: string
+        role:
+          type: string
+          enum: [super_admin, service_admin, monitoring, developer]
+        password:
+          type: string
+          minLength: 8
+        permissions:
+          type: array
+          items:
+            type: string
+
+    ServiceDetails:
+      type: object
+      required:
+        - id
+        - name
+        - status
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        displayName:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [running, stopped, error, unknown]
+        version:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        healthcheck:
+          type: object
+          properties:
+            status:
+              type: string
+              enum: [passing, failing, unknown]
+            lastCheckedAt:
+              type: string
+              format: date-time
+            message:
+              type: string
+        endpoints:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              protocol:
+                type: string
+              port:
+                type: integer
+              path:
+                type: string
+        dependencies:
+          type: array
+          items:
+            type: string
+        tags:
+          type: array
+          items:
+            type: string
+
+    ServicesResponse:
+      type: object
+      required:
+        - services
+        - total
+      properties:
+        services:
+          type: array
+          items:
+            $ref: '#/components/schemas/ServiceDetails'
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+
+    ServiceResponse:
+      type: object
+      required:
+        - service
+      properties:
+        service:
+          $ref: '#/components/schemas/ServiceDetails'
+
+    ServiceStatusResponse:
+      type: object
+      required:
+        - serviceId
+        - status
+        - timestamp
+      properties:
+        serviceId:
+          type: string
+        status:
+          type: string
+          enum: [running, stopped, starting, stopping, error, unknown]
+        timestamp:
+          type: string
+          format: date-time
+        message:
+          type: string
+        healthcheck:
+          type: object
+          properties:
+            status:
+              type: string
+              enum: [passing, failing, unknown]
+            lastCheckedAt:
+              type: string
+              format: date-time
+            message:
+              type: string
+
+    LogEntry:
+      type: object
+      required:
+        - timestamp
+        - level
+        - message
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        level:
+          type: string
+          enum: [debug, info, warn, error]
+        message:
+          type: string
+        context:
+          type: object
+        source:
+          type: string
+        serviceId:
+          type: string
+        traceId:
+          type: string
+
+    LogsResponse:
+      type: object
+      required:
+        - logs
+        - total
+      properties:
+        logs:
+          type: array
+          items:
+            $ref: '#/components/schemas/LogEntry'
+        total:
+          type: integer
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        hasMore:
+          type: boolean
+
+    ConfigSection:
+      type: object
+      additionalProperties: true
+      description: Configuration section with key-value pairs
+
+    ConfigResponse:
+      type: object
+      required:
+        - serviceId
+        - config
+        - lastUpdated
+      properties:
+        serviceId:
+          type: string
+        config:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ConfigSection'
+        schema:
+          type: object
+          description: JSON Schema for the configuration
+        lastUpdated:
+          type: string
+          format: date-time
+        updatedBy:
+          type: string
+
+    ConfigUpdateRequest:
+      type: object
+      required:
+        - config
+      properties:
+        config:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ConfigSection'
+        reason:
+          type: string
+          description: Reason for the configuration change
+
+    MetricPoint:
+      type: object
+      required:
+        - timestamp
+        - value
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        value:
+          type: number
+
+    MetricSeries:
+      type: object
+      required:
+        - name
+        - points
+      properties:
+        name:
+          type: string
+        unit:
+          type: string
+        points:
+          type: array
+          items:
+            $ref: '#/components/schemas/MetricPoint'
+
+    MetricsResponse:
+      type: object
+      required:
+        - serviceId
+        - metrics
+        - from
+        - to
+      properties:
+        serviceId:
+          type: string
+        metrics:
+          type: array
+          items:
+            $ref: '#/components/schemas/MetricSeries'
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        interval:
+          type: integer
+          description: Sampling interval in seconds
+
+    SystemMetricsResponse:
+      type: object
+      required:
+        - metrics
+        - from
+        - to
+      properties:
+        metrics:
+          type: array
+          items:
+            $ref: '#/components/schemas/MetricSeries'
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        interval:
+          type: integer
+          description: Sampling interval in seconds 

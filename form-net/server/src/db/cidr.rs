@@ -127,32 +127,64 @@ impl DatabaseCidr<String, CrdtMap> {
             return Err(ServerError::InvalidQuery);
         }
 
-        log::info!("Building cidr queue request...");
-        let request = Self::build_cidr_queue_request(CidrRequest::Create(contents.clone()))
-            .map_err(|_| ServerError::InvalidQuery)?;
+        #[cfg(feature = "devnet")]
+        {
+            // Direct API call to form-state for devnet
+            log::info!("Devnet mode: Using direct API call for CIDR creation");
+            let cidr_request = CidrRequest::Create(contents.clone());
+            
+            let resp = client
+                .post("http://127.0.0.1:3004/cidr/create")
+                .json(&cidr_request)
+                .send()
+                .await.map_err(|e| {
+                    log::error!("API request failed: {}", e);
+                    ServerError::InvalidQuery
+                })?
+                .json::<Response<Cidr<String>>>()
+                .await.map_err(|e| {
+                    log::error!("Failed to parse API response: {}", e);
+                    ServerError::NotFound
+                })?;
 
-        log::info!("Build cidr queue request: {request:?}");
-        let resp = client 
-            .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
-            .json(&request)
-            .send()
-            .await.map_err(|_| ServerError::InvalidQuery)?
-            .json::<QueueResponse>()
-            .await.map_err(|_| ServerError::NotFound)?;
-
-        log::info!("Sent queue request - response: {resp:?}");
-        let db_cidr = DatabaseCidr {
-            inner: Cidr {
-                id: contents.name.clone(),
-                contents: contents.clone()
-            },
-            marker: PhantomData::<String>
-        };
-        match resp {
-            QueueResponse::OpSuccess => {
-                return Ok(db_cidr.inner)
+            match resp {
+                Response::Success(Success::Some(cidr)) => {
+                    return Ok(cidr);
+                }
+                _ => return Err(ServerError::NotFound),
             }
-            _ => return Err(ServerError::NotFound),
+        }
+
+        #[cfg(not(feature = "devnet"))]
+        {
+            // Original queue-based implementation
+            log::info!("Building cidr queue request...");
+            let request = Self::build_cidr_queue_request(CidrRequest::Create(contents.clone()))
+                .map_err(|_| ServerError::InvalidQuery)?;
+
+            log::info!("Build cidr queue request: {request:?}");
+            let resp = client 
+                .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
+                .json(&request)
+                .send()
+                .await.map_err(|_| ServerError::InvalidQuery)?
+                .json::<QueueResponse>()
+                .await.map_err(|_| ServerError::NotFound)?;
+
+            log::info!("Sent queue request - response: {resp:?}");
+            let db_cidr = DatabaseCidr {
+                inner: Cidr {
+                    id: contents.name.clone(),
+                    contents: contents.clone()
+                },
+                marker: PhantomData::<String>
+            };
+            match resp {
+                QueueResponse::OpSuccess => {
+                    return Ok(db_cidr.inner)
+                }
+                _ => return Err(ServerError::NotFound),
+            }
         }
     }
 
@@ -174,50 +206,115 @@ impl DatabaseCidr<String, CrdtMap> {
             ..self.contents.clone()
         };
 
-        let request = Self::build_cidr_queue_request(CidrRequest::Update(new_contents.clone()))
-            .map_err(|_| ServerError::InvalidQuery)?;
+        #[cfg(feature = "devnet")]
+        {
+            // Direct API call to form-state for devnet
+            log::info!("Devnet mode: Using direct API call for CIDR update");
+            let cidr_request = CidrRequest::Update(new_contents.clone());
+            
+            let resp = reqwest::Client::new()
+                .post("http://127.0.0.1:3004/cidr/update")
+                .json(&cidr_request)
+                .send()
+                .await.map_err(|e| {
+                    log::error!("API request failed: {}", e);
+                    ServerError::InvalidQuery
+                })?
+                .json::<Response<Cidr<String>>>()
+                .await.map_err(|e| {
+                    log::error!("Failed to parse API response: {}", e);
+                    ServerError::NotFound
+                })?;
 
-        let resp = reqwest::Client::new() 
-            .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
-            .json(&request)
-            .send()
-            .await.map_err(|_| ServerError::InvalidQuery)?
-            .json::<QueueResponse>()
-            .await.map_err(|_| ServerError::NotFound)?;
+            match resp {
+                Response::Success(_) => {
+                    self.contents = new_contents;
+                    return Ok(())
+                }
+                _ => return Err(ServerError::NotFound)
+            }
+        }
 
-        match resp {
-            QueueResponse::OpSuccess => {
-                self.contents = new_contents;
-                return Ok(())
+        #[cfg(not(feature = "devnet"))]
+        {
+            // Original queue-based implementation
+            let request = Self::build_cidr_queue_request(CidrRequest::Update(new_contents.clone()))
+                .map_err(|_| ServerError::InvalidQuery)?;
+
+            let resp = reqwest::Client::new() 
+                .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
+                .json(&request)
+                .send()
+                .await.map_err(|_| ServerError::InvalidQuery)?
+                .json::<QueueResponse>()
+                .await.map_err(|_| ServerError::NotFound)?;
+
+            match resp {
+                QueueResponse::OpSuccess => {
+                    self.contents = new_contents;
+                    return Ok(())
+                }
+                QueueResponse::Failure { .. }=> {
+                    return Err(ServerError::NotFound)
+                }
+                _ => return Err(ServerError::Unauthorized)
             }
-            QueueResponse::Failure { .. }=> {
-                return Err(ServerError::NotFound)
-            }
-            _ => return Err(ServerError::Unauthorized)
         }
     }
 
     pub async fn delete(id: String) -> Result<(), ServerError> {
-        let request = CidrRequest::Delete(id.to_string());
-        let request = Self::build_cidr_queue_request(request)
-            .map_err(|_| ServerError::InvalidQuery)?;
+        #[cfg(feature = "devnet")]
+        {
+            // Direct API call to form-state for devnet
+            log::info!("Devnet mode: Using direct API call for CIDR deletion");
+            let cidr_request = CidrRequest::Delete(id.to_string());
+            
+            let resp = reqwest::Client::new()
+                .post("http://127.0.0.1:3004/cidr/delete")
+                .json(&cidr_request)
+                .send()
+                .await.map_err(|e| {
+                    log::error!("API request failed: {}", e);
+                    ServerError::InvalidQuery
+                })?
+                .json::<Response<Cidr<String>>>()
+                .await.map_err(|e| {
+                    log::error!("Failed to parse API response: {}", e);
+                    ServerError::NotFound
+                })?;
 
-        let resp = reqwest::Client::new() 
-            .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
-            .json(&request)
-            .send()
-            .await.map_err(|_| ServerError::InvalidQuery)?
-            .json::<QueueResponse>()
-            .await.map_err(|_| ServerError::NotFound)?;
+            match resp {
+                Response::Success(_) => {
+                    return Ok(())
+                }
+                _ => return Err(ServerError::NotFound)
+            }
+        }
 
-        match resp {
-            QueueResponse::OpSuccess => {
-                return Ok(())
+        #[cfg(not(feature = "devnet"))]
+        {
+            // Original queue-based implementation
+            let request = CidrRequest::Delete(id.to_string());
+            let request = Self::build_cidr_queue_request(request)
+                .map_err(|_| ServerError::InvalidQuery)?;
+
+            let resp = reqwest::Client::new() 
+                .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
+                .json(&request)
+                .send()
+                .await.map_err(|_| ServerError::InvalidQuery)?
+                .json::<QueueResponse>()
+                .await.map_err(|_| ServerError::NotFound)?;
+
+            match resp {
+                QueueResponse::OpSuccess => {
+                    return Ok(())
+                }
+                QueueResponse::Failure { .. }=> {
+                    return Err(ServerError::NotFound)
+                }
+                _ => return Err(ServerError::Unauthorized)
             }
-            QueueResponse::Failure { .. }=> {
-                return Err(ServerError::NotFound)
-            }
-            _ => return Err(ServerError::Unauthorized)
         }
     }
 

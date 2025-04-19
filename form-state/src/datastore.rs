@@ -1184,8 +1184,6 @@ impl DataStore {
         _n: Option<usize>,
     ) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error>> {
         // In devnet mode, the queue reader doesn't process any messages
-        log::info!("DEVNET MODE: Skipping queue read operation");
-        
         // Return an empty list since there are no messages to process in devnet mode
         Ok(Vec::new())
     }
@@ -1558,7 +1556,8 @@ mod tests {
                     metrics_endpoint: "http://node.metrics".to_string(),
                 },
             },
-            host: Host::Domain("example.com".to_string())
+            host: Host::Domain("example.com".to_string()),
+            operator_keys: vec![],
         };
         let node_ctx = nodes.read_ctx().derive_add_ctx(actor.clone());
         let node_op = nodes.update("node1".to_string(), node_ctx, |reg, _| {

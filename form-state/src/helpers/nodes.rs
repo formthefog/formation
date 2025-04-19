@@ -9,9 +9,19 @@ use form_types::state::{Response, Success};
 
 pub async fn create_node(
     State(state): State<Arc<Mutex<DataStore>>>,
-    Json(request): Json<NodeRequest>
+    Json(mut request): Json<NodeRequest>
 ) -> Json<Response<Node>> {
     let mut datastore = state.lock().await;
+    
+    // Extract initial operator keys from environment or request header
+    let initial_operator_keys = match std::env::var("TRUSTED_OPERATOR_KEYS") {
+        Ok(keys) => keys.split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<String>>(),
+        Err(_) => Vec::new(),
+    };
+    
     match request {
         NodeRequest::Op(map_op) => {
             log::info!("Create Node request is an Op from another peer");
@@ -32,8 +42,18 @@ pub async fn create_node(
                 }
             }
         }
-        NodeRequest::Create(contents) => {
+        NodeRequest::Create(mut contents) => {
             log::info!("Create Node request was a direct request...");
+            
+            // Add initial operator keys from environment if available
+            if !initial_operator_keys.is_empty() {
+                for key in initial_operator_keys {
+                    if !contents.operator_keys.contains(&key) {
+                        contents.operator_keys.push(key);
+                    }
+                }
+            }
+            
             log::info!("Building Map Op...");
             let map_op = datastore.node_state.update_node_local(contents);
             log::info!("Map op created... Applying...");
