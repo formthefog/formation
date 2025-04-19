@@ -66,6 +66,7 @@ pub async fn init(address: String) -> Result<IpAddr, Box<dyn std::error::Error>>
     let database_path = data_dir.join(&name.to_string()).with_extension("db");
     let _ = tokio::time::sleep(Duration::from_secs(1)).await;
     ensure_crdt_datastore().await?;
+    log::info!("Populating CRDT datastore with: server_name: {}", address);
     populate_crdt_datastore(
         db_init_data,
         address
@@ -136,18 +137,6 @@ async fn populate_crdt_datastore(
     log::info!("Succesfully created root cidr");
 
     tokio::time::sleep(Duration::from_millis(100)).await;
-
-    /*
-    log::info!("Creating server cidr");
-    let server_cidr = DatabaseCidr::<String, CrdtMap>::create(
-        CidrContents {
-            name: "peers-1".into(),
-            cidr: db_init_data.server_cidr,
-            parent: Some(root_cidr.id),
-        },
-    ).await?;
-
-*/
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 

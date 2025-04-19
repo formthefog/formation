@@ -76,6 +76,14 @@ impl<T: Display + Clone + PartialEq, D> DerefMut for DatabasePeer<T, D> {
 
 impl<T: Display + Clone + PartialEq, D> DatabasePeer<T, D> {
     fn is_valid_name(name: &str) -> bool {
+        if name.len() >= 64 {
+            log::error!("Peer name is too long...: {}", name.len());
+        }
+
+        if !PEER_NAME_REGEX.is_match(name) {
+            log::error!("Peer name does not match PEER_NAME_REGEX");
+        }
+
         name.len() < 64 && PEER_NAME_REGEX.is_match(name)
     }
 }

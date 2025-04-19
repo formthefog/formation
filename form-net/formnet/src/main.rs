@@ -57,14 +57,12 @@ struct OperatorJoinOpts {
     /// This will be used instead of or in addition to the bootstrap nodes
     #[arg(long="bootstrap-domain", alias="domain")]
     bootstrap_domain: Option<String>,
-    /// A 20 byte hex string that represents an ethereum address
     #[arg(short, long="signing-key", aliases=["private-key", "secret-key"])]
     signing_key: Option<String>,
     #[arg(short, long, default_value="true")]
     encrypted: bool,
     #[arg(short, long)]
     password: Option<String>,
-    /// Public IP address to use (if not automatically detected)
     #[arg(long="public-ip", short='i')]
     public_ip: Option<String>,
 }
@@ -83,7 +81,6 @@ struct OperatorLeaveOpts {
     /// This will be used instead of or in addition to the bootstrap nodes
     #[arg(long="bootstrap-domain", alias="domain")]
     bootstrap_domain: Option<String>,
-    /// A 20 byte hex string that represents an ethereum address
     #[arg(short, long="signing-key", aliases=["private-key", "secret-key"])]
     signing_key: Option<String>,
     #[arg(short, long, default_value="true")]
@@ -130,6 +127,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         return Ok(());
                     }
 
+                    let secret_key_string = op_config.secret_key.unwrap();
+                    let sk = SigningKey::from_slice(
+                        &hex::decode(&secret_key_string)?
+                    )?;
+
+                    let address = hex::encode(Address::from_private_key(&sk));
+
                     // Build bootstrap list, combining user-provided bootstraps with the bootstrap domain
                     let mut bootstraps = parser.bootstraps.clone();
                     if bootstraps.is_empty() {
@@ -144,7 +148,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // If no bootstraps are specified, initialize the node without joining
                     if bootstraps.is_empty() {
                         log::info!("No bootstraps specified, initializing node without joining");
-                        let address = op_config.address.clone().unwrap_or_default();
                         formnet::init::init(address).await?;
                         return Ok(());
                     }
