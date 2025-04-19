@@ -4,7 +4,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use axum::{
     Router, 
-    routing::{post, get, delete}, 
+    routing::{post, get}, 
     middleware, 
     Json,
     extract::{Path, State},
@@ -28,7 +28,6 @@ use crate::auth::{
 use crate::api_keys::{
     api_key_auth_middleware, ApiKeyAuth
 };
-use crate::billing::middleware::{check_agent_eligibility, check_token_eligibility};
 use tokio::net::TcpListener;
 use serde_json::json;
 use crate::billing::middleware::EligibilityError;
@@ -39,6 +38,12 @@ async fn node_auth_middleware(
     req: Request<Body>,
     next: middleware::Next,
 ) -> Result<Response, StatusCode> {
+    // Allow localhost access without authentication for bootstrap purposes
+    if is_localhost_request(&req) {
+        log::info!("Allowing localhost request without authentication");
+        return Ok(next.run(req).await);
+    }
+    
     // Check if we're running in dev mode with internal endpoints allowed
     let allow_internal = std::env::var("ALLOW_INTERNAL_ENDPOINTS")
         .unwrap_or_default()
@@ -46,96 +51,69 @@ async fn node_auth_middleware(
         
     if allow_internal {
         // In dev mode, skip authentication
-        log::info!("Dev mode: Skipping node authentication");
+        log::info!("Dev mode: Skipping authentication");
         return Ok(next.run(req).await);
     }
     
-    // Extract the node key from header
-    let node_key = match req.headers()
-        .get("X-Formation-Node-Key")
-        .and_then(|v| v.to_str().ok()) {
-            Some(key) => key,
-            None => {
-                log::warn!("Node authentication failed: No X-Formation-Node-Key header");
-                return Err(StatusCode::UNAUTHORIZED);
-            }
-        };
+    // Get API key from headers
+    let api_key = match req.headers().get("X-Formation-API-Key") {
+        Some(key) => match key.to_str() {
+            Ok(k) => k,
+            Err(_) => return Err(StatusCode::UNAUTHORIZED),
+        },
+        None => return Err(StatusCode::UNAUTHORIZED),
+    };
     
-    // Get node ID from header if available (for node-specific auth)
+    // Get node ID from header if available
     let node_id = req.headers()
         .get("X-Formation-Node-ID")
         .and_then(|v| v.to_str().ok());
         
-    // Lock the datastore to access nodes
-    let datastore = state.lock().await;
+    // Check trusted keys in environment
+    let trusted_keys_str = std::env::var("TRUSTED_OPERATOR_KEYS").unwrap_or_default();
+    let trusted_keys: Vec<_> = trusted_keys_str
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+        
+    // Allow if API key is in trusted keys
+    if trusted_keys.contains(&api_key) {
+        log::info!("Authentication successful with trusted key");
+        return Ok(next.run(req).await);
+    }
     
-    // First attempt: If node ID is provided, check if the key is valid for that specific node
+    // If a node ID is provided, check if the node exists and the key matches
     if let Some(id) = node_id {
+        let datastore = state.lock().await;
         if let Some(node) = datastore.node_state.get_node(id.to_string()) {
-            if node.has_operator_key(node_key) {
+            if node.has_operator_key(api_key) {
                 log::info!("Node {} authenticated successfully with key", id);
                 return Ok(next.run(req).await);
             }
         }
     }
     
-    // Second attempt: Check all nodes to see if any have this operator key
-    // Useful for operations not tied to a specific node
-    let nodes = datastore.node_state.map.iter()
-        .filter_map(|item| {
-            let reg = item.val.1; 
-                if let Some(v) = reg.val() {
-                    Some(v.value())
-                } else {
-                    None
-                }
-        })
-        .collect::<Vec<_>>();
-        
-    for node in nodes.clone() {
-        if node.has_operator_key(node_key) {
-            log::info!("Node authentication successful with operator key");
-            return Ok(next.run(req).await);
-        }
-    }
-    
-    // Fallback to environment variable for bootstrapping/initial setup
-    // This allows the first node to join when there are no nodes registered yet
-    let trusted_keys = std::env::var("TRUSTED_OPERATOR_KEYS")
-        .unwrap_or_default();
-        
-    // Split comma-separated list of keys
-    let trusted_keys: Vec<&str> = trusted_keys
-        .split(',')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect();
-        
-    if trusted_keys.contains(&node_key) {
-        log::info!("Bootstrap authentication successful with environment key");
-        return Ok(next.run(req).await);
-    }
-    
-    // If we have no registered nodes yet, and no environment keys, allow the first request
-    // This is important for initial system bootstrapping
-    if nodes.is_empty() && trusted_keys.is_empty() {
-        // Check if we're in production
-        let is_production = std::env::var("ENVIRONMENT")
-            .unwrap_or_default()
-            .to_lowercase() == "production";
-            
-        if is_production {
-            log::error!("Rejecting node authentication in production with no nodes or trusted keys configured");
-            return Err(StatusCode::UNAUTHORIZED);
-        } else {
-            log::warn!("Allowing first node authentication (bootstrap) with no trusted keys (non-production)");
-            return Ok(next.run(req).await);
-        }
-    }
-    
     // Authentication failed
-    log::warn!("Node authentication failed: Invalid key provided");
+    log::warn!("Authentication failed: Invalid API key");
     Err(StatusCode::UNAUTHORIZED)
+}
+
+// Helper function to check if a request is coming from localhost
+fn is_localhost_request(req: &Request<Body>) -> bool {
+    if let Some(addr) = req.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>() {
+        let ip = addr.ip();
+        return ip.is_loopback();
+    }
+    
+    // If we can't determine the address, check headers for proxy info
+    if let Some(forwarded) = req.headers().get("x-forwarded-for") {
+        if let Ok(addr) = forwarded.to_str() {
+            return addr == "127.0.0.1" || addr == "::1";
+        }
+    }
+    
+    false
 }
 
 pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
@@ -152,52 +130,57 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/bootstrap/peer_state", get(peer_state))
         .route("/bootstrap/cidr_state", get(cidr_state))
         .route("/bootstrap/assoc_state", get(assoc_state));
-    
-    // Define network/infrastructure routes (node authentication)
-    // These routes are only accessible to Formation nodes via operator key auth
-    let network_api = Router::new()
-        // User management for networking
+
+    let network_writers_api = Router::new()
         .route("/user/create", post(create_user))
         .route("/user/update", post(update_user))
         .route("/user/disable", post(disable_user))
-        .route("/user/redeem", post(redeem_invite)) 
-        .route("/user/:id/get", get(get_user))
-        .route("/user/:ip/get_from_ip", get(get_user_from_ip))
         .route("/user/delete", post(delete_user))
-        .route("/user/:id/get_all_allowed", get(get_all_allowed))
-        .route("/user/list", get(list_users))
-        .route("/user/list_admin", get(list_admin))
-        .route("/user/:cidr/list", get(list_by_cidr))
         .route("/user/delete_expired", post(delete_expired))
-        
-        // CIDR management
         .route("/cidr/create", post(create_cidr))
         .route("/cidr/update", post(update_cidr))
         .route("/cidr/delete", post(delete_cidr))
+        .route("/assoc/create", post(create_assoc))
+        .route("/assoc/delete", post(delete_assoc))
+        .route("/assoc/list", get(list_assoc))
+        .route("/dns/create", post(create_dns))
+        .route("/dns/update", post(update_dns))
+        .route("/dns/:domain/delete", post(delete_dns))
+        .route("/node/create", post(create_node))
+        .route("/node/update", post(update_node))
+        .route("/node/:id/get", get(get_node))
+        .route("/node/:id/delete", post(delete_node))
+        .route("/user/redeem", post(redeem_invite))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            node_auth_middleware,
+        ));
+
+    // Define network/infrastructure routes (node authentication)
+    // These routes are only accessible to Formation nodes via operator key auth
+    let network_readers_api = Router::new()
+        // User management for networking
+        .route("/user/:id/get", get(get_user))
+        .route("/user/:ip/get_from_ip", get(get_user_from_ip))
+        .route("/user/:id/get_all_allowed", get(get_all_allowed))
+        .route("/user/list", get(list_users))
+        .route("/user/list_admin", get(list_admin))
+        .route("/user/:cidr/list", get(list_by_cidr))        
+        // CIDR management
         .route("/cidr/:id/get", get(get_cidr))
         .route("/cidr/list", get(list_cidr))
         
         // Association management
-        .route("/assoc/create", post(create_assoc))
-        .route("/assoc/delete", post(delete_assoc))
-        .route("/assoc/list", get(list_assoc))
         .route("/assoc/:cidr_id/relationships", get(relationships))
         
         // DNS management
         .route("/dns/:domain/:build_id/request_vanity", post(request_vanity))
         .route("/dns/:domain/:build_id/request_public", post(request_public))
-        .route("/dns/create", post(create_dns))
-        .route("/dns/update", post(update_dns))
-        .route("/dns/:domain/delete", post(delete_dns))
         .route("/dns/:domain/get", get(get_dns_record))
         .route("/dns/:node_ip/list", get(get_dns_records_by_node_ip))
         .route("/dns/list", get(list_dns_records))
         
         // Node management
-        .route("/node/create", post(create_node))
-        .route("/node/update", post(update_node))
-        .route("/node/:id/get", get(get_node))
-        .route("/node/:id/delete", post(delete_node))
         .route("/node/list", get(list_nodes))
         .route("/node/:id/metrics", get(get_node_metrics))
         .route("/node/list/metrics", get(list_node_metrics))
@@ -205,12 +188,6 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         // Node authentication key management
         .route("/node/:id/operator-key", post(add_node_operator_key))
         .route("/node/:id/operator-key/:key", post(remove_node_operator_key));
-        
-        // Apply node authentication middleware
-        // .layer(middleware::from_fn_with_state(
-        //     state.clone(),
-        //     node_auth_middleware,
-        // ));
     
     // Define account/user management routes (JWT authentication required)
     let account_api = Router::new()
@@ -285,7 +262,8 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
     // Merge all route groups into a single router
     Router::new()
         .merge(public_api)
-        .merge(network_api)  // Add the node-authenticated network API
+        .merge(network_writers_api)  // Add the node-authenticated network API
+        .merge(network_readers_api)
         .merge(account_api)
         .merge(api_routes)
         .with_state(state)

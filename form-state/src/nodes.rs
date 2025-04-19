@@ -173,7 +173,7 @@ impl NodeMonitoring {
 /// enabling you to update, remove, and query nodes in a BFT CRDT fashion.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NodeState {
-    node_id: String,
+    pub node_id: String,
     pk: String,
     pub map: Map<String, BFTReg<Node, Actor>, Actor>,
 }
