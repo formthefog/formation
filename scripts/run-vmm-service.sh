@@ -21,6 +21,4 @@ echo "State URL: $VMM_STATE_URL"
 mkdir -p $VMM_VM_DIR $VMM_IMAGES_DIR
 
 # Start vmm-service
-exec /usr/local/bin/vmm-service run \
-  --config ${SECRET_PATH} \
-  --password ${PASSWORD}
+exec /usr/local/bin/vmm-service --config ${SECRET_PATH} --password ${PASSWORD} run
