@@ -449,6 +449,7 @@ impl VmManager {
             api_response_sender: resp_tx,
             subscriber,
             publisher_addr,
+            #[cfg(not(feature = "devnet"))]
             queue_reader: queue_handle,
             create_futures: Arc::new(Mutex::new(FuturesUnordered::new())),
         })
