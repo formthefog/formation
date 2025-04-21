@@ -3,7 +3,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-// src/service/vmm.rs
 use std::{collections::HashMap, path::PathBuf};
 use std::net::{IpAddr, SocketAddr};
 use alloy_primitives::Address;
@@ -385,6 +384,7 @@ impl FormVmApi {
 pub struct VmManager {
     vm_monitors: HashMap<String, FormVmm>, 
     server: JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>>,
+    #[cfg(not(feature = "devnet"))]
     queue_reader: JoinHandle<()>,
     tap_counter: u32,
     formnet_endpoint: String,
@@ -418,7 +418,7 @@ impl VmManager {
         let api_channel_server = api_channel.clone();
         let server = tokio::task::spawn(async move {
             let server = VmmApi::new(api_channel_server.clone(), addr);
-            server.start().await?;
+            server.start_api_server().await?;
             Ok::<(), Box<dyn std::error::Error + Send + Sync + 'static>>(())
         });
 
@@ -433,6 +433,7 @@ impl VmManager {
             None
         };
 
+        #[cfg(not(feature = "devnet"))]
         let queue_handle = tokio::task::spawn(async move {
             if let Err(e) = VmmApi::start_queue_reader(api_channel.clone(), shutdown_rx).await {
                 eprintln!("Error in queue_reader: {e}");

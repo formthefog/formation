@@ -81,6 +81,7 @@ impl VmmApi {
         mut shutdown: tokio::sync::broadcast::Receiver<()>
     ) -> Result<(), VmmError> { 
         let mut n = 0;
+        #[cfg(not(feature = "devnet"))]
         loop {
             tokio::select! {
                 Ok(messages) = Self::read_from_queue(Some(n), None) => {
@@ -394,7 +395,7 @@ impl VmmApi {
         }
     }
 
-    pub async fn start(&self) -> Result<(), VmmError> {
+    pub async fn start_api_server(&self) -> Result<(), VmmError> {
         log::info!("Attempting to start API server");
         let app_state = self.channel.clone();
 
