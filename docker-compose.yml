@@ -103,12 +103,8 @@ services:
 
   # Virtual Machine Manager Service
   vmm-service:
-    build:
-      context: ./form-vmm/vmm-service
-      dockerfile: Dockerfile
-      args:
-        - FEATURES=devnet
-    container_name: formation-vmm
+    image: formationai/form-net:latest
+    container_name: formation-network
     depends_on:
       - form-state
       - form-net
