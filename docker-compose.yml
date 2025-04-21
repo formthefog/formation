@@ -146,33 +146,38 @@ services:
       - /dev/hugepages:mode=1770
     restart: unless-stopped
 
-  # Package Manager Service - Commented out for minimal startup
-  # form-pack-manager:
-  #   image: formationai/form-pack-manager:latest
-  #   container_name: formation-pack-manager
-  #   depends_on:
-  #     - form-state
-  #   network_mode: host
-  #   volumes:
-  #     - pack-data:/var/lib/formation/pack-manager
-  #     - ./secrets:/etc/formation
-  #   environment:
-  #     - PACK_MANAGER_LOG_LEVEL=info
-  #     - PACK_MANAGER_PORT=8080
-  #     - PACK_MANAGER_INTERFACE=all
-  #     - PACK_MANAGER_CONFIG_PATH=/etc/formation/operator-config.json
-  #     - PACK_MANAGER_PASSWORD=${PASSWORD:-formation-password}
-  #     - PACK_MANAGER_DATA_DIR=/var/lib/formation/pack-manager
-  #     - PACK_MANAGER_ENCRYPTED=true
-  #   command: ["form-pack-manager", "--interface", "all", "--port", "8080", "--config", "/etc/formation/operator-config.json", "--password", "${PASSWORD:-formation-password}"]
-  #   healthcheck:
-  #     test: ["CMD", "curl", "-f", "http://localhost:8080/health", "||", "exit", "1"]
-  #     interval: 30s
-  #     timeout: 10s
-  #     retries: 3
-  #     start_period: 10s
-  #   privileged: true
-  #   restart: unless-stopped
+  # Package Manager Service
+  form-pack-manager:
+    image: formationai/form-pack:latest
+    container_name: formation-pack-manager
+    depends_on:
+      - form-state
+      - vmm-service
+    network_mode: host
+    volumes:
+      - pack-data:/var/lib/formation/pack-manager
+      - vm-images:/var/lib/formation/vm-images:rw
+      - ./secrets:/etc/formation
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - RUST_LOG=info
+      - PACK_MANAGER_LOG_LEVEL=info
+      - PACK_MANAGER_PORT=3003
+      - PACK_MANAGER_INTERFACE=all
+      - PACK_MANAGER_CONFIG_PATH=/etc/formation/.operator-config.json
+      - PACK_MANAGER_PASSWORD=${PASSWORD:-formation-password}
+      - PACK_MANAGER_DATA_DIR=/var/lib/formation/pack-manager
+      - STATE_URL=http://localhost:3004
+      - RUST_BACKTRACE=1
+    command: ["/usr/local/bin/run-form-pack-manager.sh"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3003/health", "||", "exit", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    privileged: true
+    restart: unless-stopped
 
 # Volumes configuration
 volumes:
@@ -195,5 +200,5 @@ volumes:
     driver: local
   
   # Package manager volumes
-  # pack-data:
-  #   driver: local
+  pack-data:
+    driver: local
