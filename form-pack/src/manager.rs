@@ -242,7 +242,15 @@ impl FormPackManager {
         let request = InstanceRequest::Create(instance);
 
         #[cfg(not(feature = "devnet"))]
-        Self::write_to_queue(request, 4, "state").await?;
+        Self::write_to_queue(request.clone(), 4, "state").await?;
+
+        #[cfg(feature = "devnet")]
+        reqwest::Client::new().post("http://127.0.0.1:3004/instance/update")
+            .json(&request)
+            .send()
+            .await?
+            .json()
+            .await?;
 
         Ok(())
     }
@@ -302,6 +310,14 @@ impl FormPackManager {
 
         #[cfg(not(feature = "devnet"))]
         Self::write_to_queue(request, 4, "state").await?;
+
+        #[cfg(feature = "devnet")]
+        reqwest::Client::new().post("http://127.0.0.1:3004/instance/update")
+            .json(&request)
+            .send()
+            .await?
+            .json()
+            .await?;
 
         Ok(())
     }

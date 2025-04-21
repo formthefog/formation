@@ -638,7 +638,7 @@ impl VmManager {
             .send()
             .await?
             .json()
-            .await()?;
+            .await?;
 
         log::info!("Inserting Form VMM into vm_monitoris map");
         self.vm_monitors.insert(config.name.clone(), vmm);
@@ -658,7 +658,7 @@ impl VmManager {
             .send()
             .await?
             .json()
-            .await()?;
+            .await?;
 
         #[cfg(not(feature = "devnet"))]
         VmmApi::write_to_queue(InstanceRequest::Update(instance.clone()), 4, "state").await?;
@@ -908,7 +908,7 @@ Formpack for {name} doesn't exist:
                     .send()
                     .await?
                     .json()
-                    .await()?;
+                    .await?;
 
                 log::info!("Adding formnet_ip to instance");
                 instance.formnet_ip = Some(formnet_ip.parse()?);
@@ -971,7 +971,7 @@ Formpack for {name} doesn't exist:
                     .send()
                     .await?
                     .json()
-                    .await()?;
+                    .await?;
 
                 log::info!("Boot Complete for {id}: formnet id: {formnet_ip}");
             }
@@ -1000,7 +1000,7 @@ Formpack for {name} doesn't exist:
                     .send()
                     .await?
                     .json()
-                    .await()?;
+                    .await?;
 
             }
             VmmEvent::Start {  id, .. } => {
@@ -1028,7 +1028,7 @@ Formpack for {name} doesn't exist:
                     .send()
                     .await?
                     .json()
-                    .await()?;
+                    .await?;
 
             }
             VmmEvent::Delete { id, .. } => {
