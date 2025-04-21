@@ -7,6 +7,7 @@ edition = "2021"
 pvmemcontrol = []
 guest_debug = []
 dev = []
+devnet = []
 
 [dependencies]
 anyhow = "1"

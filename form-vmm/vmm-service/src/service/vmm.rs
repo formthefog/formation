@@ -628,6 +628,7 @@ impl VmManager {
             },
         };
 
+        #[cfg(not(feature = "devnet"))]
         VmmApi::write_to_queue(InstanceRequest::Update(instance.clone()), 4, "state").await?;
 
         log::info!("Inserting Form VMM into vm_monitoris map");
@@ -878,6 +879,7 @@ Formpack for {name} doesn't exist:
                 log::info!("Built AddClusterMember InstanceRequest");
                 let request = InstanceRequest::AddClusterMember { build_id: build_id.to_string(), cluster_member }; 
                 log::info!("Writing AddClusterMember InstanceRequest to queue...");
+                #[cfg(not(feature = "devnet"))]
                 VmmApi::write_to_queue(request, 4, "state").await?;
                 
                 log::info!("Adding formnet_ip to instance");
@@ -932,6 +934,7 @@ Formpack for {name} doesn't exist:
                 let request = InstanceRequest::Update(instance);
 
                 log::info!("Writing Update request with formnet IP to queue...");
+                #[cfg(not(feature = "devnet"))]
                 VmmApi::write_to_queue(request, 4, "state").await?; 
                 log::info!("Boot Complete for {id}: formnet id: {formnet_ip}");
             }
@@ -951,6 +954,7 @@ Formpack for {name} doesn't exist:
                     (k.clone(), v.clone())
                 }).collect();
                 let request = InstanceRequest::Update(instance);
+                #[cfg(not(feature = "devnet"))]
                 VmmApi::write_to_queue(request, 4, "state").await?; 
             }
             VmmEvent::Start {  id, .. } => {
@@ -969,6 +973,7 @@ Formpack for {name} doesn't exist:
                     (k.clone(), v.clone())
                 }).collect();
                 let request = InstanceRequest::Update(instance);
+                #[cfg(not(feature = "devnet"))]
                 VmmApi::write_to_queue(request, 4, "state").await?; 
             }
             VmmEvent::Delete { id, .. } => {
