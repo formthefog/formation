@@ -236,10 +236,12 @@ impl FormPackManager {
             request: message.clone()
         };
 
+        #[cfg(not(feature = "devnet"))]
         Self::write_to_queue(status_message, 1, "pack").await?;
 
         let request = InstanceRequest::Create(instance);
 
+        #[cfg(not(feature = "devnet"))]
         Self::write_to_queue(request, 4, "state").await?;
 
         Ok(())
@@ -293,10 +295,12 @@ impl FormPackManager {
             request: message.clone()
         };
 
+        #[cfg(not(feature = "devnet"))]
         Self::write_to_queue(status_message, 1, "pack").await?;
 
         let request = InstanceRequest::Create(instance);
 
+        #[cfg(not(feature = "devnet"))]
         Self::write_to_queue(request, 4, "state").await?;
 
         Ok(())
@@ -322,7 +326,9 @@ impl FormPackManager {
             request: message.clone()
         };
 
+        #[cfg(not(feature = "devnet"))]
         Self::write_to_queue(status_message, 1, "pack").await?;
+
         Ok(())
     }
 
