@@ -1,5 +1,3 @@
-version: '3.8'
-
 # Formation platform minimal docker-compose configuration
 services:
   # State Service
@@ -103,8 +101,8 @@ services:
 
   # Virtual Machine Manager Service
   vmm-service:
-    image: formationai/form-net:latest
-    container_name: formation-network
+    image: formationai/vmm-service:latest
+    container_name: formation-vmm
     depends_on:
       - form-state
       - form-net
