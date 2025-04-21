@@ -101,7 +101,7 @@ services:
 
   # Virtual Machine Manager Service
   vmm-service:
-    image: formationai/vmm-service:latest
+    image: formationai/form-vmm:latest
     container_name: formation-vmm
     depends_on:
       - form-state
