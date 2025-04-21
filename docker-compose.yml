@@ -144,9 +144,6 @@ services:
       - /dev/urandom
     tmpfs:
       - /dev/hugepages:mode=1770
-    sysctls:
-      - net.ipv4.ip_forward=1
-      - net.ipv6.conf.all.forwarding=1
     restart: unless-stopped
 
   # Package Manager Service - Commented out for minimal startup
