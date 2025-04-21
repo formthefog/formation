@@ -101,49 +101,59 @@ services:
       retries: 3
       start_period: 15s
 
-  # Virtual Machine Manager Service - Commented out for minimal startup
-  # vmm-service:
-  #   image: formationai/vmm-service:latest
-  #   container_name: formation-vmm
-  #   depends_on:
-  #     - form-state
-  #   volumes:
-  #     - vm-images:/var/lib/formation/vm-images
-  #     - kernel-data:/var/lib/formation/kernel
-  #     - /run/form-vm:/run/form-vm
-  #     - ./secrets:/etc/formation
-  #   environment:
-  #     - VMM_LOG_LEVEL=info
-  #     - VMM_STATE_URL=http://localhost:3004
-  #     - VMM_API_PORT=3003
-  #     - VMM_CONFIG_PATH=/etc/formation/operator-config.json
-  #     - VMM_PASSWORD=${PASSWORD:-formation-password}
-  #     - VMM_KERNEL_PATH=/var/lib/formation/kernel/hypervisor-fw
-  #     - VMM_VM_DIR=/run/form-vm
-  #     - VMM_IMAGES_DIR=/var/lib/formation/vm-images
-  #     - RUST_BACKTRACE=1
-  #   command: ["vmm-service", "run"]
-  #   healthcheck:
-  #     test: ["CMD", "curl", "-f", "http://localhost:3003/health", "||", "exit", "1"]
-  #     interval: 30s
-  #     timeout: 10s
-  #     retries: 3
-  #     start_period: 10s
-  #   privileged: true
-  #   network_mode: host
-  #   devices:
-  #     - /dev/kvm
-  #     - /dev/vhost-net
-  #     - /dev/null 
-  #     - /dev/zero
-  #     - /dev/random
-  #     - /dev/urandom
-  #   tmpfs:
-  #     - /dev/hugepages:mode=1770
-  #   sysctls:
-  #     - net.ipv4.ip_forward=1
-  #     - net.ipv6.conf.all.forwarding=1
-  #   restart: unless-stopped
+  # Virtual Machine Manager Service
+  vmm-service:
+    build:
+      context: ./form-vmm/vmm-service
+      dockerfile: Dockerfile
+      args:
+        - FEATURES=devnet
+    container_name: formation-vmm
+    depends_on:
+      - form-state
+      - form-net
+      - form-dns
+    volumes:
+      - vm-images:/var/lib/formation/vm-images
+      - kernel-data:/var/lib/formation/kernel
+      - /run/form-vmm:/run/form-vmm
+      - /var/run/form-vmm:/var/run/form-vmm
+      - /lib/modules:/lib/modules:ro
+      - ./secrets:/etc/formation
+    environment:
+      - RUST_LOG=info
+      - VMM_LOG_LEVEL=info
+      - VMM_API_PORT=3002
+      - VMM_STATE_URL=http://localhost:3004
+      - FORMNET_ENDPOINT=localhost:51820
+      - SECRET_PATH=/etc/formation/.operator-config.json
+      - PASSWORD=${PASSWORD:-formation-password}
+      - VMM_KERNEL_PATH=/var/lib/formation/kernel/hypervisor-fw
+      - VMM_VM_DIR=/run/form-vmm
+      - VMM_IMAGES_DIR=/var/lib/formation/vm-images
+      - RUST_BACKTRACE=1
+    command: ["/usr/local/bin/run-vmm-service.sh"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3002/health", "||", "exit", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    privileged: true
+    network_mode: host
+    devices:
+      - /dev/kvm
+      - /dev/vhost-net
+      - /dev/null 
+      - /dev/zero
+      - /dev/random
+      - /dev/urandom
+    tmpfs:
+      - /dev/hugepages:mode=1770
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv6.conf.all.forwarding=1
+    restart: unless-stopped
 
   # Package Manager Service - Commented out for minimal startup
   # form-pack-manager:
@@ -187,12 +197,11 @@ volumes:
   net-data:
     driver: local
 
-  # Commented out volumes for minimal setup
   # VM volumes
-  # vm-images:
-  #   driver: local
-  # kernel-data:
-  #   driver: local
+  vm-images:
+    driver: local
+  kernel-data:
+    driver: local
   
   # Package manager volumes
   # pack-data:

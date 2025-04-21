@@ -2,6 +2,9 @@
 
 FROM ubuntu:22.04
 
+# Build args
+ARG FEATURES=""
+
 # Install runtime dependencies
 RUN apt-get update && \
     apt-get install -y \
@@ -39,23 +42,32 @@ RUN apt-get update && \
 
 # Create required directories
 RUN mkdir -p /var/lib/formation/vm-images && \
-    mkdir -p /run/form-vm
+    mkdir -p /run/form-vmm && \
+    mkdir -p /var/run/form-vmm
 
-# Copy the pre-compiled binary
+# Copy the pre-compiled binary (built with appropriate features)
 COPY ./target/release/vmm-service /usr/local/bin/
 
 # Copy the hypervisor firmware
 COPY ./artifacts/hypervisor-fw /var/lib/formation/kernel/hypervisor-fw
 
-# Expose ports
+# Copy the startup script
+COPY ./scripts/run-vmm-service.sh /usr/local/bin/run-vmm-service.sh
+RUN chmod +x /usr/local/bin/run-vmm-service.sh
+
+# Expose API port
 EXPOSE 3002
 
 # Set environment variables
 ENV VMM_LOG_LEVEL=info
+ENV VMM_API_PORT=3002
+ENV VMM_STATE_URL=http://localhost:3004
+ENV RUST_BACKTRACE=1
+ENV FORMNET_ENDPOINT=localhost:51820
 
 # Add health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
   CMD curl -f http://localhost:3002/health || exit 1
 
 # Run the service
-CMD ["/usr/local/bin/vmm-service"] 
+CMD ["/usr/local/bin/run-vmm-service.sh"] 
