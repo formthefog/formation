@@ -100,7 +100,7 @@ async fn node_auth_middleware(
 }
 
 // Helper function to check if a request is coming from localhost
-fn is_localhost_request(req: &Request<Body>) -> bool {
+pub fn is_localhost_request(req: &Request<Body>) -> bool {
     if let Some(addr) = req.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>() {
         let ip = addr.ip();
         return ip.is_loopback();

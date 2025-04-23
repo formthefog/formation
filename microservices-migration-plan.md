@@ -92,15 +92,104 @@
   - [x] Define depends_on relationships
   - [x] Configure healthchecks
   - [x] Set startup order
-- [ ] 1.5.3 Test complete docker-compose deployment
-  - [ ] Verify all services start correctly
-  - [ ] Test service intercommunication
-  - [ ] Verify volume sharing works correctly
-  - [ ] NOTE: Testing to be performed on Linux machine due to VMM and networking requirements
-- [ ] 1.5.4 Create docker-compose profiles for different scenarios
-  - [ ] Development profile
-  - [ ] Production profile
-  - [ ] Testing profile
+- [x] 1.5.3 Test complete docker-compose deployment
+  - [x] Verify all services start correctly
+  - [x] Test service intercommunication
+  - [x] Verify volume sharing works correctly
+  - [x] NOTE: Testing to be performed on Linux machine due to VMM and networking requirements
+- [x] 1.5.4 Create docker-compose profiles for different scenarios
+  - [x] Development profile
+  - [x] Production profile
+  - [x] Testing profile
+
+## Phase 1.6: Agent Deployment and Automatic Registration
+
+### 1.6.1 Formfile Integration for Automatic Registration
+- [ ] 1.6.1.1 Extend formfile schema for registration metadata
+  - [ ] Add agent name and description fields
+  - [ ] Add model metadata fields
+  - [ ] Add routing configuration for domains
+  - [ ] Define validation rules for schema
+- [ ] 1.6.1.2 Implement registration data extraction
+  - [ ] Create parser for formfile registration data
+  - [ ] Implement validation for required fields
+  - [ ] Add error handling for invalid data
+  - [ ] Test with various formfile formats
+
+### 1.6.2 Form-state API Enhancements
+- [ ] 1.6.2.1 Implement trusted node authentication bypass
+  - [ ] Add configuration for trusted node IDs/IPs
+  - [ ] Modify auth middleware to check trusted sources
+  - [ ] Implement additional logging for bypassed auth
+  - [ ] Test security boundaries and edge cases
+- [ ] 1.6.2.2 Create automatic agent registration endpoint
+  - [ ] Design API endpoint for agent registration
+  - [ ] Implement registration logic
+  - [ ] Add validation and error handling
+  - [ ] Integrate with existing database schema
+
+### 1.6.3 Form-pack Integration
+- [ ] 1.6.3.1 Enhance form-pack to extract and use registration info
+  - [ ] Add formfile parsing during build
+  - [ ] Implement extraction of registration metadata
+  - [ ] Add validation for required fields
+  - [ ] Test with various formfile configurations
+- [ ] 1.6.3.2 Implement form-pack to form-state communication
+  - [ ] Create API client for form-state
+  - [ ] Implement registration API calls
+  - [ ] Add error handling and retries
+  - [ ] Test integration points
+
+### 1.6.4 Domain Name and Routing
+- [ ] 1.6.4.1 Implement vanity domain registration in form-dns
+  - [ ] Add API endpoint for domain registration
+  - [ ] Implement domain record creation
+  - [ ] Add validation for domain names
+  - [ ] Test DNS resolution for registered domains
+- [ ] 1.6.4.2 Set up formnet routing for agent domains
+  - [ ] Implement IP to domain mapping
+  - [ ] Create routing configuration
+  - [ ] Test internal and external routing
+  - [ ] Document routing architecture
+
+### 1.6.5 Integration Testing
+- [ ] 1.6.5.1 Test end-to-end agent deployment
+  - [ ] Create test agents with formfiles
+  - [ ] Test automatic registration
+  - [ ] Verify domain assignment
+  - [ ] Test routing and connectivity
+- [ ] 1.6.5.2 Test multi-node deployment
+  - [ ] Set up multi-node test environment
+  - [ ] Test agent deployment across nodes
+  - [ ] Verify cross-node communication
+  - [ ] Document multi-node deployment process
+
+### 1.6.6 Entity Relationship Implementation
+- [x] 1.6.6.1 Implement localhost auth bypass
+  - [x] Add localhost detection in API key auth middleware
+  - [x] Create helper methods for dummy auth objects
+  - [x] Update middleware to bypass authentication for local requests
+  - [x] Add security logging
+- [x] 1.6.6.2 Extend Formfile parser
+  - [x] Add DESCRIPTION directive
+  - [x] Add MODEL directive
+  - [ ] Add DOMAINS directive
+  - [x] Extract existing metadata
+- [x] 1.6.6.3 Create API client in form-pack
+  - [x] Implement form-state client
+  - [x] Add agent creation function
+  - [x] Add agent update function
+  - [x] Handle authentication and errors
+- [x] 1.6.6.4 Update build process
+  - [x] Add agent registration step
+  - [x] Update agent with build ID
+  - [x] Test build flow end-to-end
+- [x] 1.6.6.5 Enhance deployment process
+  - [x] Update instance with agent ID
+  - [x] Update agent with instance ID
+  - [x] Link account to instance and agent
+  - [ ] Link to DNS records
+  - [x] Document deployment flow
 
 ## Phase 2: Admin Tool Development
 

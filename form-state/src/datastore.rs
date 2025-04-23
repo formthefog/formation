@@ -169,6 +169,22 @@ pub enum AccountRequest {
         to_address: String,
         instance_id: String,
     },
+    AddOwnedAgent {
+        address: String,
+        agent_id: String,
+    },
+    RemoveOwnedAgent {
+        address: String,
+        agent_id: String,
+    },
+    AddOwnedModel {
+        address: String,
+        model_id: String,
+    },
+    RemoveOwnedModel {
+        address: String,
+        model_id: String,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -862,6 +878,18 @@ impl DataStore {
             AccountRequest::TransferOwnership { from_address, to_address, instance_id } => {
                 self.handle_transfer_ownership(from_address, to_address, instance_id).await?;
             }
+            AccountRequest::AddOwnedAgent { address, agent_id } => {
+                self.handle_add_owned_agent(address, agent_id).await?;
+            }
+            AccountRequest::RemoveOwnedAgent { address, agent_id } => {
+                self.handle_remove_owned_agent(address, agent_id).await?;
+            }
+            AccountRequest::AddOwnedModel { address, model_id } => {
+                self.handle_add_owned_model(address, model_id).await?;
+            }
+            AccountRequest::RemoveOwnedModel { address, model_id } => {
+                self.handle_remove_owned_model(address, model_id).await?;
+            }
         }
 
         Ok(())
@@ -984,6 +1012,42 @@ impl DataStore {
             self.handle_instance_op(op).await?;
         }
         
+        Ok(())
+    }
+
+    pub async fn handle_add_owned_agent(&mut self, address: String, agent_id: String) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(mut account) = self.account_state.get_account(&address) {
+            account.add_owned_agent(agent_id);
+            let op = self.account_state.update_account_local(account);
+            self.handle_account_op(op).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn handle_remove_owned_agent(&mut self, address: String, agent_id: String) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(mut account) = self.account_state.get_account(&address) {
+            account.remove_owned_agent(&agent_id);
+            let op = self.account_state.update_account_local(account);
+            self.handle_account_op(op).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn handle_add_owned_model(&mut self, address: String, model_id: String) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(mut account) = self.account_state.get_account(&address) {
+            account.add_owned_model(model_id);
+            let op = self.account_state.update_account_local(account);
+            self.handle_account_op(op).await?;
+        }
+        Ok(())
+    }
+    
+    pub async fn handle_remove_owned_model(&mut self, address: String, model_id: String) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(mut account) = self.account_state.get_account(&address) {
+            account.remove_owned_model(&model_id);
+            let op = self.account_state.update_account_local(account);
+            self.handle_account_op(op).await?;
+        }
         Ok(())
     }
 

@@ -10,7 +10,9 @@ use alloy_primitives::Address;
 use axum::extract::{Path, State};
 use flate2::read::GzDecoder;
 use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
-use form_state::datastore::InstanceRequest;
+use form_state::datastore::{InstanceRequest, AgentRequest, AccountRequest};
+use form_state::agent::AIAgent;
+use form_state::accounts::Account;
 use futures::{StreamExt, TryStreamExt};
 use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
 use tiny_keccak::{Hasher, Sha3};
@@ -30,6 +32,8 @@ use form_state::instances::{Instance, InstanceResources, InstanceStatus};
 use form_types::state::{Response as StateResponse, Success};
 use crate::image_builder::IMAGE_PATH;
 use crate::formfile::Formfile;
+use uuid::Uuid;
+use base64;
 
 pub const VM_IMAGE_PATH: &str = "/var/lib/formation/vm-images/";
 
@@ -214,12 +218,13 @@ impl FormPackManager {
         hasher.update(message.request.formfile.name.as_bytes());
         hasher.finalize(&mut hash);
         let instance_id = build_instance_id(node_id.clone(), hex::encode(hash))?;
+        let signer_address_hex = hex::encode(signer_address);
 
         let instance = Instance {
-            instance_id,
-            node_id,
+            instance_id: instance_id.clone(),
+            node_id: node_id.clone(),
             build_id: hex::encode(hash),
-            instance_owner: hex::encode(signer_address),
+            instance_owner: signer_address_hex.clone(),
             updated_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
             status: InstanceStatus::Building,
             formfile: serde_json::to_string(&message.request.formfile)?,
@@ -231,6 +236,40 @@ impl FormPackManager {
             },
             ..Default::default()
         };
+        
+        // Create and register the AIAgent
+        let mut agent = AIAgent::default();
+        agent.agent_id = Uuid::new_v4().to_string();
+        agent.name = message.request.formfile.name.clone();
+        agent.owner_id = signer_address_hex.clone();
+        agent.description = message.request.formfile.get_description().unwrap_or("").to_string();
+        agent.requires_specific_model = message.request.formfile.is_model_required();
+        agent.required_model_id = message.request.formfile.get_model_id().map(|s| s.to_string());
+        
+        // Set formfile template
+        if let Ok(formfile_json) = serde_json::to_string(&message.request.formfile) {
+            agent.formfile_template = base64::encode(formfile_json);
+        }
+        
+        // Set resource requirements based on Formfile
+        agent.resource_requirements.min_vcpus = message.request.formfile.get_vcpus();
+        agent.resource_requirements.recommended_vcpus = message.request.formfile.get_vcpus();
+        agent.resource_requirements.min_memory_mb = message.request.formfile.get_memory() as u64;
+        agent.resource_requirements.recommended_memory_mb = message.request.formfile.get_memory() as u64;
+        agent.resource_requirements.min_disk_gb = message.request.formfile.get_storage().unwrap_or(5) as u64;
+        agent.resource_requirements.recommended_disk_gb = message.request.formfile.get_storage().unwrap_or(5) as u64;
+        agent.resource_requirements.requires_gpu = message.request.formfile.get_gpu_devices().is_some();
+        agent.has_filesystem_access = true; // VM-based agents have filesystem access
+        
+        // Add metadata for build ID
+        agent.metadata.insert("build_id".to_string(), hex::encode(hash));
+        
+        // Create account update to link instance to owner
+        let account_request = AccountRequest::AddOwnedInstance {
+            address: signer_address_hex.clone(),
+            instance_id: instance_id.clone(),
+        };
+        
         let status_message = PackBuildResponse {
             status: PackBuildStatus::Started(hex::encode(hash)),
             request: message.clone()
@@ -239,18 +278,39 @@ impl FormPackManager {
         #[cfg(not(feature = "devnet"))]
         Self::write_to_queue(status_message, 1, "pack").await?;
 
-        let request = InstanceRequest::Create(instance);
-
+        let instance_request = InstanceRequest::Create(instance);
+        let agent_request = AgentRequest::Create(agent);
+        
         #[cfg(not(feature = "devnet"))]
-        Self::write_to_queue(request.clone(), 4, "state").await?;
+        {
+            Self::write_to_queue(instance_request.clone(), 4, "state").await?;
+            Self::write_to_queue(agent_request.clone(), 8, "state").await?;
+            Self::write_to_queue(account_request.clone(), 2, "state").await?;
+        }
 
         #[cfg(feature = "devnet")]
-        reqwest::Client::new().post("http://127.0.0.1:3004/instance/update")
-            .json(&request)
-            .send()
-            .await?
-            .json()
-            .await?;
+        {
+            reqwest::Client::new().post("http://127.0.0.1:3004/instance/create")
+                .json(&instance_request)
+                .send()
+                .await?
+                .json()
+                .await?;
+                
+            reqwest::Client::new().post("http://127.0.0.1:3004/agent/create")
+                .json(&agent_request)
+                .send()
+                .await?
+                .json()
+                .await?;
+                
+            reqwest::Client::new().post("http://127.0.0.1:3004/account/update")
+                .json(&account_request)
+                .send()
+                .await?
+                .json()
+                .await?;
+        }
 
         Ok(())
     }
@@ -271,6 +331,7 @@ impl FormPackManager {
         hasher.update(message.request.formfile.name.as_bytes());
         hasher.finalize(&mut build_id);
         let instance_id = build_instance_id(node_id.clone(), hex::encode(build_id))?;
+        let signer_address_hex = hex::encode(signer_address);
 
         let mut instance = match Client::new() 
             .get(format!("http://127.0.0.1:3004/instance/{instance_id}/get"))
@@ -278,10 +339,10 @@ impl FormPackManager {
                 Ok(StateResponse::Success(Success::Some(instance))) => instance,
                 _ => {
                     Instance {
-                        instance_id,
-                        node_id,
+                        instance_id: instance_id.clone(),
+                        node_id: node_id.clone(),
                         build_id: hex::encode(build_id),
-                        instance_owner: hex::encode(signer_address),
+                        instance_owner: signer_address_hex.clone(),
                         updated_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
                         formfile: serde_json::to_string(&message.request.formfile)?,
                         snapshots: None,
@@ -296,28 +357,101 @@ impl FormPackManager {
                 }
         };
 
+        // Get the existing agent to update it
+        let agent_response = Client::new()
+            .get(format!("http://127.0.0.1:3004/agent/by_build_id/{}", hex::encode(build_id)))
+            .send().await?.json::<StateResponse<AIAgent>>().await;
+        
+        let mut agent = match agent_response {
+            Ok(StateResponse::Success(Success::Some(agent))) => agent,
+            _ => {
+                // If agent not found, create a new one
+                let mut agent = AIAgent::default();
+                agent.agent_id = Uuid::new_v4().to_string();
+                agent.name = message.request.formfile.name.clone();
+                agent.owner_id = signer_address_hex.clone();
+                agent.description = message.request.formfile.get_description().unwrap_or("").to_string();
+                agent.requires_specific_model = message.request.formfile.is_model_required();
+                agent.required_model_id = message.request.formfile.get_model_id().map(|s| s.to_string());
+                
+                // Set formfile template
+                if let Ok(formfile_json) = serde_json::to_string(&message.request.formfile) {
+                    agent.formfile_template = base64::encode(formfile_json);
+                }
+                
+                // Set resource requirements based on Formfile
+                agent.resource_requirements.min_vcpus = message.request.formfile.get_vcpus();
+                agent.resource_requirements.recommended_vcpus = message.request.formfile.get_vcpus();
+                agent.resource_requirements.min_memory_mb = message.request.formfile.get_memory() as u64;
+                agent.resource_requirements.recommended_memory_mb = message.request.formfile.get_memory() as u64;
+                agent.resource_requirements.min_disk_gb = message.request.formfile.get_storage().unwrap_or(5) as u64;
+                agent.resource_requirements.recommended_disk_gb = message.request.formfile.get_storage().unwrap_or(5) as u64;
+                agent.resource_requirements.requires_gpu = message.request.formfile.get_gpu_devices().is_some();
+                agent.has_filesystem_access = true; // VM-based agents have filesystem access
+                
+                // Add metadata for build ID
+                agent.metadata.insert("build_id".to_string(), hex::encode(build_id));
+                
+                agent
+            }
+        };
+        
+        // Update agent with instance ID and status
+        agent.metadata.insert("instance_id".to_string(), instance_id.clone());
+        agent.updated_at = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+        agent.deployment_count += 1;
+        
+        // Update instance status
         instance.status = InstanceStatus::Built;
         
+        // Create necessary requests
         let status_message = PackBuildResponse {
             status: PackBuildStatus::Completed(instance.clone()),
             request: message.clone()
         };
 
+        // Create account update to link instance and agent to owner
+        let account_request = AccountRequest::AddOwnedInstance {
+            address: signer_address_hex.clone(),
+            instance_id: instance_id.clone(),
+        };
+        
         #[cfg(not(feature = "devnet"))]
         Self::write_to_queue(status_message, 1, "pack").await?;
 
-        let request = InstanceRequest::Create(instance);
+        let instance_request = InstanceRequest::Update(instance);
+        let agent_request = AgentRequest::Update(agent);
 
         #[cfg(not(feature = "devnet"))]
-        Self::write_to_queue(request, 4, "state").await?;
+        {
+            Self::write_to_queue(instance_request, 4, "state").await?;
+            Self::write_to_queue(agent_request, 8, "state").await?;
+            Self::write_to_queue(account_request, 2, "state").await?;
+        }
 
         #[cfg(feature = "devnet")]
-        reqwest::Client::new().post("http://127.0.0.1:3004/instance/update")
-            .json(&request)
-            .send()
-            .await?
-            .json()
-            .await?;
+        {
+            reqwest::Client::new().post("http://127.0.0.1:3004/instance/update")
+                .json(&instance_request)
+                .send()
+                .await?
+                .json()
+                .await?;
+                
+            reqwest::Client::new().post("http://127.0.0.1:3004/agent/update")
+                .json(&agent_request)
+                .send()
+                .await?
+                .json()
+                .await?;
+                
+            reqwest::Client::new().post("http://127.0.0.1:3004/account/update")
+                .json(&account_request)
+                .send()
+                .await?
+                .json()
+                .await?;
+        }
 
         Ok(())
     }

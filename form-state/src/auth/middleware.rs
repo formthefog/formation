@@ -14,6 +14,7 @@ use std::sync::Arc;
 use jsonwebtoken::TokenData;
 use serde_json::{self, json};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use crate::api::is_localhost_request;
 
 /// Custom error type for authentication errors
 #[derive(Debug)]
@@ -121,6 +122,12 @@ pub async fn jwt_auth_middleware(
     
     // Log request path and method
     log::info!("Request path: {:?}, method: {:?}", request.uri().path(), request.method());
+    
+    // Check if request is from localhost - bypass auth if it is
+    if is_localhost_request(&request) {
+        log::info!("Localhost detected, bypassing JWT authentication");
+        return Ok(next.run(request).await);
+    }
     
     // Log headers for CORS debugging
     log::info!("Request headers:");
