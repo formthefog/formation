@@ -148,7 +148,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // If no bootstraps are specified, initialize the node without joining
                     if bootstraps.is_empty() {
                         log::info!("No bootstraps specified, initializing node without joining");
-                        formnet::init::init(address).await?;
+                        if let Err(e) = formnet::init::init(address).await {
+                            log::error!("Error in formnet init... {e}");
+                        }
                         return Ok(());
                     }
 

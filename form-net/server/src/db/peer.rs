@@ -91,7 +91,7 @@ impl<T: Display + Clone + PartialEq, D> DatabasePeer<T, D> {
 impl DatabasePeer<String, CrdtMap> {
     pub async fn create(contents: PeerContents<String>) -> Result<Self, ServerError> {
         if !Self::is_valid_name(&contents.name) {
-            log::warn!("Peer name is invalid, must confirm to hostname(7) requirements");
+            log::warn!("Peer name is invalid, must conform to hostname(7) requirements");
             return Err(ServerError::InvalidQuery);
         }
 

@@ -21,6 +21,7 @@ pub struct BootstrapInfo {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Response {
+    Health,
     Join(JoinResponse),
     Bootstrap(BootstrapInfo),
     Fetch(Vec<Peer<String>>),
@@ -48,6 +49,7 @@ pub async fn server(
     let bootstrap_info = Arc::new(RwLock::new(FormnetApiState { info: bootstrap_info, endpoints}));
 
     let router = Router::new()
+        .route("/health", get(health))
         .route("/join", post(join))
         .route("/leave", post(handle_leave_request))
         .route("/fetch", get(members))
@@ -60,6 +62,10 @@ pub async fn server(
     axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await?;
 
     Ok(())
+}
+
+async fn health() -> Json<Response> {
+    Ok(Response::Health)
 }
 
 async fn join(

@@ -1260,11 +1260,19 @@ impl DataStore {
         log::info!("Bradcasting Op to all active admins...");
         let peers = self.get_all_active_admin();
         for (id, peer) in peers {
+
+            if id == self.node_state.node_id {
+                continue
+            }
+
             log::info!("Sending Op to all {id} at {}...", peer.ip().to_string());
+
             if let Err(e) = self.send::<R>(&peer.ip().to_string(), endpoint, request.clone()).await {
                 eprintln!("Error sending {endpoint} request to {id}: {}: {e}", peer.ip().to_string());
             };
+
             log::info!("Successfully sent Op {id} at {}...", peer.ip().to_string());
+
         }
 
         Ok(())
