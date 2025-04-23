@@ -1150,6 +1150,7 @@ async fn interface_up(interface: InterfaceName) -> bool {
 
 async fn get_bootstrap_info_from_config(config: &ConfigFile) -> Result<(String, IpAddr, SocketAddr), Box<dyn std::error::Error>> {
     if let Some(bootstrap) = &config.bootstrap {
+        // Normal case: we have bootstrap info in config
         let bytes = hex::decode(bootstrap)?;
         let info: BootstrapInfo = serde_json::from_slice(&bytes)?;
         if let (Some(external), Some(internal)) = (info.external_endpoint, info.internal_endpoint) {
@@ -1163,12 +1164,54 @@ async fn get_bootstrap_info_from_config(config: &ConfigFile) -> Result<(String, 
             )
         }
     } else {
-        return Err(Box::new(
-            std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Cannot fetch without a bootstrap peer"
-            )
-        ))
+        // Bootstrap node case: this is likely a bootstrap node, use local API
+        log::info!("No bootstrap info found in config, assuming this is a bootstrap node");
+        
+        // Try to connect to local API
+        match Client::new().get("http://127.0.0.1:51820/bootstrap").send().await {
+            Ok(resp) => {
+                match resp.json::<Response>().await {
+                    Ok(Response::Bootstrap(info)) => {
+                        // Got bootstrap info from local API
+                        if let (Some(external), Some(internal)) = (info.external_endpoint, info.internal_endpoint) {
+                            log::info!("Successfully fetched bootstrap info from local API");
+                            return Ok((info.pubkey, internal, external));
+                        } else {
+                            return Err(Box::new(
+                                std::io::Error::new(
+                                    std::io::ErrorKind::Other,
+                                    "Local bootstrap API response missing endpoint information"
+                                )
+                            ));
+                        }
+                    },
+                    Ok(_) => {
+                        return Err(Box::new(
+                            std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                "Invalid response from local bootstrap API"
+                            )
+                        ));
+                    },
+                    Err(e) => {
+                        return Err(Box::new(
+                            std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                format!("Error parsing bootstrap response: {}", e)
+                            )
+                        ));
+                    }
+                }
+            },
+            Err(e) => {
+                return Err(Box::new(
+                    std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("Cannot fetch bootstrap info from local API: {}. If this is not a bootstrap node, configure bootstrap info.", e)
+                    )
+                ));
+            }
+        }
     }
 }
 
