@@ -65,7 +65,7 @@ pub async fn server(
 }
 
 async fn health() -> Json<Response> {
-    Ok(Response::Health)
+    Json(Response::Health)
 }
 
 async fn join(

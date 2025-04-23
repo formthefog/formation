@@ -1,12 +1,14 @@
 //! A service to create and run formnet, a wireguard based p2p VPN tunnel, behind the scenes
 use std::path::PathBuf;
 use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::Arc;
 use alloy_core::primitives::Address;
 use k256::ecdsa::SigningKey;
 use clap::{Parser, Subcommand, Args};
 use form_config::OperatorConfig;
 use form_types::PeerType;
-use formnet::{init, serve};
+use formnet::{init, serve, up};
 use formnet::{leave, uninstall, user_join_formnet, vm_join_formnet, NETWORK_NAME};
 #[cfg(target_os = "linux")]
 use formnet::{revert_formnet_resolver, set_formnet_resolver};
@@ -15,6 +17,7 @@ use serde_json::Value;
 use colored::Colorize;
 use formnet::bootstrap;
 use formnet::api;
+use tokio::sync::RwLock;
 
 // Import the Shutdown struct from the correct location
 use std::net::Shutdown;
@@ -148,9 +151,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // If no bootstraps are specified, initialize the node without joining
                     if bootstraps.is_empty() {
                         log::info!("No bootstraps specified, initializing node without joining");
-                        if let Err(e) = formnet::init::init(address).await {
+                        if let Err(e) = formnet::init::init(address.clone()).await {
                             log::error!("Error in formnet init... {e}");
+                            return Ok(());
                         }
+                        
+                        log::info!("Successfully initialized bootstrap node");
+                        
+                        // Start API server in a separate task
+                        let bootstrap_info = api::BootstrapInfo {
+                            id: address.clone(),
+                            peer_type: PeerType::Operator,
+                            cidr_id: "".to_string(),
+                            pubkey: secret_key_string.clone(),
+                            internal_endpoint: None,
+                            external_endpoint: None,
+                        };
+                        let endpoints = Arc::new(RwLock::new(HashMap::new()));
+                        
+                        // Run API server in a separate task so it doesn't block the up function
+                        let api_endpoints = endpoints.clone();
+                        tokio::spawn(async move {
+                            log::info!("Starting API server for bootstrap node");
+                            if let Err(e) = api::server(bootstrap_info, api_endpoints).await {
+                                log::error!("Bootstrap API server error: {}", e);
+                            }
+                        });
+                        
+                        // Run the up function in the main task
+                        log::info!("Starting formnet up process for bootstrap node");
+                        if let Err(e) = up(Some(Duration::from_secs(60)), None).await {
+                            log::error!("Error in bootstrap formnet up: {}", e);
+                        }
+                        
                         return Ok(());
                     }
 
@@ -180,6 +213,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ).await {
                         Ok(ip) => {
                             log::info!("Successfully joined with IP {}", ip);
+                            
+                            // Start API server in a separate task
+                            let addr_clone = op_config.address.clone().unwrap_or_default();
+                            let bootstrap_info = api::BootstrapInfo {
+                                id: addr_clone.clone(),
+                                peer_type: PeerType::Operator,
+                                cidr_id: "".to_string(), // Fill with appropriate value if needed
+                                pubkey: secret_key_string.clone(),
+                                internal_endpoint: None,
+                                external_endpoint: None,
+                            };
+                            let endpoints = Arc::new(RwLock::new(HashMap::new()));
+                            
+                            // Run API server in a separate task so it doesn't block the up function
+                            let api_endpoints = endpoints.clone();
+                            tokio::spawn(async move {
+                                log::info!("Starting API server");
+                                if let Err(e) = api::server(bootstrap_info, api_endpoints).await {
+                                    log::error!("API server error: {}", e);
+                                }
+                            });
+                            
+                            // Run the up function in the main task
+                            log::info!("Starting formnet up process");
+                            if let Err(e) = up(Some(Duration::from_secs(60)), None).await {
+                                log::error!("Error in formnet up: {}", e);
+                            }
                         }
                         Err(e) => {
                             log::error!("Failed to join: {}", e);
@@ -228,14 +288,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // Proceed with the leave command
                     let address = op_config.address.clone().unwrap_or_default();
                     
+                    log::info!("Shutting down formnet services...");
+                    
                     // Use the leave function directly instead of Shutdown
                     match leave(vec![], address).await {
                         Ok(_) => {
-                            log::info!("Node successfully shutdown");
+                            log::info!("Node successfully left the network");
+                            
+                            // Ensure formnet interface is down and services are stopped
+                            if let Err(e) = formnet::uninstall().await {
+                                log::error!("Error during formnet uninstall: {}", e);
+                                // Continue with shutdown even if uninstall has errors
+                            } else {
+                                log::info!("Formnet interface successfully uninstalled");
+                            }
+                            
+                            // At this point, the API server and 'up' function should naturally terminate
+                            // since the network interface they depend on is gone
+                            log::info!("All formnet services have been shutdown");
+                            
                             return Ok(());
                         },
                         Err(e) => {
-                            log::error!("Failed to shutdown node: {}", e);
+                            log::error!("Failed to leave network: {}", e);
+                            
+                            // Even if leaving the network failed, try to uninstall 
+                            // to ensure a clean state
+                            if let Err(uninstall_err) = formnet::uninstall().await {
+                                log::error!("Failed to uninstall formnet: {}", uninstall_err);
+                            }
+                            
                             return Ok(());
                         }
                     }
