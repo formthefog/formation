@@ -1,12 +1,14 @@
 //! A service to create and run formnet, a wireguard based p2p VPN tunnel, behind the scenes
 use std::path::PathBuf;
 use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::Arc;
 use alloy_core::primitives::Address;
 use k256::ecdsa::SigningKey;
 use clap::{Parser, Subcommand, Args};
 use form_config::OperatorConfig;
 use form_types::PeerType;
-use formnet::{init, serve};
+use formnet::{init, serve, up};
 use formnet::{leave, uninstall, user_join_formnet, vm_join_formnet, NETWORK_NAME};
 #[cfg(target_os = "linux")]
 use formnet::{revert_formnet_resolver, set_formnet_resolver};
@@ -15,9 +17,13 @@ use serde_json::Value;
 use colored::Colorize;
 use formnet::bootstrap;
 use formnet::api;
+use tokio::sync::RwLock;
+use wireguard_control::KeyPair;
 
 // Import the Shutdown struct from the correct location
 use std::net::Shutdown;
+use std::net::IpAddr;
+use std::net::SocketAddr;
 
 #[derive(Clone, Debug, Parser)]
 struct Cli {
@@ -57,14 +63,12 @@ struct OperatorJoinOpts {
     /// This will be used instead of or in addition to the bootstrap nodes
     #[arg(long="bootstrap-domain", alias="domain")]
     bootstrap_domain: Option<String>,
-    /// A 20 byte hex string that represents an ethereum address
     #[arg(short, long="signing-key", aliases=["private-key", "secret-key"])]
     signing_key: Option<String>,
     #[arg(short, long, default_value="true")]
     encrypted: bool,
     #[arg(short, long)]
     password: Option<String>,
-    /// Public IP address to use (if not automatically detected)
     #[arg(long="public-ip", short='i')]
     public_ip: Option<String>,
 }
@@ -83,7 +87,6 @@ struct OperatorLeaveOpts {
     /// This will be used instead of or in addition to the bootstrap nodes
     #[arg(long="bootstrap-domain", alias="domain")]
     bootstrap_domain: Option<String>,
-    /// A 20 byte hex string that represents an ethereum address
     #[arg(short, long="signing-key", aliases=["private-key", "secret-key"])]
     signing_key: Option<String>,
     #[arg(short, long, default_value="true")]
@@ -130,6 +133,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         return Ok(());
                     }
 
+                    let secret_key_string = op_config.secret_key.unwrap();
+                    let sk = SigningKey::from_slice(
+                        &hex::decode(&secret_key_string)?
+                    )?;
+
+                    // Generate a proper WireGuard keypair
+                    let wg_keypair = KeyPair::generate();
+                    let public_key_base64 = wg_keypair.public.to_base64();
+                    
+                    let address = hex::encode(Address::from_private_key(&sk));
+
                     // Build bootstrap list, combining user-provided bootstraps with the bootstrap domain
                     let mut bootstraps = parser.bootstraps.clone();
                     if bootstraps.is_empty() {
@@ -144,8 +158,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // If no bootstraps are specified, initialize the node without joining
                     if bootstraps.is_empty() {
                         log::info!("No bootstraps specified, initializing node without joining");
-                        let address = op_config.address.clone().unwrap_or_default();
-                        formnet::init::init(address).await?;
+                        if let Err(e) = formnet::init::init(address.clone()).await {
+                            log::error!("Error in formnet init... {e}");
+                            return Ok(());
+                        }
+                        
+                        log::info!("Successfully initialized bootstrap node");
+                        
+                        // Detect public IP for bootstrap node
+                        let pub_ip = match publicip::get_any(publicip::Preference::Ipv4) {
+                            Some(ip) => {
+                                log::info!("Detected public IP for bootstrap node: {}", ip);
+                                ip
+                            },
+                            None => {
+                                log::warn!("Failed to detect public IP for bootstrap node, using localhost");
+                                IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))
+                            }
+                        };
+                        
+                        // For bootstrap node, formnet IP is 10.0.0.1
+                        let formnet_ip = IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 1));
+                        
+                        // Create bootstrap info with actual endpoint information
+                        let bootstrap_info = api::BootstrapInfo {
+                            id: address.clone(),
+                            peer_type: PeerType::Operator,
+                            cidr_id: "".to_string(),
+                            pubkey: secret_key_string.clone(),
+                            internal_endpoint: Some(formnet_ip), // Use formnet IP for internal endpoint
+                            external_endpoint: Some(SocketAddr::new(pub_ip, 51820)), // Use detected public IP for external endpoint
+                        };
+                        let endpoints = Arc::new(RwLock::new(HashMap::new()));
+                        
+                        // Run API server in a separate task so it doesn't block the up function
+                        let api_endpoints = endpoints.clone();
+                        tokio::spawn(async move {
+                            log::info!("Starting API server for bootstrap node");
+                            if let Err(e) = api::server(bootstrap_info, api_endpoints).await {
+                                log::error!("Bootstrap API server error: {}", e);
+                            }
+                        });
+                        
+                        // Run the up function in the main task
+                        log::info!("Starting formnet up process for bootstrap node");
+                        if let Err(e) = up(Some(Duration::from_secs(60)), None).await {
+                            log::error!("Error in bootstrap formnet up: {}", e);
+                        }
+                        
                         return Ok(());
                     }
 
@@ -175,6 +235,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ).await {
                         Ok(ip) => {
                             log::info!("Successfully joined with IP {}", ip);
+                            
+                            // Start API server in a separate task
+                            let addr_clone = op_config.address.clone().unwrap_or_default();
+                            
+                            // Get the public IP for external endpoint - detect it again to avoid move issues
+                            let external_ip = match publicip::get_any(publicip::Preference::Ipv4) {
+                                Some(ip) => {
+                                    log::info!("Detected public IP for node: {}", ip);
+                                    ip
+                                },
+                                None => {
+                                    log::warn!("Failed to detect public IP, using localhost");
+                                    IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))
+                                }
+                            };
+                            
+                            // For joined node, use the IP address assigned by the bootstrap
+                            let bootstrap_info = api::BootstrapInfo {
+                                id: addr_clone.clone(),
+                                peer_type: PeerType::Operator,
+                                cidr_id: "".to_string(),
+                                pubkey: secret_key_string.clone(),
+                                internal_endpoint: Some(ip), // Use the IP provided by bootstrap node
+                                external_endpoint: None,     // Don't set external endpoint, let ICE/STUN process handle it
+                            };
+                            let endpoints = Arc::new(RwLock::new(HashMap::new()));
+                            
+                            // Run API server in a separate task so it doesn't block the up function
+                            let api_endpoints = endpoints.clone();
+                            tokio::spawn(async move {
+                                log::info!("Starting API server");
+                                if let Err(e) = api::server(bootstrap_info, api_endpoints).await {
+                                    log::error!("API server error: {}", e);
+                                }
+                            });
+                            
+                            // Run the up function in the main task
+                            log::info!("Starting formnet up process");
+                            if let Err(e) = up(Some(Duration::from_secs(60)), None).await {
+                                log::error!("Error in formnet up: {}", e);
+                            }
                         }
                         Err(e) => {
                             log::error!("Failed to join: {}", e);
@@ -223,14 +324,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // Proceed with the leave command
                     let address = op_config.address.clone().unwrap_or_default();
                     
+                    log::info!("Shutting down formnet services...");
+                    
                     // Use the leave function directly instead of Shutdown
                     match leave(vec![], address).await {
                         Ok(_) => {
-                            log::info!("Node successfully shutdown");
+                            log::info!("Node successfully left the network");
+                            
+                            // Ensure formnet interface is down and services are stopped
+                            if let Err(e) = formnet::uninstall().await {
+                                log::error!("Error during formnet uninstall: {}", e);
+                                // Continue with shutdown even if uninstall has errors
+                            } else {
+                                log::info!("Formnet interface successfully uninstalled");
+                            }
+                            
+                            // At this point, the API server and 'up' function should naturally terminate
+                            // since the network interface they depend on is gone
+                            log::info!("All formnet services have been shutdown");
+                            
                             return Ok(());
                         },
                         Err(e) => {
-                            log::error!("Failed to shutdown node: {}", e);
+                            log::error!("Failed to leave network: {}", e);
+                            
+                            // Even if leaving the network failed, try to uninstall 
+                            // to ensure a clean state
+                            if let Err(uninstall_err) = formnet::uninstall().await {
+                                log::error!("Failed to uninstall formnet: {}", uninstall_err);
+                            }
+                            
                             return Ok(());
                         }
                     }

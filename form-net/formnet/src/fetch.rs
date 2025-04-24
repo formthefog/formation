@@ -10,7 +10,7 @@ use std::{
 };
 
 use client::{data_store::DataStore, nat::NatTraverse, util};
-use formnet_server::ConfigFile;
+use formnet_server::{ConfigFile, db::CrdtMap};
 use futures::{stream::FuturesUnordered, StreamExt};
 use hostsfile::HostsBuilder;
 use reqwest::{Client, Response as ServerResponse};
@@ -1005,7 +1005,13 @@ pub async fn fetch(
     let network = NetworkOpts::default();
     let config = ConfigFile::from_file(config_dir.join(NETWORK_NAME).with_extension("conf"))?; 
     let interface_up = interface_up(interface.clone()).await;
+    
+    // Check if this is a bootstrap node
+    let is_bootstrap_node = config.bootstrap.is_none();
+    
+    // Get bootstrap info (will work for both bootstrap and non-bootstrap nodes)
     let (pubkey, internal, external) = get_bootstrap_info_from_config(&config).await?;
+    
     let store = DataStore::<String>::open_or_create(&data_dir, &interface)?;
 
     // Load connection cache
@@ -1082,41 +1088,67 @@ pub async fn fetch(
         }
     }
 
-    let bootstrap_resp = Client::new().get(format!("http://{external}/fetch")).send();
-    match bootstrap_resp.await {
-        Ok(resp) => {
-            if let Err(e) = handle_server_response(resp, &interface, network, data_dir.clone(), interface_up, external.to_string(), config.address.to_string(), host_port, hosts_path.clone(), &mut connection_cache).await {
-                log::error!(
-                    "Error handling server response from fetch call: {e}"
-                )
+    // For bootstrap nodes, we'll get peers directly from the database
+    // instead of trying to fetch from an external bootstrap node
+    if is_bootstrap_node {
+        log::info!("Bootstrap node detected - getting peers from local database");
+        if let Ok(peers) = formnet_server::DatabasePeer::<String, CrdtMap>::list().await {
+            let peers_vec: Vec<Peer<String>> = peers.iter().map(|p| p.inner.clone()).collect();
+            if let Err(e) = handle_peer_updates(
+                peers_vec,
+                &interface,
+                network,
+                data_dir.clone(),
+                interface_up,
+                hosts_path.clone(),
+                external.to_string(),
+                config.address.to_string(),
+                external.port(),
+                &mut connection_cache,
+            ).await {
+                log::error!("Error handling peer updates for bootstrap node: {e}");
             }
+        } else {
+            log::warn!("Failed to list peers from database - bootstrap node may not have any peers yet");
         }
-        Err(e) => {
-            log::error!("Error fetching from bootstrap: {e}");
-            for admin in admins {
-                if let Some(ref external) = &admin.endpoint {
-                    if let Ok(endpoint) = external.resolve() {
-                        if let Ok(resp) = Client::new().get(format!("http://{endpoint}/fetch")).send().await {
-                            match handle_server_response(
-                                resp, 
-                                &interface, 
-                                network, 
-                                data_dir.clone(), 
-                                interface_up, 
-                                endpoint.to_string(),
-                                config.address.to_string(), 
-                                endpoint.port(), 
-                                hosts_path.clone(),
-                                &mut connection_cache).await 
-                            {
-                                Ok(_) => break,
-                                Err(e) => log::error!("Error handling server response from fetch call to {external}: {e}"),
+    } else {
+        // Normal mode for non-bootstrap nodes: fetch from bootstrap node
+        let bootstrap_resp = Client::new().get(format!("http://{external}/fetch")).send();
+        match bootstrap_resp.await {
+            Ok(resp) => {
+                if let Err(e) = handle_server_response(resp, &interface, network, data_dir.clone(), interface_up, external.to_string(), config.address.to_string(), host_port, hosts_path.clone(), &mut connection_cache).await {
+                    log::error!(
+                        "Error handling server response from fetch call: {e}"
+                    )
+                }
+            }
+            Err(e) => {
+                log::error!("Error fetching from bootstrap: {e}");
+                for admin in admins {
+                    if let Some(ref external) = &admin.endpoint {
+                        if let Ok(endpoint) = external.resolve() {
+                            if let Ok(resp) = Client::new().get(format!("http://{endpoint}/fetch")).send().await {
+                                match handle_server_response(
+                                    resp, 
+                                    &interface, 
+                                    network, 
+                                    data_dir.clone(), 
+                                    interface_up, 
+                                    endpoint.to_string(),
+                                    config.address.to_string(), 
+                                    endpoint.port(), 
+                                    hosts_path.clone(),
+                                    &mut connection_cache).await 
+                                {
+                                    Ok(_) => break,
+                                    Err(e) => log::error!("Error handling server response from fetch call to {external}: {e}"),
+                                }
                             }
                         }
                     }
                 }
-            }
-        },
+            },
+        }
     }
 
     // Health check task is still running in the background
@@ -1150,6 +1182,7 @@ async fn interface_up(interface: InterfaceName) -> bool {
 
 async fn get_bootstrap_info_from_config(config: &ConfigFile) -> Result<(String, IpAddr, SocketAddr), Box<dyn std::error::Error>> {
     if let Some(bootstrap) = &config.bootstrap {
+        // Normal case: we have bootstrap info in config
         let bytes = hex::decode(bootstrap)?;
         let info: BootstrapInfo = serde_json::from_slice(&bytes)?;
         if let (Some(external), Some(internal)) = (info.external_endpoint, info.internal_endpoint) {
@@ -1163,12 +1196,40 @@ async fn get_bootstrap_info_from_config(config: &ConfigFile) -> Result<(String, 
             )
         }
     } else {
-        return Err(Box::new(
-            std::io::Error::new(
+        // Bootstrap node case - get info from the WireGuard device
+        log::info!("No bootstrap info found in config, getting info from WireGuard device");
+        
+        let interface = InterfaceName::from_str(NETWORK_NAME)?;
+        let device = Device::get(&interface, NetworkOpts::default().backend)?;
+        
+        // Get public key from device
+        let public_key = match &device.public_key {
+            Some(key) => key.to_base64(),
+            None => return Err(Box::new(std::io::Error::new(
                 std::io::ErrorKind::Other,
-                "Cannot fetch without a bootstrap peer"
-            )
-        ))
+                "Could not get public key from WireGuard device"
+            )))
+        };
+        
+        // Get internal IP (should be 10.0.0.1 for bootstrap node)
+        let internal_ip = config.address;
+        
+        // Get external endpoint (use the listen address and port)
+        let external_ip = match publicip::get_any(publicip::Preference::Ipv4) {
+            Some(ip) => ip,
+            None => return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Could not detect public IP for bootstrap node"
+            )))
+        };
+        
+        let listen_port = device.listen_port.unwrap_or(51820);
+        let external_addr = SocketAddr::new(external_ip, listen_port);
+        
+        log::info!("Bootstrap node using device info: pubkey={}, internal={}, external={}", 
+            public_key, internal_ip, external_addr);
+            
+        return Ok((public_key, internal_ip, external_addr));
     }
 }
 

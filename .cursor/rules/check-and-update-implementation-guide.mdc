@@ -1,0 +1,8 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+Always check the project implementation guide [microservices-migration-plan.md](mdc:microservices-migration-plan.md) before doing anything
+
+After completing a task always update the implementation guide [microservices-migration-plan.md](mdc:microservices-migration-plan.md) before suggesting a next step.

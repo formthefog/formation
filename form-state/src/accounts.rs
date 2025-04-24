@@ -20,6 +20,12 @@ pub struct Account {
     /// Set of instance IDs owned by this account
     #[serde(default)]
     pub owned_instances: BTreeSet<String>,
+    /// Set of agent IDs owned by this account
+    #[serde(default)]
+    pub owned_agents: BTreeSet<String>,
+    /// Set of model IDs owned by this account
+    #[serde(default)]
+    pub owned_models: BTreeSet<String>,
     /// Map of instance IDs to authorization level for instances where this account has access
     #[serde(default)]
     pub authorized_instances: BTreeMap<String, AuthorizationLevel>,
@@ -80,6 +86,8 @@ impl Account {
             address,
             name: None,
             owned_instances: BTreeSet::new(),
+            owned_agents: BTreeSet::new(),
+            owned_models: BTreeSet::new(),
             authorized_instances: BTreeMap::new(),
             subscription: None,
             usage: Some(UsageTracker::new()), // Initialize with default usage tracker
@@ -95,6 +103,36 @@ impl Account {
     pub fn add_owned_instance(&mut self, instance_id: String) {
         self.owned_instances.insert(instance_id);
         self.updated_at = Utc::now().timestamp();
+    }
+
+    /// Add an agent to the owned agents
+    pub fn add_owned_agent(&mut self, agent_id: String) {
+        self.owned_agents.insert(agent_id);
+        self.updated_at = Utc::now().timestamp();
+    }
+
+    /// Remove an agent from the owned agents
+    pub fn remove_owned_agent(&mut self, agent_id: &str) -> bool {
+        let removed = self.owned_agents.remove(agent_id);
+        if removed {
+            self.updated_at = Utc::now().timestamp();
+        }
+        removed
+    }
+
+    /// Add a model to the owned models
+    pub fn add_owned_model(&mut self, model_id: String) {
+        self.owned_models.insert(model_id);
+        self.updated_at = Utc::now().timestamp();
+    }
+
+    /// Remove a model from the owned models
+    pub fn remove_owned_model(&mut self, model_id: &str) -> bool {
+        let removed = self.owned_models.remove(model_id);
+        if removed {
+            self.updated_at = Utc::now().timestamp();
+        }
+        removed
     }
 
     /// Remove an instance from the owned instances
@@ -509,6 +547,16 @@ impl Account {
             // Default for accounts without a subscription
             5 // Free tier gets 5 API keys
         }
+    }
+
+    /// Check if an agent is owned by this account
+    pub fn owns_agent(&self, agent_id: &str) -> bool {
+        self.owned_agents.contains(agent_id)
+    }
+
+    /// Get the count of owned agents
+    pub fn owned_agent_count(&self) -> usize {
+        self.owned_agents.len()
     }
 }
 

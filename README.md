@@ -1,12 +1,15 @@
 # Formation
 
-A public verifiable and self-replicating protocol for trustless, confidential virtual private servers (VPS) coordinating as a Fog Compute network to power the Age of Autonomy.
+A vertically integrated 2-sided marketplace for AI Agents & Models built on a public verifiable and self-replicating protocol for trustless, confidential virtual private servers (VPS) coordinating as a Fog Compute network to power the Age of Autonomy.
 
 ---
 
 ## Table of Contents
 
 - [Overview](#overview)
+- [Marketplace Features](#marketplace-features)
+- [Deployment Architecture](#deployment-architecture)
+- [Docker Configuration](#docker-configuration)
 - [Special Thanks](#special-thanks)
 - [Contributing](#contributing)
 - [Pre-release Notice](#pre-release-notice)
@@ -27,10 +30,93 @@ A public verifiable and self-replicating protocol for trustless, confidential vi
   - [Writing Formfiles](#writing-formfiles)
   - [Advanced Topics](#advanced-topics)
   - [Troubleshooting](#troubleshooting)
+- [AI Marketplace Development](#ai-marketplace-development)
+  - [Creating AI Assets for the Formation Marketplace](#creating-ai-assets-for-the-formation-marketplace)
+  - [Containerization Options for Agents](#containerization-options-for-agents)
+- [Marketplace Deployment Process](#marketplace-deployment-process)
 
 ## Overview
 
-#### A public verfiable and self-replicating protocol for trustless confidential virtual private servers (VPS), coordinating as a Fog Compute network to power the Age of Autonomy.
+Formation is a **Vertically Integrated 2-Sided Marketplace for AI Agents & Models** that enables:
+
+1. **AI Creators** to publish, monetize, and distribute their AI models and agents
+2. **AI Consumers** to discover, deploy, and utilize these AI capabilities through a unified platform
+
+Built on a foundation of trustless, confidential computing, Formation manages the entire stack from infrastructure to marketplace features:
+
+- **Vertically Integrated**: Controls every layer from low-level VM provisioning and networking to high-level marketplace functions including discovery, billing, and deployment
+- **2-Sided Marketplace**: Connects AI providers with users through structured authentication, access controls, and usage-based billing
+- **Fog Computing Infrastructure**: Leverages a distributed network of nodes for resilient, decentralized computation without central points of failure
+
+This comprehensive platform serves as the foundation for the next generation of AI applications and autonomous systems.
+
+## Marketplace Features
+
+The Formation marketplace provides comprehensive infrastructure for AI model and agent distribution:
+
+### For AI Creators
+- **Model & Agent Publishing**: Structured registration process with detailed metadata, versioning, and documentation
+- **Monetization Options**: Flexible pricing models including subscription-based access, pay-per-use, and token-based billing
+- **Usage Analytics**: Track model performance, adoption, and revenue across customers
+- **Access Control**: Define private or public accessibility for models and agents with granular permissions
+
+### For AI Consumers
+- **Discovery & Deployment**: Find and deploy AI capabilities with standardized interfaces
+- **Subscription Management**: Tiered subscription plans with varying levels of resource access
+- **API Key Management**: Generate and manage API keys for programmatic access with configurable permissions
+- **Usage Tracking**: Monitor token consumption, agent usage, and credit balances
+
+### Core Technology
+- **Authentication**: JWT-based authentication with JWKS verification and role-based access control
+- **Billing Integration**: Usage-based metering with credit system and Stripe integration
+- **Resource Eligibility**: Automated enforcement of plan limitations and quota management
+- **API Access**: Comprehensive API for programmatic interaction with all marketplace components
+
+## Deployment Architecture
+
+Formation now operates as a Vertically Integrated 2-Sided Marketplace for AI Agents & Models, supported by these core components:
+
+- **form-vmm**: Virtual Machine Monitor for secure execution of AI workloads
+- **form-pack**: Packaging system for AI models and agents
+- **form-net**: Secure networking between components using WireGuard
+- **form-p2p**: Decentralized communication infrastructure
+- **form-state**: State management with authentication, billing, and marketplace features
+- **form-dns**: DNS and routing services for the network
+- **form-node-metrics**: Node performance and health monitoring
+
+The system supports three deployment configurations:
+
+### 1. Single Node Developer Network
+A self-contained deployment for testing and development, using the `formation-minimal` container with local-only components.
+
+### 2. Multi-Node Test Network
+A distributed test environment with coordinated state management and inter-node communication.
+
+### 3. Production Grade Multi-Node Network
+Full production deployment with distributed authentication, billing, and high availability.
+
+## Docker Configuration
+
+The Formation system can be deployed using Docker containers. For a development environment, we provide the `formation-minimal` container:
+
+```bash
+docker run --rm --privileged --network=host \
+    --device=/dev/kvm \
+    --device=/dev/vhost-net \
+    --device=/dev/null \
+    --device=/dev/zero \
+    --device=/dev/random \
+    --device=/dev/urandom \
+    -v /lib/modules:/lib/modules:ro \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    -v /path/to/operator/config:/etc/formation/config \
+    -e SECRET_PATH=/path/to/config \
+    -e PASSWORD=<your-encryption-password> \
+    --mount type=tmpfs,destination=/dev/hugepages,tmpfs-mode=1770 \
+    -dit formation-minimal
+```
+
+For a full production deployment, additional components are needed. The system now includes authentication, billing infrastructure, and marketplace components. Contact us for production deployment guidance.
 
 ## Special Thanks
 
@@ -770,5 +856,113 @@ Join our community:
 ## Roadmap
 
 #### **COMING SOON**
+
+<hr>
+
+## AI Marketplace Development
+
+### Creating AI Assets for the Formation Marketplace
+
+The Formation marketplace enables developers to create, publish, and monetize AI models and agents. While the user interface simplifies this process, understanding the underlying Formfile structure is valuable for advanced customization.
+
+#### Containerization Options for Agents
+
+Formation supports multiple deployment patterns for AI agents within VM instances:
+
+1. **Docker Container Deployment**:
+```
+NAME containerized-agent
+
+USER username:aiagent passwd:securepass sudo:true ssh_authorized_keys:"ssh-rsa ..."
+
+VCPU 2
+MEM 4096
+DISK 20
+
+INSTALL docker.io docker-compose
+
+RUN systemctl enable docker
+RUN systemctl start docker
+
+COPY ./agent-container /app
+WORKDIR /app
+
+ENTRYPOINT ["docker", "run", "--name", "agent-service", "-p", "8080:8080", "agent-image:latest"]
+```
+
+2. **Docker Compose from Git Repository**:
+```
+NAME git-compose-agent
+
+USER username:aiagent passwd:securepass sudo:true ssh_authorized_keys:"ssh-rsa ..."
+
+VCPU 2
+MEM 4096
+DISK 20
+
+INSTALL docker.io docker-compose git
+
+RUN systemctl enable docker
+RUN systemctl start docker
+
+WORKDIR /app
+RUN git clone https://github.com/your-org/your-agent-repo.git .
+
+ENTRYPOINT ["docker-compose", "up", "-d"]
+```
+
+3. **Native Execution from Source**:
+```
+NAME native-agent
+
+USER username:aiagent passwd:securepass sudo:true ssh_authorized_keys:"ssh-rsa ..."
+
+VCPU 2
+MEM 4096
+DISK 20
+
+COPY ./agent /app/agent
+INSTALL python3 python3-pip
+
+WORKDIR /app
+RUN pip install -r agent/requirements.txt
+
+ENTRYPOINT ["python3", "agent/main.py"]
+```
+
+#### Example Model Formfile
+
+```
+NAME llm-model-deployment
+
+USER username:aidev passwd:securepass sudo:true ssh_authorized_keys:"ssh-rsa ..."
+
+VCPU 4
+MEM 16384
+DISK 50
+
+COPY ./model /app/model
+INSTALL python3 python3-pip
+
+WORKDIR /app
+RUN pip install -r model/requirements.txt
+
+ENTRYPOINT ["python3", "model/serve.py"]
+```
+
+AI assets deployed through the marketplace will automatically integrate with Formation's billing, authentication, and access control systems.
+
+## Marketplace Deployment Process
+
+While developers will primarily interact with the Formation marketplace through our web interface, understanding the underlying deployment process is helpful:
+
+1. **Asset Creation**: Developers build their AI model or agent using their preferred tools and frameworks
+2. **Asset Registration**: Through the web interface, details about the model/agent are provided (capabilities, resource needs, pricing)
+3. **Asset Packaging**: Behind the scenes, the system generates a Formfile and prepares the asset for deployment
+4. **Deployment**: The asset is deployed as a secure VM instance with appropriate networking
+5. **Publication**: Once deployed and verified, the asset becomes available in the marketplace
+6. **Monetization**: Users can discover and use the asset based on the specified pricing model
+
+This streamlined process handles all the complexity of deployment, security, and billing infrastructure automatically.
 
 <hr>

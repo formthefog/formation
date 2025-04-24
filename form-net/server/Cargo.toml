@@ -19,6 +19,7 @@ path = "src/lib.rs"
 
 [features]
 v6-test = []
+devnet = []
 
 [dependencies]
 anyhow = "1"

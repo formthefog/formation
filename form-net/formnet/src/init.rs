@@ -2,6 +2,7 @@ use std::{net::{IpAddr, Ipv4Addr, SocketAddr}, path::PathBuf, str::FromStr, time
 use reqwest::Client;
 use serde_json::Value;
 use shared::{CidrContents, IpNetExt, PeerContents, PERSISTENT_KEEPALIVE_INTERVAL_SECS};
+use shared::{wg, NetworkOpts};
 use formnet_server::{db::CrdtMap, initialize::DbInitData, ConfigFile, DatabaseCidr, DatabasePeer};
 use ipnet::IpNet;
 use publicip::Preference;
@@ -66,10 +67,27 @@ pub async fn init(address: String) -> Result<IpAddr, Box<dyn std::error::Error>>
     let database_path = data_dir.join(&name.to_string()).with_extension("db");
     let _ = tokio::time::sleep(Duration::from_secs(1)).await;
     ensure_crdt_datastore().await?;
+    log::info!("Populating CRDT datastore with: server_name: {}", address);
     populate_crdt_datastore(
         db_init_data,
         address
     ).await?;
+
+    // After creating config and database, actually create the WireGuard interface
+    log::info!("Creating WireGuard interface for bootstrap node");
+    
+    // For the bootstrap node, we don't have any peers yet since we are the first node
+    // We'll create the interface without peers initially
+    wg::up(
+        &InterfaceName::from_str("formnet")?,
+        &our_keypair.private.to_base64(),
+        IpNet::new(our_ip.clone(), root_cidr.prefix_len())?,
+        Some(listen_port),
+        None, // No peers yet for bootstrap node
+        NetworkOpts::default(),
+    )?;
+    
+    log::info!("WireGuard interface successfully created");
 
     println!(
         "{} Created database at {}\n",
@@ -136,18 +154,6 @@ async fn populate_crdt_datastore(
     log::info!("Succesfully created root cidr");
 
     tokio::time::sleep(Duration::from_millis(100)).await;
-
-    /*
-    log::info!("Creating server cidr");
-    let server_cidr = DatabaseCidr::<String, CrdtMap>::create(
-        CidrContents {
-            name: "peers-1".into(),
-            cidr: db_init_data.server_cidr,
-            parent: Some(root_cidr.id),
-        },
-    ).await?;
-
-*/
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 

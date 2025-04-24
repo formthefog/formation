@@ -7,6 +7,9 @@ use std::{collections::{HashMap, HashSet}, path::{Component, PathBuf}};
 pub struct FormfileParser {
     current_line: usize,
     name: Option<String>,
+    description: Option<String>,
+    model_id: Option<String>,
+    model_required: bool,
     instructions: Vec<BuildInstruction>,
     system_config: Vec<SystemConfigOpt>,
     users: Vec<User>,
@@ -18,6 +21,9 @@ impl FormfileParser {
         Self {
             current_line: 0,
             name: None,
+            description: None,
+            model_id: None,
+            model_required: false,
             instructions: Vec::new(),
             system_config: Vec::new(),
             users: Vec::new(),
@@ -66,6 +72,8 @@ impl FormfileParser {
 
         match instruction {
             "NAME" => self.parse_name(args)?,
+            "DESCRIPTION" => self.parse_description(args)?,
+            "MODEL" => self.parse_model(args)?,
             "RUN" => self.parse_run(args)?,
             "COPY" => self.parse_copy(args)?,
             "INSTALL" => self.parse_install(args)?,
@@ -85,6 +93,46 @@ impl FormfileParser {
 
     fn parse_name(&mut self, args: &str) -> Result<(), Box<dyn std::error::Error>> {
         self.name = Some(args.to_string());
+        Ok(())
+    }
+
+    fn parse_description(&mut self, args: &str) -> Result<(), Box<dyn std::error::Error>> {
+        self.description = Some(args.trim().to_string());
+        Ok(())
+    }
+
+    fn parse_model(&mut self, args: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let parts: Vec<&str> = args.split(':').collect();
+        if parts.len() != 2 {
+            return Err(
+                Box::new(
+                    std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("Invalid MODEL format on line {}. Use 'required:model-id' or 'preferred:model-id'", self.current_line)
+                    )
+                )
+            );
+        }
+        
+        match parts[0].trim() {
+            "required" => {
+                self.model_required = true;
+                self.model_id = Some(parts[1].trim().to_string());
+            },
+            "preferred" => {
+                self.model_required = false;
+                self.model_id = Some(parts[1].trim().to_string());
+            },
+            _ => return Err(
+                Box::new(
+                    std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("Invalid MODEL type on line {}. Use 'required' or 'preferred'", self.current_line)
+                    )
+                )
+            )
+        }
+        
         Ok(())
     }
 
@@ -956,21 +1004,26 @@ impl FormfileParser {
     }
 
     pub fn build_formfile(&self) -> Result<Formfile, Box<dyn std::error::Error>> {
-        let name = if let Some(name) = &self.name {
-            name.to_string()
-        } else {
-            format!(
-                "{}_{}",
-                random_word::gen(random_word::Lang::En),
-                random_word::gen(random_word::Lang::En)
+        let name = self.name.clone().ok_or(
+            Box::new(
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Name is required in Formfile"
+                )
             )
-        };
+        )?;
+        
+        let workdir = self.workdir.clone().unwrap_or(PathBuf::from("/"));
+        
         Ok(Formfile {
             name,
+            description: self.description.clone(),
+            model_id: self.model_id.clone(),
+            model_required: self.model_required,
             build_instructions: self.instructions.clone(),
             system_config: self.system_config.clone(),
             users: self.users.clone(),
-            workdir: self.workdir.clone().unwrap_or(PathBuf::from("/app"))
+            workdir,
         })
     }
 }
@@ -981,6 +1034,9 @@ impl FormfileParser {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Formfile {
     pub name: String,
+    pub description: Option<String>,
+    pub model_id: Option<String>,
+    pub model_required: bool,
     ///  Build time instructions that modify the image
     pub build_instructions: Vec<BuildInstruction>,
     /// System configuration for the VM
@@ -1048,6 +1104,18 @@ impl Formfile {
                 _ => None,
             }
         }).cloned()
+    }
+
+    pub fn get_description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
+    pub fn get_model_id(&self) -> Option<&str> {
+        self.model_id.as_deref()
+    }
+
+    pub fn is_model_required(&self) -> bool {
+        self.model_required
     }
 }
 
@@ -1804,5 +1872,83 @@ mod tests {
         assert!(result.is_err());
         let error = result.unwrap_err().to_string();
         assert!(error.contains("Invalid JSON in ENTRYPOINT array"), "Unexpected error message: {}", error);
+    }
+
+    #[test]
+    fn test_description_parsing() -> Result<(), Box<dyn std::error::Error>> {
+        let content = r#"
+NAME test-agent
+DESCRIPTION This is a test agent that demonstrates the description directive
+"#;
+        let mut parser = FormfileParser::new();
+        let formfile = parser.parse(content)?;
+
+        assert_eq!(formfile.get_description(), Some("This is a test agent that demonstrates the description directive"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_model_parsing() -> Result<(), Box<dyn std::error::Error>> {
+        let content = r#"
+NAME test-agent
+MODEL required:claude-3-opus-20240229
+"#;
+        let mut parser = FormfileParser::new();
+        let formfile = parser.parse(content)?;
+
+        assert_eq!(formfile.get_model_id(), Some("claude-3-opus-20240229"));
+        assert!(formfile.is_model_required());
+
+        let content = r#"
+NAME test-agent
+MODEL preferred:gpt-4
+"#;
+        let mut parser = FormfileParser::new();
+        let formfile = parser.parse(content)?;
+
+        assert_eq!(formfile.get_model_id(), Some("gpt-4"));
+        assert!(!formfile.is_model_required());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_invalid_model_format() {
+        let content = r#"
+NAME test-agent
+MODEL invalid_format
+"#;
+        let mut parser = FormfileParser::new();
+        let result = parser.parse(content);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_complete_formfile_with_new_directives() -> Result<(), Box<dyn std::error::Error>> {
+        let content = r#"
+NAME test-agent
+DESCRIPTION An advanced AI agent with extensive capabilities
+MODEL preferred:claude-3-opus-20240229
+USER username:testuser passwd:testpass sudo:true
+VCPU 2
+MEM 2048
+DISK 10
+COPY ./agent.py /app
+INSTALL python3
+WORKDIR /app
+ENTRYPOINT ["python3", "/app/agent.py"]
+"#;
+        let mut parser = FormfileParser::new();
+        let formfile = parser.parse(content)?;
+
+        assert_eq!(formfile.name, "test-agent");
+        assert_eq!(formfile.get_description(), Some("An advanced AI agent with extensive capabilities"));
+        assert_eq!(formfile.get_model_id(), Some("claude-3-opus-20240229"));
+        assert!(!formfile.is_model_required());
+        assert_eq!(formfile.get_vcpus(), 2);
+        assert_eq!(formfile.get_memory(), 2048);
+        assert_eq!(formfile.get_storage(), Some(10));
+
+        Ok(())
     }
 }

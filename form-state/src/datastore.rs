@@ -169,6 +169,22 @@ pub enum AccountRequest {
         to_address: String,
         instance_id: String,
     },
+    AddOwnedAgent {
+        address: String,
+        agent_id: String,
+    },
+    RemoveOwnedAgent {
+        address: String,
+        agent_id: String,
+    },
+    AddOwnedModel {
+        address: String,
+        model_id: String,
+    },
+    RemoveOwnedModel {
+        address: String,
+        model_id: String,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -862,6 +878,18 @@ impl DataStore {
             AccountRequest::TransferOwnership { from_address, to_address, instance_id } => {
                 self.handle_transfer_ownership(from_address, to_address, instance_id).await?;
             }
+            AccountRequest::AddOwnedAgent { address, agent_id } => {
+                self.handle_add_owned_agent(address, agent_id).await?;
+            }
+            AccountRequest::RemoveOwnedAgent { address, agent_id } => {
+                self.handle_remove_owned_agent(address, agent_id).await?;
+            }
+            AccountRequest::AddOwnedModel { address, model_id } => {
+                self.handle_add_owned_model(address, model_id).await?;
+            }
+            AccountRequest::RemoveOwnedModel { address, model_id } => {
+                self.handle_remove_owned_model(address, model_id).await?;
+            }
         }
 
         Ok(())
@@ -984,6 +1012,42 @@ impl DataStore {
             self.handle_instance_op(op).await?;
         }
         
+        Ok(())
+    }
+
+    pub async fn handle_add_owned_agent(&mut self, address: String, agent_id: String) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(mut account) = self.account_state.get_account(&address) {
+            account.add_owned_agent(agent_id);
+            let op = self.account_state.update_account_local(account);
+            self.handle_account_op(op).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn handle_remove_owned_agent(&mut self, address: String, agent_id: String) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(mut account) = self.account_state.get_account(&address) {
+            account.remove_owned_agent(&agent_id);
+            let op = self.account_state.update_account_local(account);
+            self.handle_account_op(op).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn handle_add_owned_model(&mut self, address: String, model_id: String) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(mut account) = self.account_state.get_account(&address) {
+            account.add_owned_model(model_id);
+            let op = self.account_state.update_account_local(account);
+            self.handle_account_op(op).await?;
+        }
+        Ok(())
+    }
+    
+    pub async fn handle_remove_owned_model(&mut self, address: String, model_id: String) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(mut account) = self.account_state.get_account(&address) {
+            account.remove_owned_model(&model_id);
+            let op = self.account_state.update_account_local(account);
+            self.handle_account_op(op).await?;
+        }
         Ok(())
     }
 
@@ -1184,8 +1248,6 @@ impl DataStore {
         _n: Option<usize>,
     ) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error>> {
         // In devnet mode, the queue reader doesn't process any messages
-        log::info!("DEVNET MODE: Skipping queue read operation");
-        
         // Return an empty list since there are no messages to process in devnet mode
         Ok(Vec::new())
     }
@@ -1198,11 +1260,19 @@ impl DataStore {
         log::info!("Bradcasting Op to all active admins...");
         let peers = self.get_all_active_admin();
         for (id, peer) in peers {
+
+            if id == self.node_state.node_id {
+                continue
+            }
+
             log::info!("Sending Op to all {id} at {}...", peer.ip().to_string());
+
             if let Err(e) = self.send::<R>(&peer.ip().to_string(), endpoint, request.clone()).await {
                 eprintln!("Error sending {endpoint} request to {id}: {}: {e}", peer.ip().to_string());
             };
+
             log::info!("Successfully sent Op {id} at {}...", peer.ip().to_string());
+
         }
 
         Ok(())
@@ -1558,7 +1628,8 @@ mod tests {
                     metrics_endpoint: "http://node.metrics".to_string(),
                 },
             },
-            host: Host::Domain("example.com".to_string())
+            host: Host::Domain("example.com".to_string()),
+            operator_keys: vec![],
         };
         let node_ctx = nodes.read_ctx().derive_add_ctx(actor.clone());
         let node_op = nodes.update("node1".to_string(), node_ctx, |reg, _| {

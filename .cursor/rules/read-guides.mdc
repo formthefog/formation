@@ -1,0 +1,6 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+Read the [service-identification.md](mdc:service-identification.md) [shared-resources-analysis.md](mdc:shared-resources-analysis.md) [build-requirements.md](mdc:build-requirements.md) guides before implementing anything.

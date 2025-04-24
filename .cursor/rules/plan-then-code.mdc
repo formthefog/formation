@@ -1,0 +1,6 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+Always plan the implementation of the tasks before beginning to write any code. Once a given task to work on is selected, always plan the implementation of that specific task BEFORE implementing it.

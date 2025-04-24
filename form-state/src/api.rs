@@ -9,7 +9,10 @@ use axum::{
     Json,
     extract::{Path, State},
     response::{Response, IntoResponse},
+    http::{Request, StatusCode},
+    body::Body,
 };
+use serde::{Serialize, Deserialize};
 use crate::helpers::{
     network::*, 
     nodes::*, 
@@ -26,10 +29,122 @@ use crate::auth::{
 use crate::api_keys::{
     api_key_auth_middleware, ApiKeyAuth
 };
-use crate::billing::middleware::{check_agent_eligibility, check_token_eligibility};
 use tokio::net::TcpListener;
 use serde_json::json;
 use crate::billing::middleware::EligibilityError;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HealthStatus {
+    Healthy,
+    Degraded { reason: String },
+    Unhealthy { reason: String }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthResponse {
+    status: HealthStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    uptime: Option<u64>
+}
+
+async fn health_check() -> Json<HealthResponse> {
+    // Get the version from Cargo.toml if available
+    let version = option_env!("CARGO_PKG_VERSION").map(String::from);
+    
+    // Return a healthy status
+    Json(HealthResponse {
+        status: HealthStatus::Healthy,
+        version,
+        uptime: None // Could add uptime calculation if needed
+    })
+}
+
+// Node authentication middleware to verify formation node key
+async fn node_auth_middleware(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    req: Request<Body>,
+    next: middleware::Next,
+) -> Result<Response, StatusCode> {
+    // Allow localhost access without authentication for bootstrap purposes
+    if is_localhost_request(&req) {
+        log::info!("Allowing localhost request without authentication");
+        return Ok(next.run(req).await);
+    }
+    
+    // Check if we're running in dev mode with internal endpoints allowed
+    let allow_internal = std::env::var("ALLOW_INTERNAL_ENDPOINTS")
+        .unwrap_or_default()
+        .to_lowercase() == "true";
+        
+    if allow_internal {
+        // In dev mode, skip authentication
+        log::info!("Dev mode: Skipping authentication");
+        return Ok(next.run(req).await);
+    }
+    
+    // Get API key from headers
+    let api_key = match req.headers().get("X-Formation-API-Key") {
+        Some(key) => match key.to_str() {
+            Ok(k) => k,
+            Err(_) => return Err(StatusCode::UNAUTHORIZED),
+        },
+        None => return Err(StatusCode::UNAUTHORIZED),
+    };
+    
+    // Get node ID from header if available
+    let node_id = req.headers()
+        .get("X-Formation-Node-ID")
+        .and_then(|v| v.to_str().ok());
+        
+    // Check trusted keys in environment
+    let trusted_keys_str = std::env::var("TRUSTED_OPERATOR_KEYS").unwrap_or_default();
+    let trusted_keys: Vec<_> = trusted_keys_str
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+        
+    // Allow if API key is in trusted keys
+    if trusted_keys.contains(&api_key) {
+        log::info!("Authentication successful with trusted key");
+        return Ok(next.run(req).await);
+    }
+    
+    // If a node ID is provided, check if the node exists and the key matches
+    if let Some(id) = node_id {
+        let datastore = state.lock().await;
+        if let Some(node) = datastore.node_state.get_node(id.to_string()) {
+            if node.has_operator_key(api_key) {
+                log::info!("Node {} authenticated successfully with key", id);
+                return Ok(next.run(req).await);
+            }
+        }
+    }
+    
+    // Authentication failed
+    log::warn!("Authentication failed: Invalid API key");
+    Err(StatusCode::UNAUTHORIZED)
+}
+
+// Helper function to check if a request is coming from localhost
+pub fn is_localhost_request(req: &Request<Body>) -> bool {
+    if let Some(addr) = req.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>() {
+        let ip = addr.ip();
+        return ip.is_loopback();
+    }
+    
+    // If we can't determine the address, check headers for proxy info
+    if let Some(forwarded) = req.headers().get("x-forwarded-for") {
+        if let Ok(addr) = forwarded.to_str() {
+            return addr == "127.0.0.1" || addr == "::1";
+        }
+    }
+    
+    false
+}
 
 pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
     // Create the JWKS manager for JWT validation
@@ -39,55 +154,77 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
     let public_api = Router::new()
         // Health check and bootstrap endpoints
         .route("/ping", get(pong))
+        .route("/health", get(health_check))
         .route("/bootstrap/joined_formnet", post(complete_bootstrap))
         .route("/bootstrap/full_state", get(full_state))
         .route("/bootstrap/network_state", get(network_state))
         .route("/bootstrap/peer_state", get(peer_state))
         .route("/bootstrap/cidr_state", get(cidr_state))
         .route("/bootstrap/assoc_state", get(assoc_state));
+
+    let network_writers_api = Router::new()
+        .route("/user/create", post(create_user))
+        .route("/user/update", post(update_user))
+        .route("/user/disable", post(disable_user))
+        .route("/user/delete", post(delete_user))
+        .route("/user/delete_expired", post(delete_expired))
+        .route("/cidr/create", post(create_cidr))
+        .route("/cidr/update", post(update_cidr))
+        .route("/cidr/delete", post(delete_cidr))
+        .route("/assoc/create", post(create_assoc))
+        .route("/assoc/delete", post(delete_assoc))
+        .route("/assoc/list", get(list_assoc))
+        .route("/dns/create", post(create_dns))
+        .route("/dns/update", post(update_dns))
+        .route("/dns/:domain/delete", post(delete_dns))
+        .route("/node/create", post(create_node))
+        .route("/node/update", post(update_node))
+        .route("/node/:id/get", get(get_node))
+        .route("/node/:id/delete", post(delete_node))
+        .route("/user/redeem", post(redeem_invite))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            node_auth_middleware,
+        ));
+
+    // Define network/infrastructure routes (node authentication)
+    // These routes are only accessible to Formation nodes via operator key auth
+    let network_readers_api = Router::new()
+        // User management for networking
+        .route("/user/:id/get", get(get_user))
+        .route("/user/:ip/get_from_ip", get(get_user_from_ip))
+        .route("/user/:id/get_all_allowed", get(get_all_allowed))
+        .route("/user/list", get(list_users))
+        .route("/user/list_admin", get(list_admin))
+        .route("/user/:cidr/list", get(list_by_cidr))        
+        // CIDR management
+        .route("/cidr/:id/get", get(get_cidr))
+        .route("/cidr/list", get(list_cidr))
+        
+        // Association management
+        .route("/assoc/:cidr_id/relationships", get(relationships))
+        
+        // DNS management
+        .route("/dns/:domain/:build_id/request_vanity", post(request_vanity))
+        .route("/dns/:domain/:build_id/request_public", post(request_public))
+        .route("/dns/:domain/get", get(get_dns_record))
+        .route("/dns/:node_ip/list", get(get_dns_records_by_node_ip))
+        .route("/dns/list", get(list_dns_records))
+        
+        // Node management
+        .route("/node/list", get(list_nodes))
+        .route("/node/:id/metrics", get(get_node_metrics))
+        .route("/node/list/metrics", get(list_node_metrics))
+        
+        // Node authentication key management
+        .route("/node/:id/operator-key", post(add_node_operator_key))
+        .route("/node/:id/operator-key/:key", post(remove_node_operator_key));
     
     // Define account/user management routes (JWT authentication required)
     let account_api = Router::new()
         // Authentication test endpoints
         .route("/auth/test", get(protected_handler))
         .route("/projects/:project_id/resources/:resource_id", get(project_resource_handler))
-        
-        // User management
-        .route("/user/create", post(create_user))
-        .route("/user/update", post(update_user))
-        .route("/user/disable", post(disable_user))
-        .route("/user/redeem", post(redeem_invite)) 
-        .route("/user/:id/get", get(get_user))
-        .route("/user/:ip/get_from_ip", get(get_user_from_ip))
-        .route("/user/delete", post(delete_user))
-        .route("/user/:id/get_all_allowed", get(get_all_allowed))
-        .route("/user/list", get(list_users))
-        .route("/user/list_admin", get(list_admin))
-        .route("/user/:cidr/list", get(list_by_cidr))
-        .route("/user/delete_expired", post(delete_expired))
-        
-        // CIDR management
-        .route("/cidr/create", post(create_cidr))
-        .route("/cidr/update", post(update_cidr))
-        .route("/cidr/delete", post(delete_cidr))
-        .route("/cidr/:id/get", get(get_cidr))
-        .route("/cidr/list", get(list_cidr))
-        
-        // Association management
-        .route("/assoc/create", post(create_assoc))
-        .route("/assoc/delete", post(delete_assoc))
-        .route("/assoc/list", get(list_assoc))
-        .route("/assoc/:cidr_id/relationships", get(relationships))
-        
-        // DNS management
-        .route("/dns/:domain/:build_id/request_vanity", post(request_vanity))
-        .route("/dns/:domain/:build_id/request_public", post(request_public))
-        .route("/dns/create", post(create_dns))
-        .route("/dns/update", post(update_dns))
-        .route("/dns/:domain/delete", post(delete_dns))
-        .route("/dns/:domain/get", get(get_dns_record))
-        .route("/dns/:node_ip/list", get(get_dns_records_by_node_ip))
-        .route("/dns/list", get(list_dns_records))
         
         // Instance management
         .route("/instance/create", post(create_instance))
@@ -100,15 +237,6 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/instance/list/metrics", get(list_instance_metrics))
         .route("/cluster/:build_id/metrics", get(get_cluster_metrics))
         .route("/instance/list", get(list_instances))
-        
-        // Node management
-        .route("/node/create", post(create_node))
-        .route("/node/update", post(update_node))
-        .route("/node/:id/get", get(get_node))
-        .route("/node/:id/delete", post(delete_node))
-        .route("/node/list", get(list_nodes))
-        .route("/node/:id/metrics", get(get_node_metrics))
-        .route("/node/list/metrics", get(list_node_metrics))
         
         // Account management
         .route("/account/:address/get", get(get_account))
@@ -165,6 +293,8 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
     // Merge all route groups into a single router
     Router::new()
         .merge(public_api)
+        .merge(network_writers_api)  // Add the node-authenticated network API
+        .merge(network_readers_api)
         .merge(account_api)
         .merge(api_routes)
         .with_state(state)
@@ -379,4 +509,111 @@ async fn checked_model_inference(
     // Call the actual handler with the properly typed payload
     let response = model_inference(State(state), auth, Path(model_id), Json(typed_payload)).await;
     Ok(response.into_response())
+}
+
+/// Add an operator key to a node
+async fn add_node_operator_key(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path(node_id): Path<String>,
+    Json(payload): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    // Extract the operator key from the payload
+    let operator_key = match payload.get("operator_key").and_then(|v| v.as_str()) {
+        Some(key) => key.to_string(),
+        None => return Json(json!({
+            "success": false,
+            "error": "Missing operator_key in request body"
+        })),
+    };
+    
+    // Lock the datastore
+    let mut datastore = match state.try_lock() {
+        Ok(ds) => ds,
+        Err(_) => return Json(json!({
+            "success": false,
+            "error": "Server is busy, try again later"
+        })),
+    };
+    
+    // Verify the node exists
+    if datastore.node_state.get_node(node_id.clone()).is_none() {
+        return Json(json!({
+            "success": false,
+            "error": "Node not found"
+        }));
+    }
+    
+    // Add the operator key to the node
+    match datastore.node_state.add_operator_key(node_id.clone(), operator_key.clone()) {
+        Some(op) => {
+            log::info!("Added operator key to node {}", node_id);
+            // Apply the operation locally
+            if let Some((actor, key)) = datastore.node_state.node_op(op.clone()) {
+                // Could broadcast the change here if needed
+                Json(json!({
+                    "success": true,
+                    "message": "Operator key added successfully",
+                    "node_id": node_id,
+                    "operator_key": operator_key
+                }))
+            } else {
+                Json(json!({
+                    "success": false,
+                    "error": "Failed to apply node operation"
+                }))
+            }
+        },
+        None => Json(json!({
+            "success": false,
+            "error": "Failed to add operator key to node"
+        })),
+    }
+}
+
+/// Remove an operator key from a node
+async fn remove_node_operator_key(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path((node_id, key)): Path<(String, String)>,
+) -> Json<serde_json::Value> {
+    // Lock the datastore
+    let mut datastore = match state.try_lock() {
+        Ok(ds) => ds,
+        Err(_) => return Json(json!({
+            "success": false,
+            "error": "Server is busy, try again later"
+        })),
+    };
+    
+    // Verify the node exists
+    if datastore.node_state.get_node(node_id.clone()).is_none() {
+        return Json(json!({
+            "success": false,
+            "error": "Node not found"
+        }));
+    }
+    
+    // Remove the operator key from the node
+    match datastore.node_state.remove_operator_key(node_id.clone(), &key) {
+        Some(op) => {
+            log::info!("Removed operator key from node {}", node_id);
+            // Apply the operation locally
+            if let Some((actor, key)) = datastore.node_state.node_op(op.clone()) {
+                // Could broadcast the change here if needed
+                Json(json!({
+                    "success": true,
+                    "message": "Operator key removed successfully",
+                    "node_id": node_id
+                }))
+            } else {
+                Json(json!({
+                    "success": false,
+                    "error": "Failed to apply node operation"
+                }))
+            }
+        },
+        None => Json(json!({
+            "success": false,
+            "error": "Failed to remove operator key from node"
+        })),
+    }
 }

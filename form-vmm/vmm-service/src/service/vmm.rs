@@ -3,7 +3,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-// src/service/vmm.rs
 use std::{collections::HashMap, path::PathBuf};
 use std::net::{IpAddr, SocketAddr};
 use alloy_primitives::Address;
@@ -385,6 +384,7 @@ impl FormVmApi {
 pub struct VmManager {
     vm_monitors: HashMap<String, FormVmm>, 
     server: JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>>,
+    #[cfg(not(feature = "devnet"))]
     queue_reader: JoinHandle<()>,
     tap_counter: u32,
     formnet_endpoint: String,
@@ -418,7 +418,7 @@ impl VmManager {
         let api_channel_server = api_channel.clone();
         let server = tokio::task::spawn(async move {
             let server = VmmApi::new(api_channel_server.clone(), addr);
-            server.start().await?;
+            server.start_api_server().await?;
             Ok::<(), Box<dyn std::error::Error + Send + Sync + 'static>>(())
         });
 
@@ -433,6 +433,7 @@ impl VmManager {
             None
         };
 
+        #[cfg(not(feature = "devnet"))]
         let queue_handle = tokio::task::spawn(async move {
             if let Err(e) = VmmApi::start_queue_reader(api_channel.clone(), shutdown_rx).await {
                 eprintln!("Error in queue_reader: {e}");
@@ -448,6 +449,7 @@ impl VmManager {
             api_response_sender: resp_tx,
             subscriber,
             publisher_addr,
+            #[cfg(not(feature = "devnet"))]
             queue_reader: queue_handle,
             create_futures: Arc::new(Mutex::new(FuturesUnordered::new())),
         })
@@ -628,7 +630,16 @@ impl VmManager {
             },
         };
 
+        #[cfg(not(feature = "devnet"))]
         VmmApi::write_to_queue(InstanceRequest::Update(instance.clone()), 4, "state").await?;
+
+        #[cfg(feature = "devnet")]
+        reqwest::Client::new().post("http://127.0.0.1:3004/instance/update")
+            .json(&InstanceRequest::Update(instance.clone()))
+            .send()
+            .await?
+            .json()
+            .await?;
 
         log::info!("Inserting Form VMM into vm_monitoris map");
         self.vm_monitors.insert(config.name.clone(), vmm);
@@ -641,6 +652,17 @@ impl VmManager {
         if let Err(e) = add_tap_to_bridge("br0", &config.tap_device.clone()).await {
             log::error!("Error attempting to add tap device {} to bridge: {e}", &config.tap_device)
         };
+
+        #[cfg(feature = "devnet")]
+        reqwest::Client::new().post("http://127.0.0.1:3004/instance/update")
+            .json(&InstanceRequest::Update(instance.clone()))
+            .send()
+            .await?
+            .json()
+            .await?;
+
+        #[cfg(not(feature = "devnet"))]
+        VmmApi::write_to_queue(InstanceRequest::Update(instance.clone()), 4, "state").await?;
 
         Ok(())
     }
@@ -878,8 +900,17 @@ Formpack for {name} doesn't exist:
                 log::info!("Built AddClusterMember InstanceRequest");
                 let request = InstanceRequest::AddClusterMember { build_id: build_id.to_string(), cluster_member }; 
                 log::info!("Writing AddClusterMember InstanceRequest to queue...");
-                VmmApi::write_to_queue(request, 4, "state").await?;
+                #[cfg(not(feature = "devnet"))]
+                VmmApi::write_to_queue(request.clone(), 4, "state").await?;
                 
+                #[cfg(feature = "devnet")]
+                reqwest::Client::new().post("http://127.0.0.1:3004/instance/update")
+                    .json(&request)
+                    .send()
+                    .await?
+                    .json()
+                    .await?;
+
                 log::info!("Adding formnet_ip to instance");
                 instance.formnet_ip = Some(formnet_ip.parse()?);
                 instance.status = InstanceStatus::Started;
@@ -932,7 +963,17 @@ Formpack for {name} doesn't exist:
                 let request = InstanceRequest::Update(instance);
 
                 log::info!("Writing Update request with formnet IP to queue...");
-                VmmApi::write_to_queue(request, 4, "state").await?; 
+                #[cfg(not(feature = "devnet"))]
+                VmmApi::write_to_queue(request.clone(), 4, "state").await?; 
+
+                #[cfg(feature = "devnet")]
+                reqwest::Client::new().post("http://127.0.0.1:3004/instance/update")
+                    .json(&request)
+                    .send()
+                    .await?
+                    .json()
+                    .await?;
+
                 log::info!("Boot Complete for {id}: formnet id: {formnet_ip}");
             }
             VmmEvent::Stop { id, .. } => {
@@ -951,7 +992,17 @@ Formpack for {name} doesn't exist:
                     (k.clone(), v.clone())
                 }).collect();
                 let request = InstanceRequest::Update(instance);
-                VmmApi::write_to_queue(request, 4, "state").await?; 
+                #[cfg(not(feature = "devnet"))]
+                VmmApi::write_to_queue(request.clone(), 4, "state").await?; 
+
+                #[cfg(feature = "devnet")]
+                reqwest::Client::new().post("http://127.0.0.1:3004/instance/update")
+                    .json(&request)
+                    .send()
+                    .await?
+                    .json()
+                    .await?;
+
             }
             VmmEvent::Start {  id, .. } => {
                 //TODO: verify ownership/authorization, etc.
@@ -969,7 +1020,17 @@ Formpack for {name} doesn't exist:
                     (k.clone(), v.clone())
                 }).collect();
                 let request = InstanceRequest::Update(instance);
-                VmmApi::write_to_queue(request, 4, "state").await?; 
+                #[cfg(not(feature = "devnet"))]
+                VmmApi::write_to_queue(request.clone(), 4, "state").await?; 
+
+                #[cfg(feature = "devnet")]
+                reqwest::Client::new().post("http://127.0.0.1:3004/instance/update")
+                    .json(&request)
+                    .send()
+                    .await?
+                    .json()
+                    .await?;
+
             }
             VmmEvent::Delete { id, .. } => {
                 self.delete(id).await?;
