@@ -2,6 +2,7 @@ use std::{net::{IpAddr, Ipv4Addr, SocketAddr}, path::PathBuf, str::FromStr, time
 use reqwest::Client;
 use serde_json::Value;
 use shared::{CidrContents, IpNetExt, PeerContents, PERSISTENT_KEEPALIVE_INTERVAL_SECS};
+use shared::{wg, NetworkOpts};
 use formnet_server::{db::CrdtMap, initialize::DbInitData, ConfigFile, DatabaseCidr, DatabasePeer};
 use ipnet::IpNet;
 use publicip::Preference;
@@ -71,6 +72,22 @@ pub async fn init(address: String) -> Result<IpAddr, Box<dyn std::error::Error>>
         db_init_data,
         address
     ).await?;
+
+    // After creating config and database, actually create the WireGuard interface
+    log::info!("Creating WireGuard interface for bootstrap node");
+    
+    // For the bootstrap node, we don't have any peers yet since we are the first node
+    // We'll create the interface without peers initially
+    wg::up(
+        &InterfaceName::from_str("formnet")?,
+        &our_keypair.private.to_base64(),
+        IpNet::new(our_ip.clone(), root_cidr.prefix_len())?,
+        Some(listen_port),
+        None, // No peers yet for bootstrap node
+        NetworkOpts::default(),
+    )?;
+    
+    log::info!("WireGuard interface successfully created");
 
     println!(
         "{} Created database at {}\n",
