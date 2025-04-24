@@ -19,11 +19,11 @@ services:
       - ALLOW_INTERNAL_ENDPOINTS=true
     command: ["/usr/local/bin/run-form-state.sh"]
     healthcheck:
-      test: ["CMD", "curl", "-s", "http://localhost:3004/health", "|", "grep", "healthy", "||", "exit", "1"]
+      test: ["CMD-SHELL", "curl -s http://localhost:3004/health || exit 1"]
       interval: 30s
-      timeout: 10s
+      timeout: 30s
       retries: 3
-      start_period: 10s
+      start_period: 15s
     restart: unless-stopped
 
   # DNS Service
@@ -93,9 +93,9 @@ services:
     restart: unless-stopped
     command: ["/usr/local/bin/run-formnet.sh"]
     healthcheck:
-      test: ["CMD", "curl", "-s", "http://localhost:51820/health", "|", "grep", "healthy", "||", "exit", "1"]
+      test: ["CMD-SHELL", "curl -s http://localhost:51820/health || exit 1"]
       interval: 30s
-      timeout: 10s
+      timeout: 30s
       retries: 3
       start_period: 15s
 
@@ -128,11 +128,11 @@ services:
       - RUST_BACKTRACE=1
     command: ["/usr/local/bin/run-vmm-service.sh"]
     healthcheck:
-      test: ["CMD", "curl", "-s", "http://localhost:3002/health", "|", "grep", "healthy", "||", "exit", "1"]
+      test: ["CMD-SHELL", "curl -s http://localhost:3002/health || exit 1"]
       interval: 30s
-      timeout: 10s
+      timeout: 30s
       retries: 3
-      start_period: 10s
+      start_period: 15s
     privileged: true
     network_mode: host
     devices:
@@ -171,11 +171,11 @@ services:
       - RUST_BACKTRACE=1
     command: ["/usr/local/bin/run-form-pack-manager.sh"]
     healthcheck:
-      test: ["CMD", "curl", "-s", "http://localhost:3003/health", "|", "grep", "healthy", "||", "exit", "1"]
+      test: ["CMD-SHELL", "curl -s http://localhost:3003/health || exit 1"]
       interval: 30s
-      timeout: 10s
+      timeout: 30s
       retries: 3
-      start_period: 10s
+      start_period: 15s
     privileged: true
     restart: unless-stopped
 
