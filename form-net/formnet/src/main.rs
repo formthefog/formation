@@ -21,6 +21,8 @@ use tokio::sync::RwLock;
 
 // Import the Shutdown struct from the correct location
 use std::net::Shutdown;
+use std::net::IpAddr;
+use std::net::SocketAddr;
 
 #[derive(Clone, Debug, Parser)]
 struct Cli {
@@ -158,14 +160,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         
                         log::info!("Successfully initialized bootstrap node");
                         
-                        // Start API server in a separate task
+                        // Detect public IP for bootstrap node
+                        let pub_ip = match publicip::get_any(publicip::Preference::Ipv4) {
+                            Some(ip) => {
+                                log::info!("Detected public IP for bootstrap node: {}", ip);
+                                ip
+                            },
+                            None => {
+                                log::warn!("Failed to detect public IP for bootstrap node, using localhost");
+                                IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))
+                            }
+                        };
+                        
+                        // For bootstrap node, formnet IP is 10.0.0.1
+                        let formnet_ip = IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 1));
+                        
+                        // Create bootstrap info with actual endpoint information
                         let bootstrap_info = api::BootstrapInfo {
                             id: address.clone(),
                             peer_type: PeerType::Operator,
                             cidr_id: "".to_string(),
                             pubkey: secret_key_string.clone(),
-                            internal_endpoint: None,
-                            external_endpoint: None,
+                            internal_endpoint: Some(formnet_ip), // Use formnet IP for internal endpoint
+                            external_endpoint: Some(SocketAddr::new(pub_ip, 51820)), // Use detected public IP for external endpoint
                         };
                         let endpoints = Arc::new(RwLock::new(HashMap::new()));
                         
@@ -216,13 +233,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             
                             // Start API server in a separate task
                             let addr_clone = op_config.address.clone().unwrap_or_default();
+                            
+                            // Get the public IP for external endpoint - detect it again to avoid move issues
+                            let external_ip = match publicip::get_any(publicip::Preference::Ipv4) {
+                                Some(ip) => {
+                                    log::info!("Detected public IP for node: {}", ip);
+                                    ip
+                                },
+                                None => {
+                                    log::warn!("Failed to detect public IP, using localhost");
+                                    IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))
+                                }
+                            };
+                            
+                            // For joined node, use the IP address assigned by the bootstrap
                             let bootstrap_info = api::BootstrapInfo {
                                 id: addr_clone.clone(),
                                 peer_type: PeerType::Operator,
-                                cidr_id: "".to_string(), // Fill with appropriate value if needed
+                                cidr_id: "".to_string(),
                                 pubkey: secret_key_string.clone(),
-                                internal_endpoint: None,
-                                external_endpoint: None,
+                                internal_endpoint: Some(ip), // Use the IP provided by bootstrap node
+                                external_endpoint: Some(SocketAddr::new(external_ip, 51820)),
                             };
                             let endpoints = Arc::new(RwLock::new(HashMap::new()));
                             
