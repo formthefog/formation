@@ -191,6 +191,14 @@
   - [ ] Link to DNS records
   - [x] Document deployment flow
 
+### 1.6.7 Agent Deployment CLI Tools
+- [x] 1.6.7.1 Implement agent deployment wizard
+  - [x] Create interactive CLI wizard for formfile creation
+  - [x] Add support for Docker Compose deployment method
+  - [x] Add support for Docker Container deployment method
+  - [x] Add support for GitHub repository deployment method
+  - [x] Integrate with build and ship commands
+
 ## Phase 2: Admin Tool Development
 
 ### 2.1 API Design & Planning ✅
