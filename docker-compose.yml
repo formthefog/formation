@@ -19,7 +19,7 @@ services:
       - ALLOW_INTERNAL_ENDPOINTS=true
     command: ["/usr/local/bin/run-form-state.sh"]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3004/health", "||", "exit", "1"]
+      test: ["CMD", "curl", "-s", "http://localhost:3004/health", "|", "grep", "healthy", "||", "exit", "1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -93,7 +93,7 @@ services:
     restart: unless-stopped
     command: ["/usr/local/bin/run-formnet.sh"]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:51820/health", "||", "exit", "1"]
+      test: ["CMD", "curl", "-s", "http://localhost:51820/health", "|", "grep", "healthy", "||", "exit", "1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -128,7 +128,7 @@ services:
       - RUST_BACKTRACE=1
     command: ["/usr/local/bin/run-vmm-service.sh"]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3002/health", "||", "exit", "1"]
+      test: ["CMD", "curl", "-s", "http://localhost:3002/health", "|", "grep", "healthy", "||", "exit", "1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -171,7 +171,7 @@ services:
       - RUST_BACKTRACE=1
     command: ["/usr/local/bin/run-form-pack-manager.sh"]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3003/health", "||", "exit", "1"]
+      test: ["CMD", "curl", "-s", "http://localhost:3003/health", "|", "grep", "healthy", "||", "exit", "1"]
       interval: 30s
       timeout: 10s
       retries: 3
