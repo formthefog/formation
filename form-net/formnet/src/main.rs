@@ -253,7 +253,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 cidr_id: "".to_string(),
                                 pubkey: secret_key_string.clone(),
                                 internal_endpoint: Some(ip), // Use the IP provided by bootstrap node
-                                external_endpoint: Some(SocketAddr::new(external_ip, 51820)),
+                                external_endpoint: None,     // Don't set external endpoint, let ICE/STUN process handle it
                             };
                             let endpoints = Arc::new(RwLock::new(HashMap::new()));
                             
