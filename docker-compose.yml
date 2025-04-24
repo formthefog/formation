@@ -54,7 +54,7 @@ services:
       - SYS_PTRACE
     command: ["/usr/local/bin/run-form-dns.sh"]
     healthcheck:
-      test: ["CMD", "dig", "@localhost", "formation", "+short", "||", "exit", "1"]
+      test: ["CMD", "dig", "@localhost", "-p", "5453", "formation", "+short", "||", "exit", "1"]
       interval: 30s
       timeout: 10s
       retries: 3

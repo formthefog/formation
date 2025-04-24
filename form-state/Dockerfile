@@ -32,9 +32,5 @@ EXPOSE 3004
 ENV STATE_DB_PATH=/var/lib/formation/db/state.db \
     AUTH_MODE=production
 
-# Add health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:3004/ping || exit 1
-
 # Run the service
 CMD ["/usr/local/bin/run-form-state.sh"] 

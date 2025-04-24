@@ -9,6 +9,23 @@ use wireguard_control::{AllowedIp, Backend, Device, DeviceUpdate, InterfaceName,
 
 use crate::{add_peer, handle_leave_request};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HealthStatus {
+    Healthy,
+    Degraded { reason: String },
+    Unhealthy { reason: String }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthResponse {
+    status: HealthStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    uptime: Option<u64>
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BootstrapInfo {
     pub id: String,
@@ -21,7 +38,7 @@ pub struct BootstrapInfo {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Response {
-    Health,
+    Health(HealthResponse),
     Join(JoinResponse),
     Bootstrap(BootstrapInfo),
     Fetch(Vec<Peer<String>>),
@@ -65,7 +82,17 @@ pub async fn server(
 }
 
 async fn health() -> Json<Response> {
-    Json(Response::Health)
+    // Get the version from Cargo.toml if available
+    let version = option_env!("CARGO_PKG_VERSION").map(String::from);
+    
+    // Create a health response with healthy status
+    let health_response = HealthResponse {
+        status: HealthStatus::Healthy,
+        version,
+        uptime: None // Could add uptime calculation if needed
+    };
+    
+    Json(Response::Health(health_response))
 }
 
 async fn join(

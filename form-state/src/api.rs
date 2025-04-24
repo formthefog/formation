@@ -12,6 +12,7 @@ use axum::{
     http::{Request, StatusCode},
     body::Body,
 };
+use serde::{Serialize, Deserialize};
 use crate::helpers::{
     network::*, 
     nodes::*, 
@@ -31,6 +32,35 @@ use crate::api_keys::{
 use tokio::net::TcpListener;
 use serde_json::json;
 use crate::billing::middleware::EligibilityError;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HealthStatus {
+    Healthy,
+    Degraded { reason: String },
+    Unhealthy { reason: String }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthResponse {
+    status: HealthStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    uptime: Option<u64>
+}
+
+async fn health_check() -> Json<HealthResponse> {
+    // Get the version from Cargo.toml if available
+    let version = option_env!("CARGO_PKG_VERSION").map(String::from);
+    
+    // Return a healthy status
+    Json(HealthResponse {
+        status: HealthStatus::Healthy,
+        version,
+        uptime: None // Could add uptime calculation if needed
+    })
+}
 
 // Node authentication middleware to verify formation node key
 async fn node_auth_middleware(
@@ -124,6 +154,7 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
     let public_api = Router::new()
         // Health check and bootstrap endpoints
         .route("/ping", get(pong))
+        .route("/health", get(health_check))
         .route("/bootstrap/joined_formnet", post(complete_bootstrap))
         .route("/bootstrap/full_state", get(full_state))
         .route("/bootstrap/network_state", get(network_state))
