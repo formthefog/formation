@@ -18,6 +18,7 @@ use colored::Colorize;
 use formnet::bootstrap;
 use formnet::api;
 use tokio::sync::RwLock;
+use wireguard_control::KeyPair;
 
 // Import the Shutdown struct from the correct location
 use std::net::Shutdown;
@@ -137,6 +138,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &hex::decode(&secret_key_string)?
                     )?;
 
+                    // Generate a proper WireGuard keypair
+                    let wg_keypair = KeyPair::generate();
+                    let public_key_base64 = wg_keypair.public.to_base64();
+                    
                     let address = hex::encode(Address::from_private_key(&sk));
 
                     // Build bootstrap list, combining user-provided bootstraps with the bootstrap domain
