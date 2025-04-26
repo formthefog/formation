@@ -47,4 +47,3 @@ pub enum PackCommand {
     #[clap(name = "wizard")]
     Wizard(WizardCommand),
 }
-

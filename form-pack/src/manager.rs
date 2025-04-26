@@ -724,7 +724,8 @@ async fn handle_pack(
     println!("Reading metadata into Formfile struct...");
     let formfile: Formfile = match std::fs::read_to_string(&metadata_path)
         .and_then(|s| serde_json::from_str(&s)
-            .map_err(|_| {
+            .map_err(|e| {
+                println!("Error reading metadata: {e}");
                 std::io::Error::from(
                     std::io::ErrorKind::InvalidData
                 )

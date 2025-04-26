@@ -131,15 +131,30 @@ async fn node_auth_middleware(
 
 // Helper function to check if a request is coming from localhost
 pub fn is_localhost_request(req: &Request<Body>) -> bool {
+    // Check from connection info (direct connections)
     if let Some(addr) = req.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>() {
         let ip = addr.ip();
-        return ip.is_loopback();
+        if ip.is_loopback() {
+            return true;
+        }
     }
     
-    // If we can't determine the address, check headers for proxy info
+    // Check headers for proxy info
     if let Some(forwarded) = req.headers().get("x-forwarded-for") {
         if let Ok(addr) = forwarded.to_str() {
-            return addr == "127.0.0.1" || addr == "::1";
+            let first_ip = addr.split(',').next().unwrap_or("").trim();
+            if first_ip == "127.0.0.1" || first_ip == "::1" || first_ip.starts_with("localhost") {
+                return true;
+            }
+        }
+    }
+    
+    // Check if host header indicates localhost
+    if let Some(host) = req.headers().get("host") {
+        if let Ok(host_str) = host.to_str() {
+            if host_str.starts_with("localhost:") || host_str == "localhost" || host_str.starts_with("127.0.0.1") || host_str.starts_with("::1") {
+                return true;
+            }
         }
     }
     
@@ -160,7 +175,19 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/bootstrap/network_state", get(network_state))
         .route("/bootstrap/peer_state", get(peer_state))
         .route("/bootstrap/cidr_state", get(cidr_state))
-        .route("/bootstrap/assoc_state", get(assoc_state));
+        .route("/bootstrap/assoc_state", get(assoc_state))
+        // Add read-only endpoints for non-sensitive data
+        .route("/agent/:id", get(get_agent))
+        .route("/agents", get(list_agent))
+        .route("/agents/:id", get(get_agent))
+        .route("/instance/:instance_id/get", get(get_instance))
+        .route("/instance/:build_id/get_by_build_id", get(get_instance_by_build_id))
+        .route("/instance/:build_id/get_instance_ips", get(get_instance_ips))
+        .route("/instance/list", get(list_instances))
+        .route("/model/:id", get(get_model))
+        .route("/models", get(list_model))
+        .route("/models/:id", get(get_model))
+        .route("/node/list", get(list_nodes));
 
     let network_writers_api = Router::new()
         .route("/user/create", post(create_user))
