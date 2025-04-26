@@ -187,7 +187,19 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/model/:id", get(get_model))
         .route("/models", get(list_model))
         .route("/models/:id", get(get_model))
-        .route("/node/list", get(list_nodes));
+        .route("/node/list", get(list_nodes))
+        .route("/agents/:id", get(get_agent))
+        .route("/agents", get(list_agent))
+        .route("/instance/:instance_id/metrics", get(get_instance_metrics))
+        .route("/instance/list/metrics", get(list_instance_metrics))
+        .route("/cluster/:build_id/metrics", get(get_cluster_metrics))
+        .route("/instance/list", get(list_instances))
+        .route("/instance/:instance_id/get", get(get_instance))
+        .route("/instance/:build_id/get_by_build_id", get(get_instance_by_build_id))
+        .route("/instance/:build_id/get_instance_ips", get(get_instance_ips))
+        .route("/models/:id", get(get_model))
+        .route("/models", get(list_model));
+
 
     let network_writers_api = Router::new()
         .route("/user/create", post(create_user))
@@ -256,14 +268,7 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         // Instance management
         .route("/instance/create", post(create_instance))
         .route("/instance/update", post(update_instance))
-        .route("/instance/:instance_id/get", get(get_instance))
-        .route("/instance/:build_id/get_by_build_id", get(get_instance_by_build_id))
-        .route("/instance/:build_id/get_instance_ips", get(get_instance_ips))
         .route("/instance/:instance_id/delete", post(delete_instance))
-        .route("/instance/:instance_id/metrics", get(get_instance_metrics))
-        .route("/instance/list/metrics", get(list_instance_metrics))
-        .route("/cluster/:build_id/metrics", get(get_cluster_metrics))
-        .route("/instance/list", get(list_instances))
         
         // Account management
         .route("/account/:address/get", get(get_account))
@@ -299,16 +304,12 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/agents/create", post(create_agent))
         .route("/agents/update", post(update_agent))
         .route("/agents/delete", post(delete_agent))
-        .route("/agents/:id", get(get_agent))
-        .route("/agents", get(list_agent))
         .route("/agents/:id/hire", post(checked_agent_hire))
         
         // Model management
         .route("/models/create", post(create_model))
         .route("/models/update", post(update_model))
         .route("/models/delete", post(delete_model))
-        .route("/models/:id", get(get_model))
-        .route("/models", get(list_model))
         .route("/models/:id/inference", post(checked_model_inference))
         
         // Apply API key authentication middleware to all API routes
