@@ -557,18 +557,34 @@ impl FormPackManager {
             )?; 
 
         println!("Building FormPackMonitor for {} build...", formfile.name);
-        let mut monitor = FormPackMonitor::new().await?; 
+        let mut monitor = match FormPackMonitor::new().await {
+            Ok(m) => m,
+            Err(e) => {
+                let err_msg = format!("Failed to create FormPackMonitor: {}", e);
+                println!("{}", err_msg);
+                Self::write_pack_status_failed(&message, err_msg).await?;
+                return Err(e);
+            }
+        };
+        
         println!("Attempting to build image for {}...", formfile.name);
-        monitor.build_image(
+        match monitor.build_image(
             self.node_id.clone(),
             message.request.name.clone(),
             formfile,
             artifacts_path,
-        ).await?; 
-
-        Self::write_pack_status_completed(&message, self.node_id.clone()).await?;
-
-        Ok(())
+        ).await {
+            Ok(_) => {
+                Self::write_pack_status_completed(&message, self.node_id.clone()).await?;
+                Ok(())
+            },
+            Err(e) => {
+                let err_msg = format!("Image build failed: {}", e);
+                println!("{}", err_msg);
+                Self::write_pack_status_failed(&message, err_msg).await?;
+                Err(e)
+            }
+        }
     }
 }
 
@@ -825,17 +841,32 @@ impl FormPackMonitor {
         )?;
         println!("Build server for {} is {container_id}", formfile.name);
 
-        println!("Uploading artifacts to {container_id}");
-        self.upload_artifacts(&container_id, artifacts).await?;
-        println!("Starting build server for {}", formfile.name);
-        self.start_build_server(&container_id).await?;
-        println!("Requesting image build for {}", formfile.name);
-        self.execute_build(node_id.clone(), vm_name.clone(), &formfile).await?;
-        self.extract_disk_image(&container_id, vm_name.clone()).await?;
-        println!("Image build completed for {} successfully, cleaning up {container_id}...", formfile.name);
-        self.cleanup().await?;
+        // Use a Result to track success/failure for cleanup
+        let build_result = async {
+            println!("Uploading artifacts to {container_id}");
+            self.upload_artifacts(&container_id, artifacts).await?;
+            println!("Starting build server for {}", formfile.name);
+            self.start_build_server(&container_id).await?;
+            println!("Requesting image build for {}", formfile.name);
+            self.execute_build(node_id.clone(), vm_name.clone(), &formfile).await?;
+            self.extract_disk_image(&container_id, vm_name.clone()).await?;
+            println!("Image build completed for {} successfully", formfile.name);
+            Ok(())
+        }.await;
 
-        Ok(())
+        // Always cleanup the container regardless of build success or failure
+        println!("Cleaning up container {container_id}...");
+        if let Err(cleanup_err) = self.cleanup().await {
+            println!("Error during container cleanup: {cleanup_err}");
+            // If the build was successful but cleanup failed, still return the cleanup error
+            if build_result.is_ok() {
+                return Err(cleanup_err);
+            }
+            // Otherwise, return the original build error and log the cleanup error
+        }
+
+        // Return the original build result
+        build_result
     }
 
     pub async fn start_build_container(&self) -> Result<(String, String, String), Box<dyn std::error::Error + Send + Sync>> {
