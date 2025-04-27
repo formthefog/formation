@@ -1,6 +1,6 @@
 # State Service API
 
-The State Service maintains the globally consistent state of the Formation cloud. It is responsible for managing all network resources including peers, CIDRs, associations, DNS records, instances, nodes, and accounts.
+The State Service maintains the globally consistent state of the Formation cloud. It is responsible for managing all network resources including users, DNS records, instances, nodes, and accounts.
 
 ## API Overview
 
@@ -16,22 +16,52 @@ API requests to the State Service require authentication using one of the follow
 
 The State Service manages several types of data:
 
-- **Peers**: Network participants (users)
-- **CIDRs**: IP address ranges for network segmentation
-- **Associations**: Relationships between CIDRs
+- **Users**: Network participants
 - **DNS Records**: Domain name mappings
 - **Instances**: Virtual machine instances
 - **Nodes**: Compute nodes in the network
 - **Accounts**: User accounts and permissions
 
-Each data type has its own set of API endpoints for creation, retrieval, updating, and deletion.
+Each data type has its own set of API endpoints for retrieval and querying.
+
+## Response Format
+
+The State API uses consistent response types:
+
+```json
+{
+  "Success": {
+    "Some": { ... }  // Single object response
+  }
+}
+```
+
+or
+
+```json
+{
+  "Success": {
+    "List": [ ... ]  // List of objects response
+  }
+}
+```
+
+or
+
+```json
+{
+  "Failure": {
+    "reason": "Error message"
+  }
+}
+```
 
 ## Core Endpoints
 
 ### Health Check
 
 ```
-GET /health
+GET /ping
 ```
 
 Verifies that the State Service is running and responsive.
@@ -41,385 +71,239 @@ Verifies that the State Service is running and responsive.
 "healthy"
 ```
 
-## Peer Management
+## User Management
 
-Peers represent users or services that participate in the network.
+Users represent network participants who can access and manage resources.
 
-### Create Peer
+### Get User
 
 ```
-POST /peers/create
+GET /user/:id/get
 ```
 
-Creates a new peer.
-
-**Request Body**:
-```json
-{
-  "name": "Alice",
-  "public_key": "0x1234567890abcdef1234567890abcdef12345678",
-  "peer_type": "user"
-}
-```
+Retrieves information about a specific user by ID.
 
 **Response**:
 ```json
 {
-  "success": true,
-  "peer_id": "peer-123456789",
-  "created_at": 1677721600
-}
-```
-
-### Get Peer
-
-```
-GET /peers/{id}
-```
-
-Retrieves information about a specific peer.
-
-**Response**:
-```json
-{
-  "id": "peer-123456789",
-  "name": "Alice",
-  "public_key": "0x1234567890abcdef1234567890abcdef12345678",
-  "peer_type": "user",
-  "created_at": 1677721600,
-  "updated_at": 1677721600
-}
-```
-
-### Update Peer
-
-```
-POST /peers/update
-```
-
-Updates an existing peer's information.
-
-**Request Body**:
-```json
-{
-  "id": "peer-123456789",
-  "name": "Alice (Updated)",
-  "peer_type": "user"
-}
-```
-
-**Response**:
-```json
-{
-  "success": true,
-  "peer_id": "peer-123456789",
-  "updated_at": 1677722600
-}
-```
-
-### Delete Peer
-
-```
-DELETE /peers/{id}
-```
-
-Deletes a peer.
-
-**Response**:
-```json
-{
-  "success": true,
-  "peer_id": "peer-123456789",
-  "deleted_at": 1677723600
-}
-```
-
-### List Peers
-
-```
-GET /peers
-```
-
-Retrieves a list of all peers.
-
-**Response**:
-```json
-{
-  "success": true,
-  "peers": [
-    {
-      "id": "peer-123456789",
-      "name": "Alice",
-      "public_key": "0x1234567890abcdef1234567890abcdef12345678",
-      "peer_type": "user",
-      "created_at": 1677721600,
-      "updated_at": 1677721600
-    },
-    {
-      "id": "peer-987654321",
-      "name": "Bob",
-      "public_key": "0x9876543210fedcba9876543210fedcba98765432",
-      "peer_type": "user",
-      "created_at": 1677722600,
-      "updated_at": 1677722600
+  "Success": {
+    "Some": {
+      "id": "user-123456789",
+      "contents": {
+        "name": "Alice",
+        "ip": "10.0.0.1",
+        "cidr_id": "cidr-12345",
+        "public_key": "0x1234567890abcdef1234567890abcdef12345678",
+        "endpoint": null,
+        "persistent_keepalive_interval": null,
+        "is_admin": false,
+        "is_disabled": false,
+        "is_redeemed": true,
+        "invite_expires": null,
+        "candidates": []
+      }
     }
-  ]
+  }
 }
 ```
 
-## CIDR Management
-
-CIDRs represent IP address ranges used for network segmentation.
-
-### Create CIDR
+### Get User by IP
 
 ```
-POST /cidrs/create
+GET /user/:ip/get_from_ip
 ```
 
-Creates a new CIDR.
-
-**Request Body**:
-```json
-{
-  "cidr": "192.168.100.0/24",
-  "name": "VM Network",
-  "owner": "peer-123456789"
-}
-```
+Retrieves information about a user based on their IP address.
 
 **Response**:
 ```json
 {
-  "success": true,
-  "cidr_id": "cidr-123456789",
-  "created_at": 1677721600
-}
-```
-
-### Get CIDR
-
-```
-GET /cidrs/{id}
-```
-
-Retrieves information about a specific CIDR.
-
-**Response**:
-```json
-{
-  "id": "cidr-123456789",
-  "cidr": "192.168.100.0/24",
-  "name": "VM Network",
-  "owner": "peer-123456789",
-  "created_at": 1677721600,
-  "updated_at": 1677721600
-}
-```
-
-### Update CIDR
-
-```
-POST /cidrs/update
-```
-
-Updates an existing CIDR's information.
-
-**Request Body**:
-```json
-{
-  "id": "cidr-123456789",
-  "name": "VM Network (Updated)",
-  "owner": "peer-123456789"
-}
-```
-
-**Response**:
-```json
-{
-  "success": true,
-  "cidr_id": "cidr-123456789",
-  "updated_at": 1677722600
-}
-```
-
-### Delete CIDR
-
-```
-DELETE /cidrs/{id}
-```
-
-Deletes a CIDR.
-
-**Response**:
-```json
-{
-  "success": true,
-  "cidr_id": "cidr-123456789",
-  "deleted_at": 1677723600
-}
-```
-
-### List CIDRs
-
-```
-GET /cidrs
-```
-
-Retrieves a list of all CIDRs.
-
-**Response**:
-```json
-{
-  "success": true,
-  "cidrs": [
-    {
-      "id": "cidr-123456789",
-      "cidr": "192.168.100.0/24",
-      "name": "VM Network",
-      "owner": "peer-123456789",
-      "created_at": 1677721600,
-      "updated_at": 1677721600
-    },
-    {
-      "id": "cidr-987654321",
-      "cidr": "192.168.101.0/24",
-      "name": "Control Network",
-      "owner": "peer-987654321",
-      "created_at": 1677722600,
-      "updated_at": 1677722600
+  "Success": {
+    "Some": {
+      "id": "user-123456789",
+      "contents": {
+        "name": "Alice",
+        "ip": "10.0.0.1",
+        "cidr_id": "cidr-12345",
+        "public_key": "0x1234567890abcdef1234567890abcdef12345678",
+        "endpoint": null,
+        "persistent_keepalive_interval": null,
+        "is_admin": false,
+        "is_disabled": false,
+        "is_redeemed": true,
+        "invite_expires": null,
+        "candidates": []
+      }
     }
-  ]
+  }
 }
 ```
 
-## Association Management
-
-Associations represent relationships between CIDRs.
-
-### Create Association
+### Get All Allowed Users
 
 ```
-POST /associations/create
+GET /user/:id/get_all_allowed
 ```
 
-Creates a new association between CIDRs.
-
-**Request Body**:
-```json
-{
-  "name": "VM to Control",
-  "source_cidr": "cidr-123456789",
-  "target_cidr": "cidr-987654321",
-  "allow_bidirectional": true
-}
-```
+Retrieves all users that are allowed to interact with the specified user.
 
 **Response**:
 ```json
 {
-  "success": true,
-  "association_id": "assoc-123456789",
-  "created_at": 1677721600
+  "Success": {
+    "List": [
+      {
+        "id": "user-123456789",
+        "contents": {
+          "name": "Alice",
+          "ip": "10.0.0.1",
+          "cidr_id": "cidr-12345",
+          "public_key": "0x1234567890abcdef1234567890abcdef12345678",
+          "endpoint": null,
+          "persistent_keepalive_interval": null,
+          "is_admin": false,
+          "is_disabled": false,
+          "is_redeemed": true,
+          "invite_expires": null,
+          "candidates": []
+        }
+      },
+      {
+        "id": "user-987654321",
+        "contents": {
+          "name": "Bob",
+          "ip": "10.0.0.2",
+          "cidr_id": "cidr-12345",
+          "public_key": "0x9876543210fedcba9876543210fedcba98765432",
+          "endpoint": null,
+          "persistent_keepalive_interval": null,
+          "is_admin": false,
+          "is_disabled": false,
+          "is_redeemed": true,
+          "invite_expires": null,
+          "candidates": []
+        }
+      }
+    ]
+  }
 }
 ```
 
-### Get Association
+### List Users
 
 ```
-GET /associations/{id}
+GET /user/list
 ```
 
-Retrieves information about a specific association.
+Retrieves a list of all users.
 
 **Response**:
 ```json
 {
-  "id": "assoc-123456789",
-  "name": "VM to Control",
-  "source_cidr": "cidr-123456789",
-  "target_cidr": "cidr-987654321",
-  "allow_bidirectional": true,
-  "created_at": 1677721600,
-  "updated_at": 1677721600
+  "Success": {
+    "List": [
+      {
+        "id": "user-123456789",
+        "contents": {
+          "name": "Alice",
+          "ip": "10.0.0.1",
+          "cidr_id": "cidr-12345",
+          "public_key": "0x1234567890abcdef1234567890abcdef12345678",
+          "endpoint": null,
+          "persistent_keepalive_interval": null,
+          "is_admin": false,
+          "is_disabled": false,
+          "is_redeemed": true,
+          "invite_expires": null,
+          "candidates": []
+        }
+      },
+      {
+        "id": "user-987654321",
+        "contents": {
+          "name": "Bob",
+          "ip": "10.0.0.2",
+          "cidr_id": "cidr-12345",
+          "public_key": "0x9876543210fedcba9876543210fedcba98765432",
+          "endpoint": null,
+          "persistent_keepalive_interval": null,
+          "is_admin": false,
+          "is_disabled": false,
+          "is_redeemed": true,
+          "invite_expires": null,
+          "candidates": []
+        }
+      }
+    ]
+  }
 }
 ```
 
-### Update Association
+### List Admin Users
 
 ```
-POST /associations/update
+GET /user/list_admin
 ```
 
-Updates an existing association's information.
-
-**Request Body**:
-```json
-{
-  "id": "assoc-123456789",
-  "name": "VM to Control (Updated)",
-  "allow_bidirectional": false
-}
-```
+Retrieves a list of all users with administrative privileges.
 
 **Response**:
 ```json
 {
-  "success": true,
-  "association_id": "assoc-123456789",
-  "updated_at": 1677722600
+  "Success": {
+    "List": [
+      {
+        "id": "user-123456789",
+        "contents": {
+          "name": "Alice",
+          "ip": "10.0.0.1",
+          "cidr_id": "cidr-12345",
+          "public_key": "0x1234567890abcdef1234567890abcdef12345678",
+          "endpoint": null,
+          "persistent_keepalive_interval": null,
+          "is_admin": true,
+          "is_disabled": false,
+          "is_redeemed": true,
+          "invite_expires": null,
+          "candidates": []
+        }
+      }
+    ]
+  }
 }
 ```
 
-### Delete Association
+### List Users by CIDR
 
 ```
-DELETE /associations/{id}
+GET /user/:cidr/list
 ```
 
-Deletes an association.
+Retrieves a list of users associated with a specific CIDR.
 
 **Response**:
 ```json
 {
-  "success": true,
-  "association_id": "assoc-123456789",
-  "deleted_at": 1677723600
-}
-```
-
-### List Associations
-
-```
-GET /associations
-```
-
-Retrieves a list of all associations.
-
-**Response**:
-```json
-{
-  "success": true,
-  "associations": [
-    {
-      "id": "assoc-123456789",
-      "name": "VM to Control",
-      "source_cidr": "cidr-123456789",
-      "target_cidr": "cidr-987654321",
-      "allow_bidirectional": true,
-      "created_at": 1677721600,
-      "updated_at": 1677721600
-    },
-    {
-      "id": "assoc-987654321",
-      "name": "VM to Public",
-      "source_cidr": "cidr-123456789",
-      "target_cidr": "cidr-456789123",
-      "allow_bidirectional": false,
-      "created_at": 1677722600,
-      "updated_at": 1677722600
-    }
-  ]
+  "Success": {
+    "List": [
+      {
+        "id": "user-123456789",
+        "contents": {
+          "name": "Alice",
+          "ip": "10.0.0.1",
+          "cidr_id": "cidr-12345",
+          "public_key": "0x1234567890abcdef1234567890abcdef12345678",
+          "endpoint": null,
+          "persistent_keepalive_interval": null,
+          "is_admin": false,
+          "is_disabled": false,
+          "is_redeemed": true,
+          "invite_expires": null,
+          "candidates": []
+        }
+      }
+    ]
+  }
 }
 ```
 
@@ -427,37 +311,10 @@ Retrieves a list of all associations.
 
 DNS records map domain names to IP addresses or other resources.
 
-### Create DNS Record
-
-```
-POST /dns/create
-```
-
-Creates a new DNS record.
-
-**Request Body**:
-```json
-{
-  "domain": "myapp.formation.cloud",
-  "record_type": "A",
-  "value": "192.168.100.10",
-  "ttl": 300
-}
-```
-
-**Response**:
-```json
-{
-  "success": true,
-  "dns_id": "dns-123456789",
-  "created_at": 1677721600
-}
-```
-
 ### Get DNS Record
 
 ```
-GET /dns/{domain}
+GET /dns/:domain/get
 ```
 
 Retrieves information about a specific DNS record.
@@ -465,64 +322,60 @@ Retrieves information about a specific DNS record.
 **Response**:
 ```json
 {
-  "id": "dns-123456789",
-  "domain": "myapp.formation.cloud",
-  "record_type": "A",
-  "value": "192.168.100.10",
-  "ttl": 300,
-  "created_at": 1677721600,
-  "updated_at": 1677721600
+  "Success": {
+    "Some": {
+      "domain": "myapp.formation.cloud",
+      "record_type": "A",
+      "formnet_ip": ["192.168.100.10:80"],
+      "public_ip": ["203.0.113.10:80"],
+      "cname_target": null,
+      "ttl": 300,
+      "ssl_cert": false
+    }
+  }
 }
 ```
 
-### Update DNS Record
+### Get DNS Records by Node IP
 
 ```
-POST /dns/update
+GET /dns/:node_ip/list
 ```
 
-Updates an existing DNS record.
-
-**Request Body**:
-```json
-{
-  "domain": "myapp.formation.cloud",
-  "record_type": "A",
-  "value": "192.168.100.11",
-  "ttl": 600
-}
-```
+Retrieves DNS records associated with a specific node IP.
 
 **Response**:
 ```json
 {
-  "success": true,
-  "dns_id": "dns-123456789",
-  "updated_at": 1677722600
-}
-```
-
-### Delete DNS Record
-
-```
-DELETE /dns/{domain}
-```
-
-Deletes a DNS record.
-
-**Response**:
-```json
-{
-  "success": true,
-  "dns_id": "dns-123456789",
-  "deleted_at": 1677723600
+  "Success": {
+    "List": [
+      {
+        "domain": "myapp.formation.cloud",
+        "record_type": "A",
+        "formnet_ip": ["192.168.100.10:80"],
+        "public_ip": ["203.0.113.10:80"],
+        "cname_target": null,
+        "ttl": 300,
+        "ssl_cert": false
+      },
+      {
+        "domain": "api.formation.cloud",
+        "record_type": "A",
+        "formnet_ip": ["192.168.100.11:80"],
+        "public_ip": ["203.0.113.11:80"],
+        "cname_target": null,
+        "ttl": 300,
+        "ssl_cert": false
+      }
+    ]
+  }
 }
 ```
 
 ### List DNS Records
 
 ```
-GET /dns
+GET /dns/list
 ```
 
 Retrieves a list of all DNS records.
@@ -530,27 +383,28 @@ Retrieves a list of all DNS records.
 **Response**:
 ```json
 {
-  "success": true,
-  "dns_records": [
-    {
-      "id": "dns-123456789",
-      "domain": "myapp.formation.cloud",
-      "record_type": "A",
-      "value": "192.168.100.10",
-      "ttl": 300,
-      "created_at": 1677721600,
-      "updated_at": 1677721600
-    },
-    {
-      "id": "dns-987654321",
-      "domain": "api.formation.cloud",
-      "record_type": "A",
-      "value": "192.168.100.11",
-      "ttl": 300,
-      "created_at": 1677722600,
-      "updated_at": 1677722600
-    }
-  ]
+  "Success": {
+    "List": [
+      {
+        "domain": "myapp.formation.cloud",
+        "record_type": "A",
+        "formnet_ip": ["192.168.100.10:80"],
+        "public_ip": ["203.0.113.10:80"],
+        "cname_target": null,
+        "ttl": 300,
+        "ssl_cert": false
+      },
+      {
+        "domain": "api.formation.cloud",
+        "record_type": "A",
+        "formnet_ip": ["192.168.100.11:80"],
+        "public_ip": ["203.0.113.11:80"],
+        "cname_target": null,
+        "ttl": 300,
+        "ssl_cert": false
+      }
+    ]
+  }
 }
 ```
 
@@ -558,39 +412,10 @@ Retrieves a list of all DNS records.
 
 Instances represent virtual machines running on the network.
 
-### Create Instance
-
-```
-POST /instances/create
-```
-
-Creates a new instance record.
-
-**Request Body**:
-```json
-{
-  "build_id": "build-123456789",
-  "name": "web-server",
-  "owner": "peer-123456789",
-  "vcpu_count": 2,
-  "mem_size_mib": 2048,
-  "disk_size_gb": 10
-}
-```
-
-**Response**:
-```json
-{
-  "success": true,
-  "instance_id": "instance-123456789",
-  "created_at": 1677721600
-}
-```
-
 ### Get Instance
 
 ```
-GET /instances/{id}
+GET /instance/:instance_id/get
 ```
 
 Retrieves information about a specific instance.
@@ -598,66 +423,287 @@ Retrieves information about a specific instance.
 **Response**:
 ```json
 {
-  "id": "instance-123456789",
-  "build_id": "build-123456789",
-  "name": "web-server",
-  "owner": "peer-123456789",
-  "vcpu_count": 2,
-  "mem_size_mib": 2048,
-  "disk_size_gb": 10,
-  "state": "running",
-  "created_at": 1677721600,
-  "updated_at": 1677721600
+  "Success": {
+    "Some": {
+      "instance_id": "instance-123456789",
+      "node_id": "node-123456789",
+      "build_id": "build-123456789",
+      "instance_owner": "user-123456789",
+      "formnet_ip": "10.0.0.5",
+      "dns_record": {
+        "domain": "myapp.formation.cloud",
+        "record_type": "A",
+        "formnet_ip": ["10.0.0.5:80"],
+        "public_ip": ["203.0.113.10:80"],
+        "cname_target": null,
+        "ttl": 300,
+        "ssl_cert": false
+      },
+      "created_at": 1677721600,
+      "updated_at": 1677721600,
+      "last_snapshot": 0,
+      "status": "Started",
+      "host_region": "us-west-1",
+      "resources": {
+        "vcpus": 2,
+        "memory_mb": 2048,
+        "bandwidth_mbps": 100,
+        "gpu": null
+      },
+      "cluster": {
+        "members": {},
+        "scaling_policy": null,
+        "template_instance_id": null,
+        "session_affinity_enabled": false
+      },
+      "formfile": "base64-encoded-formfile-content",
+      "snapshots": null,
+      "metadata": {
+        "tags": ["web", "production"],
+        "description": "Production web server",
+        "annotations": {
+          "deployed_by": "user-123456789",
+          "network_id": 1,
+          "build_commit": "a1b2c3d4"
+        },
+        "security": {
+          "encryption": {
+            "is_encrypted": false,
+            "scheme": null
+          },
+          "tee": false,
+          "hsm": false
+        },
+        "monitoring": {
+          "logging_enabled": true,
+          "metrics_endpoint": "https://metrics.formation.cloud"
+        }
+      }
+    }
+  }
 }
 ```
 
-### Update Instance
+### Get Instance by Build ID
 
 ```
-POST /instances/update
+GET /instance/:build_id/get_by_build_id
 ```
 
-Updates an existing instance's information.
-
-**Request Body**:
-```json
-{
-  "id": "instance-123456789",
-  "name": "web-server-updated",
-  "state": "stopped"
-}
-```
+Retrieves information about an instance using its build ID.
 
 **Response**:
 ```json
 {
-  "success": true,
-  "instance_id": "instance-123456789",
-  "updated_at": 1677722600
+  "Success": {
+    "Some": {
+      "instance_id": "instance-123456789",
+      "node_id": "node-123456789",
+      "build_id": "build-123456789",
+      "instance_owner": "user-123456789",
+      "formnet_ip": "10.0.0.5",
+      "dns_record": {
+        "domain": "myapp.formation.cloud",
+        "record_type": "A",
+        "formnet_ip": ["10.0.0.5:80"],
+        "public_ip": ["203.0.113.10:80"],
+        "cname_target": null,
+        "ttl": 300,
+        "ssl_cert": false
+      },
+      "created_at": 1677721600,
+      "updated_at": 1677721600,
+      "last_snapshot": 0,
+      "status": "Started",
+      "host_region": "us-west-1",
+      "resources": {
+        "vcpus": 2,
+        "memory_mb": 2048,
+        "bandwidth_mbps": 100,
+        "gpu": null
+      },
+      "cluster": {
+        "members": {},
+        "scaling_policy": null,
+        "template_instance_id": null,
+        "session_affinity_enabled": false
+      },
+      "formfile": "base64-encoded-formfile-content",
+      "snapshots": null,
+      "metadata": {
+        "tags": ["web", "production"],
+        "description": "Production web server",
+        "annotations": {
+          "deployed_by": "user-123456789",
+          "network_id": 1,
+          "build_commit": "a1b2c3d4"
+        },
+        "security": {
+          "encryption": {
+            "is_encrypted": false,
+            "scheme": null
+          },
+          "tee": false,
+          "hsm": false
+        },
+        "monitoring": {
+          "logging_enabled": true,
+          "metrics_endpoint": "https://metrics.formation.cloud"
+        }
+      }
+    }
+  }
 }
 ```
 
-### Delete Instance
+### Get Instance IPs
 
 ```
-DELETE /instances/{id}
+GET /instance/:build_id/get_instance_ips
 ```
 
-Deletes an instance.
+Retrieves IP addresses associated with a specific instance.
 
 **Response**:
 ```json
 {
-  "success": true,
-  "instance_id": "instance-123456789",
-  "deleted_at": 1677723600
+  "Success": {
+    "List": [
+      "192.168.100.10",
+      "192.168.100.11"
+    ]
+  }
+}
+```
+
+### Get Instance Metrics
+
+```
+GET /instance/:instance_id/metrics
+```
+
+Retrieves performance metrics for a specific instance.
+
+**Response**:
+```json
+{
+  "Success": {
+    "Some": {
+      "load_avg_1": 0,
+      "load_avg_5": 0, 
+      "load_avg_15": 0,
+      "process_count": 42,
+      "disk_read_bytes_per_sec": 1024000,
+      "disk_write_bytes_per_sec": 512000,
+      "network_in_bytes_per_sec": 1024000,
+      "network_out_bytes_per_sec": 512000,
+      "cpu_temperature": 45,
+      "gpu_temperature": null,
+      "power_usage_watts": 120
+    }
+  }
+}
+```
+
+### List Instance Metrics
+
+```
+GET /instance/list/metrics
+```
+
+Retrieves performance metrics for all instances.
+
+**Response**:
+```json
+{
+  "Success": {
+    "List": [
+      {
+        "instance_id": "instance-123456789",
+        "load_avg_1": 0,
+        "load_avg_5": 0, 
+        "load_avg_15": 0,
+        "process_count": 42,
+        "disk_read_bytes_per_sec": 1024000,
+        "disk_write_bytes_per_sec": 512000,
+        "network_in_bytes_per_sec": 1024000,
+        "network_out_bytes_per_sec": 512000,
+        "cpu_temperature": 45,
+        "gpu_temperature": null,
+        "power_usage_watts": 120
+      },
+      {
+        "instance_id": "instance-987654321",
+        "load_avg_1": 0,
+        "load_avg_5": 0, 
+        "load_avg_15": 0,
+        "process_count": 35,
+        "disk_read_bytes_per_sec": 2048000,
+        "disk_write_bytes_per_sec": 1024000,
+        "network_in_bytes_per_sec": 2048000,
+        "network_out_bytes_per_sec": 1024000,
+        "cpu_temperature": 50,
+        "gpu_temperature": null,
+        "power_usage_watts": 150
+      }
+    ]
+  }
+}
+```
+
+### Get Cluster Metrics
+
+```
+GET /cluster/:build_id/metrics
+```
+
+Retrieves performance metrics for a specific cluster.
+
+**Response**:
+```json
+{
+  "Success": {
+    "Some": {
+      "cluster_id": "cluster-123456789",
+      "members": [
+        {
+          "instance_id": "instance-123456789",
+          "load_avg_1": 0,
+          "load_avg_5": 0, 
+          "load_avg_15": 0,
+          "process_count": 42,
+          "disk_read_bytes_per_sec": 1024000,
+          "disk_write_bytes_per_sec": 512000,
+          "network_in_bytes_per_sec": 1024000,
+          "network_out_bytes_per_sec": 512000,
+          "cpu_temperature": 45,
+          "gpu_temperature": null,
+          "power_usage_watts": 120
+        },
+        {
+          "instance_id": "instance-987654321",
+          "load_avg_1": 0,
+          "load_avg_5": 0, 
+          "load_avg_15": 0,
+          "process_count": 35,
+          "disk_read_bytes_per_sec": 2048000,
+          "disk_write_bytes_per_sec": 1024000,
+          "network_in_bytes_per_sec": 2048000,
+          "network_out_bytes_per_sec": 1024000,
+          "cpu_temperature": 50,
+          "gpu_temperature": null,
+          "power_usage_watts": 150
+        }
+      ]
+    }
+  }
 }
 ```
 
 ### List Instances
 
 ```
-GET /instances
+GET /instance/list
 ```
 
 Retrieves a list of all instances.
@@ -665,33 +711,122 @@ Retrieves a list of all instances.
 **Response**:
 ```json
 {
-  "success": true,
-  "instances": [
-    {
-      "id": "instance-123456789",
-      "build_id": "build-123456789",
-      "name": "web-server",
-      "owner": "peer-123456789",
-      "vcpu_count": 2,
-      "mem_size_mib": 2048,
-      "disk_size_gb": 10,
-      "state": "running",
-      "created_at": 1677721600,
-      "updated_at": 1677721600
-    },
-    {
-      "id": "instance-987654321",
-      "build_id": "build-987654321",
-      "name": "database",
-      "owner": "peer-123456789",
-      "vcpu_count": 4,
-      "mem_size_mib": 4096,
-      "disk_size_gb": 20,
-      "state": "stopped",
-      "created_at": 1677722600,
-      "updated_at": 1677722600
-    }
-  ]
+  "Success": {
+    "List": [
+      {
+        "instance_id": "instance-123456789",
+        "node_id": "node-123456789",
+        "build_id": "build-123456789",
+        "instance_owner": "user-123456789",
+        "formnet_ip": "10.0.0.5",
+        "dns_record": {
+          "domain": "myapp.formation.cloud",
+          "record_type": "A",
+          "formnet_ip": ["10.0.0.5:80"],
+          "public_ip": ["203.0.113.10:80"],
+          "cname_target": null,
+          "ttl": 300,
+          "ssl_cert": false
+        },
+        "created_at": 1677721600,
+        "updated_at": 1677721600,
+        "last_snapshot": 0,
+        "status": "Started",
+        "host_region": "us-west-1",
+        "resources": {
+          "vcpus": 2,
+          "memory_mb": 2048,
+          "bandwidth_mbps": 100,
+          "gpu": null
+        },
+        "cluster": {
+          "members": {},
+          "scaling_policy": null,
+          "template_instance_id": null,
+          "session_affinity_enabled": false
+        },
+        "formfile": "base64-encoded-formfile-content",
+        "snapshots": null,
+        "metadata": {
+          "tags": ["web", "production"],
+          "description": "Production web server",
+          "annotations": {
+            "deployed_by": "user-123456789",
+            "network_id": 1,
+            "build_commit": "a1b2c3d4"
+          },
+          "security": {
+            "encryption": {
+              "is_encrypted": false,
+              "scheme": null
+            },
+            "tee": false,
+            "hsm": false
+          },
+          "monitoring": {
+            "logging_enabled": true,
+            "metrics_endpoint": "https://metrics.formation.cloud"
+          }
+        }
+      },
+      {
+        "instance_id": "instance-987654321",
+        "node_id": "node-987654321",
+        "build_id": "build-987654321",
+        "instance_owner": "user-123456789",
+        "formnet_ip": "10.0.0.6",
+        "dns_record": {
+          "domain": "api.formation.cloud",
+          "record_type": "A",
+          "formnet_ip": ["10.0.0.6:80"],
+          "public_ip": ["203.0.113.11:80"],
+          "cname_target": null,
+          "ttl": 300,
+          "ssl_cert": false
+        },
+        "created_at": 1677722600,
+        "updated_at": 1677722600,
+        "last_snapshot": 0,
+        "status": "Stopped",
+        "host_region": "us-west-1",
+        "resources": {
+          "vcpus": 4,
+          "memory_mb": 4096,
+          "bandwidth_mbps": 100,
+          "gpu": null
+        },
+        "cluster": {
+          "members": {},
+          "scaling_policy": null,
+          "template_instance_id": null,
+          "session_affinity_enabled": false
+        },
+        "formfile": "base64-encoded-formfile-content",
+        "snapshots": null,
+        "metadata": {
+          "tags": ["api", "production"],
+          "description": "Production API server",
+          "annotations": {
+            "deployed_by": "user-123456789",
+            "network_id": 1,
+            "build_commit": "e5f6g7h8"
+          },
+          "security": {
+            "encryption": {
+              "is_encrypted": false,
+              "scheme": null
+            },
+            "tee": false,
+            "hsm": false
+          },
+          "monitoring": {
+            "logging_enabled": true,
+            "metrics_endpoint": "https://metrics.formation.cloud"
+          }
+        }
+      }
+    ]
+  }
 }
 ```
 
@@ -699,40 +834,10 @@ Retrieves a list of all instances.
 
 Nodes represent compute resources in the network.
 
-### Create Node
-
-```
-POST /nodes/create
-```
-
-Creates a new node record.
-
-**Request Body**:
-```json
-{
-  "name": "Worker-1",
-  "public_key": "WFmc3ixj8Ue4qZEQRTH+GYKJmUFQd2H4UBW5BJdXpXE=",
-  "endpoint": "203.0.113.10:51820",
-  "total_vcpus": 16,
-  "total_memory_mib": 32768,
-  "total_disk_gb": 1000,
-  "operator_id": "peer-123456789"
-}
-```
-
-**Response**:
-```json
-{
-  "success": true,
-  "node_id": "node-123456789",
-  "created_at": 1677721600
-}
-```
-
 ### Get Node
 
 ```
-GET /nodes/{id}
+GET /node/:id/get
 ```
 
 Retrieves information about a specific node.
@@ -740,71 +845,150 @@ Retrieves information about a specific node.
 **Response**:
 ```json
 {
-  "id": "node-123456789",
-  "name": "Worker-1",
-  "public_key": "WFmc3ixj8Ue4qZEQRTH+GYKJmUFQd2H4UBW5BJdXpXE=",
-  "endpoint": "203.0.113.10:51820",
-  "total_vcpus": 16,
-  "total_memory_mib": 32768,
-  "total_disk_gb": 1000,
-  "available_vcpus": 12,
-  "available_memory_mib": 28672,
-  "available_disk_gb": 900,
-  "operator_id": "peer-123456789",
-  "state": "online",
-  "created_at": 1677721600,
-  "updated_at": 1677721600
+  "Success": {
+    "Some": {
+      "node_id": "node-123456789",
+      "node_owner": "user-123456789",
+      "created_at": 1677721600,
+      "updated_at": 1677721600,
+      "last_heartbeat": 1677723600,
+      "host_region": "us-west-1",
+      "capabilities": {
+        "cpu_model": "Intel(R) Xeon(R) CPU E5-2678 v3 @ 2.50GHz",
+        "cpu_cores": 16,
+        "total_memory": 32768,
+        "total_storage": 1000000000000,
+        "gpu_models": [],
+        "network_interfaces": [],
+        "tpm": null,
+        "sgx": null,
+        "sev": null,
+        "virtualization_type": "BareMetal"
+      },
+      "capacity": {
+        "cpu_total_cores": 16,
+        "cpu_available_cores": 12000,
+        "memory_total_bytes": 34359738368,
+        "memory_available_bytes": 30064771072,
+        "storage_total_bytes": 1073741824000,
+        "storage_available_bytes": 966367641600,
+        "gpu_total_memory_bytes": 0,
+        "gpu_available_memory_bytes": 0,
+        "network_total_bandwidth": 0,
+        "network_available_bandwidth": 0
+      },
+      "metrics": {
+        "load_avg_1": 125,
+        "load_avg_5": 150,
+        "load_avg_15": 180,
+        "process_count": 324,
+        "disk_read_bytes_per_sec": 10240000,
+        "disk_write_bytes_per_sec": 5120000,
+        "network_in_bytes_per_sec": 10240000,
+        "network_out_bytes_per_sec": 5120000,
+        "cpu_temperature": 55,
+        "gpu_temperature": null,
+        "power_usage_watts": 220
+      },
+      "metadata": {
+        "tags": ["compute", "production"],
+        "description": "Production compute node",
+        "annotations": {
+          "roles": ["compute", "storage"],
+          "datacenter": "dc-west-1"
+        },
+        "monitoring": {
+          "logging_enabled": true,
+          "metrics_endpoint": "https://metrics.formation.cloud"
+        }
+      },
+      "host": {
+        "Domain": "node1.formation.cloud"
+      }
+    }
+  }
 }
 ```
 
-### Update Node
+### Get Node Metrics
 
 ```
-POST /nodes/update
+GET /node/:id/metrics
 ```
 
-Updates an existing node's information.
-
-**Request Body**:
-```json
-{
-  "id": "node-123456789",
-  "name": "Worker-1-Updated",
-  "endpoint": "203.0.113.20:51820",
-  "state": "maintenance"
-}
-```
+Retrieves performance metrics for a specific node.
 
 **Response**:
 ```json
 {
-  "success": true,
-  "node_id": "node-123456789",
-  "updated_at": 1677722600
+  "Success": {
+    "Some": {
+      "load_avg_1": 125,
+      "load_avg_5": 150,
+      "load_avg_15": 180,
+      "process_count": 324,
+      "disk_read_bytes_per_sec": 10240000,
+      "disk_write_bytes_per_sec": 5120000,
+      "network_in_bytes_per_sec": 10240000,
+      "network_out_bytes_per_sec": 5120000,
+      "cpu_temperature": 55,
+      "gpu_temperature": null,
+      "power_usage_watts": 220
+    }
+  }
 }
 ```
 
-### Delete Node
+### List Node Metrics
 
 ```
-DELETE /nodes/{id}
+GET /node/list/metrics
 ```
 
-Deletes a node.
+Retrieves performance metrics for all nodes.
 
 **Response**:
 ```json
 {
-  "success": true,
-  "node_id": "node-123456789",
-  "deleted_at": 1677723600
+  "Success": {
+    "List": [
+      {
+        "node_id": "node-123456789",
+        "load_avg_1": 125,
+        "load_avg_5": 150,
+        "load_avg_15": 180,
+        "process_count": 324,
+        "disk_read_bytes_per_sec": 10240000,
+        "disk_write_bytes_per_sec": 5120000,
+        "network_in_bytes_per_sec": 10240000,
+        "network_out_bytes_per_sec": 5120000,
+        "cpu_temperature": 55,
+        "gpu_temperature": null,
+        "power_usage_watts": 220
+      },
+      {
+        "node_id": "node-987654321",
+        "load_avg_1": 100,
+        "load_avg_5": 120,
+        "load_avg_15": 140,
+        "process_count": 245,
+        "disk_read_bytes_per_sec": 20480000,
+        "disk_write_bytes_per_sec": 10240000,
+        "network_in_bytes_per_sec": 20480000,
+        "network_out_bytes_per_sec": 10240000,
+        "cpu_temperature": 50,
+        "gpu_temperature": null,
+        "power_usage_watts": 200
+      }
+    ]
+  }
 }
 ```
 
 ### List Nodes
 
 ```
-GET /nodes
+GET /node/list
 ```
 
 Retrieves a list of all nodes.
@@ -812,41 +996,130 @@ Retrieves a list of all nodes.
 **Response**:
 ```json
 {
-  "success": true,
-  "nodes": [
-    {
-      "id": "node-123456789",
-      "name": "Worker-1",
-      "public_key": "WFmc3ixj8Ue4qZEQRTH+GYKJmUFQd2H4UBW5BJdXpXE=",
-      "endpoint": "203.0.113.10:51820",
-      "total_vcpus": 16,
-      "total_memory_mib": 32768,
-      "total_disk_gb": 1000,
-      "available_vcpus": 12,
-      "available_memory_mib": 28672,
-      "available_disk_gb": 900,
-      "operator_id": "peer-123456789",
-      "state": "online",
-      "created_at": 1677721600,
-      "updated_at": 1677721600
-    },
-    {
-      "id": "node-987654321",
-      "name": "Worker-2",
-      "public_key": "xTIBA5rboUvnH4htodjb6e+4dOEcNqkq/JZFJpBYCnM=",
-      "endpoint": "203.0.113.11:51820",
-      "total_vcpus": 32,
-      "total_memory_mib": 65536,
-      "total_disk_gb": 2000,
-      "available_vcpus": 24,
-      "available_memory_mib": 49152,
-      "available_disk_gb": 1800,
-      "operator_id": "peer-987654321",
-      "state": "online",
-      "created_at": 1677722600,
-      "updated_at": 1677722600
-    }
-  ]
+  "Success": {
+    "List": [
+      {
+        "node_id": "node-123456789",
+        "node_owner": "user-123456789",
+        "created_at": 1677721600,
+        "updated_at": 1677721600,
+        "last_heartbeat": 1677723600,
+        "host_region": "us-west-1",
+        "capabilities": {
+          "cpu_model": "Intel(R) Xeon(R) CPU E5-2678 v3 @ 2.50GHz",
+          "cpu_cores": 16,
+          "total_memory": 32768,
+          "total_storage": 1000000000000,
+          "gpu_models": [],
+          "network_interfaces": [],
+          "tpm": null,
+          "sgx": null,
+          "sev": null,
+          "virtualization_type": "BareMetal"
+        },
+        "capacity": {
+          "cpu_total_cores": 16,
+          "cpu_available_cores": 12000,
+          "memory_total_bytes": 34359738368,
+          "memory_available_bytes": 30064771072,
+          "storage_total_bytes": 1073741824000,
+          "storage_available_bytes": 966367641600,
+          "gpu_total_memory_bytes": 0,
+          "gpu_available_memory_bytes": 0,
+          "network_total_bandwidth": 0,
+          "network_available_bandwidth": 0
+        },
+        "metrics": {
+          "load_avg_1": 125,
+          "load_avg_5": 150,
+          "load_avg_15": 180,
+          "process_count": 324,
+          "disk_read_bytes_per_sec": 10240000,
+          "disk_write_bytes_per_sec": 5120000,
+          "network_in_bytes_per_sec": 10240000,
+          "network_out_bytes_per_sec": 5120000,
+          "cpu_temperature": 55,
+          "gpu_temperature": null,
+          "power_usage_watts": 220
+        },
+        "metadata": {
+          "tags": ["compute", "production"],
+          "description": "Production compute node",
+          "annotations": {
+            "roles": ["compute", "storage"],
+            "datacenter": "dc-west-1"
+          },
+          "monitoring": {
+            "logging_enabled": true,
+            "metrics_endpoint": "https://metrics.formation.cloud"
+          }
+        },
+        "host": {
+          "Domain": "node1.formation.cloud"
+        }
+      },
+      {
+        "node_id": "node-987654321",
+        "node_owner": "user-987654321",
+        "created_at": 1677722600,
+        "updated_at": 1677722600,
+        "last_heartbeat": 1677723600,
+        "host_region": "us-east-1",
+        "capabilities": {
+          "cpu_model": "AMD EPYC 7642 48-Core Processor",
+          "cpu_cores": 32,
+          "total_memory": 65536,
+          "total_storage": 2000000000000,
+          "gpu_models": [],
+          "network_interfaces": [],
+          "tpm": null,
+          "sgx": null,
+          "sev": null,
+          "virtualization_type": "BareMetal"
+        },
+        "capacity": {
+          "cpu_total_cores": 32,
+          "cpu_available_cores": 24000,
+          "memory_total_bytes": 68719476736,
+          "memory_available_bytes": 51539607552,
+          "storage_total_bytes": 2147483648000,
+          "storage_available_bytes": 1932735283200,
+          "gpu_total_memory_bytes": 0,
+          "gpu_available_memory_bytes": 0,
+          "network_total_bandwidth": 0,
+          "network_available_bandwidth": 0
+        },
+        "metrics": {
+          "load_avg_1": 100,
+          "load_avg_5": 120,
+          "load_avg_15": 140,
+          "process_count": 245,
+          "disk_read_bytes_per_sec": 20480000,
+          "disk_write_bytes_per_sec": 10240000,
+          "network_in_bytes_per_sec": 20480000,
+          "network_out_bytes_per_sec": 10240000,
+          "cpu_temperature": 50,
+          "gpu_temperature": null,
+          "power_usage_watts": 200
+        },
+        "metadata": {
+          "tags": ["compute", "production"],
+          "description": "Production compute node",
+          "annotations": {
+            "roles": ["compute", "storage"],
+            "datacenter": "dc-east-1"
+          },
+          "monitoring": {
+            "logging_enabled": true,
+            "metrics_endpoint": "https://metrics.formation.cloud"
+          }
+        },
+        "host": {
+          "Domain": "node2.formation.cloud"
+        }
+      }
+    ]
+  }
 }
 ```
 
@@ -854,102 +1127,41 @@ Retrieves a list of all nodes.
 
 Accounts represent user accounts with authentication and permission information.
 
-### Create Account
-
-```
-POST /accounts/create
-```
-
-Creates a new account.
-
-**Request Body**:
-```json
-{
-  "name": "Alice",
-  "ethereum_address": "0x1234567890abcdef1234567890abcdef12345678",
-  "email": "alice@example.com",
-  "role": "user"
-}
-```
-
-**Response**:
-```json
-{
-  "success": true,
-  "account_id": "account-123456789",
-  "created_at": 1677721600
-}
-```
-
 ### Get Account
 
 ```
-GET /accounts/{id}
+GET /account/:address/get
 ```
 
-Retrieves information about a specific account.
+Retrieves information about a specific account by Ethereum address.
 
 **Response**:
 ```json
 {
-  "id": "account-123456789",
-  "name": "Alice",
-  "ethereum_address": "0x1234567890abcdef1234567890abcdef12345678",
-  "email": "alice@example.com",
-  "role": "user",
-  "created_at": 1677721600,
-  "updated_at": 1677721600
-}
-```
-
-### Update Account
-
-```
-POST /accounts/update
-```
-
-Updates an existing account's information.
-
-**Request Body**:
-```json
-{
-  "id": "account-123456789",
-  "name": "Alice Smith",
-  "email": "alice.smith@example.com",
-  "role": "admin"
-}
-```
-
-**Response**:
-```json
-{
-  "success": true,
-  "account_id": "account-123456789",
-  "updated_at": 1677722600
-}
-```
-
-### Delete Account
-
-```
-DELETE /accounts/{id}
-```
-
-Deletes an account.
-
-**Response**:
-```json
-{
-  "success": true,
-  "account_id": "account-123456789",
-  "deleted_at": 1677723600
+  "Success": {
+    "Some": {
+      "address": "0x1234567890abcdef1234567890abcdef12345678",
+      "name": "Alice",
+      "owned_instances": [
+        "instance-123456789",
+        "instance-987654321"
+      ],
+      "authorized_instances": {
+        "instance-123456789": "Owner",
+        "instance-987654321": "Owner",
+        "instance-456789123": "Manager"
+      },
+      "created_at": 1677721600,
+      "updated_at": 1677721600
+    }
+  }
 }
 ```
 
 ### List Accounts
 
 ```
-GET /accounts
+GET /account/list
 ```
 
 Retrieves a list of all accounts.
@@ -957,27 +1169,38 @@ Retrieves a list of all accounts.
 **Response**:
 ```json
 {
-  "success": true,
-  "accounts": [
-    {
-      "id": "account-123456789",
-      "name": "Alice",
-      "ethereum_address": "0x1234567890abcdef1234567890abcdef12345678",
-      "email": "alice@example.com",
-      "role": "user",
-      "created_at": 1677721600,
-      "updated_at": 1677721600
-    },
-    {
-      "id": "account-987654321",
-      "name": "Bob",
-      "ethereum_address": "0x9876543210fedcba9876543210fedcba98765432",
-      "email": "bob@example.com",
-      "role": "user",
-      "created_at": 1677722600,
-      "updated_at": 1677722600
-    }
-  ]
+  "Success": {
+    "List": [
+      {
+        "address": "0x1234567890abcdef1234567890abcdef12345678",
+        "name": "Alice",
+        "owned_instances": [
+          "instance-123456789",
+          "instance-987654321"
+        ],
+        "authorized_instances": {
+          "instance-123456789": "Owner",
+          "instance-987654321": "Owner",
+          "instance-456789123": "Manager"
+        },
+        "created_at": 1677721600,
+        "updated_at": 1677721600
+      },
+      {
+        "address": "0x9876543210fedcba9876543210fedcba98765432",
+        "name": "Bob",
+        "owned_instances": [
+          "instance-456789123"
+        ],
+        "authorized_instances": {
+          "instance-456789123": "Owner",
+          "instance-123456789": "ReadOnly"
+        },
+        "created_at": 1677722600,
+        "updated_at": 1677722600
+      }
+    ]
+  }
 }
 ```
 
@@ -996,36 +1219,10 @@ The State Service API returns standard HTTP status codes:
 Error responses include a JSON object with:
 ```json
 {
-  "success": false,
-  "error": "Descriptive error message",
-  "code": "ERROR_CODE"
+  "Failure": {
+    "reason": "Descriptive error message"
+  }
 }
-```
-
-## Example Usage
-
-### Creating a Node
-
-```bash
-curl -X POST https://node.formation.cloud:3004/nodes/create \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <JWT_TOKEN>" \
-  -d '{
-    "name": "Worker-1",
-    "public_key": "WFmc3ixj8Ue4qZEQRTH+GYKJmUFQd2H4UBW5BJdXpXE=",
-    "endpoint": "203.0.113.10:51820",
-    "total_vcpus": 16,
-    "total_memory_mib": 32768,
-    "total_disk_gb": 1000,
-    "operator_id": "peer-123456789"
-  }'
-```
-
-### Getting an Instance
-
-```bash
-curl -X GET https://node.formation.cloud:3004/instances/build-123456789 \
-  -H "Authorization: Bearer <JWT_TOKEN>"
 ```
 
 ## SDK Integration
@@ -1040,13 +1237,8 @@ const formation = new Formation({
   apiKey: 'your-api-key'
 });
 
-// Create a DNS record
-const dnsRecord = await formation.state.createDnsRecord({
-  domain: 'myapp.formation.cloud',
-  recordType: 'A',
-  value: '192.168.100.10',
-  ttl: 300
-});
+// Get a DNS record
+const dnsRecord = await formation.state.getDnsRecord('myapp.formation.cloud');
 console.log(dnsRecord);
 
 // List all instances
@@ -1059,7 +1251,7 @@ console.log(instances);
 When working with the State Service API, keep these considerations in mind:
 
 1. **Consistency**: The BFT-CRDT database ensures that all nodes will eventually have the same state, but there may be a slight delay in propagation.
-2. **Idempotency**: API operations are designed to be idempotent, allowing for safe retries.
+2. **Read-only Access**: Most users should only use the GET endpoints documented here. The POST, PUT, and DELETE endpoints are primarily for internal use.
 3. **Pagination**: For list endpoints that may return many items, use the `limit` and `offset` query parameters to paginate results.
 4. **Filtering**: Most list endpoints support filtering parameters to narrow down results.
 5. **Performance**: For critical paths, consider caching frequently accessed data locally. 
