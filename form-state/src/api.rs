@@ -161,6 +161,37 @@ pub fn is_localhost_request(req: &Request<Body>) -> bool {
     false
 }
 
+// Helper function to determine if a path is for a public endpoint
+pub fn is_public_endpoint(path: &str) -> bool {
+    // List of paths that are safe for public access
+    let public_paths = [
+        // Agents endpoints
+        "/agents",
+        "/agents/",
+        "/agent/",
+        
+        // Instance endpoints
+        "/instances",
+        "/instance/list",
+        "/instance/",
+        
+        // Model endpoints
+        "/models",
+        "/models/",
+        "/model/",
+        
+        // Account endpoints (minimal info only)
+        "/accounts",
+        
+        // Node endpoints
+        "/nodes",
+        "/node/list"
+    ];
+    
+    // Check if the path starts with any of the public paths
+    public_paths.iter().any(|&prefix| path.starts_with(prefix))
+}
+
 pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
     // Create the JWKS manager for JWT validation
     let jwks_manager = Arc::new(JWKSManager::new());

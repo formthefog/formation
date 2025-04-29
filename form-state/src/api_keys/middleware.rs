@@ -1,7 +1,7 @@
 use axum::{
     async_trait,
     extract::{FromRequestParts, State},
-    http::{request::Parts, Request, StatusCode, header},
+    http::{request::Parts, Request, StatusCode, header, Method},
     middleware::Next,
     response::Response,
     body::Body,
@@ -16,7 +16,7 @@ use crate::datastore::DataStore;
 use crate::api_keys::{ApiKey, ApiKeyError, ApiKeyRateLimiter, RateLimitCheckResult, get_rate_limit_headers};
 use crate::api_keys::audit::{ApiKeyEvent, ApiKeyAuditLog, API_KEY_AUDIT_LOG};
 use crate::accounts::Account;
-use crate::api::is_localhost_request;
+use crate::api::{is_localhost_request, is_public_endpoint};
 
 // Global rate limiter instance
 static RATE_LIMITER: Lazy<ApiKeyRateLimiter> = Lazy::new(|| {
@@ -57,6 +57,12 @@ pub async fn api_key_auth_middleware(
     // Check if request is from localhost - bypass auth if it is
     if is_localhost_request(&request) {
         log::info!("Localhost detected, bypassing API key authentication");
+        return Ok(next.run(request).await);
+    }
+    
+    // Skip auth for GET requests to public endpoints (agents, instances, models)
+    if method == Method::GET && is_public_endpoint(&path) {
+        log::info!("Public GET endpoint detected, bypassing API key authentication: {}", path);
         return Ok(next.run(request).await);
     }
     
