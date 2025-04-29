@@ -237,29 +237,21 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/bootstrap/peer_state", get(peer_state))
         .route("/bootstrap/cidr_state", get(cidr_state))
         .route("/bootstrap/assoc_state", get(assoc_state))
-        // Add read-only endpoints for non-sensitive data
+        // Add read-only endpoints for non-sensitive data - NO DUPLICATES
         .route("/agent/:id", get(get_agent))
-        .route("/agents", get(list_agent))
+        .route("/agents", get(list_agent))  // Only defined once
         .route("/agents/:id", get(get_agent))
         .route("/instance/:instance_id/get", get(get_instance))
         .route("/instance/:build_id/get_by_build_id", get(get_instance_by_build_id))
         .route("/instance/:build_id/get_instance_ips", get(get_instance_ips))
         .route("/instance/list", get(list_instances))
-        .route("/model/:id", get(get_model))
-        .route("/models", get(list_model))
-        .route("/models/:id", get(get_model))
-        .route("/node/list", get(list_nodes))
-        .route("/agents/:id", get(get_agent))
-        .route("/agents", get(list_agent))
         .route("/instance/:instance_id/metrics", get(get_instance_metrics))
         .route("/instance/list/metrics", get(list_instance_metrics))
         .route("/cluster/:build_id/metrics", get(get_cluster_metrics))
-        .route("/instance/list", get(list_instances))
-        .route("/instance/:instance_id/get", get(get_instance))
-        .route("/instance/:build_id/get_by_build_id", get(get_instance_by_build_id))
-        .route("/instance/:build_id/get_instance_ips", get(get_instance_ips))
+        .route("/model/:id", get(get_model))
+        .route("/models", get(list_model))  // Only defined once
         .route("/models/:id", get(get_model))
-        .route("/models", get(list_model));
+        .route("/node/list", get(list_nodes));
 
 
     let network_writers_api = Router::new()
@@ -381,11 +373,18 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
     
     // Merge all route groups into a single router
     Router::new()
+        // Put public routes first to ensure they take precedence
         .merge(public_api)
-        .merge(network_writers_api)  // Add the node-authenticated network API
+        // Create a nested router for all authenticated API routes
+        // This ensures the auth middleware is only applied to these specific routes
+        .nest("/api", 
+            Router::new()
+                .merge(api_routes)
+        )
+        // Other routers
+        .merge(network_writers_api)
         .merge(network_readers_api)
         .merge(account_api)
-        .merge(api_routes)
         .with_state(state)
 }
 
