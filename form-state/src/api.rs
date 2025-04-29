@@ -131,38 +131,59 @@ async fn node_auth_middleware(
 
 // Helper function to check if a request is coming from localhost
 pub fn is_localhost_request(req: &Request<Body>) -> bool {
+    log::info!("Checking if request is from localhost");
+    
     // Check from connection info (direct connections)
     if let Some(addr) = req.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>() {
         let ip = addr.ip();
+        log::info!("  Connection info IP: {}", ip);
         if ip.is_loopback() {
+            log::info!("  Localhost detected via connection info (loopback)");
             return true;
         }
+    } else {
+        log::info!("  No connection info available");
     }
     
     // Check headers for proxy info
     if let Some(forwarded) = req.headers().get("x-forwarded-for") {
         if let Ok(addr) = forwarded.to_str() {
             let first_ip = addr.split(',').next().unwrap_or("").trim();
+            log::info!("  X-Forwarded-For header: {}", first_ip);
             if first_ip == "127.0.0.1" || first_ip == "::1" || first_ip.starts_with("localhost") {
+                log::info!("  Localhost detected via X-Forwarded-For");
                 return true;
             }
+        } else {
+            log::info!("  X-Forwarded-For header exists but couldn't be parsed");
         }
+    } else {
+        log::info!("  No X-Forwarded-For header");
     }
     
     // Check if host header indicates localhost
     if let Some(host) = req.headers().get("host") {
         if let Ok(host_str) = host.to_str() {
+            log::info!("  Host header: {}", host_str);
             if host_str.starts_with("localhost:") || host_str == "localhost" || host_str.starts_with("127.0.0.1") || host_str.starts_with("::1") {
+                log::info!("  Localhost detected via Host header");
                 return true;
             }
+        } else {
+            log::info!("  Host header exists but couldn't be parsed");
         }
+    } else {
+        log::info!("  No Host header");
     }
     
+    log::info!("  Not a localhost request");
     false
 }
 
 // Helper function to determine if a path is for a public endpoint
 pub fn is_public_endpoint(path: &str) -> bool {
+    log::info!("Checking if path '{}' is a public endpoint", path);
+    
     // List of paths that are safe for public access
     let public_paths = [
         // Agents endpoints
@@ -188,8 +209,17 @@ pub fn is_public_endpoint(path: &str) -> bool {
         "/node/list"
     ];
     
-    // Check if the path starts with any of the public paths
-    public_paths.iter().any(|&prefix| path.starts_with(prefix))
+    // Log all path checks for debugging
+    for &prefix in &public_paths {
+        let matches = path.starts_with(prefix);
+        log::info!("  Checking against '{}': {}", prefix, if matches { "MATCH" } else { "no match" });
+        if matches {
+            return true;
+        }
+    }
+    
+    log::info!("  No public path match found for '{}'", path);
+    false
 }
 
 pub fn app(state: Arc<Mutex<DataStore>>) -> Router {

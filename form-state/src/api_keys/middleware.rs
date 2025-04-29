@@ -48,26 +48,56 @@ pub async fn api_key_auth_middleware(
     next: Next,
 ) -> Result<Response, StatusCode> {
     log::info!("API key auth middleware called");
+    log::info!("Function imported: crate::api::is_public_endpoint = {:?}", std::any::type_name::<fn(&str) -> bool>());
     
     // Log request path and method
     let path = request.uri().path().to_string();
     let method = request.method().clone();
     log::info!("Request path: {:?}, method: {:?}", path, method);
     
+    // DIRECT PATH CHECK for common endpoints - temporary solution
+    if method == Method::GET && (
+        path == "/agents" || 
+        path == "/instances" || 
+        path == "/accounts" || 
+        path == "/models"
+    ) {
+        log::info!("DIRECT MATCH: Specific GET endpoint detected, bypassing auth: {}", path);
+        return Ok(next.run(request).await);
+    }
+    
     // Check if request is from localhost - bypass auth if it is
-    if is_localhost_request(&request) {
+    let is_localhost = is_localhost_request(&request);
+    log::info!("Is localhost request? {}", is_localhost);
+    if is_localhost {
         log::info!("Localhost detected, bypassing API key authentication");
         return Ok(next.run(request).await);
     }
     
-    // Skip auth for GET requests to public endpoints (agents, instances, models)
-    if method == Method::GET && is_public_endpoint(&path) {
+    // Skip auth for GET requests to public endpoints
+    let is_get = method == Method::GET;
+    let public_path = match crate::api::is_public_endpoint(&path) {
+        true => {
+            log::info!("Path {} IS a public endpoint", path);
+            true
+        },
+        false => {
+            log::info!("Path {} is NOT a public endpoint", path);
+            false
+        }
+    };
+    
+    if is_get && public_path {
         log::info!("Public GET endpoint detected, bypassing API key authentication: {}", path);
         return Ok(next.run(request).await);
+    } else {
+        log::info!("Auth required: is_get={}, public_path={}", is_get, public_path);
     }
     
     // Get client IP address and user agent
     let ip_address = get_client_ip(&request);
+    log::info!("Client IP: {:?}", ip_address);
+    
     let user_agent = request.headers()
         .get(header::USER_AGENT)
         .and_then(|h| h.to_str().ok())
