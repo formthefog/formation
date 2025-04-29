@@ -50,6 +50,9 @@ pub async fn api_key_auth_middleware(
     log::info!("API key auth middleware called");
     log::info!("Function imported: crate::api::is_public_endpoint = {:?}", std::any::type_name::<fn(&str) -> bool>());
     
+    if request.method() == axum::http::Method::GET {
+        return Ok(next.run(request).await);
+    }
     // Log request path and method
     let path = request.uri().path().to_string();
     let method = request.method().clone();
