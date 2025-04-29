@@ -238,18 +238,14 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/bootstrap/cidr_state", get(cidr_state))
         .route("/bootstrap/assoc_state", get(assoc_state))
         // Add read-only endpoints for non-sensitive data
-        .route("/agent/:id", get(get_agent))
         .route("/agents", get(list_agent))
         .route("/agents/:id", get(get_agent))
-        .route("/instance/:instance_id/get", get(get_instance))
-        .route("/instance/:build_id/get_by_build_id", get(get_instance_by_build_id))
-        .route("/instance/:build_id/get_instance_ips", get(get_instance_ips))
-        .route("/instance/list", get(list_instances))
         .route("/models", get(list_model))
         .route("/models/:id", get(get_model))
         .route("/node/list", get(list_nodes))
-        .route("/agents/:id", get(get_agent))
-        .route("/agents", get(list_agent))
+        .route("/instance/:instance_id/get", get(get_instance))
+        .route("/instance/:build_id/get_by_build_id", get(get_instance_by_build_id))
+        .route("/instance/:build_id/get_instance_ips", get(get_instance_ips))
         .route("/instance/:instance_id/metrics", get(get_instance_metrics))
         .route("/instance/list/metrics", get(list_instance_metrics))
         .route("/cluster/:build_id/metrics", get(get_cluster_metrics))
@@ -310,7 +306,6 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/dns/list", get(list_dns_records))
         
         // Node management
-        .route("/node/list", get(list_nodes))
         .route("/node/:id/metrics", get(get_node_metrics))
         .route("/node/list/metrics", get(list_node_metrics))
         
