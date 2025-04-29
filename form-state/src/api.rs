@@ -256,7 +256,7 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/instance/list", get(list_instances))
         .route("/instance/:instance_id/get", get(get_instance))
         .route("/instance/:build_id/get_by_build_id", get(get_instance_by_build_id))
-        .route("/instance/:build_id/get_instance_ips", get(get_instance_ips))
+        .route("/instance/:build_id/get_instance_ips", get(get_instance_ips));
 
 
 
