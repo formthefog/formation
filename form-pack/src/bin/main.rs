@@ -19,7 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let node_id = std::env::var("NODE_ID")
         .unwrap_or_else(|_| "form-pack-default".to_string());
     
-    let host = std::env::var("API_HOST")
+    let _host = std::env::var("API_HOST")
         .unwrap_or_else(|_| "0.0.0.0".to_string());
     
     let port = std::env::var("API_PORT")
