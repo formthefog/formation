@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::io::Write;
 use std::fs::OpenOptions;
 use tokio::sync::Mutex;
-use axum::{Json, extract::{State, Multipart}};
+use axum::{Json, extract::{State, Multipart}, Extension};
 use tempfile::tempdir;
 use futures::{StreamExt, TryStreamExt};
 use crate::manager::FormPackManager;
@@ -12,6 +12,8 @@ use crate::formfile::Formfile;
 
 pub(crate) async fn handle_pack(
     State(manager): State<Arc<Mutex<FormPackManager>>>,
+    Extension(auth_token): Extension<Option<String>>,
+    Extension(api_key): Extension<Option<String>>,
     mut multipart: Multipart
 ) -> Json<PackResponse> {
     println!("Received a multipart Form, attempting to extract data...");
@@ -82,7 +84,7 @@ pub(crate) async fn handle_pack(
     };
 
     println!("Building FormPackMonitor for {} build...", formfile.name);
-    let mut monitor = match FormPackMonitor::new().await {
+    let mut monitor = match FormPackMonitor::new_with_auth(auth_token, api_key).await {
         Ok(monitor) => monitor,
         Err(e) => {
             println!("Error building monitor: {e}");
@@ -93,7 +95,7 @@ pub(crate) async fn handle_pack(
     let guard = manager.lock().await;
     let node_id = guard.node_id.clone();
     drop(guard);
-    println!("Attmpting to build image for {}...", formfile.name);
+    println!("Attempting to build image for {}...", formfile.name);
     match monitor.build_image(
         node_id.clone(),
         formfile.name.clone(),

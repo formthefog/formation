@@ -58,17 +58,6 @@ pub async fn api_key_auth_middleware(
     let method = request.method().clone();
     log::info!("Request path: {:?}, method: {:?}", path, method);
     
-    // DIRECT PATH CHECK for common endpoints - temporary solution
-    if method == Method::GET && (
-        path == "/agents" || 
-        path == "/instances" || 
-        path == "/accounts" || 
-        path == "/models"
-    ) {
-        log::info!("DIRECT MATCH: Specific GET endpoint detected, bypassing auth: {}", path);
-        return Ok(next.run(request).await);
-    }
-    
     // Check if request is from localhost - bypass auth if it is
     let is_localhost = is_localhost_request(&request);
     log::info!("Is localhost request? {}", is_localhost);
