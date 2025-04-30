@@ -4,7 +4,7 @@ use std::time::Duration;
 use std::path::PathBuf;
 use tokio::time::sleep;
 use flate2::read::GzDecoder;
-use reqwest::Client;
+use reqwest::{Client, header::HeaderMap};
 use futures::StreamExt;
 use bollard::{Docker, exec::CreateExecOptions, container::{DownloadFromContainerOptions, UploadToContainerOptions, CreateContainerOptions, Config}, models::{DeviceMapping, HostConfig, PortBinding}};
 use crate::helpers::utils::{is_gzip, build_instance_id, get_host_bridge_ip};
@@ -18,6 +18,8 @@ pub struct FormPackMonitor {
     build_server_id: Option<String>,
     build_server_uri: String,
     build_server_client: Client,
+    auth_token: Option<String>,
+    api_key: Option<String>,
 }
 
 impl FormPackMonitor {
@@ -30,6 +32,8 @@ impl FormPackMonitor {
             build_server_id: None,
             build_server_uri: String::new(),
             build_server_client: Client::new(),
+            auth_token: None,
+            api_key: None,
         };
 
         println!("Attempting to start build container...");
@@ -41,8 +45,34 @@ impl FormPackMonitor {
         Ok(monitor)
     }
 
+    pub async fn new_with_auth(
+        auth_token: Option<String>, 
+        api_key: Option<String>
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let mut monitor = Self::new().await?;
+        monitor.auth_token = auth_token;
+        monitor.api_key = api_key;
+        Ok(monitor)
+    }
+
     pub fn container_id(&self) -> &Option<String> {
         &self.container_id
+    }
+
+    fn add_auth_headers(&self, headers: &mut HeaderMap) {
+        if let Some(token) = &self.auth_token {
+            headers.insert(
+                reqwest::header::AUTHORIZATION, 
+                format!("Bearer {}", token).parse().unwrap()
+            );
+        }
+        
+        if let Some(api_key) = &self.api_key {
+            headers.insert(
+                "X-API-Key", 
+                api_key.parse().unwrap()
+            );
+        }
     }
 
     pub async fn build_image(
@@ -62,7 +92,6 @@ impl FormPackMonitor {
         )?;
         println!("Build server for {} is {container_id}", formfile.name);
 
-        // Use a Result to track success/failure for cleanup
         let build_result = async {
             println!("Uploading artifacts to {container_id}");
             self.upload_artifacts(&container_id, artifacts).await?;
@@ -75,18 +104,14 @@ impl FormPackMonitor {
             Ok(())
         }.await;
 
-        // Always cleanup the container regardless of build success or failure
         println!("Cleaning up container {container_id}...");
         if let Err(cleanup_err) = self.cleanup().await {
             println!("Error during container cleanup: {cleanup_err}");
-            // If the build was successful but cleanup failed, still return the cleanup error
             if build_result.is_ok() {
                 return Err(cleanup_err);
             }
-            // Otherwise, return the original build error and log the cleanup error
         }
 
-        // Return the original build result
         build_result
     }
 
@@ -253,12 +278,15 @@ impl FormPackMonitor {
         println!("Sending Formfile {formfile:?} for {} to build_server: {}", formfile.name, self.build_server_uri);
         let instance_id = build_instance_id(node_id, vm_name.clone())?; 
 
-        let resp = self.build_server_client
+        let mut request = self.build_server_client
             .post(format!("{}/{}/{}/formfile", self.build_server_uri, vm_name, instance_id))
-            .json(formfile)
-            .send()
-            .await?;
-
+            .json(formfile);
+        
+        let mut headers = HeaderMap::new();
+        self.add_auth_headers(&mut headers);
+        request = request.headers(headers);
+        
+        let resp = request.send().await?;
         println!("Received response: {resp:?}");
 
         Ok(())

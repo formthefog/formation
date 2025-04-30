@@ -31,7 +31,6 @@ base64 = "0.22"
 sha-crypt = "0.5"
 lazy_static = "1"
 futures = "0.3.31"
-futures-util = "0.3"
 uuid = { version = "1", features = ["v4"] }
 reqwest = { version = "0.12", features = ["json"] }
 axum = { version = "0.7.9", features = ["multipart"] } 
@@ -52,3 +51,23 @@ get_if_addrs = "0.5"
 form-config = { path = "../form-config" }
 log = "0.4"
 regex = "1.10.2"
+actix-web = "4"
+serde_yaml = "0.9"
+async-trait = "0.1"
+jwt = "0.16"
+jsonwebtoken = "8.3"
+chrono = { version = "0.4", features = ["serde"] }
+futures-util = "0.3.28"
+tower-http = { version = "0.4.0", features = ["cors"] }
+tokio-util = { version = "0.7", features = ["io", "compat"] }
+url = "2.3.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+envconfig = "0.10.0"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "form-pack"
+path = "src/bin/main.rs"
