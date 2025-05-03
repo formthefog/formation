@@ -13,6 +13,106 @@ The vmm-service is responsible for:
 5. VM image management and snapshots
 6. VM monitoring and health checks
 
+## Authentication
+
+### Signature-Based Authentication
+
+The VMM Service uses signature-based authentication using ECDSA signatures with the secp256k1 curve. This approach provides a secure and decentralized authentication model where:
+
+1. Developers sign requests with their Ethereum-compatible private key
+2. The service verifies the signature and recovers the developer's Ethereum address
+3. Authorization checks verify that the developer has appropriate permissions for the requested operation
+
+This approach allows any registered developer to interact with the VMM service while ensuring that only authorized developers can perform specific operations on VMs they own or have access to.
+
+#### How It Works
+
+1. When making API requests, clients must include the following headers:
+   - `X-Signature`: The hex-encoded signature for the request
+   - `X-Recovery-ID`: The recovery ID for the signature
+   - `X-Timestamp`: Current timestamp (Unix epoch in seconds)
+
+2. The server verifies that:
+   - The signature is valid and recovers the signer's Ethereum address
+   - The signer has appropriate permissions to perform the requested operation
+   - The timestamp is within a valid time window (to prevent replay attacks)
+
+#### Permission Levels
+
+The VMM service implements several permission levels:
+
+1. **ReadOnly**: Can view VM details but not modify them
+2. **Operator**: Can perform basic operations like starting/stopping VMs
+3. **Manager**: Can modify VM configurations
+4. **Owner**: Has full control including ownership transfer
+
+Permissions are assigned based on the relationship of the signer to the specific VM:
+- VM owners automatically have full permissions
+- Collaborators may have limited permissions based on their assigned role
+- Team members can have shared access to team-owned VMs
+
+#### Protected Routes
+
+All API routes except the following are protected by signature verification:
+- `/health` - Health check endpoint
+- `/vm/boot_complete` - Internal endpoint called by VM instances
+
+#### Making Signed Requests
+
+To make a signed request to the API:
+
+1. Generate an ECDSA key pair using the secp256k1 curve
+2. Create the message to sign (typically the request path or payload)
+3. Get the current timestamp
+4. Sign the message with your private key
+5. Include the signature, recovery ID, and timestamp in the request headers
+
+#### Example
+
+```python
+from eth_account import Account
+import time
+import requests
+import json
+
+# Generate or load your private key
+private_key = "0x..."
+account = Account.from_key(private_key)
+
+# Prepare request
+timestamp = int(time.time())
+path = "/vm/create"
+data = {"name": "my-vm", "formfile": "..."}
+data_str = json.dumps(data, sort_keys=True)
+message = f"{path}:{timestamp}:{data_str}"
+
+# Sign the message
+msg = Account.messages.encode_defunct(text=message)
+signed_message = Account.sign_message(msg, private_key)
+
+# Extract signature components
+signature = signed_message.signature.hex()
+recovery_id = signed_message.v - 27  # Convert to 0/1 format
+
+# Make the request
+headers = {
+    "X-Signature": signature,
+    "X-Recovery-ID": hex(recovery_id)[2:],  # Remove '0x' prefix
+    "X-Timestamp": str(timestamp)
+}
+
+# Send the request
+response = requests.post(
+    "http://vmm-service:3002/vm/create",
+    headers=headers,
+    json=data
+)
+```
+
+### Backwards Compatibility
+
+For backward compatibility, the service still supports the legacy authentication methods, but these will be deprecated in a future release. It is recommended to migrate to signature-based authentication.
+
 ## Building the Service
 
 ### Prerequisites

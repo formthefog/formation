@@ -95,14 +95,6 @@ struct PeerDiffAdapter<'a, T: std::fmt::Display + Clone + PartialEq = String> {
     peer: Option<&'a Peer<T>>,
 }
 
-// Implement required traits for NatTraverse to use our adapter
-// This is simplified for the example
-impl<'a, T: std::fmt::Display + Clone + PartialEq> shared::PeerDiff<'a, T> for PeerDiffAdapter<'a, T> {
-    fn new(_old: Option<&'a wireguard_control::PeerConfig>, _new: Option<&'a Peer<T>>) -> Self {
-        unimplemented!("Not needed for this example")
-    }
-}
-
 impl<'a, T: std::fmt::Display + Clone + PartialEq> From<&'a shared::PeerDiff<'a, T>> for PeerDiffAdapter<'a, T> {
     fn from(_peer_diff: &'a shared::PeerDiff<'a, T>) -> Self {
         unimplemented!("Not needed for this example")

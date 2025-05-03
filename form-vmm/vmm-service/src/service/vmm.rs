@@ -403,7 +403,7 @@ impl VmManager {
         signing_key: String,
         subscriber_uri: Option<&str>,
         publisher_addr: Option<String>,
-        shutdown_rx: broadcast::Receiver<()>
+        shutdown_rx: broadcast::Receiver<()>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync + 'static>> {
         let pk = SigningKey::from_slice(
             &hex::decode(&signing_key)?
@@ -416,9 +416,26 @@ impl VmManager {
             resp_rx,
         )));
         let api_channel_server = api_channel.clone();
+        
         let server = tokio::task::spawn(async move {
             let server = VmmApi::new(api_channel_server.clone(), addr);
-            server.start_api_server().await?;
+            if let Some(config) = config {
+                server.start_api_server(&config).await?;
+            } else {
+                let default_config = Config {
+                    base_dir: PathBuf::from("/var/lib/formation"),
+                    network: Default::default(),
+                    limits: Default::default(),
+                    default_vm_params: Default::default(),
+                    pack_manager: "127.0.0.1:3003".to_string(),
+                    api: ApiConfig {
+                        port: 3002,
+                        signature_public_key: None,
+                        auth_token: None,
+                    },
+                };
+                server.start_api_server(&default_config).await?;
+            }
             Ok::<(), Box<dyn std::error::Error + Send + Sync + 'static>>(())
         });
 

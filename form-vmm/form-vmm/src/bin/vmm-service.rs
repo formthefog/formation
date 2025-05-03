@@ -1,6 +1,7 @@
 use clap::Parser;
-use vmm_service::{CliArgs, CliCommand, VmManager}; 
+use vmm_service::{CliArgs, CliCommand, VmManager, config::Config, config::ApiConfig};
 use form_config::OperatorConfig;
+use std::path::PathBuf;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -60,7 +61,7 @@ async fn run_vm_manager(
         signing_key,
         subscriber_uri,
         publisher_uri,
-        manager_shutdown
+        manager_shutdown,
     ).await?;
 
     vm_manager.run(shutdown_rx, event_receiver).await 

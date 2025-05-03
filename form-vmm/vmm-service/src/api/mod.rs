@@ -1,6 +1,10 @@
 use alloy_primitives::Address;
 use axum::{
-    extract::State, routing::{get, post}, Json, Router
+    extract::{State, Path, Request, Extension}, 
+    routing::{get, post}, 
+    Json, Router,
+    body::Body,
+    response::{Response, IntoResponse}
 };
 use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
 use reqwest::Client;
@@ -11,11 +15,27 @@ use tokio::sync::Mutex;
 use vmm::api::{VmInfo, VmmPingResponse};
 use std::{sync::Arc, time::Duration};
 use std::net::SocketAddr;
+use k256::ecdsa::VerifyingKey;
+use http::{HeaderMap, StatusCode};
+use axum::middleware::{self, Next};
+use std::ops::Deref;
+use bytes::Bytes;
+use sha2;
 
 use crate::VmmError;
 use form_types::{BootCompleteRequest, CreateVmRequest, DeleteVmRequest, GetVmRequest, PingVmmRequest, StartVmRequest, StopVmRequest, VmResponse, VmmEvent, VmmResponse};
+use crate::api::helpers::{
+    create::create,
+    start::start,
+    stop::stop,
+    delete::delete,
+    complete::complete,
+    get_vm,
+    list
+};
 
 pub mod auth;
+pub mod helpers;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -412,15 +432,18 @@ impl VmmApi {
         }
     }
 
-    pub async fn start_api_server(&self) -> Result<(), VmmError> {
+    pub async fn start_api_server(&self, config: &crate::config::Config) -> Result<(), VmmError> {
         log::info!("Attempting to start API server");
         let app_state = self.channel.clone();
 
-        log::info!("Establishing Routes");
-        let app = Router::new()
+        // Create the router with public routes (no authentication)
+        let public_routes = Router::new()
             .route("/health", get(health_check))
+            .route("/vm/boot_complete", post(boot_complete));
+        
+        // Create the router with protected routes (requires authentication)
+        let protected_routes = Router::new()
             .route("/vm/create", post(create))
-            .route("/vm/boot_complete", post(boot_complete))
             .route("/vm/:id/boot", post(start))
             .route("/vm/:id/delete", post(delete))
             .route("/vm/:id/pause", post(stop))
@@ -447,9 +470,15 @@ impl VmmApi {
             .route("/vm/:id/info", get(get_vm))
             .route("/vm/:id", get(get_vm))
             .route("/vms/list", get(list))
+            .layer(middleware::from_fn(signature_verify_middleware));
+
+        // Merge the routers
+        let app = Router::new()
+            .merge(public_routes)
+            .merge(protected_routes)
             .with_state(app_state);
 
-        log::info!("Established route, binding to {}", &self.addr);
+        log::info!("Established routes, binding to {}", &self.addr);
         let listener = tokio::net::TcpListener::bind(
             self.addr.clone()).await
             .map_err(|e| {
@@ -466,7 +495,6 @@ impl VmmApi {
         axum::serve(listener, app).await
             .map_err(|e| VmmError::SystemError(format!("Failed to serve API server {e}")))?;
 
-
         Ok(())
     }
 
@@ -475,376 +503,101 @@ impl VmmApi {
     }
 }
 
-async fn health_check() -> Json<HealthResponse> {
-    // Get the version from Cargo.toml if available
-    let version = option_env!("CARGO_PKG_VERSION").map(String::from);
+// Helper function to extract signature data from request headers
+fn extract_signature_data(headers: &HeaderMap) -> Result<(String, String, i64), VmmError> {
+    let signature = headers.get("X-Signature")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| VmmError::Config("Missing X-Signature header".to_string()))?
+        .to_string();
     
-    // Return a healthy status
-    Json(HealthResponse {
-        status: HealthStatus::Healthy,
-        version,
-        uptime: None // Could add uptime calculation if needed
-    })
+    let recovery_id = headers.get("X-Recovery-ID")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| VmmError::Config("Missing X-Recovery-ID header".to_string()))?
+        .to_string();
+    
+    let timestamp = headers.get("X-Timestamp")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<i64>().ok())
+        .ok_or_else(|| VmmError::Config("Missing or invalid X-Timestamp header".to_string()))?;
+    
+    Ok((signature, recovery_id, timestamp))
 }
 
-async fn ping(
-    State(channel): State<Arc<Mutex<VmmApiChannel>>>,
-    Json(request): Json<PingVmmRequest>
-) -> Result<Json<VmmPingResponse>, String> {
-    let event = VmmEvent::Ping { name: request.name.to_string() };
-    request_receive(channel, event).await
+// Define a new type to hold authentication details for request extensions
+#[derive(Debug, Clone)]
+pub struct AuthenticatedUser {
+    pub address: String,
 }
 
-async fn create(
-    State(channel): State<Arc<Mutex<VmmApiChannel>>>,
-    Json(request): Json<CreateVmRequest>,
-) -> Json<VmmResponse> {
-    log::info!(
-        "Received VM create request: name={}",
-        request.name
-    );
+// Fix the signature verification middleware to properly handle bodies
+async fn signature_verify_middleware(
+    req: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    // Skip authentication for public paths
+    let path = req.uri().path();
+    if path == "/health" || path == "/vm/boot_complete" {
+        return Ok(next.run(req).await);
+    }
     
-    // Verify ownership if signature is provided
-    let owner = if let Some(sig) = request.signature.clone() {
-        // Create message for verification (name + formfile hash)
-        let message = format!("CreateVmRequest:{}:{}", request.name, hex::encode(&request.formfile.as_bytes()[0..32]));
+    // Extract headers from the request
+    let headers = req.headers().clone();
+    
+    // Extract signature data
+    let (signature, recovery_id, timestamp) = match extract_signature_data(&headers) {
+        Ok(data) => data,
+        Err(_) => return Err(StatusCode::UNAUTHORIZED),
+    };
+    
+    // We need to handle the body properly for security
+    // First, split the request into parts and body
+    let (parts, body) = req.into_parts();
+    
+    // Read the entire body
+    let bytes = match hyper::body::to_bytes(body).await {
+        Ok(b) => b,
+        Err(_) => return Err(StatusCode::BAD_REQUEST),
+    };
+    
+    // Create the message by combining path, timestamp, and body hash (if it's not empty)
+    let mut message = format!("{}", path);
+    
+    // For non-empty bodies, include a hash of the body in the message
+    if !bytes.is_empty() {
+        // Create a secure hash of the body content
+        let mut hasher = sha2::Sha256::new();
+        sha2::Digest::update(&mut hasher, &bytes);
+        let body_hash = hasher.finalize();
         
-        // Use our SignatureVerifier utility
-        match auth::SignatureVerifier::verify_signature(message, &sig, request.recovery_id) {
-            Ok(address) => address,
-            Err(e) => return Json(VmmResponse::Failure(format!("Signature verification failed: {}", e)))
-        }
-    } else {
-        return Json(VmmResponse::Failure("Signature is required for VM creation".to_string()));
-    };
-    
-    let event = VmmEvent::Create {
-        formfile: request.formfile.clone(),
-        name: request.name.clone(),
-        owner,
-    };
-
-    let guard = channel.lock().await;
-
-    if let Err(e) = guard.send(event.clone())
-        .await {
-            log::info!("Error sending {event:?}: {e}");
-            return Json(
-                VmmResponse::Failure(
-                    format!(
-                        "Error sending event {event:?} across VmmApiChannel to request creation of vm {}",
-                        request.name
-                    )
-                )
-            )
-    }
-
-    drop(guard);
-
-    Json(VmmResponse::Success(VmResponse {
-        id: "pending".to_string(),
-        name: request.name,
-        state: "PENDING".to_string()
-    }))
-}
-
-async fn boot_complete(
-    State(channel): State<Arc<Mutex<VmmApiChannel>>>,
-    Json(request): Json<BootCompleteRequest>,
-) -> Json<VmmResponse> {
-
-    let guard = channel.lock().await;
-    log::info!("Received BootCompleteRequest for VM {}", request.name);
-    let event = VmmEvent::BootComplete {
-        id: request.name.clone(),
-        build_id: request.build_id.clone(),
-        formnet_ip: request.formnet_ip,
-    };
-
-    log::info!("Built BootComplete VmmEvent, sending across api channel");
-    if let Err(e) = guard.send(event.clone()).await {
-        log::info!("Error receiving response back from API channel: {e}");
-        return Json(
-            VmmResponse::Failure(
-                format!("Error recording BootComplete event {event:?}: {e}")
-            )
-        )
-    }
-    drop(guard);
-    log::info!("BootCompleteRequest handled succesfully, responding...");
-    Json(VmmResponse::Success(
-        VmResponse { 
-            id: request.name.clone(), 
-            name: request.name,
-            state: "complete".to_string() 
-        }
-    ))
-}
-
-async fn start(
-    State(channel): State<Arc<Mutex<VmmApiChannel>>>,
-    Json(request): Json<StartVmRequest>,
-) -> Json<VmmResponse> {
-    // Verify signature if provided
-    if let Some(signature) = &request.signature {
-        // Create message for verification
-        let message = auth::SignatureVerifier::create_operation_message("StartVmRequest", &request.id);
-        
-        // Verify signature
-        match auth::SignatureVerifier::verify_signature(message, signature, request.recovery_id) {
-            Ok(signer_address) => {
-                // Check if signer is authorized
-                match auth::OwnershipVerifier::verify_authorization(
-                    &request.id, 
-                    &signer_address, 
-                    auth::Permission::Operator
-                ).await {
-                    Ok(true) => {
-                        // Authorized - proceed with operation
-                    },
-                    Ok(false) => {
-                        return Json(VmmResponse::Failure(
-                            format!("Unauthorized: Address {} is not the owner or authorized user for instance {}", 
-                                   signer_address, request.id)
-                        ));
-                    },
-                    Err(e) => {
-                        return Json(VmmResponse::Failure(
-                            format!("Error checking authorization: {}", e)
-                        ));
-                    }
-                }
-            },
-            Err(e) => {
-                return Json(VmmResponse::Failure(
-                    format!("Signature verification failed: {}", e)
-                ));
-            }
-        }
-    } else {
-        return Json(VmmResponse::Failure("Signature is required".to_string()));
+        // Add body hash to the message
+        message = format!("{}:{}", message, hex::encode(body_hash));
     }
     
-    // Proceed with starting the VM
-    let event = VmmEvent::Start {
-        id: request.id.clone(),
-    };
-    if let Err(e) = request_receive::<()>(channel, event).await {
-        return Json(VmmResponse::Failure(e.to_string()))
-    }
-    Json(VmmResponse::Success(
-        VmResponse {
-            id: request.id, 
-            name: request.name,
-            state: "pending".to_string()
-    }))
-}
-
-async fn stop(
-    State(channel): State<Arc<Mutex<VmmApiChannel>>>,
-    Json(request): Json<StopVmRequest>,
-) -> Json<VmmResponse> {
-    // Verify signature if provided
-    if let Some(signature) = &request.signature {
-        // Create message for verification
-        let message = auth::SignatureVerifier::create_operation_message("StopVmRequest", &request.id);
-        
-        // Verify signature
-        match auth::SignatureVerifier::verify_signature(message, signature, request.recovery_id) {
-            Ok(signer_address) => {
-                // Check if signer is authorized
-                match auth::OwnershipVerifier::verify_authorization(
-                    &request.id, 
-                    &signer_address, 
-                    auth::Permission::Operator
-                ).await {
-                    Ok(true) => {
-                        // Authorized - proceed with operation
-                    },
-                    Ok(false) => {
-                        return Json(VmmResponse::Failure(
-                            format!("Unauthorized: Address {} is not the owner or authorized user for instance {}", 
-                                   signer_address, request.id)
-                        ));
-                    },
-                    Err(e) => {
-                        return Json(VmmResponse::Failure(
-                            format!("Error checking authorization: {}", e)
-                        ));
-                    }
-                }
-            },
-            Err(e) => {
-                return Json(VmmResponse::Failure(
-                    format!("Signature verification failed: {}", e)
-                ));
-            }
-        }
-    } else {
-        return Json(VmmResponse::Failure("Signature is required".to_string()));
-    }
+    // Always include timestamp
+    message = format!("{}:{}", message, timestamp);
     
-    // Proceed with stopping the VM
-    let event = VmmEvent::Stop {
-        id: request.id.clone(),
-    };
-
-    if let Err(e) = request_receive::<()>(channel, event).await {
-        return Json(VmmResponse::Failure(e.to_string()))
-    }
-    Json(VmmResponse::Success(
-        VmResponse {
-            id: request.id, 
-            name: request.name,
-            state: "pending".to_string()
-    }))
-}
-
-async fn delete(
-    State(channel): State<Arc<Mutex<VmmApiChannel>>>,
-    Json(request): Json<DeleteVmRequest>,
-) -> Json<VmmResponse> {
-    // Verify signature if provided
-    if let Some(signature) = &request.signature {
-        // Create message for verification
-        let message = auth::SignatureVerifier::create_operation_message("DeleteVmRequest", &request.id);
-        
-        // Verify signature
-        match auth::SignatureVerifier::verify_signature(message, signature, request.recovery_id) {
-            Ok(signer_address) => {
-                // Check if signer is authorized
-                match auth::OwnershipVerifier::verify_authorization(
-                    &request.id, 
-                    &signer_address, 
-                    auth::Permission::Owner // Deletion requires owner permission
-                ).await {
-                    Ok(true) => {
-                        // Authorized - proceed with operation
-                    },
-                    Ok(false) => {
-                        return Json(VmmResponse::Failure(
-                            format!("Unauthorized: Address {} is not the owner of instance {}", 
-                                   signer_address, request.id)
-                        ));
-                    },
-                    Err(e) => {
-                        return Json(VmmResponse::Failure(
-                            format!("Error checking authorization: {}", e)
-                        ));
-                    }
-                }
-            },
-            Err(e) => {
-                return Json(VmmResponse::Failure(
-                    format!("Signature verification failed: {}", e)
-                ));
-            }
-        }
-    } else {
-        return Json(VmmResponse::Failure("Signature is required".to_string()));
-    }
+    log::debug!("Verifying signature for message: {}", message);
     
-    // Proceed with deleting the VM
-    let event = VmmEvent::Delete {
-        id: request.id.clone(),
-    };
-
-    if let Err(e) = request_receive::<()>(channel, event).await {
-        return Json(VmmResponse::Failure(e.to_string()))
-    }
-
-    Json(VmmResponse::Success(
-        VmResponse {
-            id: request.id, 
-            name: request.name,
-            state: "pending".to_string()
-    }))
-}
-
-async fn get_vm(
-    State(channel): State<Arc<Mutex<VmmApiChannel>>>,
-    Json(request): Json<GetVmRequest>,
-) -> Result<Json<VmInfo>, String>  {
-    // Verify signature if provided
-    if let Some(signature) = &request.signature {
-        // Create message for verification
-        let message = auth::SignatureVerifier::create_operation_message("GetVmRequest", &request.id);
-        
-        // Verify signature
-        match auth::SignatureVerifier::verify_signature(message, signature, request.recovery_id) {
-            Ok(signer_address) => {
-                // Check if signer is authorized - Read access requires at least ReadOnly permission
-                match auth::OwnershipVerifier::verify_authorization(
-                    &request.id, 
-                    &signer_address, 
-                    auth::Permission::ReadOnly
-                ).await {
-                    Ok(true) => {
-                        // Authorized - proceed with operation
-                    },
-                    Ok(false) => {
-                        return Err(format!("Unauthorized: Address {} is not authorized to view instance {}", 
-                                 signer_address, request.id));
-                    },
-                    Err(e) => {
-                        return Err(format!("Error checking authorization: {}", e));
-                    }
-                }
-            },
-            Err(e) => {
-                return Err(format!("Signature verification failed: {}", e));
-            }
+    // Verify the signature and get the signer's address
+    let address = match auth::SignatureVerifier::verify_signature(
+        message,
+        &signature,
+        u8::from_str_radix(&recovery_id, 16).unwrap_or(0) as u32
+    ) {
+        Ok(address) => address,
+        Err(e) => {
+            log::warn!("Signature verification failed: {}", e);
+            return Err(StatusCode::UNAUTHORIZED);
         }
-    } else {
-        return Err("Signature is required".to_string());
-    }
+    };
     
-    // Proceed with getting the VM information
-    let event = VmmEvent::Get {
-        id: request.id.clone(),
-    };
-
-    request_receive(channel, event).await
-}
-
-async fn list(
-    State(channel): State<Arc<Mutex<VmmApiChannel>>>,
-) -> Result<Json<Vec<VmInfo>>, String> {
-
-    let event = VmmEvent::GetList {
-        requestor: "test".to_string(),
-    };
-
-    request_receive(channel, event).await
-}
-
-async fn power_button() {}
-async fn reboot() {}
-async fn commit() {}
-async fn snapshot() {}
-async fn coredump() {}
-async fn restore() {}
-async fn resize_vcpu() {}
-async fn resize_memory() {}
-async fn add_device() {}
-async fn add_disk() {}
-async fn add_fs() {}
-async fn remove_device() {}
-async fn migrate_to() {}
-async fn migrate_from() {}
-
-async fn request_receive<T: DeserializeOwned>(
-    channel: Arc<Mutex<VmmApiChannel>>,
-    event: VmmEvent,
-) -> Result<Json<T>, String> {
-    let mut channel = channel.lock().await; 
-    channel.send(event.clone()).await.map_err(|e| e.to_string())?;
-    tokio::select! {
-        Some(resp) = channel.recv() => {
-            Ok(Json(resp))
-        }
-        _ = tokio::time::sleep(Duration::from_secs(5)) => {
-            Err(format!("Request {event:?} timed out awaiting response"))
-        }
-    }
+    // Log the authenticated user
+    log::info!("Request authenticated: path={}, user={}", path, address);
+    
+    // Create a new request with the authenticated user
+    let mut req = Request::from_parts(parts, Body::from(bytes));
+    req.extensions_mut().insert(AuthenticatedUser { address });
+    
+    // Continue to the handler
+    Ok(next.run(req).await)
 }

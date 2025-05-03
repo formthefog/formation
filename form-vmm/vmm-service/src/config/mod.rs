@@ -201,10 +201,9 @@ impl ServicePaths {
     pub const KERNEL_DIR: &'static str = "kernel"; 
 }
 
-/*
 /// Global configuration for the VMM service
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ServiceConfig {
+pub struct Config {
     /// Base directory for VM-related files
     pub base_dir: PathBuf,
     /// Network configuration
@@ -213,87 +212,39 @@ pub struct ServiceConfig {
     pub limits: ResourceLimits,
     /// Default VM parameters
     pub default_vm_params: DefaultVmParams,
-    /// Address that the FormPackManager API s listening on
+    /// Address that the FormPackManager API is listening on
     pub pack_manager: String,
+    /// API server configuration
+    pub api: ApiConfig,
 }
 
-impl ServiceConfig {
-    /// Loads a ServiceConfig from a file. This method reads a TOML, YAML or
-    /// JSON configuration file and deserializes it into a ServiceConfig instance.
-    ///
-    /// # Arguments
-    /// * `path` - the path to the config file
-    ///
-    /// # Returns
-    /// * `Result<ServiceConfig, VmmError>` - the loaded configuration or an error
-    ///
-    /// # Example
-    /// ```rust
-    /// let config = ServiceConfig::from_file("/etc/vmm/config.toml")?;
-    /// ```
-    pub fn from_file(path: &str) -> Result<Self, VmmError> {
-        // Open the configuration file
-        let mut file = std::fs::File::open(path).map_err(|e| {
-            VmmError::Config(format!("Failed to open config file `{path}`: {e}"))
-        })?;
+/// Configuration for the API server
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiConfig {
+    /// Port for the API server to listen on
+    #[serde(default = "default_api_port")]
+    pub port: u16,
+    /// Public key for signature verification in hex format (optional)
+    pub signature_public_key: Option<String>,
+    /// Legacy authentication token (deprecated)
+    pub auth_token: Option<String>,
+}
 
-        // Read the file contents into a string
-        let mut contents = String::new();
-        file.read_to_string(&mut contents).map_err(|e| {
-            VmmError::Config(format!("Failed to read config file `{path}`: {e}"))
-        })?;
+fn default_api_port() -> u16 {
+    3020
+}
 
-        toml::from_str(&contents).map_err(|e| {
-            VmmError::Config(format!("failed to parse config file `{path}`: {e}"))
-        })
-
-    }
-
-    /// Saves the current `ServiceConfig` to a file in TOML format. This method handles 
-    /// serialization serialization of the config and ensures the file is written
-    /// atomically by writing to a temporary file first then renaming it.
-    ///
-    /// # Arguments
-    /// * `path` - The path where the configuration should be saved
-    ///
-    /// # Returns
-    /// * `Result<(), VmmError>` - Success or an error
-    ///
-    /// # Example
-    /// ```rust
-    /// config.save_to_file("/tec/vmm/config.toml")?;
-    /// ```
-    pub fn save_to_file(&self, path: &str) -> Result<(), VmmError> {
-        // Serialize to TOML
-        let toml_content = toml::to_string_pretty(self).map_err(|e| {
-            VmmError::Config(format!("Failed to serialize config: {}", e))
-        })?;
-
-        // Create a temporary file in the same directory
-        let path = PathBuf::from(path);
-        let parent = path.parent().ok_or_else(|| {
-            VmmError::Config("Invalid config file path".to_string())
-        })?;
-
-        let mut temp_file = tempfile::NamedTempFile::new_in(parent).map_err(|e| {
-            VmmError::Config(format!("Failed to create temporary file: {e}"))
-        })?;
-
-        // Write the configuration to a temporary file
-        temp_file.write_all(toml_content.as_bytes()).map_err(|e| {
-            VmmError::Config(format!("Failed to write config: {e}"))
-        })?;
-
-        // Persist the file by moving it to the target location
-        temp_file.persist(&path).map_err(|e| {
-            VmmError::Config(format!("Failed to save config file `{path:?}`: {e}"))
-        })?;
-
-        Ok(())
+impl Default for ApiConfig {
+    fn default() -> Self {
+        Self {
+            port: default_api_port(),
+            signature_public_key: None,
+            auth_token: None,
+        }
     }
 }
-*/
 
+/// Network configuration for VMs
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkConfig {
     /// Bridge interface name
@@ -334,17 +285,6 @@ pub struct DefaultVmParams {
     pub disk_size_gb: u64,
 }
 
-/*
-impl Default for DirectoryConfig {
-    fn default() -> Self {
-        let base_dir = PathBuf::from(ServicePaths::BASE_DIR);
-        Self {
-            kernel_dir: base_dir.join(ServicePaths::KERNEL_DIR),
-        }
-    }
-}
-*/
-
 impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
@@ -380,17 +320,3 @@ impl Default for DefaultVmParams {
         }
     }
 }
-
-/*
-impl Default for ServiceConfig {
-    fn default() -> Self {
-        Self {
-            base_dir: PathBuf::from(ServicePaths::BASE_DIR),
-            network: NetworkConfig::default(),
-            limits: ResourceLimits::default(),
-            default_vm_params: DefaultVmParams::default(),
-            pack_manager: "pack-manager:51520".to_string(),
-        }
-    }
-}
-*/
