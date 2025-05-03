@@ -45,7 +45,9 @@ use crate::api::helpers::{
     migrate_to::migrate_to,
     migrate_from::migrate_from,
     get::get_vm,
-    list::list
+    list::list,
+    health::health_check,
+    ping::ping,
 };
 use crate::queue::read::read_from_queue;
 use crate::queue::helpers::{
@@ -59,22 +61,6 @@ use crate::queue::helpers::{
 pub mod auth;
 pub mod helpers;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum HealthStatus {
-    Healthy,
-    Degraded { reason: String },
-    Unhealthy { reason: String }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HealthResponse {
-    status: HealthStatus,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    uptime: Option<u64>
-}
 pub struct VmmApiChannel {
     event_sender: mpsc::Sender<VmmEvent>,
     response_receiver: mpsc::Receiver<String>,
