@@ -44,6 +44,7 @@ use crate::{
     config::create_vm_config,
     instance::config::VmInstanceConfig,
 };
+use form_pack::helpers::utils::build_instance_id;
 use std::io::{Cursor, Write};
 use std::convert::TryFrom;
 use std::error::Error;
@@ -596,7 +597,7 @@ impl VmManager {
         let node_id = self.derive_address().await?;
         let build_id = config.name.clone();
         log::info!("Deriving instance id from node_id: {node_id} and build_id: {build_id}");
-        let instance_id = form_pack::manager::build_instance_id(node_id, build_id)?; 
+        let instance_id = build_instance_id(node_id, build_id)?; 
         let mut instance = Instance {
             instance_id, 
             node_id: self.derive_address().await?,
@@ -996,7 +997,7 @@ Formpack for {name} doesn't exist:
             VmmEvent::Stop { id, .. } => {
                 //TODO: verify ownership/authorization, etc.
                 self.pause(id).await?;
-                let instance_id = form_pack::manager::build_instance_id(self.derive_address().await?, id.to_string())?;
+                let instance_id = build_instance_id(self.derive_address().await?, id.to_string())?;
                 let mut instance = Instance::get(&instance_id).await.ok_or(
                     Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Instance doesn't exist"))
                 )?;
@@ -1024,7 +1025,7 @@ Formpack for {name} doesn't exist:
             VmmEvent::Start {  id, .. } => {
                 //TODO: verify ownership/authorization, etc.
                 self.boot(id).await?;
-                let instance_id = form_pack::manager::build_instance_id(self.derive_address().await?, id.to_string())?;
+                let instance_id = build_instance_id(self.derive_address().await?, id.to_string())?;
                 let mut instance = Instance::get(&instance_id).await.ok_or(
                     Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Instance doesn't exist"))
                 )?;

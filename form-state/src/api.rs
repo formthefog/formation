@@ -22,9 +22,8 @@ use crate::helpers::{
     model::*,
 };
 use tokio::net::TcpListener;
-use serde_json::{self, json, Value};
+use serde_json::{self, json};
 use crate::billing::middleware::EligibilityError;
-use k256::ecdsa::{SigningKey, VerifyingKey};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -518,7 +517,7 @@ async fn add_node_operator_key(
         Some(op) => {
             log::info!("Added operator key to node {}", node_id);
             // Apply the operation locally
-            if let Some((actor, key)) = datastore.node_state.node_op(op.clone()) {
+            if let Some((_actor, _key)) = datastore.node_state.node_op(op.clone()) {
                 // Could broadcast the change here if needed
                 Json(json!({
                     "success": true,
@@ -567,7 +566,7 @@ async fn remove_node_operator_key(
         Some(op) => {
             log::info!("Removed operator key from node {}", node_id);
             // Apply the operation locally
-            if let Some((actor, key)) = datastore.node_state.node_op(op.clone()) {
+            if let Some((_actor, _key)) = datastore.node_state.node_op(op.clone()) {
                 // Could broadcast the change here if needed
                 Json(json!({
                     "success": true,
