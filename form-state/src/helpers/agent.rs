@@ -91,7 +91,7 @@ pub async fn list_agent(
 /// Handler for hiring an agent
 pub async fn agent_hire(
     State(state): State<Arc<Mutex<DataStore>>>,
-    auth: ApiKeyAuth,
+    auth: crate::signature_auth::SignatureAuth,
     Path(agent_id): Path<String>,
     Json(payload): Json<serde_json::Value>,
 ) -> impl IntoResponse {
@@ -101,7 +101,7 @@ pub async fn agent_hire(
     
     // Check if the agent exists
     if let Some(agent) = datastore.agent_state.get_agent(&agent_id) {
-        // Get the account from ApiKeyAuth
+        // Get the account from SignatureAuth
         let mut account = auth.account.clone();
         
         // Add the agent to the hired agents

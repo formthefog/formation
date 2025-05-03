@@ -30,8 +30,9 @@ use crate::api_keys::{
     api_key_auth_middleware, ApiKeyAuth
 };
 use tokio::net::TcpListener;
-use serde_json::json;
+use serde_json::{self, json, Value};
 use crate::billing::middleware::EligibilityError;
+use k256::ecdsa::{SigningKey, VerifyingKey};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -222,10 +223,19 @@ pub fn is_public_endpoint(path: &str) -> bool {
     false
 }
 
+// Test handler for signature authentication
+async fn signature_test_handler(
+    sig_auth: crate::signature_auth::SignatureAuth,
+) -> Json<serde_json::Value> {
+    // Access the validated account and public key
+    Json(json!({
+        "message": "You have access to this signature-protected route",
+        "public_key": sig_auth.public_key,
+        "account_address": sig_auth.account.address,
+    }))
+}
+
 pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
-    // Create the JWKS manager for JWT validation
-    let jwks_manager = Arc::new(JWKSManager::new());
-    
     // Define public routes (no authentication required)
     let public_api = Router::new()
         // Health check and bootstrap endpoints
@@ -251,51 +261,40 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/instance/:build_id/get_by_build_id", get(get_instance_by_build_id))
         .route("/instance/:build_id/get_instance_ips", get(get_instance_ips));
 
-
-
-    let network_writers_api = Router::new()
+    // Define network/infrastructure routes (node authentication)
+    // These routes are only accessible to Formation nodes via operator key auth
+    let network_api = Router::new()
+        // User management for networking
         .route("/user/create", post(create_user))
         .route("/user/update", post(update_user))
         .route("/user/disable", post(disable_user))
         .route("/user/delete", post(delete_user))
         .route("/user/delete_expired", post(delete_expired))
-        .route("/cidr/create", post(create_cidr))
-        .route("/cidr/update", post(update_cidr))
-        .route("/cidr/delete", post(delete_cidr))
-        .route("/assoc/create", post(create_assoc))
-        .route("/assoc/delete", post(delete_assoc))
-        .route("/assoc/list", get(list_assoc))
-        .route("/dns/create", post(create_dns))
-        .route("/dns/update", post(update_dns))
-        .route("/dns/:domain/delete", post(delete_dns))
-        .route("/node/create", post(create_node))
-        .route("/node/update", post(update_node))
-        .route("/node/:id/get", get(get_node))
-        .route("/node/:id/delete", post(delete_node))
-        .route("/user/redeem", post(redeem_invite))
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            node_auth_middleware,
-        ));
-
-    // Define network/infrastructure routes (node authentication)
-    // These routes are only accessible to Formation nodes via operator key auth
-    let network_readers_api = Router::new()
-        // User management for networking
         .route("/user/:id/get", get(get_user))
         .route("/user/:ip/get_from_ip", get(get_user_from_ip))
         .route("/user/:id/get_all_allowed", get(get_all_allowed))
         .route("/user/list", get(list_users))
         .route("/user/list_admin", get(list_admin))
-        .route("/user/:cidr/list", get(list_by_cidr))        
+        .route("/user/:cidr/list", get(list_by_cidr))
+        .route("/user/redeem", post(redeem_invite))
+        
         // CIDR management
+        .route("/cidr/create", post(create_cidr))
+        .route("/cidr/update", post(update_cidr))
+        .route("/cidr/delete", post(delete_cidr))
         .route("/cidr/:id/get", get(get_cidr))
         .route("/cidr/list", get(list_cidr))
         
         // Association management
+        .route("/assoc/create", post(create_assoc))
+        .route("/assoc/delete", post(delete_assoc))
+        .route("/assoc/list", get(list_assoc))
         .route("/assoc/:cidr_id/relationships", get(relationships))
         
         // DNS management
+        .route("/dns/create", post(create_dns))
+        .route("/dns/update", post(update_dns))
+        .route("/dns/:domain/delete", post(delete_dns))
         .route("/dns/:domain/:build_id/request_vanity", post(request_vanity))
         .route("/dns/:domain/:build_id/request_public", post(request_public))
         .route("/dns/:domain/get", get(get_dns_record))
@@ -303,18 +302,27 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/dns/list", get(list_dns_records))
         
         // Node management
+        .route("/node/create", post(create_node))
+        .route("/node/update", post(update_node))
+        .route("/node/:id/get", get(get_node))
+        .route("/node/:id/delete", post(delete_node))
         .route("/node/:id/metrics", get(get_node_metrics))
         .route("/node/list/metrics", get(list_node_metrics))
         
         // Node authentication key management
         .route("/node/:id/operator-key", post(add_node_operator_key))
-        .route("/node/:id/operator-key/:key", post(remove_node_operator_key));
+        .route("/node/:id/operator-key/:key", post(remove_node_operator_key))
+        
+        // Apply signature authentication middleware instead of node authentication
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::signature_auth::signature_auth_middleware,
+        ));
     
-    // Define account/user management routes (JWT authentication required)
-    let account_api = Router::new()
+    // Define account/user and API management routes (signature authentication)
+    let protected_api = Router::new()
         // Authentication test endpoints
-        .route("/auth/test", get(protected_handler))
-        .route("/projects/:project_id/resources/:resource_id", get(project_resource_handler))
+        .route("/auth/test", get(signature_test_handler))
         
         // Instance management
         .route("/instance/create", post(create_instance))
@@ -329,7 +337,7 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/account/delete", post(delete_account))
         .route("/account/transfer-ownership", post(transfer_instance_ownership))
         
-        // API key management
+        // API key management (still useful for legacy clients)
         .route("/api-keys", get(list_api_keys_handler))
         .route("/api-keys/create", post(create_api_key_handler))
         .route("/api-keys/:id", get(get_api_key_handler))
@@ -343,14 +351,6 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/billing/checkout/process", post(crate::billing::handlers::process_stripe_checkout_session))
         .route("/billing/credits/add", post(crate::billing::handlers::add_credits))
         
-        // Apply JWT authentication middleware to all account management routes
-        .layer(middleware::from_fn_with_state(
-            jwks_manager.clone(),
-            jwt_auth_middleware,
-        ));
-    
-    // Define API routes (primarily for developers, using API key authentication)
-    let api_routes = Router::new()
         // Agent management
         .route("/agents/create", post(create_agent))
         .route("/agents/update", post(update_agent))
@@ -363,111 +363,18 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/models/delete", post(delete_model))
         .route("/models/:id/inference", post(checked_model_inference))
         
-        // Apply API key authentication middleware to all API routes
+        // Apply signature authentication middleware to all protected routes
         .layer(middleware::from_fn_with_state(
             state.clone(),
-            api_key_auth_middleware,
+            crate::signature_auth::signature_auth_middleware,
         ));
     
     // Merge all route groups into a single router
     Router::new()
         .merge(public_api)
-        .merge(network_writers_api)  // Add the node-authenticated network API
-        .merge(network_readers_api)
-        .merge(account_api)
-        .merge(api_routes)
+        .merge(network_api)
+        .merge(protected_api)
         .with_state(state)
-}
-
-// Protected route handler example - requires valid JWT
-async fn protected_handler(
-    claims: JwtClaims,
-) -> Json<serde_json::Value> {
-    // Access the validated claims
-    Json(json!({
-        "message": "You have access to this protected route",
-        "user_id": claims.0.sub,
-        "project": claims.0.project_id(),
-        "role": format!("{:?}", claims.0.user_role()),
-    }))
-}
-
-// Example of a project resource handler using our helper functions
-async fn project_resource_handler(
-    claims: JwtClaims,
-    Path((project_id, resource_id)): Path<(String, String)>,
-) -> Result<Json<serde_json::Value>, AuthError> {
-    // Verify that the user has access to this project
-    verify_project_path_access(&claims.0, &project_id)?;
-    
-    // Let's assume we looked up the resource and found it belongs to this project
-    // Now we verify user has access to this specific resource
-    has_resource_access(&claims.0, &resource_id, &project_id)?;
-    
-    // For audit logging, extract user info
-    let user_info = extract_user_info(&claims.0);
-    
-    // Log the access (just printing here, but would log to file/database in a real app)
-    log::info!(
-        "User accessed resource: project_id={}, resource_id={}, user={}",
-        project_id,
-        resource_id,
-        serde_json::to_string(&user_info).unwrap_or_default()
-    );
-    
-    // Return some data about the resource
-    Ok(Json(json!({
-        "project_id": project_id,
-        "resource_id": resource_id,
-        "name": "Example Resource",
-        "description": "This is a protected resource that requires authentication and authorization",
-        "user": user_info
-    })))
-}
-
-/// Run the API server without queue processing
-pub async fn run_api(datastore: Arc<Mutex<DataStore>>) -> Result<(), Box<dyn std::error::Error>> {
-    let router = app(datastore.clone());
-    let listener = TcpListener::bind("0.0.0.0:3004").await?;
-    log::info!("Running API server only...");
-    
-    if let Err(e) = axum::serve(listener, router).await {
-        eprintln!("Error serving State API Server: {e}");
-        return Err(Box::new(e));
-    }
-    
-    Ok(())
-}
-
-/// Run the queue reader without the API server
-pub async fn run_queue_reader(datastore: Arc<Mutex<DataStore>>, mut shutdown: tokio::sync::broadcast::Receiver<()>) -> Result<(), Box<dyn std::error::Error>> {
-    log::info!("Running queue reader only...");
-    
-    let mut n = 0;
-    let polling_interval = 100;
-    loop {
-        tokio::select! {
-            Ok(messages) = DataStore::read_from_queue(Some(n), None) => {
-                n += messages.len();
-                for message in messages {
-                    log::info!("pulled message from queue");
-                    let ds = datastore.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = process_message(message, ds).await {
-                            eprintln!("Error processing message: {e}");
-                        }
-                    });
-                }
-            }
-            _ = tokio::time::sleep(Duration::from_millis(polling_interval)) => {
-            }
-            _ = shutdown.recv() => {
-                break;
-            }
-        }
-    }
-
-    Ok(())
 }
 
 /// Run both the API server and queue reader
@@ -514,7 +421,7 @@ pub async fn run(datastore: Arc<Mutex<DataStore>>, mut shutdown: tokio::sync::br
 // Wrapper function that performs eligibility check before calling agent_hire
 async fn checked_agent_hire(
     State(state): State<Arc<Mutex<DataStore>>>,
-    auth: ApiKeyAuth,
+    auth: crate::signature_auth::SignatureAuth,
     Path(agent_id): Path<String>,
     payload: Json<serde_json::Value>,
 ) -> Result<Response, EligibilityError> {
@@ -544,7 +451,7 @@ async fn checked_agent_hire(
 // Wrapper function that performs eligibility check before calling model_inference
 async fn checked_model_inference(
     State(state): State<Arc<Mutex<DataStore>>>,
-    auth: ApiKeyAuth,
+    auth: crate::signature_auth::SignatureAuth,
     Path(model_id): Path<String>, 
     Json(json_payload): Json<serde_json::Value>,
 ) -> Result<Response, EligibilityError> {

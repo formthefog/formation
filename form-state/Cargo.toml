@@ -51,8 +51,15 @@ dotenv = "0.15.0"
 sha2 = "0.10"
 subtle = "2.5"
 once_cell = "1.19"
+form-auth = { path = "../form-auth" }
 
 [features]
 default = ["axum"]
 axum = []
 devnet = []
+
+[dev-dependencies]
+tower = "0.4"
+rand_core = "0.6"
+http = "0.2"
+tokio-test = "0.4"

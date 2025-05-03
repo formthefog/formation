@@ -1,5 +1,4 @@
 use crate::datastore::{DataStore, ModelRequest};
-use crate::api_keys::ApiKeyAuth;
 use crate::billing::UsageTracker;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -12,21 +11,12 @@ use serde_json::json;
 
 pub async fn create_model(
     State(state): State<Arc<Mutex<DataStore>>>,
-    auth: ApiKeyAuth,
+    auth: crate::signature_auth::SignatureAuth,
     Json(model_data): Json<ModelRequest>,
 ) -> impl IntoResponse {
     log::info!("Account {} is attempting to create a new model", auth.account.address);
     
-    // Check operation permission
-    if !auth.api_key.can_perform_operation("models.create") {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "success": false,
-                "error": "API key does not have permission to create models"
-            }))
-        );
-    }
+    let mut datastore = state.lock().await;
     
     // Validate the model data
     let model_id = match &model_data {
@@ -54,7 +44,6 @@ pub async fn create_model(
     };
     
     // Check for duplicate model ID/name
-    let mut datastore = state.lock().await;
     if let Some(existing) = datastore.model_state.get_model(&model_id) {
         return (
             StatusCode::CONFLICT,
@@ -111,21 +100,10 @@ pub async fn create_model(
 
 pub async fn update_model(
     State(state): State<Arc<Mutex<DataStore>>>,
-    auth: ApiKeyAuth,
+    auth: crate::signature_auth::SignatureAuth,
     Json(model_data): Json<ModelRequest>,
 ) -> impl IntoResponse {
     log::info!("Account {} is attempting to update a model", auth.account.address);
-    
-    // Check operation permission
-    if !auth.api_key.can_perform_operation("models.update") {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "success": false,
-                "error": "API key does not have permission to update models"
-            }))
-        );
-    }
     
     // Ensure we have a valid update request
     let model_id = match &model_data {
@@ -156,8 +134,8 @@ pub async fn update_model(
         }
     };
     
-    // Verify ownership/permissions - only the owner or an admin can update
-    if existing_model.owner_id != auth.account.address && !auth.api_key.can_perform_operation("admin.models") {
+    // Verify ownership - only the owner can update
+    if existing_model.owner_id != auth.account.address {
         return (
             StatusCode::FORBIDDEN,
             Json(json!({
@@ -207,21 +185,10 @@ pub async fn update_model(
 
 pub async fn delete_model(
     State(state): State<Arc<Mutex<DataStore>>>,
-    auth: ApiKeyAuth,
+    auth: crate::signature_auth::SignatureAuth,
     Json(model_data): Json<ModelRequest>,
 ) -> impl IntoResponse {
     log::info!("Account {} is attempting to delete a model", auth.account.address);
-    
-    // Check operation permission
-    if !auth.api_key.can_perform_operation("models.delete") {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "success": false,
-                "error": "API key does not have permission to delete models"
-            }))
-        );
-    }
     
     // Ensure we have a valid delete request
     let model_id = match &model_data {
@@ -252,8 +219,8 @@ pub async fn delete_model(
         }
     };
     
-    // Verify ownership/permissions - only the owner or an admin can delete
-    if existing_model.owner_id != auth.account.address && !auth.api_key.can_perform_operation("admin.models") {
+    // Verify ownership - only the owner can delete
+    if existing_model.owner_id != auth.account.address {
         return (
             StatusCode::FORBIDDEN,
             Json(json!({
@@ -287,31 +254,19 @@ pub async fn delete_model(
     )
 }
 
-/// Get information about a specific AI model
+/// Get details for a specific model
 pub async fn get_model(
     State(state): State<Arc<Mutex<DataStore>>>,
-    auth: ApiKeyAuth,
     Path(model_id): Path<String>,
 ) -> impl IntoResponse {
-    log::info!("User {} is requesting model {}", auth.account.address, model_id);
+    log::info!("Getting model details for {}", model_id);
     
-    // Check operation permission (in a real implementation, we'd check the API key scope)
-    if !auth.api_key.can_perform_operation("models.get") {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "success": false,
-                "error": "API key does not have permission to view models"
-            }))
-        );
-    }
-    
-    // Get the model from datastore
     let datastore = state.lock().await;
+    
     match datastore.model_state.get_model(&model_id) {
         Some(model) => {
             // Log access for auditing
-            log::info!("Model access: {} by account {}", model_id, auth.account.address);
+            log::info!("Model access: {}", model_id);
             
             // Return the model with 200 OK
             (
@@ -338,20 +293,8 @@ pub async fn get_model(
 /// List all available models
 pub async fn list_model(
     State(state): State<Arc<Mutex<DataStore>>>,
-    auth: ApiKeyAuth,
 ) -> impl IntoResponse {
-    log::info!("Account {} is requesting list of all models", auth.account.address);
-    
-    // Check operation permission
-    if !auth.api_key.can_perform_operation("models.list") {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "success": false,
-                "error": "API key does not have permission to list models"
-            }))
-        );
-    }
+    log::info!("Requesting list of all models");
     
     // Get all models from datastore
     let datastore = state.lock().await;
@@ -371,22 +314,11 @@ pub async fn list_model(
 /// Handler for model inference
 pub async fn model_inference(
     State(state): State<Arc<Mutex<DataStore>>>,
-    auth: ApiKeyAuth,
+    auth: crate::signature_auth::SignatureAuth,
     Path(model_id): Path<String>,
     Json(payload): Json<ModelInferenceRequest>,
 ) -> impl IntoResponse {
     log::info!("Account {} is requesting inference from model {}", auth.account.address, model_id);
-    
-    // Check operation permission
-    if !auth.api_key.can_perform_operation("models.inference") {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "success": false,
-                "error": "API key does not have permission to use model inference"
-            }))
-        );
-    }
     
     let mut datastore = state.lock().await;
     

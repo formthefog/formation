@@ -13,5 +13,6 @@ pub mod api;
 pub mod auth;
 pub mod billing;
 pub mod api_keys;
+pub mod signature_auth;
 
 pub type Actor = String;
