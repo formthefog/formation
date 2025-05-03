@@ -18,9 +18,9 @@ use uuid::Uuid;
 use chrono::{Utc, DateTime};
 
 use crate::datastore::DataStore;
-use crate::auth::{JwtClaims, DynamicClaims};
 use crate::billing::{SubscriptionInfo, SubscriptionStatus, SubscriptionTier, UsageTracker, PeriodUsage};
 use crate::billing::stripe::{BillingStore, BillingError, BillingTransaction};
+use crate::signature_auth::SignatureAuth;
 
 /// Response for usage statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,15 +143,10 @@ pub struct ApiVerifySubscription {
 /// Handler for getting subscription status
 pub async fn get_subscription_status(
     State(state): State<Arc<Mutex<DataStore>>>,
-    JwtClaims(claims): JwtClaims,
+    auth: SignatureAuth,
 ) -> Result<Json<SubscriptionResponse>, StatusCode> {
-    // Get user ID from claims
-    let user_id = claims.sub;
-    
-    // Get account information
-    let datastore = state.lock().await;
-    let account = datastore.account_state.get_account(&user_id)
-        .ok_or(StatusCode::NOT_FOUND)?;
+    // Get account directly from SignatureAuth
+    let account = auth.account;
     
     // Get subscription information
     let subscription = account.subscription.clone()
@@ -186,15 +181,10 @@ pub async fn get_subscription_status(
 /// Handler for getting usage statistics
 pub async fn get_usage_stats(
     State(state): State<Arc<Mutex<DataStore>>>,
-    JwtClaims(claims): JwtClaims,
+    auth: SignatureAuth,
 ) -> Result<Json<UsageResponse>, StatusCode> {
-    // Get user ID from claims
-    let user_id = claims.sub;
-    
-    // Get account information
-    let datastore = state.lock().await;
-    let account = datastore.account_state.get_account(&user_id)
-        .ok_or(StatusCode::NOT_FOUND)?;
+    // Get account directly from SignatureAuth
+    let account = auth.account;
     
     // Initialize response with default values
     let mut response = UsageResponse {
@@ -244,82 +234,56 @@ pub async fn get_usage_stats(
 /// Handler for adding credits
 pub async fn add_credits(
     State(state): State<Arc<Mutex<DataStore>>>,
-    JwtClaims(claims): JwtClaims,
+    auth: SignatureAuth,
     Json(request): Json<AddCreditsRequest>,
 ) -> impl IntoResponse {
-    // Get user ID from claims
-    let user_id = claims.sub;
+    // Get account from SignatureAuth
+    let mut account = auth.account;
+    let user_id = account.address.clone();
     
     // Validate payment with Stripe if payment_intent_id is provided
     if let Some(payment_id) = &request.payment_intent_id {
         // In a real implementation, we would verify the payment with Stripe
         // For now, we'll just assume it's valid
-        
-        // Example of what Stripe verification might look like:
-        /*
-        let stripe_client = StripeClient::from_env().await
-            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to initialize Stripe".to_string()))?;
-            
-        let is_valid = stripe_client.verify_payment(payment_id).await
-            .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid payment".to_string()))?;
-            
-        if !is_valid {
-            return Err((StatusCode::BAD_REQUEST, "Payment verification failed".to_string()));
-        }
-        */
     }
     
     // Add credits to the account
     let mut datastore = state.lock().await;
-    if let Some(mut account) = datastore.account_state.get_account(&user_id) {
-        // Add credits
-        account.add_credits(request.amount);
-        
-        // Update account in datastore
-        let op = datastore.account_state.update_account_local(account.clone());
-        datastore.account_state.account_op(op);
-        
-        // Return success response
+    
+    // Add credits
+    account.add_credits(request.amount);
+    
+    // Update account in datastore
+    let op = datastore.account_state.update_account_local(account.clone());
+    if let Err(err) = datastore.handle_account_op(op).await {
         return (
-            StatusCode::OK, 
-            Json(json!({
-                "success": true,
-                "credits_added": request.amount,
-                "total_credits": account.available_credits()
-            }))
-        );
-    } else {
-        return (
-            StatusCode::NOT_FOUND, 
+            StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({
                 "success": false,
-                "error": "Account not found"
+                "error": format!("Failed to update account: {}", err)
             }))
         );
     }
+    
+    // Return success response
+    (
+        StatusCode::OK, 
+        Json(json!({
+            "success": true,
+            "credits_added": request.amount,
+            "total_credits": account.available_credits()
+        }))
+    )
 }
 
 /// Handler for verifying subscription
 pub async fn verify_subscription(
     State(state): State<Arc<Mutex<DataStore>>>,
-    req: Json<ApiVerifySubscription>,
+    auth: SignatureAuth,
 ) -> impl IntoResponse {
-    let account_id = req.0.account_id;
-    
-    // Get account from datastore
-    let datastore = state.lock().await;
-    let account = match datastore.account_state.get_account(&account_id) {
-        Some(account) => account,
-        None => {
-            return (
-                StatusCode::NOT_FOUND, 
-                Json(json!({
-                    "success": false,
-                    "error": "Account not found"
-                }))
-            );
-        }
-    };
+    // Get account directly from SignatureAuth
+    let account = auth.account;
+    let account_id = account.address.clone();
     
     // Return the current subscription status
     (

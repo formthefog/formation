@@ -20,14 +20,6 @@ use crate::helpers::{
     account::*, 
     agent::*, 
     model::*,
-    api_key_handlers::*,
-};
-use crate::auth::{
-    JWKSManager, JwtClaims, jwt_auth_middleware, AuthError,
-    verify_project_path_access, has_resource_access, extract_user_info
-};
-use crate::api_keys::{
-    api_key_auth_middleware, ApiKeyAuth
 };
 use tokio::net::TcpListener;
 use serde_json::{self, json, Value};
@@ -336,14 +328,6 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/account/update", post(update_account))
         .route("/account/delete", post(delete_account))
         .route("/account/transfer-ownership", post(transfer_instance_ownership))
-        
-        // API key management (still useful for legacy clients)
-        .route("/api-keys", get(list_api_keys_handler))
-        .route("/api-keys/create", post(create_api_key_handler))
-        .route("/api-keys/:id", get(get_api_key_handler))
-        .route("/api-keys/:id/revoke", post(revoke_api_key_handler))
-        .route("/api-keys/:id/audit-logs", get(get_api_key_audit_logs))
-        .route("/api-keys/audit-logs", get(get_account_api_key_audit_logs))
         
         // Billing and subscription management
         .route("/billing/subscription", get(crate::billing::handlers::get_subscription_status))

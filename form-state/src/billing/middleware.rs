@@ -17,8 +17,8 @@ use serde_json::json;
 use thiserror::Error;
 
 use crate::datastore::DataStore;
-use crate::auth::{DynamicClaims, JwtClaims};
 use crate::billing::BillingConfig;
+use crate::signature_auth::SignatureAuth;
 
 /// Error types for eligibility checks
 #[derive(Debug, thiserror::Error)]
@@ -165,20 +165,17 @@ pub struct EligibilityContext {
 /// Middleware for checking if an account can use an agent
 pub async fn check_agent_eligibility(
     State(state): State<Arc<Mutex<DataStore>>>,
-    JwtClaims(claims): JwtClaims,
+    auth: SignatureAuth,
     Path(agent_id): Path<String>,
     mut request: Request<Body>,
     next: Next,
 ) -> Result<Response, EligibilityError> {
-    // Get user ID from claims
-    let user_id = claims.sub.clone();
-    
-    // Get account information
-    let datastore = state.lock().await;
-    let account = datastore.account_state.get_account(&user_id)
-        .ok_or(EligibilityError::AccountNotFound(user_id.clone()))?;
+    // Get account directly from SignatureAuth
+    let account = auth.account.clone();
+    let user_id = account.address.clone();
     
     // Check if the agent exists
+    let datastore = state.lock().await;
     if datastore.agent_state.get_agent(&agent_id).is_none() {
         return Err(EligibilityError::AccountNotFound(agent_id));
     }
@@ -244,18 +241,14 @@ pub async fn check_agent_eligibility(
 /// Middleware for checking if tokens can be consumed
 pub async fn check_token_eligibility(
     State(state): State<Arc<Mutex<DataStore>>>,
-    JwtClaims(claims): JwtClaims,
+    auth: SignatureAuth,
     Json(payload): Json<serde_json::Value>,
     mut request: Request<Body>,
     next: Next,
 ) -> Result<Response, EligibilityError> {
-    // Get user ID from claims
-    let user_id = claims.sub.clone();
-    
-    // Get account information
-    let datastore = state.lock().await;
-    let account = datastore.account_state.get_account(&user_id)
-        .ok_or(EligibilityError::AccountNotFound(user_id.clone()))?;
+    // Get account directly from SignatureAuth
+    let account = auth.account.clone();
+    let user_id = account.address.clone();
     
     // Extract token count from payload (simplified - actual would depend on API structure)
     let token_count = payload.get("max_tokens")

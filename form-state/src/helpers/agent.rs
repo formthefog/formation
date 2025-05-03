@@ -1,8 +1,7 @@
 use crate::datastore::{AccountRequest, AgentRequest, DataStore, DB_HANDLE};
 use crate::db::write_datastore;
 use crate::agent::*;
-use crate::auth::JwtClaims;
-use crate::api_keys::ApiKeyAuth;
+use crate::signature_auth::SignatureAuth;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use axum::{extract::{State, Path}, Json};
