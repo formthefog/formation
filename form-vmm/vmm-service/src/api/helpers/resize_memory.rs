@@ -1,0 +1,1 @@
+pub async fn resize_memory() {}

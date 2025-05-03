@@ -30,8 +30,30 @@ use crate::api::helpers::{
     stop::stop,
     delete::delete,
     complete::complete,
-    get_vm,
-    list
+    reboot::reboot,
+    power_button::power_button,
+    commit::commit,
+    snapshot::snapshot,
+    coredump::coredump,
+    restore::restore,
+    resize_vcpu::resize_vcpu,
+    resize_memory::resize_memory,
+    add_device::add_device,
+    add_disk::add_disk,
+    add_fs::add_fs,
+    remove_device::remove_device,
+    migrate_to::migrate_to,
+    migrate_from::migrate_from,
+    get::get_vm,
+    list::list
+};
+use crate::queue::read::read_from_queue;
+use crate::queue::helpers::{
+    create::handle_create_vm_message,
+    boot::handle_boot_vm_message,
+    delete::handle_delete_vm_message,
+    stop::handle_stop_vm_message,
+    reboot::handle_reboot_vm_message,
 };
 
 pub mod auth;
@@ -53,7 +75,6 @@ pub struct HealthResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     uptime: Option<u64>
 }
-
 pub struct VmmApiChannel {
     event_sender: mpsc::Sender<VmmEvent>,
     response_receiver: mpsc::Receiver<String>,
@@ -121,7 +142,7 @@ impl VmmApi {
         #[cfg(not(feature = "devnet"))]
         loop {
             tokio::select! {
-                Ok(messages) = Self::read_from_queue(Some(n), None) => {
+                Ok(messages) = read_from_queue(Some(n), None) => {
                     for message in &messages {
                         if let Err(e) = Self::handle_message(message.to_vec(), channel.clone()).await {
                             eprintln!("Error handling message in queue reader: {e}");
@@ -143,12 +164,12 @@ impl VmmApi {
         log::info!("Received subtopic: {subtopic}");
         let msg = &message[1..];
         match subtopic {
-            0 => Self::handle_create_vm_message(msg, channel.clone()).await?,
-            1 => Self::handle_boot_vm_message(msg, channel.clone()).await?, 
-            2 => Self::handle_delete_vm_message(msg, channel.clone()).await?,
-            3 => Self::handle_stop_vm_message(msg, channel.clone()).await?,
-            4 => Self::handle_reboot_vm_message(msg, channel.clone()).await?,
-            5 => Self::handle_start_vm_message(msg, channel.clone()).await?,
+            0 => handle_create_vm_message(msg, channel.clone()).await?,
+            1 => handle_boot_vm_message(msg, channel.clone()).await?, 
+            2 => handle_delete_vm_message(msg, channel.clone()).await?,
+            3 => handle_stop_vm_message(msg, channel.clone()).await?,
+            4 => handle_reboot_vm_message(msg, channel.clone()).await?,
+            5 => handle_start_vm_message(msg, channel.clone()).await?,
             _ => unreachable!()
         }
         Ok(())
@@ -177,261 +198,6 @@ impl VmmApi {
         Ok(hex::encode(hash))
     }
 
-    pub async fn handle_create_vm_message(msg: &[u8], channel: Arc<Mutex<VmmApiChannel>>) -> Result<(), VmmError> {
-        log::info!("Received create request from queue..");
-        let request: CreateVmRequest = serde_json::from_slice(msg).map_err(|e| {
-            VmmError::Config(e.to_string())
-        })?;
-        log::info!("Deserialized create request..");
-        let owner = Self::extract_owner_from_create_request(request.clone())?;
-        log::info!("built create event...");
-        let event = VmmEvent::Create { 
-            formfile: request.formfile, 
-            name: request.name, 
-            owner,
-        };
-
-        log::info!("Acquiring lock on API channel...");
-        let guard = channel.lock().await; 
-        log::info!("Sending event...");
-        guard.send(event).await.map_err(|e| {
-            VmmError::SystemError(e.to_string())
-        })?;
-
-        log::info!("dropping guard");
-        drop(guard);
-        log::info!("guard dropped, returning...");
-
-        Ok(())
-    }
-
-    pub async fn handle_boot_vm_message(msg: &[u8], channel: Arc<Mutex<VmmApiChannel>>) -> Result<(), VmmError> {
-        log::info!("Recevied boot request from queue...");
-        let request: StartVmRequest = serde_json::from_slice(msg).map_err(|e| {
-            VmmError::Config(e.to_string())
-        })?;
-
-        log::info!("Building start event..");
-        let event = VmmEvent::Start { id: request.id };
-        log::info!("Acquiring lock on API channel..");
-        let guard = channel.lock().await; 
-        log::info!("Sending event...");
-        guard.send(event).await.map_err(|e| {
-            VmmError::SystemError(e.to_string())
-        })?;
-
-        log::info!("dropping guard...");
-        drop(guard);
-        log::info!("guard dropped, returning...");
-        Ok(())
-    }
-
-    pub async fn handle_delete_vm_message(msg: &[u8], channel: Arc<Mutex<VmmApiChannel>>) -> Result<(), VmmError> {
-        let request: DeleteVmRequest = serde_json::from_slice(msg).map_err(|e| {
-            VmmError::Config(e.to_string())
-        })?;
-
-        // Verify signature if provided
-        if let Some(signature) = &request.signature {
-            // Create message for verification
-            let message = auth::SignatureVerifier::create_operation_message("DeleteVmRequest", &request.id);
-            
-            // Verify signature
-            let signer_address = auth::SignatureVerifier::verify_signature(message, signature, request.recovery_id)?;
-            
-            // Check if signer is authorized
-            let is_authorized = auth::OwnershipVerifier::verify_authorization(
-                &request.id, 
-                &signer_address, 
-                auth::Permission::Owner // Deletion requires owner permission
-            ).await?;
-            
-            if !is_authorized {
-                return Err(VmmError::Config(format!(
-                    "Unauthorized: Address {} is not the owner of instance {}", 
-                    signer_address, request.id
-                )));
-            }
-        } else {
-            return Err(VmmError::Config("Signature is required".to_string()));
-        }
-
-        // Proceed with deleting the VM
-        let event = VmmEvent::Delete { id: request.id };
-
-        let guard = channel.lock().await; 
-        guard.send(event).await.map_err(|e| {
-            VmmError::SystemError(e.to_string())
-        })?;
-        drop(guard);
-
-        Ok(())
-    }
-
-    pub async fn handle_stop_vm_message(msg: &[u8], channel: Arc<Mutex<VmmApiChannel>>) -> Result<(), VmmError> {
-        let request: StopVmRequest = serde_json::from_slice(msg).map_err(|e| {
-            VmmError::Config(e.to_string())
-        })?;
-
-        // Verify signature if provided
-        if let Some(signature) = &request.signature {
-            // Create message for verification
-            let message = auth::SignatureVerifier::create_operation_message("StopVmRequest", &request.id);
-            
-            // Verify signature
-            let signer_address = auth::SignatureVerifier::verify_signature(message, signature, request.recovery_id)?;
-            
-            // Check if signer is authorized
-            let is_authorized = auth::OwnershipVerifier::verify_authorization(
-                &request.id, 
-                &signer_address, 
-                auth::Permission::Operator
-            ).await?;
-            
-            if !is_authorized {
-                return Err(VmmError::Config(format!(
-                    "Unauthorized: Address {} is not the owner or authorized user for instance {}", 
-                    signer_address, request.id
-                )));
-            }
-        } else {
-            return Err(VmmError::Config("Signature is required".to_string()));
-        }
-
-        // Proceed with stopping the VM
-        let event = VmmEvent::Stop { id: request.id };
-        let guard = channel.lock().await; 
-        guard.send(event).await.map_err(|e| {
-            VmmError::SystemError(e.to_string())
-        })?;
-
-        drop(guard);
-        
-        Ok(())
-    }
-
-    pub async fn handle_reboot_vm_message(msg: &[u8], channel: Arc<Mutex<VmmApiChannel>>) -> Result<(), VmmError> {
-        let request: StopVmRequest = serde_json::from_slice(msg).map_err(|e| {
-            VmmError::Config(e.to_string())
-        })?;
-
-        let event = VmmEvent::Stop { id: request.id.clone() };
-
-        let guard = channel.lock().await; 
-        guard.send(event).await.map_err(|e| {
-            VmmError::SystemError(e.to_string())
-        })?;
-
-        let event = VmmEvent::Start { id: request.id };
-        let guard = channel.lock().await; 
-        guard.send(event).await.map_err(|e| {
-            VmmError::SystemError(e.to_string())
-        })?;
-
-        drop(guard);
-
-        Ok(())
-    }
-
-    pub async fn handle_start_vm_message(msg: &[u8], channel: Arc<Mutex<VmmApiChannel>>) -> Result<(), VmmError> {
-        let request: StartVmRequest = serde_json::from_slice(msg).map_err(|e| {
-            VmmError::Config(e.to_string())
-        })?;
-
-        // Verify signature if provided
-        if let Some(signature) = &request.signature {
-            // Create message for verification
-            let message = auth::SignatureVerifier::create_operation_message("StartVmRequest", &request.id);
-            
-            // Verify signature
-            let signer_address = auth::SignatureVerifier::verify_signature(message, signature, request.recovery_id)?;
-            
-            // Check if signer is authorized
-            let is_authorized = auth::OwnershipVerifier::verify_authorization(
-                &request.id, 
-                &signer_address, 
-                auth::Permission::Operator
-            ).await?;
-            
-            if !is_authorized {
-                return Err(VmmError::Config(format!(
-                    "Unauthorized: Address {} is not the owner or authorized user for instance {}", 
-                    signer_address, request.id
-                )));
-            }
-        } else {
-            return Err(VmmError::Config("Signature is required".to_string()));
-        }
-
-        // Proceed with starting the VM
-        let event = VmmEvent::Start { id: request.id };
-        let guard = channel.lock().await; 
-        guard.send(event).await.map_err(|e| {
-            VmmError::SystemError(e.to_string())
-        })?;
-
-        drop(guard);
-
-        Ok(())
-    }
-
-    pub async fn write_to_queue(
-        message: impl Serialize + Clone,
-        sub_topic: u8,
-        topic: &str
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut hasher = Sha3::v256();
-        let mut topic_hash = [0u8; 32];
-        hasher.update(topic.as_bytes());
-        hasher.finalize(&mut topic_hash);
-        let mut message_code = vec![sub_topic];
-        message_code.extend(serde_json::to_vec(&message)?);
-        let request = QueueRequest::Write { 
-            content: message_code, 
-            topic: hex::encode(topic_hash) 
-        };
-
-        match Client::new()
-            .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
-            .json(&request)
-            .send().await?
-            .json::<QueueResponse>().await? {
-                QueueResponse::OpSuccess => return Ok(()),
-                QueueResponse::Failure { reason } => return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("{reason:?}")))),
-                _ => return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Invalid response variant for write_local endpoint")))
-        }
-    }
-
-    pub async fn read_from_queue(
-        last: Option<usize>,
-        n: Option<usize>,
-    ) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
-        let mut endpoint = format!("http://127.0.0.1:{}/queue/vmm", QUEUE_PORT);
-        if let Some(idx) = last {
-            endpoint.push_str(&format!("/{idx}"));
-            if let Some(n) = n {
-                endpoint.push_str(&format!("/{n}/get_n_after"));
-            } else {
-                endpoint.push_str("/get_after");
-            }
-        } else {
-            if let Some(n) = n {
-                endpoint.push_str(&format!("/{n}/get_n"))
-            } else {
-                endpoint.push_str("/get")
-            }
-        }
-
-        match Client::new()
-            .get(endpoint.clone())
-            .send().await?
-            .json::<QueueResponse>().await? {
-                QueueResponse::List(list) => Ok(list),
-                QueueResponse::Failure { reason } => Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("{reason:?}")))),
-                _ => Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Invalid response variant for {endpoint}")))) 
-        }
-    }
-
     pub async fn start_api_server(&self, config: &crate::config::Config) -> Result<(), VmmError> {
         log::info!("Attempting to start API server");
         let app_state = self.channel.clone();
@@ -439,7 +205,7 @@ impl VmmApi {
         // Create the router with public routes (no authentication)
         let public_routes = Router::new()
             .route("/health", get(health_check))
-            .route("/vm/boot_complete", post(boot_complete));
+            .route("/vm/boot_complete", post(complete));
         
         // Create the router with protected routes (requires authentication)
         let protected_routes = Router::new()
