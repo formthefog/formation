@@ -6,20 +6,17 @@
 //! 3. Viewing usage statistics
 
 use axum::{
-    extract::{State, Path, Json},
+    extract::{State, Json},
     http::StatusCode,
-    response::{IntoResponse, Response},
+    response::IntoResponse,
 };
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use uuid::Uuid;
-use chrono::{Utc, DateTime};
 
 use crate::datastore::DataStore;
-use crate::billing::{SubscriptionInfo, SubscriptionStatus, SubscriptionTier, UsageTracker, PeriodUsage};
-use crate::billing::stripe::{BillingStore, BillingError, BillingTransaction};
+use crate::billing::{SubscriptionInfo, SubscriptionStatus, SubscriptionTier};
 use crate::signature_auth::SignatureAuth;
 
 /// Response for usage statistics
@@ -142,7 +139,7 @@ pub struct ApiVerifySubscription {
 
 /// Handler for getting subscription status
 pub async fn get_subscription_status(
-    State(state): State<Arc<Mutex<DataStore>>>,
+    State(_state): State<Arc<Mutex<DataStore>>>,
     auth: SignatureAuth,
 ) -> Result<Json<SubscriptionResponse>, StatusCode> {
     // Get account directly from SignatureAuth
@@ -180,7 +177,7 @@ pub async fn get_subscription_status(
 
 /// Handler for getting usage statistics
 pub async fn get_usage_stats(
-    State(state): State<Arc<Mutex<DataStore>>>,
+    State(_state): State<Arc<Mutex<DataStore>>>,
     auth: SignatureAuth,
 ) -> Result<Json<UsageResponse>, StatusCode> {
     // Get account directly from SignatureAuth
@@ -239,13 +236,6 @@ pub async fn add_credits(
 ) -> impl IntoResponse {
     // Get account from SignatureAuth
     let mut account = auth.account;
-    let user_id = account.address.clone();
-    
-    // Validate payment with Stripe if payment_intent_id is provided
-    if let Some(payment_id) = &request.payment_intent_id {
-        // In a real implementation, we would verify the payment with Stripe
-        // For now, we'll just assume it's valid
-    }
     
     // Add credits to the account
     let mut datastore = state.lock().await;
@@ -278,12 +268,11 @@ pub async fn add_credits(
 
 /// Handler for verifying subscription
 pub async fn verify_subscription(
-    State(state): State<Arc<Mutex<DataStore>>>,
+    State(_state): State<Arc<Mutex<DataStore>>>,
     auth: SignatureAuth,
 ) -> impl IntoResponse {
     // Get account directly from SignatureAuth
     let account = auth.account;
-    let account_id = account.address.clone();
     
     // Return the current subscription status
     (
@@ -293,26 +282,6 @@ pub async fn verify_subscription(
             "subscription": account.subscription,
             "tier": account.subscription.as_ref().map(|s| s.tier).unwrap_or_default(),
             "credits": account.available_credits()
-        }))
-    )
-}
-
-/// Handler for webhook events from Stripe
-pub async fn stripe_webhook(
-    State(state): State<Arc<Mutex<DataStore>>>,
-    headers: axum::http::HeaderMap,
-    body: String,
-) -> impl IntoResponse {
-    // In the new architecture, webhook handling happens in the frontend
-    // This endpoint just receives the final processed data
-    
-    // For now just return a success response
-    (
-        StatusCode::OK, 
-        Json(json!({
-            "success": true,
-            "received": true,
-            "message": "Webhook processing should be done in frontend"
         }))
     )
 }
