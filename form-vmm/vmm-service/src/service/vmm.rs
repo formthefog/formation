@@ -49,6 +49,7 @@ use std::io::{Cursor, Write};
 use std::convert::TryFrom;
 use std::error::Error;
 use crate::ChError;
+use crate::queue::write::write_to_queue;
 use crate::IMAGE_DIR;
 
 type VmmResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
@@ -649,7 +650,7 @@ impl VmManager {
         };
 
         #[cfg(not(feature = "devnet"))]
-        VmmApi::write_to_queue(InstanceRequest::Update(instance.clone()), 4, "state").await?;
+        write_to_queue(InstanceRequest::Update(instance.clone()), 4, "state").await?;
 
         #[cfg(feature = "devnet")]
         reqwest::Client::new().post("http://127.0.0.1:3004/instance/update")
@@ -680,7 +681,7 @@ impl VmManager {
             .await?;
 
         #[cfg(not(feature = "devnet"))]
-        VmmApi::write_to_queue(InstanceRequest::Update(instance.clone()), 4, "state").await?;
+        write_to_queue(InstanceRequest::Update(instance.clone()), 4, "state").await?;
 
         Ok(())
     }
@@ -919,7 +920,7 @@ Formpack for {name} doesn't exist:
                 let request = InstanceRequest::AddClusterMember { build_id: build_id.to_string(), cluster_member }; 
                 log::info!("Writing AddClusterMember InstanceRequest to queue...");
                 #[cfg(not(feature = "devnet"))]
-                VmmApi::write_to_queue(request.clone(), 4, "state").await?;
+                write_to_queue(request.clone(), 4, "state").await?;
                 
                 #[cfg(feature = "devnet")]
                 reqwest::Client::new().post("http://127.0.0.1:3004/instance/update")
@@ -982,7 +983,7 @@ Formpack for {name} doesn't exist:
 
                 log::info!("Writing Update request with formnet IP to queue...");
                 #[cfg(not(feature = "devnet"))]
-                VmmApi::write_to_queue(request.clone(), 4, "state").await?; 
+                write_to_queue(request.clone(), 4, "state").await?; 
 
                 #[cfg(feature = "devnet")]
                 reqwest::Client::new().post("http://127.0.0.1:3004/instance/update")
@@ -1011,7 +1012,7 @@ Formpack for {name} doesn't exist:
                 }).collect();
                 let request = InstanceRequest::Update(instance);
                 #[cfg(not(feature = "devnet"))]
-                VmmApi::write_to_queue(request.clone(), 4, "state").await?; 
+                write_to_queue(request.clone(), 4, "state").await?; 
 
                 #[cfg(feature = "devnet")]
                 reqwest::Client::new().post("http://127.0.0.1:3004/instance/update")
@@ -1039,7 +1040,7 @@ Formpack for {name} doesn't exist:
                 }).collect();
                 let request = InstanceRequest::Update(instance);
                 #[cfg(not(feature = "devnet"))]
-                VmmApi::write_to_queue(request.clone(), 4, "state").await?; 
+                write_to_queue(request.clone(), 4, "state").await?; 
 
                 #[cfg(feature = "devnet")]
                 reqwest::Client::new().post("http://127.0.0.1:3004/instance/update")

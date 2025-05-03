@@ -8,9 +8,11 @@ pub mod cli;
 pub mod api;
 pub mod util;
 pub mod gpu;
+pub mod queue;
 
 pub use config::{NetworkConfig, DefaultVmParams, ResourceLimits, ServicePaths};
 pub use service::*;
 pub use instance::*;
 pub use error::*;
 pub use cli::*;
+pub use queue::*;
