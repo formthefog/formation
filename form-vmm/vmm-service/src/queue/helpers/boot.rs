@@ -1,3 +1,8 @@
+use crate::api::VmmApiChannel;
+use crate::error::VmmError;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
 pub async fn handle_boot_vm_message(msg: &[u8], channel: Arc<Mutex<VmmApiChannel>>) -> Result<(), VmmError> {
     log::info!("Recevied boot request from queue...");
     let request: StartVmRequest = serde_json::from_slice(msg).map_err(|e| {

@@ -134,47 +134,6 @@ impl VmmApi {
         }
     }
 
-    pub async fn start_queue_reader(
-        channel: Arc<Mutex<VmmApiChannel>>,
-        mut shutdown: tokio::sync::broadcast::Receiver<()>
-    ) -> Result<(), VmmError> { 
-        let mut n = 0;
-        #[cfg(not(feature = "devnet"))]
-        loop {
-            tokio::select! {
-                Ok(messages) = read_from_queue(Some(n), None) => {
-                    for message in &messages {
-                        if let Err(e) = Self::handle_message(message.to_vec(), channel.clone()).await {
-                            eprintln!("Error handling message in queue reader: {e}");
-                        }
-                    }
-                    n += messages.len();
-                }
-                _ = tokio::time::sleep(Duration::from_millis(100)) => {}
-                _ = shutdown.recv() => {
-                    break;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub async fn handle_message(message: Vec<u8>, channel: Arc<Mutex<VmmApiChannel>>) -> Result<(), VmmError> {
-        let subtopic = message[0];
-        log::info!("Received subtopic: {subtopic}");
-        let msg = &message[1..];
-        match subtopic {
-            0 => handle_create_vm_message(msg, channel.clone()).await?,
-            1 => handle_boot_vm_message(msg, channel.clone()).await?, 
-            2 => handle_delete_vm_message(msg, channel.clone()).await?,
-            3 => handle_stop_vm_message(msg, channel.clone()).await?,
-            4 => handle_reboot_vm_message(msg, channel.clone()).await?,
-            5 => handle_start_vm_message(msg, channel.clone()).await?,
-            _ => unreachable!()
-        }
-        Ok(())
-    }
-
     pub fn extract_owner_from_create_request(request: CreateVmRequest) -> Result<String, VmmError> {
         // Get signature from request
         let signature = request.signature.ok_or(VmmError::Config("Signature is required".to_string()))?;

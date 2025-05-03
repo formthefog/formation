@@ -1,3 +1,8 @@
+use crate::api::VmmApiChannel;
+use crate::error::VmmError;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
 pub async fn handle_create_vm_message(msg: &[u8], channel: Arc<Mutex<VmmApiChannel>>) -> Result<(), VmmError> {
     log::info!("Received create request from queue..");
     let request: CreateVmRequest = serde_json::from_slice(msg).map_err(|e| {
