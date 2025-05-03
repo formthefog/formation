@@ -7,4 +7,3 @@ pub mod capability_matcher;
 pub mod types;
 pub mod helpers;
 pub mod auth;
-pub mod api_keys;

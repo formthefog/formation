@@ -9,14 +9,22 @@ use crate::manager::FormPackManager;
 use crate::types::response::PackResponse;
 use crate::monitor::FormPackMonitor;
 use crate::formfile::Formfile;
+use crate::auth::SignatureAuth;
 
 pub(crate) async fn handle_pack(
     State(manager): State<Arc<Mutex<FormPackManager>>>,
-    Extension(auth_token): Extension<Option<String>>,
-    Extension(api_key): Extension<Option<String>>,
+    Extension(signature_auth): Extension<Option<SignatureAuth>>,
     mut multipart: Multipart
 ) -> Json<PackResponse> {
     println!("Received a multipart Form, attempting to extract data...");
+    
+    // Log authentication info
+    if let Some(auth) = &signature_auth {
+        println!("Request authenticated using signature from: {}", auth.public_key_hex);
+    } else {
+        println!("Warning: Request processed without authentication");
+    }
+    
     let packdir = if let Ok(td) = tempdir() {
         td
     } else {
@@ -84,7 +92,7 @@ pub(crate) async fn handle_pack(
     };
 
     println!("Building FormPackMonitor for {} build...", formfile.name);
-    let mut monitor = match FormPackMonitor::new_with_auth(auth_token, api_key).await {
+    let mut monitor = match FormPackMonitor::new().await {
         Ok(monitor) => monitor,
         Err(e) => {
             println!("Error building monitor: {e}");

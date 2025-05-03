@@ -3590,6 +3590,7 @@ dependencies = [
  "crdts",
  "envconfig",
  "flate2",
+ "form-auth",
  "form-config",
  "form-p2p",
  "form-state",

@@ -1,90 +1,109 @@
-# Authentication Module for Form Pack
+# Authentication for FormPack
 
-This module provides JWT-based authentication for the Form Pack service, similar to what exists in Form State.
+This directory contains authentication modules for the FormPack service.
 
-## Features
+## Authentication Methods
 
-1. JWT token validation
-2. Role-based access control
-3. Project access verification
-4. Inter-service authentication
+FormPack now supports three authentication methods:
 
-## Usage
+1. **Signature-based Authentication (Recommended)** - ECDSA signatures for secure and decentralized authentication
+2. **JWT-based Authentication (Deprecated)** - Traditional JWT token-based authentication
+3. **API Key Authentication (Deprecated)** - Simple API key-based authentication
 
-### Middleware
+The signature-based authentication is recommended for all new integrations, as the JWT and API Key methods will be removed in a future version.
 
-The authentication middleware can be applied to routes:
+## Using Signature-based Authentication
+
+### Configuration
+
+Configure signature authentication by setting these environment variables:
+
+```
+# Comma-separated list of authorized public keys (hex-encoded)
+AUTH_PUBKEYS=046a04c1f05384c734c5dbe48f9df93b2234fb92534fb4f10f6e53dace81c12b52781cb8172225da30d4d6a8e06de1e52db0749ad41cdfa36a5dbb281703c0e430
+
+# Comma-separated list of paths that bypass auth (default: "/health,/ping")
+AUTH_BYPASS_PATHS=/health,/ping
+```
+
+### Client-Side Signing
+
+Clients need to:
+
+1. Create a message hash from the request data (typically the endpoint path)
+2. Sign the hash with their ECDSA private key
+3. Add the following headers to their request:
+   - `X-Signature`: Hex-encoded signature (64 bytes)
+   - `X-Recovery-ID`: Hex-encoded recovery ID (1 byte, usually "00" or "01")
+   - `X-Timestamp`: Current UNIX timestamp in seconds
+
+### Example Client Code
 
 ```rust
-use axum::middleware;
-use crate::auth::{jwt_auth_middleware, AuthConfig, JwtClient};
+use k256::{
+    ecdsa::{SigningKey, signature::Signer},
+    SecretKey,
+};
+use sha2::{Sha256, Digest};
+use std::time::{SystemTime, UNIX_EPOCH};
+use hex;
 
-// Initialize auth client
-let auth_config = AuthConfig::from_env();
-let jwt_client = Arc::new(JwtClient::new(auth_config));
+// Load private key
+let private_key = SigningKey::from_bytes(&[/* your key bytes */])?;
 
-// Apply middleware to routes
-let app = Router::new()
-    .route("/some-protected-route", post(my_handler))
-    .with_state(jwt_client.clone())
-    .route_layer(middleware::from_fn_with_state(
-        jwt_client,
-        jwt_auth_middleware
-    ));
+// Get current timestamp
+let timestamp = SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .unwrap()
+    .as_secs();
+
+// Endpoint path (used as message)
+let path = "/build";
+
+// Create hash to sign
+let mut hasher = Sha256::new();
+hasher.update(path.as_bytes());
+hasher.update(timestamp.to_string().as_bytes());
+let hash = hasher.finalize();
+
+// Sign the hash
+let signature = private_key.sign(&hash);
+let signature_bytes = signature.to_bytes();
+let recid = 0; // Use appropriate recovery ID
+
+// Add to headers
+let headers = reqwest::header::HeaderMap::new();
+headers.insert("X-Signature", hex::encode(signature_bytes).parse().unwrap());
+headers.insert("X-Recovery-ID", format!("{:02x}", recid).parse().unwrap());
+headers.insert("X-Timestamp", timestamp.to_string().parse().unwrap());
+
+// Make request with headers
+let client = reqwest::Client::new();
+let response = client.post("https://api.formation.fi/build")
+    .headers(headers)
+    .send()
+    .await?;
 ```
 
-### Request Handlers
+## Legacy Authentication Methods (Deprecated)
 
-In your request handlers, you can access the authenticated user's claims:
+### JWT Authentication
 
-```rust
-use axum::Extension;
-use crate::auth::JwtClaims;
+JWT authentication uses traditional token-based authentication with JWKs for validation.
 
-async fn my_handler(
-    Extension(claims): Extension<JwtClaims>,
-    // other parameters...
-) -> impl IntoResponse {
-    // Access user information
-    let user_id = claims.sub;
-    let role = claims.role;
-    
-    // Check project access
-    if claims.has_project_access("project-123") {
-        // Allow operation
-    }
-    
-    // Rest of handler
-}
-```
+Environment variables:
+- `JWT_URL`: URL for JWKS endpoint
+- `JWT_AUDIENCE`: Expected audience in JWT claims
+- `JWT_ISSUER`: Expected issuer in JWT claims
 
-### Making Authenticated Inter-service Calls
+### API Key Authentication
 
-To make an authenticated call to another service:
+API key authentication uses simple keys for authentication.
 
-```rust
-use crate::auth::jwt_client::JwtClient;
+Environment variables:
+- `API_KEY_TEST`: API key for testing
+- `API_KEY_PREFIX`: Required prefix for API keys (default: "form-")
 
-async fn call_another_service(jwt_client: &JwtClient, auth_token: &str) {
-    let response = jwt_client.call_service_with_auth(
-        reqwest::Method::GET,
-        "https://other-service/api/endpoint",
-        auth_token,
-        Some(serde_json::json!({ "key": "value" })),
-    ).await.unwrap();
-    
-    // Process response
-}
-```
+## Integration Example
 
-## Configuration
-
-Set the following environment variables:
-
-```
-JWKS_URL=https://auth.formation.dev/.well-known/jwks.json
-AUTH_AUDIENCE=https://api.formation.dev
-AUTH_ISSUER=https://auth.formation.dev/
-API_GATEWAY_URL=https://api.formation.dev
-AUTH_SERVICES_URL=https://auth.formation.dev
-``` 
+For examples of how to use signature-based auth in your service, see [FormAuth Documentation](../../form-auth/README.md). 
