@@ -1,7 +1,7 @@
 use axum::{
     async_trait,
     extract::{FromRequestParts, Request},
-    http::{request::Parts, StatusCode, HeaderMap},
+    http::{request::Parts, StatusCode, HeaderMap, Method},
     response::{IntoResponse, Response},
     Json,
 };
@@ -177,9 +177,11 @@ pub async fn ecdsa_auth_middleware(
     
     // Extract signature parts and verify
     let (signature_bytes, recovery_id, message) = extract_signature_parts(&headers)?;
+    
+    // Recover the address - this just verifies the signature is valid
     let _address = recover_address(&signature_bytes, recovery_id, &message)?;
     
-    // If successful, continue
+    // Authentication successful - let the handler handle authorization
     Ok(next.run(request).await)
 }
 

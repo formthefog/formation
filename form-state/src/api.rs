@@ -245,14 +245,9 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/node/list", get(list_nodes))
         .route("/instance/:instance_id/metrics", get(get_instance_metrics))
         .route("/instance/list/metrics", get(list_instance_metrics))
-        .route("/cluster/:build_id/metrics", get(get_cluster_metrics))
-        .route("/instance/list", get(list_instances))
-        .route("/instance/:instance_id/get", get(get_instance))
-        .route("/instance/:build_id/get_by_build_id", get(get_instance_by_build_id))
-        .route("/instance/:build_id/get_instance_ips", get(get_instance_ips));
-
-
-
+        .route("/cluster/:build_id/metrics", get(get_cluster_metrics));
+    
+    // Keep the original network API routes
     let network_writers_api = Router::new()
         .route("/user/create", post(create_user))
         .route("/user/update", post(update_user))
@@ -277,7 +272,7 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
             state.clone(),
             node_auth_middleware,
         ));
-
+    
     // Define network/infrastructure routes (node authentication)
     // These routes are only accessible to Formation nodes via operator key auth
     let network_readers_api = Router::new()
@@ -309,14 +304,8 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         // Node authentication key management
         .route("/node/:id/operator-key", post(add_node_operator_key))
         .route("/node/:id/operator-key/:key", post(remove_node_operator_key));
-    
-    // Define account/user management routes (JWT authentication required)
-    let account_api = Router::new()
-        // Instance management
-        .route("/instance/create", post(create_instance))
-        .route("/instance/update", post(update_instance))
-        .route("/instance/:instance_id/delete", post(delete_instance))
         
+    let account_api = Router::new()
         // Account management
         .route("/account/:address/get", get(get_account))
         .route("/account/list", get(list_accounts))
@@ -324,7 +313,22 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/account/update", post(update_account))
         .route("/account/delete", post(delete_account))
         .route("/account/transfer-ownership", post(transfer_instance_ownership))
-        //apply ecdsa auth middleware to all account management routes
+        // Apply ECDSA auth middleware to all account management routes
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            ecdsa_auth_middleware
+        ));
+    
+    // User-authenticated instance API routes 
+    let instance_api = Router::new()
+        .route("/instance/create", post(create_instance))
+        .route("/instance/update", post(update_instance))
+        .route("/instance/:instance_id/delete", post(delete_instance))
+        .route("/instance/list", get(list_instances))
+        .route("/instance/:instance_id/get", get(get_instance))
+        .route("/instance/:build_id/get_by_build_id", get(get_instance_by_build_id))
+        .route("/instance/:build_id/get_instance_ips", get(get_instance_ips))
+        // Apply ECDSA auth middleware to all instance API routes
         .layer(middleware::from_fn_with_state(
             state.clone(),
             ecdsa_auth_middleware
@@ -356,6 +360,7 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .merge(network_writers_api)  // Add the node-authenticated network API
         .merge(network_readers_api)
         .merge(account_api)
+        .merge(instance_api)  // Add the authenticated instance API
         .merge(api_routes)
         .with_state(state)
 }

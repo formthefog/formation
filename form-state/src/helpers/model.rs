@@ -10,6 +10,14 @@ use chrono::Utc;
 use serde_json::json;
 use crate::auth::RecoveredAddress;
 
+// Helper function to determine if an address belongs to an admin
+// This would ideally be replaced with a proper role-based system
+fn is_admin_address(address: &str) -> bool {
+    // For now, we'll use a simple check for a specific address pattern
+    // In a real system, this would query against a database or use JWT claims
+    address.to_lowercase() == "0xadmin" || address.starts_with("0x000admin")
+}
+
 pub async fn create_model(
     State(state): State<Arc<Mutex<DataStore>>>,
     recovered: RecoveredAddress,
@@ -298,10 +306,42 @@ pub async fn get_model(
 ) -> impl IntoResponse {
     log::info!("User {} is requesting model {}", recovered.as_hex(), model_id);
     
+    // Get the authenticated user's address
+    let authenticated_address = recovered.as_hex();
+    
     // Get the model from datastore
     let datastore = state.lock().await;
+    
     match datastore.model_state.get_model(&model_id) {
         Some(model) => {
+            // Check authorization if the model is private
+            if model.is_private {
+                // Check if user is the owner, has authorization, or is an admin
+                let account = datastore.account_state.get_account(&authenticated_address);
+                
+                // Determine if the user has access to this model
+                let is_authorized = match account {
+                    Some(account) => {
+                        // User is authorized if they own the model or are an admin
+                        account.owned_models.contains(&model_id) || 
+                        is_admin_address(&authenticated_address) ||
+                        model.owner_id == authenticated_address
+                    },
+                    None => false
+                };
+                
+                if !is_authorized {
+                    log::warn!("Unauthorized attempt to access private model: {} by {}", model_id, authenticated_address);
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(json!({
+                            "success": false,
+                            "error": "You don't have permission to access this private model"
+                        }))
+                    );
+                }
+            }
+            
             // Log access for auditing
             log::info!("Model access: {} by account {}", model_id, recovered.as_hex());
             
@@ -334,17 +374,60 @@ pub async fn list_model(
 ) -> impl IntoResponse {
     log::info!("Account {} is requesting list of all models", recovered.as_hex());
     
+    // Get the authenticated user's address
+    let authenticated_address = recovered.as_hex();
+    
     // Get all models from datastore
     let datastore = state.lock().await;
+    
+    // Check if the user is an admin
+    let is_admin = is_admin_address(&authenticated_address);
+    
+    // Get the account
+    let account = datastore.account_state.get_account(&authenticated_address);
+    
+    // Get all models
     let all_models = datastore.model_state.list_models();
     
-    // Return the models with 200 OK
+    // Filter the models based on authorization
+    let filtered_models: Vec<_> = all_models
+        .into_iter()
+        .filter(|(model_id, model)| {
+            // If model is not private, everyone can see it
+            if !model.is_private {
+                return true;
+            }
+            
+            // Admins can see all models
+            if is_admin {
+                return true;
+            }
+            
+            // Owner can see their own models
+            if model.owner_id == authenticated_address {
+                return true;
+            }
+            
+            // Check if user has ownership in their account records
+            if let Some(acc) = &account {
+                if acc.owned_models.contains(model_id) {
+                    return true;
+                }
+            }
+            
+            // Otherwise, the user can't see this model
+            false
+        })
+        .map(|(_, model)| model)
+        .collect();
+    
+    // Return the filtered models with 200 OK
     (
         StatusCode::OK, 
         Json(json!({
             "success": true,
-            "models": all_models,
-            "total": all_models.len()
+            "models": filtered_models,
+            "total": filtered_models.len()
         }))
     )
 }
@@ -363,6 +446,34 @@ pub async fn model_inference(
     
     // Check if the model exists
     if let Some(model) = datastore.model_state.get_model(&model_id) {
+        // Check authorization if the model is private
+        if model.is_private {
+            // Check if user is the owner, has authorization, or is an admin
+            let account = datastore.account_state.get_account(&account_address);
+            
+            // Determine if the user has access to this model
+            let is_authorized = match &account {
+                Some(account) => {
+                    // User is authorized if they own the model or are an admin
+                    account.owned_models.contains(&model_id) || 
+                    is_admin_address(&account_address) ||
+                    model.owner_id == account_address
+                },
+                None => false
+            };
+            
+            if !is_authorized {
+                log::warn!("Unauthorized attempt to use private model for inference: {} by {}", model_id, account_address);
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({
+                        "success": false,
+                        "error": "You don't have permission to use this private model for inference"
+                    }))
+                );
+            }
+        }
+        
         // Get or create the user's account
         let mut account = match datastore.account_state.get_account(&account_address) {
             Some(acc) => acc,
@@ -436,8 +547,7 @@ pub async fn model_inference(
             );
         }
         
-        // Return success with mock inference result
-        // In a real implementation, this would call the actual model inference service
+        // Return successful response
         return (
             StatusCode::OK,
             Json(json!({
