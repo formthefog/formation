@@ -13,286 +13,217 @@ use axum::response::IntoResponse;
 pub async fn create_agent(
     State(state): State<Arc<Mutex<DataStore>>>,
     recovered: RecoveredAddress,
-    Json(request): Json<AgentRequest>
+    Json(payload): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    log::info!("Received agent create request");
-    
-    // Get the authenticated user's address
-    let authenticated_address = recovered.as_hex();
-    
     let mut datastore = state.lock().await;
     
-    // Get or create the user's account
-    let mut account = match datastore.account_state.get_account(&authenticated_address) {
-        Some(acc) => acc.clone(),
-        None => {
-            // Create a new account if it doesn't exist
-            let new_account = crate::accounts::Account::new(authenticated_address.clone());
-            let op = datastore.account_state.update_account_local(new_account.clone());
-            if let Err(e) = datastore.handle_account_op(op).await {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({
-                        "success": false,
-                        "error": format!("Failed to create account: {}", e)
-                    }))
-                );
-            }
-            new_account
-        }
+    // Get the address of the authenticated user
+    let user_address = recovered.as_hex();
+    
+    // Check if this is a request from an admin node with an original user address
+    let effective_address = if datastore.network_state.is_admin_address(&user_address) {
+        // If it's an admin node, extract the original user address from the payload
+        crate::auth::extract_original_user_address(&payload)
+            .unwrap_or_else(|| user_address.clone())
+    } else {
+        // If it's a regular user, use their address
+        user_address
     };
     
-    match request {
-        AgentRequest::Create(mut agent) => {
-            // Check if an agent with this id already exists
-            if datastore.agent_state.get_agent(&agent.agent_id).is_some() {
-                return (
-                    StatusCode::CONFLICT,
-                    Json(json!({
-                        "success": false,
-                        "error": format!("Agent with id {} already exists", agent.agent_id)
-                    }))
-                );
-            }
+    // Parse the agent data from the payload
+    let agent_data: Result<AIAgent, serde_json::Error> = serde_json::from_value(payload.clone());
+    
+    match agent_data {
+        Ok(mut agent) => {
+            // Ensure the agent has the correct owner set to the authenticated user
+            agent.owner_id = effective_address.to_lowercase();
             
-            // Set the owner_id to the authenticated user's address
-            agent.owner_id = authenticated_address.clone();
-            
-            // Create the agent 
+            // Create and apply the agent update
             let op = datastore.agent_state.update_agent_local(agent.clone());
-            
-            // Apply the operation
-            if let Err(e) = datastore.handle_agent_op(op.clone()).await {
+            if let Err(e) = datastore.handle_agent_op(op).await {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({
-                        "success": false,
                         "error": format!("Failed to create agent: {}", e)
-                    }))
+                    })),
                 );
             }
             
-            // Add the agent to the user's owned agents
-            account.add_owned_agent(agent.agent_id.clone());
-            let account_op = datastore.account_state.update_account_local(account);
-            if let Err(e) = datastore.handle_account_op(account_op).await {
-                log::error!("Failed to update account after agent creation: {}", e);
-                // Continue anyway since the agent was created
-            }
-            
-            // Write to persistent storage
-            let _ = write_datastore(&DB_HANDLE, &datastore.clone());
-            
-            // Add to message queue
-            if let Err(e) = DataStore::write_to_queue(AgentRequest::Op(op), 8).await {
-                log::error!("Error writing to queue: {}", e);
-            }
-            
-            return (
+            (
                 StatusCode::CREATED,
                 Json(json!({
-                    "success": true,
+                    "status": "success",
                     "agent": agent
-                }))
-            );
+                })),
+            )
         },
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "success": false,
-                    "error": "Invalid request type for agent creation"
-                }))
-            );
-        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": format!("Invalid agent data: {}", e)
+            })),
+        ),
     }
 }
 
 pub async fn update_agent(
     State(state): State<Arc<Mutex<DataStore>>>,
     recovered: RecoveredAddress,
-    Json(request): Json<AgentRequest>
+    Json(payload): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    log::info!("Received agent update request");
-    
-    // Get the authenticated user's address
-    let authenticated_address = recovered.as_hex();
-    
     let mut datastore = state.lock().await;
     
-    match request {
-        AgentRequest::Update(agent) => {
+    // Get the address of the authenticated user
+    let user_address = recovered.as_hex();
+    
+    // Check if this is a request from an admin node with an original user address
+    let effective_address = if datastore.network_state.is_admin_address(&user_address.clone()) {
+        // If it's an admin node, extract the original user address from the payload
+        crate::auth::extract_original_user_address(&payload)
+            .unwrap_or_else(|| user_address.clone())
+    } else {
+        // If it's a regular user, use their address
+        user_address.clone()
+    };
+    
+    // Parse the agent data from the payload
+    let agent_data: Result<AIAgent, serde_json::Error> = serde_json::from_value(payload.clone());
+    
+    match agent_data {
+        Ok(agent) => {
             // Check if the agent exists
-            if let Some(existing_agent) = datastore.agent_state.get_agent(&agent.agent_id) {
-                // Check if the user is the owner of the agent
-                let account = datastore.account_state.get_account(&authenticated_address);
-                
-                match account {
-                    Some(account) => {
-                        if !account.owned_agents.contains(&agent.agent_id) {
-                            log::warn!("Unauthorized attempt to update agent: {} by {}", agent.agent_id, authenticated_address);
-                            return (
-                                StatusCode::FORBIDDEN,
-                                Json(json!({
-                                    "success": false,
-                                    "error": "You don't have permission to update this agent"
-                                }))
-                            );
-                        }
-                    },
-                    None => {
-                        return (
-                            StatusCode::UNAUTHORIZED,
-                            Json(json!({
-                                "success": false,
-                                "error": "Account not found"
-                            }))
-                        );
-                    }
-                }
-                
-                // Preserve the owner_id field - users cannot change ownership via update
-                let mut updated_agent = agent;
-                updated_agent.owner_id = existing_agent.owner_id;
-                
-                // Update the agent
-                let op = datastore.agent_state.update_agent_local(updated_agent);
-                if let Err(e) = datastore.handle_agent_op(op.clone()).await {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({
-                            "success": false,
-                            "error": format!("Failed to update agent: {}", e)
-                        }))
-                    );
-                }
-                
-                // Get the updated agent
-                if let Some(updated) = datastore.agent_state.get_agent(&existing_agent.agent_id) {
-                    // Write to persistent storage
-                    let _ = write_datastore(&DB_HANDLE, &datastore.clone());
-                    
-                    // Add to message queue
-                    if let Err(e) = DataStore::write_to_queue(AgentRequest::Op(op), 8).await {
-                        log::error!("Error writing to queue: {}", e);
-                    }
-                    
-                    return (
-                        StatusCode::OK,
-                        Json(json!({
-                            "success": true,
-                            "agent": updated
-                        }))
-                    );
-                } else {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({
-                            "success": false,
-                            "error": "Failed to retrieve updated agent"
-                        }))
-                    );
-                }
-            } else {
-                return (
-                    StatusCode::NOT_FOUND,
-                    Json(json!({
-                        "success": false,
-                        "error": format!("Agent with id {} does not exist", agent.agent_id)
-                    }))
-                );
-            }
-        },
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "success": false,
-                    "error": "Invalid request type for agent update"
-                }))
-            );
-        }
-    }
-}
-
-pub async fn delete_agent(
-    State(state): State<Arc<Mutex<DataStore>>>,
-    recovered: RecoveredAddress,
-    Path(agent_id): Path<String>
-) -> impl IntoResponse {
-    log::info!("Received agent delete request for {}", agent_id);
-    
-    // Get the authenticated user's address
-    let authenticated_address = recovered.as_hex();
-    
-    let mut datastore = state.lock().await;
-    
-    // Check if the agent exists
-    if let Some(agent) = datastore.agent_state.get_agent(&agent_id) {
-        // Check if the user is the owner of the agent
-        let account = datastore.account_state.get_account(&authenticated_address);
-        
-        match account {
-            Some(mut account) => {
-                if !account.owned_agents.contains(&agent_id) {
-                    log::warn!("Unauthorized attempt to delete agent: {} by {}", agent_id, authenticated_address);
+            let existing_agent = datastore.agent_state.get_agent(&agent.agent_id);
+            if let Some(existing_agent) = existing_agent {
+                // Verify ownership unless the request is from an admin
+                if existing_agent.owner_id.to_lowercase() != effective_address.to_lowercase() && 
+                   !datastore.network_state.is_admin_address(&user_address) {
                     return (
                         StatusCode::FORBIDDEN,
                         Json(json!({
-                            "success": false,
-                            "error": "You don't have permission to delete this agent"
-                        }))
+                            "error": "You don't have permission to update this agent"
+                        })),
                     );
                 }
                 
-                // Delete the agent
-                if let Err(e) = datastore.handle_agent_delete(agent_id.clone()).await {
+                // Create and apply the agent update
+                let op = datastore.agent_state.update_agent_local(agent.clone());
+                if let Err(e) = datastore.handle_agent_op(op).await {
                     return (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(json!({
-                            "success": false,
-                            "error": format!("Failed to delete agent: {}", e)
-                        }))
+                            "error": format!("Failed to update agent: {}", e)
+                        })),
                     );
                 }
                 
-                // Remove the agent ID from the user's owned agents
-                account.remove_owned_agent(&agent_id);
-                let op = datastore.account_state.update_account_local(account);
-                if let Err(e) = datastore.handle_account_op(op).await {
-                    log::error!("Failed to update account after agent deletion: {}", e);
-                    // Continue anyway since the agent is already deleted
-                }
-                
-                // Write to persistent storage
-                let _ = write_datastore(&DB_HANDLE, &datastore.clone());
-                
-                return (
+                (
                     StatusCode::OK,
                     Json(json!({
-                        "success": true,
-                        "message": format!("Successfully deleted agent {}", agent_id)
-                    }))
-                );
-            },
+                        "status": "success",
+                        "agent": agent
+                    })),
+                )
+            } else {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({
+                        "error": "Agent not found"
+                    })),
+                )
+            }
+        },
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": format!("Invalid agent data: {}", e)
+            })),
+        ),
+    }
+}
+
+/// Delete an agent
+pub async fn delete_agent(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    recovered: RecoveredAddress,
+    Json(payload): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    // Extract the agent ID from the payload
+    let agent_id = match payload.get("id") {
+        Some(id) => match id.as_str() {
+            Some(s) => s.to_string(),
             None => {
                 return (
-                    StatusCode::UNAUTHORIZED,
+                    StatusCode::BAD_REQUEST,
                     Json(json!({
-                        "success": false,
-                        "error": "Account not found"
-                    }))
+                        "error": "Invalid agent ID format"
+                    })),
                 );
             }
+        },
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": "Agent ID is required"
+                })),
+            );
         }
+    };
+    
+    let mut datastore = state.lock().await;
+    
+    // Get the address of the authenticated user
+    let user_address = recovered.as_hex();
+    
+    // Check if this is a request from an admin node with an original user address
+    let effective_address = if datastore.network_state.is_admin_address(&user_address.clone()) {
+        // If it's an admin node, extract the original user address from the payload
+        crate::auth::extract_original_user_address(&payload)
+            .unwrap_or_else(|| user_address.clone())
     } else {
-        return (
+        // If it's a regular user, use their address
+        user_address.clone()
+    };
+    
+    // Check if the agent exists
+    let existing_agent = datastore.agent_state.get_agent(&agent_id);
+    if let Some(existing_agent) = existing_agent {
+        // Verify ownership unless the request is from an admin
+        if existing_agent.owner_id.to_lowercase() != effective_address.to_lowercase() && 
+           !datastore.network_state.is_admin_address(&user_address) {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({
+                    "error": "You don't have permission to delete this agent"
+                })),
+            );
+        }
+        
+        // Delete the agent
+        let op = datastore.agent_state.remove_agent_local(agent_id.clone());
+        if let Err(e) = datastore.handle_agent_op(op).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": format!("Failed to delete agent: {}", e)
+                })),
+            );
+        }
+        
+        (
+            StatusCode::OK,
+            Json(json!({
+                "status": "success",
+                "message": "Agent deleted successfully"
+            })),
+        )
+    } else {
+        (
             StatusCode::NOT_FOUND,
             Json(json!({
-                "success": false,
-                "error": format!("Agent with id {} does not exist", agent_id)
-            }))
-        );
+                "error": "Agent not found"
+            })),
+        )
     }
 }
 

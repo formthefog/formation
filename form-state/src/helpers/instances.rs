@@ -2,7 +2,6 @@ use crate::datastore::{DataStore, DB_HANDLE, InstanceRequest};
 use crate::db::write_datastore;
 use crate::instances::*;
 use crate::auth::RecoveredAddress;
-use crate::accounts::AuthorizationLevel;
 use reqwest::Client;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -25,245 +24,131 @@ fn is_admin_address(address: &str) -> bool {
 pub async fn create_instance(
     State(state): State<Arc<Mutex<DataStore>>>,
     recovered: RecoveredAddress,
-    Json(request): Json<InstanceRequest>
+    Json(payload): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    log::info!("Received instance create request");
-    
-    // Get the authenticated user's address
-    let authenticated_address = recovered.as_hex();
-    
     let mut datastore = state.lock().await;
     
-    // Check if the user account exists
-    let mut account = match datastore.account_state.get_account(&authenticated_address) {
-        Some(acc) => acc.clone(),
-        None => {
-            // Create a new account if it doesn't exist
-            let new_account = crate::accounts::Account::new(authenticated_address.clone());
-            let op = datastore.account_state.update_account_local(new_account.clone());
-            if let Err(e) = datastore.handle_account_op(op).await {
+    // Get the address of the authenticated user
+    let user_address = recovered.as_hex();
+    
+    // Check if this is a request from an admin node with an original user address
+    let effective_address = if datastore.network_state.is_admin_address(&user_address) {
+        // If it's an admin node, extract the original user address from the payload
+        crate::auth::extract_original_user_address(&payload)
+            .unwrap_or_else(|| user_address.clone())
+    } else {
+        // If it's a regular user, use their address
+        user_address
+    };
+    
+    // Parse the instance data from the payload
+    let instance_data: Result<Instance, serde_json::Error> = serde_json::from_value(payload.clone());
+    
+    match instance_data {
+        Ok(mut instance) => {
+            // Ensure the instance has the correct owner set to the authenticated user
+            instance.instance_owner = effective_address.to_lowercase();
+            
+            // Create and apply the instance update
+            let op = datastore.instance_state.update_instance_local(instance.clone());
+            if let Err(e) = datastore.handle_instance_op(op).await {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({
-                        "success": false,
-                        "error": format!("Failed to create account: {}", e)
-                    }))
+                        "error": format!("Failed to create instance: {}", e)
+                    })),
                 );
             }
-            new_account
-        }
-    };
-    
-    match request {
-        InstanceRequest::Op(map_op) => {
-            // For InstanceRequest::Op, we only allow this from internal network operations
-            // External users should not be able to directly apply operations
-            return (
-                StatusCode::FORBIDDEN,
+            
+            (
+                StatusCode::CREATED,
                 Json(json!({
-                    "success": false,
-                    "error": "Direct operation application is not allowed for external users"
-                }))
-            );
+                    "status": "success",
+                    "instance": instance
+                })),
+            )
         },
-        InstanceRequest::Create(mut instance) => {
-            log::info!("Create Instance request was a direct request");
-            
-            // Set the owner to the authenticated user
-            instance.instance_owner = authenticated_address.clone();
-            
-            // Create the instance
-            let map_op = datastore.instance_state.update_instance_local(instance.clone());
-            datastore.instance_state.instance_op(map_op.clone());
-            
-            match &map_op {
-                crdts::map::Op::Rm { .. } => {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({
-                            "success": false,
-                            "error": "Map generated RM context instead of Add context on Create request"
-                        }))
-                    );
-                },
-                crdts::map::Op::Up { ref key, ref op, .. } => {
-                    if let (true, v) = datastore.instance_state.instance_op_success(key.clone(), op.clone()) {
-                        // Add the instance to the user's owned instances
-                        account.add_owned_instance(instance.instance_id.clone());
-                        let account_op = datastore.account_state.update_account_local(account);
-                        if let Err(e) = datastore.handle_account_op(account_op).await {
-                            log::error!("Failed to update account after instance creation: {}", e);
-                            // Continue anyway since the instance was created
-                        }
-                        
-                        log::info!("Map Op was successful, broadcasting...");
-                        let broadcast_request = InstanceRequest::Op(map_op);
-                        if let Err(e) = datastore.broadcast::<Response<Instance>>(broadcast_request, "/instance/create").await {
-                            log::error!("Error broadcasting Instance Create Request: {}", e);
-                        }
-                        
-                        // Write to persistent storage
-                        let _ = write_datastore(&DB_HANDLE, &datastore.clone());
-                        
-                        return (
-                            StatusCode::CREATED,
-                            Json(json!({
-                                "success": true,
-                                "instance": v
-                            }))
-                        );
-                    } else {
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({
-                                "success": false,
-                                "error": "Update was rejected"
-                            }))
-                        );
-                    }
-                }
-            }
-        },
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "success": false,
-                    "error": "Invalid request for create instance"
-                }))
-            );
-        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": format!("Invalid instance data: {}", e)
+            })),
+        ),
     }
 }
 
 pub async fn update_instance(
     State(state): State<Arc<Mutex<DataStore>>>,
     recovered: RecoveredAddress,
-    Json(request): Json<InstanceRequest>
+    Json(payload): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    log::info!("Received instance update request");
-    
-    // Get the authenticated user's address
-    let authenticated_address = recovered.as_hex();
-    
     let mut datastore = state.lock().await;
     
-    match request {
-        InstanceRequest::Op(map_op) => {
-            // For InstanceRequest::Op, we only allow this from internal network operations
-            // External users should not be able to directly apply operations
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({
-                    "success": false,
-                    "error": "Direct operation application is not allowed for external users"
-                }))
-            );
-        },
-        InstanceRequest::Update(mut instance) => {
-            log::info!("Update Instance request was a direct request");
-            
+    // Get the address of the authenticated user
+    let user_address = recovered.as_hex();
+    
+    // Check if this is a request from an admin node with an original user address
+    let effective_address = if datastore.network_state.is_admin_address(&user_address.clone()) {
+        // If it's an admin node, extract the original user address from the payload
+        crate::auth::extract_original_user_address(&payload)
+            .unwrap_or_else(|| user_address.clone())
+    } else {
+        // If it's a regular user, use their address
+        user_address.clone()
+    };
+    
+    // Parse the instance data from the payload
+    let instance_data: Result<Instance, serde_json::Error> = serde_json::from_value(payload.clone());
+    
+    match instance_data {
+        Ok(instance) => {
             // Check if the instance exists
-            if let Some(existing_instance) = datastore.instance_state.get_instance(instance.instance_id.clone()) {
-                // Check authorization - user must be owner or have Manager permissions
-                let account = datastore.account_state.get_account(&authenticated_address);
-                
-                match account {
-                    Some(account) => {
-                        // Check if the user is the owner or has Manager authorization
-                        let is_owner = account.owned_instances.contains(&instance.instance_id);
-                        let has_manager_auth = match account.get_authorization_level(&instance.instance_id) {
-                            Some(AuthorizationLevel::Owner) | Some(AuthorizationLevel::Manager) => true,
-                            _ => false
-                        };
-                        
-                        if !is_owner && !has_manager_auth {
-                            log::warn!("Unauthorized attempt to update instance: {} by {}", instance.instance_id, authenticated_address);
-                            return (
-                                StatusCode::FORBIDDEN,
-                                Json(json!({
-                                    "success": false,
-                                    "error": "You don't have permission to update this instance"
-                                }))
-                            );
-                        }
-                    },
-                    None => {
-                        return (
-                            StatusCode::UNAUTHORIZED,
-                            Json(json!({
-                                "success": false,
-                                "error": "Account not found"
-                            }))
-                        );
-                    }
+            let existing_instance = datastore.instance_state.get_instance(instance.instance_id.clone());
+            if let Some(existing_instance) = existing_instance {
+                // Verify ownership unless the request is from an admin
+                if existing_instance.instance_owner.to_lowercase() != effective_address.to_lowercase() && 
+                   !datastore.network_state.is_admin_address(&user_address) {
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(json!({
+                            "error": "You don't have permission to update this instance"
+                        })),
+                    );
                 }
                 
-                // Preserve the owner field - users cannot change ownership via update
-                instance.instance_owner = existing_instance.instance_owner;
-                
-                // Update the instance
-                let map_op = datastore.instance_state.update_instance_local(instance);
-                datastore.instance_state.instance_op(map_op.clone());
-                
-                match &map_op {
-                    crdts::map::Op::Rm { .. } => {
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({
-                                "success": false,
-                                "error": "Map generated RM context instead of Add context on Update request"
-                            }))
-                        );
-                    },
-                    crdts::map::Op::Up { ref key, ref op, .. } => {
-                        if let (true, v) = datastore.instance_state.instance_op_success(key.clone(), op.clone()) {
-                            log::info!("Map Op was successful, broadcasting...");
-                            let broadcast_request = InstanceRequest::Op(map_op);
-                            if let Err(e) = datastore.broadcast::<Response<Instance>>(broadcast_request, "/instance/update").await {
-                                log::error!("Error broadcasting Instance Update Request: {}", e);
-                            }
-                            
-                            // Write to persistent storage
-                            let _ = write_datastore(&DB_HANDLE, &datastore.clone());
-                            
-                            return (
-                                StatusCode::OK,
-                                Json(json!({
-                                    "success": true,
-                                    "instance": v
-                                }))
-                            );
-                        } else {
-                            return (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(json!({
-                                    "success": false,
-                                    "error": "Update was rejected"
-                                }))
-                            );
-                        }
-                    }
+                // Create and apply the instance update
+                let op = datastore.instance_state.update_instance_local(instance.clone());
+                if let Err(e) = datastore.handle_instance_op(op).await {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({
+                            "error": format!("Failed to update instance: {}", e)
+                        })),
+                    );
                 }
+                
+                (
+                    StatusCode::OK,
+                    Json(json!({
+                        "status": "success",
+                        "instance": instance
+                    })),
+                )
             } else {
-                return (
+                (
                     StatusCode::NOT_FOUND,
                     Json(json!({
-                        "success": false,
-                        "error": format!("Instance with id {} does not exist", instance.instance_id)
-                    }))
-                );
+                        "error": "Instance not found"
+                    })),
+                )
             }
         },
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "success": false,
-                    "error": "Invalid request for update instance"
-                }))
-            );
-        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": format!("Invalid instance data: {}", e)
+            })),
+        ),
     }
 }
 
@@ -505,84 +390,66 @@ pub async fn get_cluster_metrics(
 pub async fn delete_instance(
     State(state): State<Arc<Mutex<DataStore>>>,
     recovered: RecoveredAddress,
-    Path(instance_id): Path<String>
+    Path(instance_id): Path<String>,
+    payload: Option<Json<serde_json::Value>>,
 ) -> impl IntoResponse {
-    log::info!("Received instance delete request for {}", instance_id);
-    
-    // Get the authenticated user's address
-    let authenticated_address = recovered.as_hex();
-    
     let mut datastore = state.lock().await;
     
-    // Check if the instance exists
-    if let Some(instance) = datastore.instance_state.get_instance(instance_id.clone()) {
-        // Check authorization - user must be the owner
-        let account = datastore.account_state.get_account(&authenticated_address);
-        
-        match account {
-            Some(mut account) => {
-                // Only the owner can delete an instance
-                let is_owner = account.owned_instances.contains(&instance_id);
-                let auth_level = account.get_authorization_level(&instance_id);
-                
-                if !is_owner && auth_level != Some(&AuthorizationLevel::Owner) {
-                    log::warn!("Unauthorized attempt to delete instance: {} by {}", instance_id, authenticated_address);
-                    return (
-                        StatusCode::FORBIDDEN,
-                        Json(json!({
-                            "success": false,
-                            "error": "You don't have permission to delete this instance"
-                        }))
-                    );
-                }
-                
-                // Create and apply the delete operation
-                let map_op = datastore.instance_state.remove_instance_local(instance_id.clone());
-                datastore.instance_state.instance_op(map_op.clone());
-                
-                // Remove the instance from the user's owned instances
-                account.remove_owned_instance(&instance_id);
-                let account_op = datastore.account_state.update_account_local(account);
-                if let Err(e) = datastore.handle_account_op(account_op).await {
-                    log::error!("Failed to update account after instance deletion: {}", e);
-                    // Continue anyway since the instance is deleted
-                }
-                
-                // Broadcast the delete operation
-                let broadcast_request = InstanceRequest::Op(map_op);
-                if let Err(e) = datastore.broadcast::<Response<Instance>>(broadcast_request, &format!("/instance/{}/delete", instance_id)).await {
-                    log::error!("Error broadcasting Delete Instance request: {}", e);
-                }
-                
-                // Write to persistent storage
-                let _ = write_datastore(&DB_HANDLE, &datastore.clone());
-                
-                return (
-                    StatusCode::OK,
-                    Json(json!({
-                        "success": true,
-                        "message": format!("Successfully deleted instance {}", instance_id)
-                    }))
-                );
-            },
-            None => {
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({
-                        "success": false,
-                        "error": "Account not found"
-                    }))
-                );
-            }
+    // Get the address of the authenticated user
+    let user_address = recovered.as_hex();
+    
+    // Check if this is a request from an admin node with an original user address
+    let effective_address = if datastore.network_state.is_admin_address(&user_address.clone()) {
+        // If it's an admin node, extract the original user address from the payload
+        if let Some(Json(p)) = &payload {
+            crate::auth::extract_original_user_address(p)
+                .unwrap_or_else(|| user_address.clone())
+        } else {
+            user_address.clone()
         }
     } else {
-        return (
+        user_address.clone()
+    };
+    
+    // Check if the instance exists
+    let existing_instance = datastore.instance_state.get_instance(instance_id.clone());
+    if let Some(existing_instance) = existing_instance {
+        // Verify ownership unless the request is from an admin
+        if existing_instance.instance_owner.to_lowercase() != effective_address.to_lowercase() && 
+           !datastore.network_state.is_admin_address(&user_address) {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({
+                    "error": "You don't have permission to delete this instance"
+                })),
+            );
+        }
+        
+        // Delete the instance
+        let op = datastore.instance_state.remove_instance_local(instance_id.clone());
+        if let Err(e) = datastore.handle_instance_op(op).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": format!("Failed to delete instance: {}", e)
+                })),
+            );
+        }
+        
+        (
+            StatusCode::OK,
+            Json(json!({
+                "status": "success",
+                "message": "Instance deleted successfully"
+            })),
+        )
+    } else {
+        (
             StatusCode::NOT_FOUND,
             Json(json!({
-                "success": false,
-                "error": format!("Instance with id {} does not exist", instance_id)
-            }))
-        );
+                "error": "Instance not found"
+            })),
+        )
     }
 }
 

@@ -112,3 +112,11 @@ pub fn extract_user_info(claims: &DynamicClaims) -> (String, Option<String>) {
     let email = claims.email.clone();
     (user_id, email)
 }
+
+/// Extract the original user address from the request body if present
+/// This is used when an admin node is making a request on behalf of a user
+pub fn extract_original_user_address(body: &serde_json::Value) -> Option<String> {
+    body.get("original_user_address")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}

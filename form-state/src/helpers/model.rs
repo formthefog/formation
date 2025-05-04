@@ -9,6 +9,7 @@ use axum::response::IntoResponse;
 use chrono::Utc;
 use serde_json::json;
 use crate::auth::RecoveredAddress;
+use crate::model::AIModel;
 
 // Helper function to determine if an address belongs to an admin
 // This would ideally be replaced with a proper role-based system
@@ -21,281 +22,217 @@ fn is_admin_address(address: &str) -> bool {
 pub async fn create_model(
     State(state): State<Arc<Mutex<DataStore>>>,
     recovered: RecoveredAddress,
-    Json(model_data): Json<ModelRequest>,
+    Json(payload): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    log::info!("Account {} is attempting to create a new model", recovered.as_hex());
+    let mut datastore = state.lock().await;
     
-    // Validate the model data
-    let model_id = match &model_data {
-        ModelRequest::Create(model) => {
-            if model.name.is_empty() {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({
-                        "success": false,
-                        "error": "Model name cannot be empty"
-                    }))
-                );
-            }
-            model.model_id.clone()
-        },
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "success": false,
-                    "error": "Invalid request type for model creation"
-                }))
-            );
-        }
+    // Get the address of the authenticated user
+    let user_address = recovered.as_hex();
+    
+    // Check if this is a request from an admin node with an original user address
+    let effective_address = if datastore.network_state.is_admin_address(&user_address) {
+        // If it's an admin node, extract the original user address from the payload
+        crate::auth::extract_original_user_address(&payload)
+            .unwrap_or_else(|| user_address.clone())
+    } else {
+        // If it's a regular user, use their address
+        user_address
     };
     
-    // Check for duplicate model ID/name
-    let mut datastore = state.lock().await;
-    if let Some(existing) = datastore.model_state.get_model(&model_id) {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({
-                "success": false,
-                "error": format!("Model with ID {} already exists", model_id),
-                "existing_model": existing
-            }))
-        );
-    }
+    // Parse the model data from the payload
+    let model_data: Result<AIModel, serde_json::Error> = serde_json::from_value(payload.clone());
     
-    // Get or create account for the user
-    let account_address = recovered.as_hex();
-    let mut account = match datastore.account_state.get_account(&account_address) {
-        Some(acc) => acc,
-        None => {
-            // Create a new account if it doesn't exist
-            let new_account = crate::accounts::Account::new(account_address.clone());
-            let op = datastore.account_state.update_account_local(new_account.clone());
-            if let Err(_) = datastore.handle_account_op(op).await {
+    match model_data {
+        Ok(mut model) => {
+            // Ensure the model has the correct owner set to the authenticated user
+            model.owner_id = effective_address.to_lowercase();
+            
+            // Create and apply the model update
+            let op = datastore.model_state.update_model_local(model.clone());
+            if let Err(e) = datastore.handle_model_op(op).await {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({
-                        "success": false,
-                        "error": "Failed to create new account"
-                    }))
+                        "error": format!("Failed to create model: {}", e)
+                    })),
                 );
             }
-            new_account
-        }
-    };
-    
-    // Set the owner to the current account
-    let model = match model_data {
-        ModelRequest::Create(mut model) => {
-            model.owner_id = account_address.clone();
-            model.created_at = Utc::now().timestamp();
-            model.updated_at = Utc::now().timestamp();
-            model
+            
+            (
+                StatusCode::CREATED,
+                Json(json!({
+                    "status": "success",
+                    "model": model
+                })),
+            )
         },
-        _ => unreachable!(), // We already checked this above
-    };
-    
-    // Create the model in the datastore
-    let op = datastore.model_state.update_model_local(model.clone());
-    
-    // Apply the operation
-    if let Err(e) = datastore.handle_model_op(op.clone()).await {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
             Json(json!({
-                "success": false,
-                "error": format!("Failed to create model: {}", e)
-            }))
-        );
+                "error": format!("Invalid model data: {}", e)
+            })),
+        ),
     }
-    
-    // Add model to account's owned models
-    account.add_owned_model(model.model_id.clone());
-    let account_op = datastore.account_state.update_account_local(account);
-    if let Err(e) = datastore.handle_account_op(account_op).await {
-        log::error!("Failed to update account with owned model: {}", e);
-    }
-    
-    // Return success with the created model
-    (
-        StatusCode::CREATED,
-        Json(json!({
-            "success": true,
-            "message": format!("Model {} created successfully", model.model_id),
-            "model": model
-        }))
-    )
 }
 
 pub async fn update_model(
     State(state): State<Arc<Mutex<DataStore>>>,
     recovered: RecoveredAddress,
-    Json(model_data): Json<ModelRequest>,
+    Json(payload): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    log::info!("Account {} is attempting to update a model", recovered.as_hex());
-    
-    // Ensure we have a valid update request
-    let model_id = match &model_data {
-        ModelRequest::Update(model) => model.model_id.clone(),
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "success": false,
-                    "error": "Invalid request type for model update"
-                }))
-            );
-        }
-    };
-    
-    // Get the existing model
     let mut datastore = state.lock().await;
-    let existing_model = match datastore.model_state.get_model(&model_id) {
-        Some(model) => model,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({
-                    "success": false,
-                    "error": format!("Model with ID {} not found", model_id)
-                }))
-            );
-        }
+    
+    // Get the address of the authenticated user
+    let user_address = recovered.as_hex();
+    
+    // Check if this is a request from an admin node with an original user address
+    let effective_address = if datastore.network_state.is_admin_address(&user_address.clone()) {
+        // If it's an admin node, extract the original user address from the payload
+        crate::auth::extract_original_user_address(&payload)
+            .unwrap_or_else(|| user_address.clone())
+    } else {
+        // If it's a regular user, use their address
+        user_address.clone()
     };
     
-    // Get the account address
-    let account_address = recovered.as_hex();
+    // Parse the model data from the payload
+    let model_data: Result<AIModel, serde_json::Error> = serde_json::from_value(payload.clone());
     
-    // Verify ownership - only the owner can update
-    if existing_model.owner_id != account_address {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "success": false,
-                "error": "You do not have permission to update this model"
-            }))
-        );
-    }
-    
-    // Update the model
-    let updated_model = match model_data {
-        ModelRequest::Update(mut model) => {
-            // Preserve owner and creation timestamp
-            model.owner_id = existing_model.owner_id.clone();
-            model.created_at = existing_model.created_at;
-            // Update the timestamp
-            model.updated_at = Utc::now().timestamp();
-            model
+    match model_data {
+        Ok(model) => {
+            // Check if the model exists
+            let existing_model = datastore.model_state.get_model(&model.model_id);
+            if let Some(existing_model) = existing_model {
+                // Verify ownership unless the request is from an admin
+                if existing_model.owner_id.to_lowercase() != effective_address.to_lowercase() && 
+                   !datastore.network_state.is_admin_address(&user_address) {
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(json!({
+                            "error": "You don't have permission to update this model"
+                        })),
+                    );
+                }
+                
+                // Create and apply the model update
+                let op = datastore.model_state.update_model_local(model.clone());
+                if let Err(e) = datastore.handle_model_op(op).await {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({
+                            "error": format!("Failed to update model: {}", e)
+                        })),
+                    );
+                }
+                
+                (
+                    StatusCode::OK,
+                    Json(json!({
+                        "status": "success",
+                        "model": model
+                    })),
+                )
+            } else {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({
+                        "error": "Model not found"
+                    })),
+                )
+            }
         },
-        _ => unreachable!(), // We already checked this above
-    };
-    
-    // Create the model update operation
-    let op = datastore.model_state.update_model_local(updated_model.clone());
-    
-    // Apply the operation
-    if let Err(e) = datastore.handle_model_op(op.clone()).await {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
             Json(json!({
-                "success": false,
-                "error": format!("Failed to update model: {}", e)
-            }))
-        );
+                "error": format!("Invalid model data: {}", e)
+            })),
+        ),
     }
-    
-    // Return success with the updated model
-    (
-        StatusCode::OK,
-        Json(json!({
-            "success": true,
-            "message": format!("Model {} updated successfully", model_id),
-            "model": updated_model
-        }))
-    )
 }
 
 pub async fn delete_model(
     State(state): State<Arc<Mutex<DataStore>>>,
     recovered: RecoveredAddress,
-    Json(model_data): Json<ModelRequest>,
+    Json(payload): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    log::info!("Account {} is attempting to delete a model", recovered.as_hex());
-    
-    // Ensure we have a valid delete request
-    let model_id = match &model_data {
-        ModelRequest::Delete(id) => id.clone(),
-        _ => {
+    // Extract the model ID from the payload
+    let model_id = match payload.get("id") {
+        Some(id) => match id.as_str() {
+            Some(s) => s.to_string(),
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "error": "Invalid model ID format"
+                    })),
+                );
+            }
+        },
+        None => {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({
-                    "success": false,
-                    "error": "Invalid request type for model deletion"
-                }))
+                    "error": "Model ID is required"
+                })),
             );
         }
     };
     
-    // Get the existing model to verify ownership
     let mut datastore = state.lock().await;
-    let existing_model = match datastore.model_state.get_model(&model_id) {
-        Some(model) => model,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({
-                    "success": false,
-                    "error": format!("Model with ID {} not found", model_id)
-                }))
-            );
-        }
+    
+    // Get the address of the authenticated user
+    let user_address = recovered.as_hex();
+    
+    // Check if this is a request from an admin node with an original user address
+    let effective_address = if datastore.network_state.is_admin_address(&user_address.clone()) {
+        // If it's an admin node, extract the original user address from the payload
+        crate::auth::extract_original_user_address(&payload)
+            .unwrap_or_else(|| user_address.clone())
+    } else {
+        // If it's a regular user, use their address
+        user_address.clone()
     };
     
-    // Get the account address
-    let account_address = recovered.as_hex();
-    
-    // Verify ownership - only the owner can delete
-    if existing_model.owner_id != account_address {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "success": false,
-                "error": "You do not have permission to delete this model"
-            }))
-        );
-    }
-    
-    // Create the model deletion operation
-    let op = datastore.model_state.remove_model_local(model_id.clone());
-    
-    // Apply the operation
-    if let Err(e) = datastore.handle_model_op(op.clone()).await {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "success": false,
-                "error": format!("Failed to delete model: {}", e)
-            }))
-        );
-    }
-    
-    // Get the account to remove the model from owned models
-    if let Some(mut account) = datastore.account_state.get_account(&account_address) {
-        account.remove_owned_model(&model_id);
-        let account_op = datastore.account_state.update_account_local(account);
-        if let Err(e) = datastore.handle_account_op(account_op).await {
-            log::error!("Failed to update account after model deletion: {}", e);
+    // Check if the model exists
+    let existing_model = datastore.model_state.get_model(&model_id.clone());
+    if let Some(existing_model) = existing_model {
+        // Verify ownership unless the request is from an admin
+        if existing_model.owner_id.to_lowercase() != effective_address.to_lowercase() && 
+           !datastore.network_state.is_admin_address(&user_address) {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({
+                    "error": "You don't have permission to delete this model"
+                })),
+            );
         }
+        
+        // Delete the model
+        let op = datastore.model_state.remove_model_local(model_id.clone());
+        if let Err(e) = datastore.handle_model_op(op).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": format!("Failed to delete model: {}", e)
+                })),
+            );
+        }
+        
+        (
+            StatusCode::OK,
+            Json(json!({
+                "status": "success",
+                "message": "Model deleted successfully"
+            })),
+        )
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": "Model not found"
+            })),
+        )
     }
-    
-    // Return success
-    (
-        StatusCode::OK,
-        Json(json!({
-            "success": true,
-            "message": format!("Model {} deleted successfully", model_id)
-        }))
-    )
 }
 
 /// Get information about a specific AI model
