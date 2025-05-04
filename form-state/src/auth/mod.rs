@@ -1,30 +1,114 @@
-//! Authentication module for Form Network services
+pub mod ecdsa;
 
-pub mod config;
-pub mod jwks;
-pub mod claims;
-pub mod middleware;
-pub mod permissions;
-
-pub use config::AuthConfig;
-pub use jwks::JWKSManager;
-pub use claims::{DynamicClaims, UserRole};
-pub use middleware::{
-    jwt_auth_middleware, JwtClaims, AuthError,
-    AdminClaims, DeveloperOrAdminClaims, DeveloperOnlyClaims, ProjectRoleExtractor,
-    verify_project_access, verify_role, verify_project_and_role,
-    get_wallet_address, get_user_email, is_token_valid,
-    verify_project_path_access, create_auth_error_response,
-    extract_token_from_header, has_resource_access, extract_user_info,
-    create_role_rejection, create_project_rejection, create_access_rejection
+pub use ecdsa::{
+    RecoveredAddress,
+    OptionalRecoveredAddress,
+    SignatureError,
+    ecdsa_auth_middleware,
+    extract_signature_parts,
+    recover_address,
 };
-pub use permissions::{
-    Operation, Owned, ProjectScoped,
-    can_perform_operation, can_perform_project_operation,
-    can_manage_model, can_view_models, can_deploy_model,
-    can_manage_agent, can_view_agents, can_deploy_agent,
-    can_manage_billing, can_view_billing, can_modify_subscription,
-    can_manage_users, can_view_system_stats, can_configure_system,
-    can_manage_project_access, can_delete_project,
-    has_owner_or_admin_access, check_custom_access, can_manage_resource
-}; 
+
+// Placeholder implementations to make the codebase compile
+// These will be replaced with ECDSA-based authentication
+use serde::{Serialize, Deserialize};
+use axum::{
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    Json,
+};
+
+// JWT Claims placeholder
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DynamicClaims {
+    pub sub: String,
+    pub dynamic_user_id: Option<String>,
+    pub email: Option<String>,
+    pub role: Option<String>,
+}
+
+impl DynamicClaims {
+    pub fn user_role(&self) -> Option<UserRole> {
+        self.role.as_ref().and_then(|r| r.parse().ok())
+    }
+    
+    pub fn email(&self) -> Option<&str> {
+        self.email.as_deref()
+    }
+}
+
+// Error type for authentication
+#[derive(Debug)]
+pub enum AuthError {
+    Unauthorized,
+    Forbidden,
+    InvalidToken,
+    MissingClaims,
+}
+
+impl IntoResponse for AuthError {
+    fn into_response(self) -> Response {
+        let status = match self {
+            Self::Unauthorized => StatusCode::UNAUTHORIZED,
+            Self::Forbidden => StatusCode::FORBIDDEN,
+            Self::InvalidToken => StatusCode::UNAUTHORIZED, 
+            Self::MissingClaims => StatusCode::UNAUTHORIZED,
+        };
+        
+        let body = Json(serde_json::json!({
+            "error": format!("{:?}", self)
+        }));
+        
+        (status, body).into_response()
+    }
+}
+
+// User role enum
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum UserRole {
+    Admin,
+    Developer,
+    User,
+}
+
+impl std::str::FromStr for UserRole {
+    type Err = ();
+    
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "admin" => Ok(Self::Admin),
+            "developer" => Ok(Self::Developer),
+            "user" => Ok(Self::User),
+            _ => Err(()),
+        }
+    }
+}
+
+// Path access verification helper
+pub fn verify_project_path_access(claims: &DynamicClaims, project_id: &str) -> Result<(), AuthError> {
+    // In a real implementation, this would check project access
+    // For now, just allow access
+    Ok(())
+}
+
+// Resource access verification helper
+pub fn has_resource_access(claims: &DynamicClaims, resource_id: &str) -> bool {
+    // In a real implementation, this would check resource access
+    // For now, just allow access
+    true
+}
+
+// Role verification helper
+pub fn verify_role(claims: &DynamicClaims, required_role: UserRole) -> Result<(), AuthError> {
+    match claims.user_role() {
+        Some(role) if role == required_role => Ok(()),
+        _ => Err(AuthError::Forbidden),
+    }
+}
+
+// Extract user info helper
+pub fn extract_user_info(claims: &DynamicClaims) -> (String, Option<String>) {
+    let user_id = claims.sub.clone();
+    let email = claims.email.clone();
+    (user_id, email)
+}

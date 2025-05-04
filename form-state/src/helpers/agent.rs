@@ -1,8 +1,7 @@
 use crate::datastore::{AccountRequest, AgentRequest, DataStore, DB_HANDLE};
 use crate::db::write_datastore;
 use crate::agent::*;
-use crate::auth::JwtClaims;
-use crate::api_keys::ApiKeyAuth;
+use crate::auth::RecoveredAddress;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use axum::{extract::{State, Path}, Json};
@@ -91,18 +90,36 @@ pub async fn list_agent(
 /// Handler for hiring an agent
 pub async fn agent_hire(
     State(state): State<Arc<Mutex<DataStore>>>,
-    auth: ApiKeyAuth,
+    recovered: RecoveredAddress,  // Use RecoveredAddress from ECDSA auth
     Path(agent_id): Path<String>,
     Json(payload): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    log::info!("User {} is attempting to hire agent {}", auth.account.address, agent_id);
+    log::info!("User {} is attempting to hire agent {}", recovered.as_hex(), agent_id);
     
     let mut datastore = state.lock().await;
     
     // Check if the agent exists
     if let Some(agent) = datastore.agent_state.get_agent(&agent_id) {
-        // Get the account from ApiKeyAuth
-        let mut account = auth.account.clone();
+        // Get or create an account using the recovered address
+        let account_address = recovered.as_hex();
+        let mut account = match datastore.account_state.get_account(&account_address) {
+            Some(acc) => acc,
+            None => {
+                // Create a new account if it doesn't exist
+                let new_account = crate::accounts::Account::new(account_address);
+                let op = datastore.account_state.update_account_local(new_account.clone());
+                if let Err(_) = datastore.handle_account_op(op).await {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({
+                            "success": false,
+                            "error": "Failed to create new account"
+                        }))
+                    );
+                }
+                new_account
+            }
+        };
         
         // Add the agent to the hired agents
         account.hire_agent(agent_id.clone());

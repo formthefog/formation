@@ -18,9 +18,9 @@ use uuid::Uuid;
 use chrono::{Utc, DateTime};
 
 use crate::datastore::DataStore;
-use crate::auth::{JwtClaims, DynamicClaims};
 use crate::billing::{SubscriptionInfo, SubscriptionStatus, SubscriptionTier, UsageTracker, PeriodUsage};
 use crate::billing::stripe::{BillingStore, BillingError, BillingTransaction};
+use crate::auth::RecoveredAddress;
 
 /// Response for usage statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,10 +143,10 @@ pub struct ApiVerifySubscription {
 /// Handler for getting subscription status
 pub async fn get_subscription_status(
     State(state): State<Arc<Mutex<DataStore>>>,
-    JwtClaims(claims): JwtClaims,
+    recovered: RecoveredAddress,
 ) -> Result<Json<SubscriptionResponse>, StatusCode> {
-    // Get user ID from claims
-    let user_id = claims.sub;
+    // Get user ID from recovered address
+    let user_id = recovered.as_hex();
     
     // Get account information
     let datastore = state.lock().await;
@@ -186,10 +186,10 @@ pub async fn get_subscription_status(
 /// Handler for getting usage statistics
 pub async fn get_usage_stats(
     State(state): State<Arc<Mutex<DataStore>>>,
-    JwtClaims(claims): JwtClaims,
+    recovered: RecoveredAddress,
 ) -> Result<Json<UsageResponse>, StatusCode> {
-    // Get user ID from claims
-    let user_id = claims.sub;
+    // Get user ID from recovered address
+    let user_id = recovered.as_hex();
     
     // Get account information
     let datastore = state.lock().await;
@@ -244,11 +244,11 @@ pub async fn get_usage_stats(
 /// Handler for adding credits
 pub async fn add_credits(
     State(state): State<Arc<Mutex<DataStore>>>,
-    JwtClaims(claims): JwtClaims,
+    recovered: RecoveredAddress,
     Json(request): Json<AddCreditsRequest>,
 ) -> impl IntoResponse {
-    // Get user ID from claims
-    let user_id = claims.sub;
+    // Get user ID from recovered address
+    let user_id = recovered.as_hex();
     
     // Validate payment with Stripe if payment_intent_id is provided
     if let Some(payment_id) = &request.payment_intent_id {
