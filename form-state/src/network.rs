@@ -8,6 +8,7 @@ use tiny_keccak::{Hasher, Sha3};
 use trust_dns_proto::rr::RecordType;
 use form_dns::store::FormDnsRecord;
 use crate::Actor;
+use hex;
 
 pub type PeerOp<T> = Op<String, BFTReg<CrdtPeer<T>, Actor>, Actor>; 
 pub type CidrOp<T> = Op<String, BFTReg<CrdtCidr<T>, Actor>, Actor>;
@@ -623,6 +624,36 @@ impl NetworkState {
         for op in ops {
             self.dns_op(op);
         }
+    }
+
+    /// Check if an address is an admin in any of the peers
+    pub fn is_admin_address(&self, address: &str) -> bool {
+        // Check all peers to see if this address is an admin for any of them
+        for item in self.peers.iter() {
+            // Get the peer value if available
+            if let Some(peer_val) = item.val.1.val() {
+                let peer = peer_val.value();
+                
+                // Check if this peer is an admin and if its address matches
+                if peer.is_admin() {
+                    // Match against the peer's public key (assumed to be an address)
+                    if peer.id().to_lowercase() == address.to_lowercase() {
+                        return true;
+                    }
+                    
+                    // Also check the IP address as hex if this is a hex string (Ethereum address)
+                    // This is a temporary solution for compatibility
+                    if let Ok(peer_addr_bytes) = hex::decode(peer.ip().to_string().replace(".", "")) {
+                        let peer_addr_hex = hex::encode(peer_addr_bytes);
+                        if peer_addr_hex.to_lowercase() == address.to_lowercase() {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        
+        false
     }
 }
 

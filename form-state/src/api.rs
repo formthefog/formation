@@ -7,7 +7,7 @@ use axum::{
     routing::{post, get}, 
     middleware, 
     Json,
-    extract::{Path, State},
+    extract::{Path, State, ConnectInfo},
     response::{Response, IntoResponse},
     http::{Request, StatusCode},
     body::Body,
@@ -20,18 +20,17 @@ use crate::helpers::{
     account::*, 
     agent::*, 
     model::*,
-    api_key_handlers::*,
 };
 use crate::auth::{
-    JWKSManager, JwtClaims, jwt_auth_middleware, AuthError,
-    verify_project_path_access, has_resource_access, extract_user_info
+    AuthError,
+    verify_project_path_access, has_resource_access, extract_user_info,
+    RecoveredAddress, ecdsa_auth_middleware
 };
-use crate::api_keys::{
-    api_key_auth_middleware, ApiKeyAuth
-};
+
 use tokio::net::TcpListener;
 use serde_json::json;
 use crate::billing::middleware::EligibilityError;
+use hex;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -85,70 +84,147 @@ async fn node_auth_middleware(
         return Ok(next.run(req).await);
     }
     
-    // Get API key from headers
-    let api_key = match req.headers().get("X-Formation-API-Key") {
-        Some(key) => match key.to_str() {
-            Ok(k) => k,
-            Err(_) => return Err(StatusCode::UNAUTHORIZED),
+    // Extract headers for ECDSA verification
+    let headers = req.headers().clone();
+    
+    // Extract signature parts and verify
+    use crate::auth::{extract_signature_parts, recover_address, SignatureError};
+    
+    // Extract and verify the signature
+    let (signature_bytes, recovery_id, message) = match extract_signature_parts(&headers) {
+        Ok(parts) => parts,
+        Err(SignatureError::MissingSignature) => {
+            log::warn!("Authentication failed: Missing signature");
+            return Err(StatusCode::UNAUTHORIZED);
         },
-        None => return Err(StatusCode::UNAUTHORIZED),
+        Err(_) => {
+            log::warn!("Authentication failed: Invalid signature format");
+            return Err(StatusCode::UNAUTHORIZED);
+        }
     };
     
-    // Get node ID from header if available
-    let node_id = req.headers()
-        .get("X-Formation-Node-ID")
-        .and_then(|v| v.to_str().ok());
-        
-    // Check trusted keys in environment
-    let trusted_keys_str = std::env::var("TRUSTED_OPERATOR_KEYS").unwrap_or_default();
-    let trusted_keys: Vec<_> = trusted_keys_str
-        .split(',')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect();
-        
-    // Allow if API key is in trusted keys
-    if trusted_keys.contains(&api_key) {
-        log::info!("Authentication successful with trusted key");
-        return Ok(next.run(req).await);
-    }
-    
-    // If a node ID is provided, check if the node exists and the key matches
-    if let Some(id) = node_id {
-        let datastore = state.lock().await;
-        if let Some(node) = datastore.node_state.get_node(id.to_string()) {
-            if node.has_operator_key(api_key) {
-                log::info!("Node {} authenticated successfully with key", id);
-                return Ok(next.run(req).await);
-            }
+    // Recover the address from the signature
+    let address = match recover_address(&signature_bytes, recovery_id, &message) {
+        Ok(addr) => addr,
+        Err(_) => {
+            log::warn!("Authentication failed: Could not recover address from signature");
+            return Err(StatusCode::UNAUTHORIZED);
         }
-    }
+    };
     
-    // Authentication failed
-    log::warn!("Authentication failed: Invalid API key");
-    Err(StatusCode::UNAUTHORIZED)
+    // Convert address to hex string
+    let address_hex = hex::encode(address.as_slice());
+    log::debug!("Recovered address from signature: 0x{}", address_hex);
+        
+    // Lock the datastore to check admin status
+    let datastore = state.lock().await;
+    
+    // Check if this address belongs to an admin node
+    let is_admin = datastore.network_state.is_admin_address(&address_hex);
+    
+    if is_admin {
+        log::info!("Node authentication successful: Address 0x{} is an admin", address_hex);
+        Ok(next.run(req).await)
+    } else {
+        log::warn!("Authentication failed: Address 0x{} is not an admin", address_hex);
+        Err(StatusCode::UNAUTHORIZED)
+    }
 }
 
 // Helper function to check if a request is coming from localhost
 pub fn is_localhost_request(req: &Request<Body>) -> bool {
+    log::info!("Checking if request is from localhost");
+    
+    // Check from connection info (direct connections)
     if let Some(addr) = req.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>() {
         let ip = addr.ip();
-        return ip.is_loopback();
+        log::info!("  Connection info IP: {}", ip);
+        if ip.is_loopback() {
+            log::info!("  Localhost detected via connection info (loopback)");
+            return true;
+        }
+    } else {
+        log::info!("  No connection info available");
     }
     
-    // If we can't determine the address, check headers for proxy info
+    // Check headers for proxy info
     if let Some(forwarded) = req.headers().get("x-forwarded-for") {
         if let Ok(addr) = forwarded.to_str() {
-            return addr == "127.0.0.1" || addr == "::1";
+            let first_ip = addr.split(',').next().unwrap_or("").trim();
+            log::info!("  X-Forwarded-For header: {}", first_ip);
+            if first_ip == "127.0.0.1" || first_ip == "::1" || first_ip.starts_with("localhost") {
+                log::info!("  Localhost detected via X-Forwarded-For");
+                return true;
+            }
+        } else {
+            log::info!("  X-Forwarded-For header exists but couldn't be parsed");
+        }
+    } else {
+        log::info!("  No X-Forwarded-For header");
+    }
+    
+    // Check if host header indicates localhost
+    if let Some(host) = req.headers().get("host") {
+        if let Ok(host_str) = host.to_str() {
+            log::info!("  Host header: {}", host_str);
+            if host_str.starts_with("localhost:") || host_str == "localhost" || host_str.starts_with("127.0.0.1") || host_str.starts_with("::1") {
+                log::info!("  Localhost detected via Host header");
+                return true;
+            }
+        } else {
+            log::info!("  Host header exists but couldn't be parsed");
+        }
+    } else {
+        log::info!("  No Host header");
+    }
+    
+    log::info!("  Not a localhost request");
+    false
+}
+
+// Helper function to determine if a path is for a public endpoint
+pub fn is_public_endpoint(path: &str) -> bool {
+    log::info!("Checking if path '{}' is a public endpoint", path);
+    
+    // List of paths that are safe for public access
+    let public_paths = [
+        // Agents endpoints
+        "/agents",
+        "/agents/",
+        "/agent/",
+        
+        // Instance endpoints
+        "/instances",
+        "/instance/list",
+        "/instance/",
+        
+        // Model endpoints
+        "/models",
+        "/models/",
+        "/model/",
+        
+        // Account endpoints (minimal info only)
+        "/accounts",
+        
+        // Node endpoints
+        "/nodes",
+        "/node/list"
+    ];
+    
+    // Log all path checks for debugging
+    for &prefix in &public_paths {
+        let matches = path.starts_with(prefix);
+        log::info!("  Checking against '{}': {}", prefix, if matches { "MATCH" } else { "no match" });
+        if matches {
+            return true;
         }
     }
     
+    log::info!("  No public path match found for '{}'", path);
     false
 }
 
 pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
-    // Create the JWKS manager for JWT validation
-    let jwks_manager = Arc::new(JWKSManager::new());
     
     // Define public routes (no authentication required)
     let public_api = Router::new()
@@ -160,8 +236,18 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/bootstrap/network_state", get(network_state))
         .route("/bootstrap/peer_state", get(peer_state))
         .route("/bootstrap/cidr_state", get(cidr_state))
-        .route("/bootstrap/assoc_state", get(assoc_state));
-
+        .route("/bootstrap/assoc_state", get(assoc_state))
+        // Add read-only endpoints for non-sensitive data
+        .route("/agents", get(list_agent))
+        .route("/agents/:id", get(get_agent))
+        .route("/models", get(list_model))
+        .route("/models/:id", get(get_model))
+        .route("/node/list", get(list_nodes))
+        .route("/instance/:instance_id/metrics", get(get_instance_metrics))
+        .route("/instance/list/metrics", get(list_instance_metrics))
+        .route("/cluster/:build_id/metrics", get(get_cluster_metrics));
+    
+    // Keep the original network API routes
     let network_writers_api = Router::new()
         .route("/user/create", post(create_user))
         .route("/user/update", post(update_user))
@@ -186,7 +272,7 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
             state.clone(),
             node_auth_middleware,
         ));
-
+    
     // Define network/infrastructure routes (node authentication)
     // These routes are only accessible to Formation nodes via operator key auth
     let network_readers_api = Router::new()
@@ -212,32 +298,14 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/dns/list", get(list_dns_records))
         
         // Node management
-        .route("/node/list", get(list_nodes))
         .route("/node/:id/metrics", get(get_node_metrics))
         .route("/node/list/metrics", get(list_node_metrics))
         
         // Node authentication key management
         .route("/node/:id/operator-key", post(add_node_operator_key))
         .route("/node/:id/operator-key/:key", post(remove_node_operator_key));
-    
-    // Define account/user management routes (JWT authentication required)
+        
     let account_api = Router::new()
-        // Authentication test endpoints
-        .route("/auth/test", get(protected_handler))
-        .route("/projects/:project_id/resources/:resource_id", get(project_resource_handler))
-        
-        // Instance management
-        .route("/instance/create", post(create_instance))
-        .route("/instance/update", post(update_instance))
-        .route("/instance/:instance_id/get", get(get_instance))
-        .route("/instance/:build_id/get_by_build_id", get(get_instance_by_build_id))
-        .route("/instance/:build_id/get_instance_ips", get(get_instance_ips))
-        .route("/instance/:instance_id/delete", post(delete_instance))
-        .route("/instance/:instance_id/metrics", get(get_instance_metrics))
-        .route("/instance/list/metrics", get(list_instance_metrics))
-        .route("/cluster/:build_id/metrics", get(get_cluster_metrics))
-        .route("/instance/list", get(list_instances))
-        
         // Account management
         .route("/account/:address/get", get(get_account))
         .route("/account/list", get(list_accounts))
@@ -245,49 +313,45 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/account/update", post(update_account))
         .route("/account/delete", post(delete_account))
         .route("/account/transfer-ownership", post(transfer_instance_ownership))
-        
-        // API key management
-        .route("/api-keys", get(list_api_keys_handler))
-        .route("/api-keys/create", post(create_api_key_handler))
-        .route("/api-keys/:id", get(get_api_key_handler))
-        .route("/api-keys/:id/revoke", post(revoke_api_key_handler))
-        .route("/api-keys/:id/audit-logs", get(get_api_key_audit_logs))
-        .route("/api-keys/audit-logs", get(get_account_api_key_audit_logs))
-        
-        // Billing and subscription management
-        .route("/billing/subscription", get(crate::billing::handlers::get_subscription_status))
-        .route("/billing/usage", get(crate::billing::handlers::get_usage_stats))
-        .route("/billing/checkout/process", post(crate::billing::handlers::process_stripe_checkout_session))
-        .route("/billing/credits/add", post(crate::billing::handlers::add_credits))
-        
-        // Apply JWT authentication middleware to all account management routes
+        // Apply ECDSA auth middleware to all account management routes
         .layer(middleware::from_fn_with_state(
-            jwks_manager.clone(),
-            jwt_auth_middleware,
+            state.clone(),
+            ecdsa_auth_middleware
         ));
     
+    // User-authenticated instance API routes 
+    let instance_api = Router::new()
+        .route("/instance/create", post(create_instance))
+        .route("/instance/update", post(update_instance))
+        .route("/instance/:instance_id/delete", post(delete_instance))
+        .route("/instance/list", get(list_instances))
+        .route("/instance/:instance_id/get", get(get_instance))
+        .route("/instance/:build_id/get_by_build_id", get(get_instance_by_build_id))
+        .route("/instance/:build_id/get_instance_ips", get(get_instance_ips))
+        // Apply ECDSA auth middleware to all instance API routes
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            ecdsa_auth_middleware
+        ));
+
     // Define API routes (primarily for developers, using API key authentication)
     let api_routes = Router::new()
         // Agent management
-        .route("/agents/create", post(create_agent))
+        .route("/agents/create", post(create_agent_without_connect_info))
         .route("/agents/update", post(update_agent))
         .route("/agents/delete", post(delete_agent))
-        .route("/agents/:id", get(get_agent))
-        .route("/agents", get(list_agent))
         .route("/agents/:id/hire", post(checked_agent_hire))
         
         // Model management
         .route("/models/create", post(create_model))
         .route("/models/update", post(update_model))
         .route("/models/delete", post(delete_model))
-        .route("/models/:id", get(get_model))
-        .route("/models", get(list_model))
         .route("/models/:id/inference", post(checked_model_inference))
         
-        // Apply API key authentication middleware to all API routes
+        // Apply ECDSA authentication middleware to all API routes
         .layer(middleware::from_fn_with_state(
             state.clone(),
-            api_key_auth_middleware,
+            ecdsa_auth_middleware
         ));
     
     // Merge all route groups into a single router
@@ -296,63 +360,23 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .merge(network_writers_api)  // Add the node-authenticated network API
         .merge(network_readers_api)
         .merge(account_api)
+        .merge(instance_api)  // Add the authenticated instance API
         .merge(api_routes)
         .with_state(state)
-}
-
-// Protected route handler example - requires valid JWT
-async fn protected_handler(
-    claims: JwtClaims,
-) -> Json<serde_json::Value> {
-    // Access the validated claims
-    Json(json!({
-        "message": "You have access to this protected route",
-        "user_id": claims.0.sub,
-        "project": claims.0.project_id(),
-        "role": format!("{:?}", claims.0.user_role()),
-    }))
-}
-
-// Example of a project resource handler using our helper functions
-async fn project_resource_handler(
-    claims: JwtClaims,
-    Path((project_id, resource_id)): Path<(String, String)>,
-) -> Result<Json<serde_json::Value>, AuthError> {
-    // Verify that the user has access to this project
-    verify_project_path_access(&claims.0, &project_id)?;
-    
-    // Let's assume we looked up the resource and found it belongs to this project
-    // Now we verify user has access to this specific resource
-    has_resource_access(&claims.0, &resource_id, &project_id)?;
-    
-    // For audit logging, extract user info
-    let user_info = extract_user_info(&claims.0);
-    
-    // Log the access (just printing here, but would log to file/database in a real app)
-    log::info!(
-        "User accessed resource: project_id={}, resource_id={}, user={}",
-        project_id,
-        resource_id,
-        serde_json::to_string(&user_info).unwrap_or_default()
-    );
-    
-    // Return some data about the resource
-    Ok(Json(json!({
-        "project_id": project_id,
-        "resource_id": resource_id,
-        "name": "Example Resource",
-        "description": "This is a protected resource that requires authentication and authorization",
-        "user": user_info
-    })))
 }
 
 /// Run the API server without queue processing
 pub async fn run_api(datastore: Arc<Mutex<DataStore>>) -> Result<(), Box<dyn std::error::Error>> {
     let router = app(datastore.clone());
-    let listener = TcpListener::bind("0.0.0.0:3004").await?;
-    log::info!("Running API server only...");
+    let addr = "0.0.0.0:3004".parse::<std::net::SocketAddr>()?;
     
-    if let Err(e) = axum::serve(listener, router).await {
+    let socket = tokio::net::TcpListener::bind(addr).await?;
+    log::info!("Running API server only at {}", addr);
+    
+    if let Err(e) = axum::serve(
+        socket,
+        router
+    ).await {
         eprintln!("Error serving State API Server: {e}");
         return Err(Box::new(e));
     }
@@ -394,12 +418,17 @@ pub async fn run_queue_reader(datastore: Arc<Mutex<DataStore>>, mut shutdown: to
 /// Run both the API server and queue reader
 pub async fn run(datastore: Arc<Mutex<DataStore>>, mut shutdown: tokio::sync::broadcast::Receiver<()>) -> Result<(), Box<dyn std::error::Error>> {
     let router = app(datastore.clone());
-    let listener = TcpListener::bind("0.0.0.0:3004").await?;
-    log::info!("Running datastore server with API and queue reader...");
+    let addr = "0.0.0.0:3004".parse::<std::net::SocketAddr>()?;
+    
+    let socket = tokio::net::TcpListener::bind(addr).await?;
+    log::info!("Running datastore server with API and queue reader at {}", addr);
     
     // Start API server
     tokio::spawn(async move {
-        if let Err(e) = axum::serve(listener, router).await {
+        if let Err(e) = axum::serve(
+            socket,
+            router
+        ).await {
             eprintln!("Error serving State API Server: {e}");
         }
     });
@@ -435,18 +464,36 @@ pub async fn run(datastore: Arc<Mutex<DataStore>>, mut shutdown: tokio::sync::br
 // Wrapper function that performs eligibility check before calling agent_hire
 async fn checked_agent_hire(
     State(state): State<Arc<Mutex<DataStore>>>,
-    auth: ApiKeyAuth,
+    recovered: RecoveredAddress,
     Path(agent_id): Path<String>,
     payload: Json<serde_json::Value>,
 ) -> Result<Response, EligibilityError> {
     // Run eligibility check first
-    let datastore = state.lock().await;
-    let account = auth.account.clone();
+    let mut datastore = state.lock().await;
+    
+    // Get the account address
+    let account_address = recovered.as_hex();
     
     // Check if the agent exists
     if datastore.agent_state.get_agent(&agent_id).is_none() {
         return Err(EligibilityError::OperationNotAllowed(format!("Agent not found: {}", agent_id)));
     }
+    
+    // Get or create the account
+    let account = match datastore.account_state.get_account(&account_address) {
+        Some(acc) => acc,
+        None => {
+            // Create a new account if it doesn't exist
+            let new_account = crate::accounts::Account::new(account_address.clone());
+            let op = datastore.account_state.update_account_local(new_account.clone());
+            if let Err(e) = datastore.handle_account_op(op).await {
+                return Err(EligibilityError::OperationNotAllowed(
+                    format!("Failed to create account: {}", e)
+                ));
+            }
+            new_account
+        }
+    };
     
     // Use the new centralized credit checking function
     use crate::billing::middleware::{check_operation_credits, OperationType};
@@ -458,20 +505,38 @@ async fn checked_agent_hire(
     drop(datastore); // Release the lock before calling handler
     
     // Call the actual handler with the account context
-    let response = agent_hire(State(state), auth, Path(agent_id), payload).await;
+    let response = agent_hire(State(state), recovered, Path(agent_id), payload).await;
     Ok(response.into_response())
 }
 
 // Wrapper function that performs eligibility check before calling model_inference
 async fn checked_model_inference(
     State(state): State<Arc<Mutex<DataStore>>>,
-    auth: ApiKeyAuth,
+    recovered: RecoveredAddress,
     Path(model_id): Path<String>, 
     Json(json_payload): Json<serde_json::Value>,
 ) -> Result<Response, EligibilityError> {
     // Run eligibility check first
-    let datastore = state.lock().await;
-    let account = auth.account.clone();
+    let mut datastore = state.lock().await;
+    
+    // Get the account address
+    let account_address = recovered.as_hex();
+    
+    // Get or create the account
+    let account = match datastore.account_state.get_account(&account_address) {
+        Some(acc) => acc,
+        None => {
+            // Create a new account if it doesn't exist
+            let new_account = crate::accounts::Account::new(account_address.clone());
+            let op = datastore.account_state.update_account_local(new_account.clone());
+            if let Err(e) = datastore.handle_account_op(op).await {
+                return Err(EligibilityError::OperationNotAllowed(
+                    format!("Failed to create account: {}", e)
+                ));
+            }
+            new_account
+        }
+    };
     
     // Extract token count from payload
     let input_tokens = json_payload.get("input_tokens")
@@ -507,7 +572,7 @@ async fn checked_model_inference(
     };
     
     // Call the actual handler with the properly typed payload
-    let response = model_inference(State(state), auth, Path(model_id), Json(typed_payload)).await;
+    let response = model_inference(State(state), recovered, Path(model_id), Json(typed_payload)).await;
     Ok(response.into_response())
 }
 

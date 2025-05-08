@@ -11,6 +11,14 @@ path = "examples/request-full-state.rs"
 name = "auth_example"
 path = "examples/auth-example.rs"
 
+[[example]]
+name = "ecdsa_auth_example"
+path = "examples/ecdsa-auth-example.rs"
+
+[[example]]
+name = "ecdsa_auth_client"
+path = "examples/ecdsa-auth-client.rs"
+
 [dependencies]
 clap = { version = "4", features = ["derive"]}
 tokio = { version = "1", features = ["full"] } 

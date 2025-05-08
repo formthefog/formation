@@ -413,60 +413,81 @@ impl VmmApi {
     }
 
     pub async fn start_api_server(&self) -> Result<(), VmmError> {
-        log::info!("Attempting to start API server");
-        let app_state = self.channel.clone();
-
-        log::info!("Establishing Routes");
+        log::info!("Starting API server on {}", self.addr);
+        
+        // Create a reference to the channel
+        let channel = self.channel.clone();
+        
+        // Define the router
         let app = Router::new()
             .route("/health", get(health_check))
-            .route("/vm/create", post(create))
-            .route("/vm/boot_complete", post(boot_complete))
-            .route("/vm/:id/boot", post(start))
-            .route("/vm/:id/delete", post(delete))
-            .route("/vm/:id/pause", post(stop))
-            .route("/vm/:id/stop", post(stop))
-            .route("/vm/:id/reboot", post(reboot))
-            .route("/vm/:id/resume", post(start))
-            .route("/vm/:id/start", post(start))
-            .route("/vm/:id/on", post(start))
-            .route("/vm/:id/power_button", post(power_button))
-            .route("/vm/:id/commit", post(commit))
-            .route("/vm/:id/update", post(commit))
-            .route("/vm/:id/snapshot", post(snapshot))
-            .route("/vm/:id/coredump", post(coredump))
-            .route("/vm/:id/restore", post(restore))
-            .route("/vm/:id/resize_vcpu", post(resize_vcpu))
-            .route("/vm/:id/resize_memory", post(resize_memory))
-            .route("/vm/:id/add_device", post(add_device))
-            .route("/vm/:id/add_disk", post(add_disk))
-            .route("/vm/:id/add_fs", post(add_fs))
-            .route("/vm/:id/remove_device", post(remove_device))
-            .route("/vm/:id/migrate_to", post(migrate_to))
-            .route("/vm/:id/migrate_from", post(migrate_from))
-            .route("/vm/:id/ping", post(ping))
-            .route("/vm/:id/info", get(get_vm))
-            .route("/vm/:id", get(get_vm))
-            .route("/vms/list", get(list))
-            .with_state(app_state);
-
-        log::info!("Established route, binding to {}", &self.addr);
-        let listener = tokio::net::TcpListener::bind(
-            self.addr.clone()).await
-            .map_err(|e| {
-                VmmError::SystemError(
-                    format!(
-                        "Failed to bind listener to address {}: {e}",
-                        self.addr.clone()
-                    )
-                )
-            })?;
-            
-        // Start the API server
-        log::info!("Starting server");
-        axum::serve(listener, app).await
-            .map_err(|e| VmmError::SystemError(format!("Failed to serve API server {e}")))?;
-
-
+            .route("/ping", post(ping))
+            .route("/create", post(create))
+            .route("/boot_complete", post(boot_complete))
+            .route("/start", post(start))
+            .route("/stop", post(stop))
+            .route("/delete", post(delete))
+            .route("/get_vm", post(get_vm))
+            .route("/list", get(list))
+            .route("/power_button", post(power_button))
+            .route("/reboot", post(reboot))
+            .route("/commit", post(commit))
+            .route("/snapshot", post(snapshot))
+            .route("/coredump", post(coredump))
+            .route("/restore", post(restore))
+            .route("/resize_vcpu", post(resize_vcpu))
+            .route("/resize_memory", post(resize_memory))
+            .route("/add_device", post(add_device))
+            .route("/add_disk", post(add_disk))
+            .route("/add_fs", post(add_fs))
+            .route("/remove_device", post(remove_device))
+            .route("/migrate_to", post(migrate_to))
+            .route("/migrate_from", post(migrate_from))
+            .with_state(channel);
+        
+        // Define protected routes that require authentication
+        let protected_routes = Router::new()
+            .route("/create", post(create))
+            .route("/boot_complete", post(boot_complete))
+            .route("/start", post(start))
+            .route("/stop", post(stop))
+            .route("/delete", post(delete))
+            .route("/get_vm", post(get_vm))
+            .route("/list", get(list))
+            .route("/power_button", post(power_button))
+            .route("/reboot", post(reboot))
+            .route("/commit", post(commit))
+            .route("/snapshot", post(snapshot))
+            .route("/coredump", post(coredump))
+            .route("/restore", post(restore))
+            .route("/resize_vcpu", post(resize_vcpu))
+            .route("/resize_memory", post(resize_memory))
+            .route("/add_device", post(add_device))
+            .route("/add_disk", post(add_disk))
+            .route("/add_fs", post(add_fs))
+            .route("/remove_device", post(remove_device))
+            .route("/migrate_to", post(migrate_to))
+            .route("/migrate_from", post(migrate_from))
+            .layer(axum::middleware::from_fn(auth::ecdsa_auth_middleware))
+            .with_state(channel);
+        
+        // Define public routes that don't require authentication
+        let public_routes = Router::new()
+            .route("/health", get(health_check))
+            .route("/ping", post(ping))
+            .with_state(channel);
+        
+        // Combine public and protected routes
+        let app = Router::new()
+            .merge(public_routes)
+            .merge(protected_routes);
+        
+        // Start the server
+        let listener = tokio::net::TcpListener::bind(&self.addr).await?;
+        axum::serve(listener, app).await.map_err(|e| {
+            VmmError::SystemError(e.to_string())
+        })?;
+        
         Ok(())
     }
 

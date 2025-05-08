@@ -106,6 +106,23 @@ impl Node {
     pub fn remove_operator_key(&mut self, key: &str) {
         self.operator_keys.retain(|k| k != key);
     }
+
+    /// Check if an address is authorized as an admin for this node
+    pub fn is_admin_address(&self, address: &str) -> bool {
+        // First check if the address matches the node owner (always admin)
+        if self.node_owner.to_lowercase() == address.to_lowercase() {
+            return true;
+        }
+        
+        // Then check if the address is in operator_keys
+        // This is a temporary solution that assumes operator keys might contain addresses
+        // In a production environment, you might want a separate field for admin addresses
+        if self.has_operator_key(address) {
+            return true;
+        }
+        
+        false
+    }
 }
 
 /// Additional metadata for operational context.

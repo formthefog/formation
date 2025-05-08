@@ -137,6 +137,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let provider = config.hosts[0].clone();
                     status_command.handle_status(provider, 3004).await?;
                 }
+                PackCommand::Wizard(wizard_command) => {
+                    let (config, keystore) = load_config_and_keystore(&parser).await?;
+                    let provider = config.hosts[0].clone();
+                    wizard_command.handle(&provider, config.pack_manager_port, config.vmm_port, Some(keystore)).await?;
+                }
             }
         }
         FormCommand::Kit(ref mut kit_command) => {

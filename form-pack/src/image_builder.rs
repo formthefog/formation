@@ -177,6 +177,7 @@ async fn handle_formfile(
     AxumPath((build_id, instance_id)): AxumPath<(String, String)>,
     Json(formfile): Json<Formfile>,
 ) -> Json<FormfileResponse> {
+    println!("Received formfile: {formfile:?}");
     let formfile = formfile;
     let workdir = formfile.workdir.clone().to_string_lossy().into_owned();
     println!("Request... Building command");
@@ -203,7 +204,7 @@ async fn handle_formfile(
 
     // Create users
     for user in &formfile.users {
-        println!("Formfile containers users, adding users...");
+        println!("Formfile contains users, adding users...");
         command = command.useradd(user);
         if !user.ssh_authorized_keys().is_empty() {
             command = command.ssh_inject(user);
