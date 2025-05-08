@@ -6,9 +6,9 @@ use reqwest::Client;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use form_types::state::{Response, Success};
-use axum::{extract::{State, Path}, Json};
+use axum::{extract::{State, Path, ConnectInfo}, Json};
 use form_vm_metrics::system::SystemMetrics;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use serde_json::json;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -23,58 +23,55 @@ fn is_admin_address(address: &str) -> bool {
 
 pub async fn create_instance(
     State(state): State<Arc<Mutex<DataStore>>>,
-    recovered: RecoveredAddress,
-    Json(payload): Json<serde_json::Value>,
+    recovered: Option<RecoveredAddress>,
+    ConnectInfo(connection_info): ConnectInfo<SocketAddr>,
+    Json(payload): Json<Instance>,
 ) -> impl IntoResponse {
     let mut datastore = state.lock().await;
     
-    // Get the address of the authenticated user
-    let user_address = recovered.as_hex();
+    let remote_addr = connection_info.to_string();
+    let is_localhost = remote_addr.starts_with("127.0.0.1") || remote_addr.starts_with("::1");
     
     // Check if this is a request from an admin node with an original user address
-    let effective_address = if datastore.network_state.is_admin_address(&user_address) {
-        // If it's an admin node, extract the original user address from the payload
-        crate::auth::extract_original_user_address(&payload)
-            .unwrap_or_else(|| user_address.clone())
+    let effective_address = if is_localhost {
+        payload.instance_owner.clone()
     } else {
         // If it's a regular user, use their address
-        user_address
+        match recovered {
+            Some(address) => address.as_hex(),
+            None => {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(
+                        json!({
+                            "error": format!("Failed to create agent: requests from remote address must included a valid recovered address")
+                        })
+                    )
+                )
+            }
+        }
     };
     
-    // Parse the instance data from the payload
-    let instance_data: Result<Instance, serde_json::Error> = serde_json::from_value(payload.clone());
-    
-    match instance_data {
-        Ok(mut instance) => {
-            // Ensure the instance has the correct owner set to the authenticated user
-            instance.instance_owner = effective_address.to_lowercase();
+    let mut instance = payload.clone();
+    instance.instance_owner = effective_address.to_lowercase();
             
-            // Create and apply the instance update
-            let op = datastore.instance_state.update_instance_local(instance.clone());
-            if let Err(e) = datastore.handle_instance_op(op).await {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({
-                        "error": format!("Failed to create instance: {}", e)
-                    })),
-                );
-            }
-            
-            (
-                StatusCode::CREATED,
-                Json(json!({
-                    "status": "success",
-                    "instance": instance
-                })),
-            )
-        },
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
+    let op = datastore.instance_state.update_instance_local(instance.clone());
+    if let Err(e) = datastore.handle_instance_op(op).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({
-                "error": format!("Invalid instance data: {}", e)
+                "error": format!("Failed to create instance: {}", e)
             })),
-        ),
+        );
     }
+            
+    (
+        StatusCode::CREATED,
+        Json(json!({
+            "status": "success",
+            "instance": instance
+        })),
+    )
 }
 
 pub async fn update_instance(

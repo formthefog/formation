@@ -4,66 +4,66 @@ use crate::agent::*;
 use crate::auth::RecoveredAddress;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use axum::{extract::{State, Path}, Json};
+use axum::{extract::{State, Path, ConnectInfo}, Json};
 use form_types::state::{Response, Success};
 use axum::http::StatusCode;
 use serde_json::json;
 use axum::response::IntoResponse;
+use std::net::SocketAddr;
 
 pub async fn create_agent(
     State(state): State<Arc<Mutex<DataStore>>>,
-    recovered: RecoveredAddress,
-    Json(payload): Json<serde_json::Value>,
+    recovered: Option<RecoveredAddress>,
+    ConnectInfo(connection_info): ConnectInfo<SocketAddr>,
+    Json(payload): Json<AIAgent>,
 ) -> impl IntoResponse {
     let mut datastore = state.lock().await;
     
-    // Get the address of the authenticated user
-    let user_address = recovered.as_hex();
+    let remote_addr = connection_info.to_string();
+    let is_localhost = remote_addr.starts_with("127.0.0.1") || remote_addr.starts_with("::1");
     
     // Check if this is a request from an admin node with an original user address
-    let effective_address = if datastore.network_state.is_admin_address(&user_address) {
+    let effective_address = if is_localhost {
         // If it's an admin node, extract the original user address from the payload
-        crate::auth::extract_original_user_address(&payload)
-            .unwrap_or_else(|| user_address.clone())
+        payload.owner_id.clone()
     } else {
         // If it's a regular user, use their address
-        user_address
-    };
-    
-    // Parse the agent data from the payload
-    let agent_data: Result<AIAgent, serde_json::Error> = serde_json::from_value(payload.clone());
-    
-    match agent_data {
-        Ok(mut agent) => {
-            // Ensure the agent has the correct owner set to the authenticated user
-            agent.owner_id = effective_address.to_lowercase();
-            
-            // Create and apply the agent update
-            let op = datastore.agent_state.update_agent_local(agent.clone());
-            if let Err(e) = datastore.handle_agent_op(op).await {
+        match recovered {
+            Some(address) => address.as_hex(),
+            None => {
                 return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({
-                        "error": format!("Failed to create agent: {}", e)
-                    })),
-                );
+                    StatusCode::UNAUTHORIZED,
+                    Json(
+                        json!({
+                            "error": format!("Failed to create agent: requests from remote address must included a valid recovered address")
+                        })
+                    )
+                )
             }
-            
-            (
-                StatusCode::CREATED,
-                Json(json!({
-                    "status": "success",
-                    "agent": agent
-                })),
-            )
-        },
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
+        }
+    };
+
+    let mut agent = payload.clone();
+    agent.owner_id = effective_address;
+    
+    // Create and apply the agent update
+    let op = datastore.agent_state.update_agent_local(agent.clone());
+    if let Err(e) = datastore.handle_agent_op(op).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({
-                "error": format!("Invalid agent data: {}", e)
+                "error": format!("Failed to create agent: {}", e)
             })),
-        ),
+        );
     }
+            
+    (
+        StatusCode::CREATED,
+        Json(json!({
+            "status": "success",
+            "agent": payload 
+        })),
+    )
 }
 
 pub async fn update_agent(
@@ -436,4 +436,41 @@ pub async fn agent_hire(
             }))
         );
     }
+}
+
+pub async fn create_agent_without_connect_info(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    recovered: Option<RecoveredAddress>,
+    Json(payload): Json<AIAgent>,
+) -> impl IntoResponse {
+    let mut datastore = state.lock().await;
+    
+    // Determine the effective user address
+    let effective_address = if let Some(recovered_addr) = recovered {
+        // For normal requests, use the recovered address
+        recovered_addr.as_hex()
+    } else {
+        // If no recovered address (which should not happen unless auth was bypassed),
+        // use the owner_id from the payload (assuming it's coming from localhost)
+        payload.owner_id.clone()
+    };
+    
+    // Create and apply the agent update
+    let op = datastore.agent_state.update_agent_local(payload.clone());
+    if let Err(e) = datastore.handle_agent_op(op).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": format!("Failed to create agent: {}", e)
+            })),
+        );
+    }
+            
+    (
+        StatusCode::CREATED,
+        Json(json!({
+            "status": "success",
+            "agent": payload 
+        })),
+    )
 }

@@ -1,6 +1,6 @@
 use axum::{
     async_trait,
-    extract::{FromRequestParts, Request},
+    extract::{FromRequestParts, Request, ConnectInfo},
     http::{request::Parts, StatusCode, HeaderMap, Method},
     response::{IntoResponse, Response},
     Json,
@@ -13,6 +13,7 @@ use sha2::{Sha256, Digest};
 use tiny_keccak::Hasher;
 use hex;
 use log;
+use std::net::SocketAddr;
 
 /// Error type for signature verification failures
 #[derive(Debug, Serialize)]
@@ -169,9 +170,23 @@ where
 
 /// Middleware function to verify ECDSA signatures
 pub async fn ecdsa_auth_middleware(
-    request: Request,
+    mut request: Request,
     next: axum::middleware::Next,
 ) -> Result<Response, SignatureError> {
+    // Check for localhost connection
+    let is_localhost = {
+        let connection_info = request.extensions().get::<ConnectInfo<SocketAddr>>();
+        let remote_addr = connection_info.map(|c| c.0.to_string()).unwrap_or("".to_string());
+        remote_addr.starts_with("127.0.0.1") || remote_addr.starts_with("::1")
+    };
+    
+    // Skip auth for localhost connections
+    if is_localhost {
+        // Add a default service identity to the request extensions
+        request.extensions_mut().insert(None::<RecoveredAddress>);
+        return Ok(next.run(request).await);
+    }
+
     // Extract headers for verification
     let headers = request.headers().clone();
     
@@ -179,7 +194,13 @@ pub async fn ecdsa_auth_middleware(
     let (signature_bytes, recovery_id, message) = extract_signature_parts(&headers)?;
     
     // Recover the address - this just verifies the signature is valid
-    let _address = recover_address(&signature_bytes, recovery_id, &message)?;
+    let address = recover_address(&signature_bytes, recovery_id, &message)?;
+    request.extensions_mut().insert(Some(
+        RecoveredAddress {
+            address,
+            message,
+        }
+    ));
     
     // Authentication successful - let the handler handle authorization
     Ok(next.run(request).await)

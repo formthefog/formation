@@ -2,9 +2,10 @@ use crate::datastore::{DataStore, DB_HANDLE, AccountRequest};
 use crate::db::write_datastore;
 use crate::accounts::*;
 use crate::auth::RecoveredAddress;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use axum::{extract::{State, Path}, Json, http::StatusCode, response::IntoResponse};
+use axum::{extract::{State, Path, ConnectInfo}, Json, http::StatusCode, response::IntoResponse};
 use serde_json::json;
 
 pub async fn list_accounts(
@@ -225,14 +226,16 @@ pub async fn create_account(
 
 pub async fn update_account(
     State(state): State<Arc<Mutex<DataStore>>>,
-    recovered: RecoveredAddress,
+    recovered: Option<RecoveredAddress>,
+    ConnectInfo(connection_info): ConnectInfo<SocketAddr>,
     Json(request): Json<AccountRequest>,
 ) -> impl IntoResponse {
     log::info!("Received account update request");
     
-    // Get the authenticated user's address
-    let authenticated_address = recovered.as_hex();
     
+    let remote_addr = connection_info.to_string();
+    let is_localhost = remote_addr.starts_with("127.0.0.1") || remote_addr.starts_with("::1");
+
     // Extract the account to be updated
     let account_address = match &request {
         AccountRequest::Update(account) => account.address.clone(),
@@ -246,22 +249,40 @@ pub async fn update_account(
             );
         }
     };
-    
-    // Only allow users to update their own account
-    if authenticated_address.to_lowercase() != account_address.to_lowercase() {
-        log::warn!("Unauthorized: Address {} attempted to update account {}", 
-                 authenticated_address, account_address);
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "success": false,
-                "error": "You can only update your own account",
-                "authenticated_as": authenticated_address,
-                "requested_update_for": account_address
-            }))
-        );
-    }
-    
+
+    let authenticated_addr = if recovered.is_none() {
+        if !is_localhost {
+            log::warn!(
+                "Unauthorized: Remote attempted to update account {} with no authenticated address", 
+                account_address
+            );
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({
+                    "success": false,
+                    "error": "You can only update your own account",
+                    "authenticated_as": "none",
+                    "requested_update_for": account_address
+                }))
+            );
+        }
+    } else {
+        let auth_addr = recovered.unwrap().as_hex();
+        if auth_addr.to_lowercase() != account_address.to_lowercase() {
+            log::warn!("Unauthorized: Address {} attempted to update account {}", 
+                     auth_addr, account_address);
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({
+                    "success": false,
+                    "error": "You can only update your own account",
+                    "authenticated_as": auth_addr,
+                    "requested_update_for": account_address
+                }))
+            );
+        }
+    };
+
     let mut datastore = state.lock().await;
     
     match request {

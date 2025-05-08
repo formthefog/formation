@@ -7,7 +7,7 @@ use axum::{
     routing::{post, get}, 
     middleware, 
     Json,
-    extract::{Path, State},
+    extract::{Path, State, ConnectInfo},
     response::{Response, IntoResponse},
     http::{Request, StatusCode},
     body::Body,
@@ -337,7 +337,7 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
     // Define API routes (primarily for developers, using API key authentication)
     let api_routes = Router::new()
         // Agent management
-        .route("/agents/create", post(create_agent))
+        .route("/agents/create", post(create_agent_without_connect_info))
         .route("/agents/update", post(update_agent))
         .route("/agents/delete", post(delete_agent))
         .route("/agents/:id/hire", post(checked_agent_hire))
@@ -368,10 +368,15 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
 /// Run the API server without queue processing
 pub async fn run_api(datastore: Arc<Mutex<DataStore>>) -> Result<(), Box<dyn std::error::Error>> {
     let router = app(datastore.clone());
-    let listener = TcpListener::bind("0.0.0.0:3004").await?;
-    log::info!("Running API server only...");
+    let addr = "0.0.0.0:3004".parse::<std::net::SocketAddr>()?;
     
-    if let Err(e) = axum::serve(listener, router).await {
+    let socket = tokio::net::TcpListener::bind(addr).await?;
+    log::info!("Running API server only at {}", addr);
+    
+    if let Err(e) = axum::serve(
+        socket,
+        router
+    ).await {
         eprintln!("Error serving State API Server: {e}");
         return Err(Box::new(e));
     }
@@ -413,12 +418,17 @@ pub async fn run_queue_reader(datastore: Arc<Mutex<DataStore>>, mut shutdown: to
 /// Run both the API server and queue reader
 pub async fn run(datastore: Arc<Mutex<DataStore>>, mut shutdown: tokio::sync::broadcast::Receiver<()>) -> Result<(), Box<dyn std::error::Error>> {
     let router = app(datastore.clone());
-    let listener = TcpListener::bind("0.0.0.0:3004").await?;
-    log::info!("Running datastore server with API and queue reader...");
+    let addr = "0.0.0.0:3004".parse::<std::net::SocketAddr>()?;
+    
+    let socket = tokio::net::TcpListener::bind(addr).await?;
+    log::info!("Running datastore server with API and queue reader at {}", addr);
     
     // Start API server
     tokio::spawn(async move {
-        if let Err(e) = axum::serve(listener, router).await {
+        if let Err(e) = axum::serve(
+            socket,
+            router
+        ).await {
             eprintln!("Error serving State API Server: {e}");
         }
     });
