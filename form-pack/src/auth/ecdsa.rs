@@ -9,11 +9,12 @@ use k256::ecdsa::{RecoveryId, Signature};
 use alloy_primitives::Address;
 use serde::Serialize;
 use serde_json::json;
-use sha2::{Sha256, Digest};
+use k256::sha2::{Sha256, Digest};
 use tiny_keccak::Hasher;
 use hex;
 use log;
 use std::sync::Arc;
+use std::net::SocketAddr;
 
 /// Error type for signature verification failures
 #[derive(Debug, Serialize)]

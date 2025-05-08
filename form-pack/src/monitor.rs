@@ -18,8 +18,6 @@ pub struct FormPackMonitor {
     build_server_id: Option<String>,
     build_server_uri: String,
     build_server_client: Client,
-    auth_token: Option<String>,
-    api_key: Option<String>,
 }
 
 impl FormPackMonitor {
@@ -32,8 +30,6 @@ impl FormPackMonitor {
             build_server_id: None,
             build_server_uri: String::new(),
             build_server_client: Client::new(),
-            auth_token: None,
-            api_key: None,
         };
 
         println!("Attempting to start build container...");
@@ -45,34 +41,8 @@ impl FormPackMonitor {
         Ok(monitor)
     }
 
-    pub async fn new_with_auth(
-        auth_token: Option<String>, 
-        api_key: Option<String>
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let mut monitor = Self::new().await?;
-        monitor.auth_token = auth_token;
-        monitor.api_key = api_key;
-        Ok(monitor)
-    }
-
     pub fn container_id(&self) -> &Option<String> {
         &self.container_id
-    }
-
-    fn add_auth_headers(&self, headers: &mut HeaderMap) {
-        if let Some(token) = &self.auth_token {
-            headers.insert(
-                reqwest::header::AUTHORIZATION, 
-                format!("Bearer {}", token).parse().unwrap()
-            );
-        }
-        
-        if let Some(api_key) = &self.api_key {
-            headers.insert(
-                "X-API-Key", 
-                api_key.parse().unwrap()
-            );
-        }
     }
 
     pub async fn build_image(
@@ -283,7 +253,6 @@ impl FormPackMonitor {
             .json(formfile);
         
         let mut headers = HeaderMap::new();
-        self.add_auth_headers(&mut headers);
         request = request.headers(headers);
         
         let resp = request.send().await?;

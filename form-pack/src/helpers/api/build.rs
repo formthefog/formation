@@ -12,8 +12,6 @@ use crate::formfile::Formfile;
 
 pub(crate) async fn handle_pack(
     State(manager): State<Arc<Mutex<FormPackManager>>>,
-    Extension(auth_token): Extension<Option<String>>,
-    Extension(api_key): Extension<Option<String>>,
     mut multipart: Multipart
 ) -> Json<PackResponse> {
     println!("Received a multipart Form, attempting to extract data...");
@@ -84,7 +82,7 @@ pub(crate) async fn handle_pack(
     };
 
     println!("Building FormPackMonitor for {} build...", formfile.name);
-    let mut monitor = match FormPackMonitor::new_with_auth(auth_token, api_key).await {
+    let mut monitor = match FormPackMonitor::new().await {
         Ok(monitor) => monitor,
         Err(e) => {
             println!("Error building monitor: {e}");

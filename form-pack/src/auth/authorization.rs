@@ -4,9 +4,10 @@ use std::error::Error;
 use std::sync::Arc;
 use log;
 use super::ecdsa::{RecoveredAddress, create_auth_client};
+use thiserror::Error;
 
-/// Error type for authorization failures
-#[derive(Debug, thiserror::Error)]
+/// Authorization errors
+#[derive(Debug, Error)]
 pub enum AuthorizationError {
     #[error("Resource not found")]
     ResourceNotFound,
@@ -18,7 +19,7 @@ pub enum AuthorizationError {
     NetworkError(String),
     
     #[error("Unknown error: {0}")]
-    Unknown(String),
+    UnknownError(String),
 }
 
 /// Authorization client for checking permissions with form-state
@@ -63,14 +64,14 @@ impl AuthorizationClient {
             StatusCode::OK => {
                 let body: serde_json::Value = response.json()
                     .await
-                    .map_err(|e| AuthorizationError::Unknown(e.to_string()))?;
+                    .map_err(|e| AuthorizationError::UnknownError(e.to_string()))?;
                 
                 // Parse the response to check if access is granted
                 if let Some(has_access) = body.get("has_access").and_then(|v| v.as_bool()) {
                     Ok(has_access)
                 } else {
                     log::error!("Unexpected response format: {:?}", body);
-                    Err(AuthorizationError::Unknown("Unexpected response format".to_string()))
+                    Err(AuthorizationError::UnknownError("Unexpected response format".to_string()))
                 }
             },
             StatusCode::NOT_FOUND => Err(AuthorizationError::ResourceNotFound),
@@ -81,7 +82,7 @@ impl AuthorizationClient {
                     response.status()
                 );
                 log::error!("{}", error_msg);
-                Err(AuthorizationError::Unknown(error_msg))
+                Err(AuthorizationError::UnknownError(error_msg))
             }
         }
     }
@@ -106,7 +107,7 @@ impl AuthorizationClient {
         
         // Add the user's address to the payload
         let mut payload_with_user = serde_json::to_value(payload)
-            .map_err(|e| AuthorizationError::Unknown(e.to_string()))?;
+            .map_err(|e| AuthorizationError::UnknownError(e.to_string()))?;
         
         if let serde_json::Value::Object(ref mut map) = payload_with_user {
             map.insert(
@@ -127,7 +128,7 @@ impl AuthorizationClient {
             StatusCode::OK | StatusCode::CREATED => {
                 response.json::<R>()
                     .await
-                    .map_err(|e| AuthorizationError::Unknown(e.to_string()))
+                    .map_err(|e| AuthorizationError::UnknownError(e.to_string()))
             },
             StatusCode::NOT_FOUND => Err(AuthorizationError::ResourceNotFound),
             StatusCode::FORBIDDEN => Err(AuthorizationError::AccessDenied),
@@ -137,7 +138,7 @@ impl AuthorizationClient {
                     response.status()
                 );
                 log::error!("{}", error_msg);
-                Err(AuthorizationError::Unknown(error_msg))
+                Err(AuthorizationError::UnknownError(error_msg))
             }
         }
     }
