@@ -7,7 +7,7 @@ use axum::{
     routing::{post, get}, 
     middleware, 
     Json,
-    extract::{Path, State, ConnectInfo},
+    extract::{Path, State},
     response::{Response, IntoResponse},
     http::{Request, StatusCode},
     body::Body,
@@ -22,12 +22,9 @@ use crate::helpers::{
     model::*,
 };
 use crate::auth::{
-    AuthError,
-    verify_project_path_access, has_resource_access, extract_user_info,
     RecoveredAddress, ecdsa_auth_middleware
 };
 
-use tokio::net::TcpListener;
 use serde_json::json;
 use crate::billing::middleware::EligibilityError;
 use hex;
@@ -238,7 +235,7 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/bootstrap/cidr_state", get(cidr_state))
         .route("/bootstrap/assoc_state", get(assoc_state))
         // Add read-only endpoints for non-sensitive data
-        .route("/agents", get(list_agent))
+        .route("/agents", get(list_agents))
         .route("/agents/:id", get(get_agent))
         .route("/models", get(list_model))
         .route("/models/:id", get(get_model))
@@ -337,7 +334,7 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
     // Define API routes (primarily for developers, using API key authentication)
     let api_routes = Router::new()
         // Agent management
-        .route("/agents/create", post(create_agent_without_connect_info))
+        .route("/agents/create", post(create_agent))
         .route("/agents/update", post(update_agent))
         .route("/agents/delete", post(delete_agent))
         .route("/agents/:id/hire", post(checked_agent_hire))
@@ -375,7 +372,7 @@ pub async fn run_api(datastore: Arc<Mutex<DataStore>>) -> Result<(), Box<dyn std
     
     if let Err(e) = axum::serve(
         socket,
-        router
+        router.into_make_service_with_connect_info::<std::net::SocketAddr>()
     ).await {
         eprintln!("Error serving State API Server: {e}");
         return Err(Box::new(e));
@@ -427,7 +424,7 @@ pub async fn run(datastore: Arc<Mutex<DataStore>>, mut shutdown: tokio::sync::br
     tokio::spawn(async move {
         if let Err(e) = axum::serve(
             socket,
-            router
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>()
         ).await {
             eprintln!("Error serving State API Server: {e}");
         }

@@ -1,7 +1,7 @@
 use axum::{
     async_trait,
     extract::{FromRequestParts, Request, ConnectInfo},
-    http::{request::Parts, StatusCode, HeaderMap, Method},
+    http::{request::Parts, StatusCode, HeaderMap},
     response::{IntoResponse, Response},
     Json,
 };
@@ -180,30 +180,26 @@ pub async fn ecdsa_auth_middleware(
         remote_addr.starts_with("127.0.0.1") || remote_addr.starts_with("::1")
     };
     
-    // Skip auth for localhost connections
-    if is_localhost {
+    let headers = request.headers().clone();
+    if let Ok((signature_bytes, recovery_id, message)) = extract_signature_parts(&headers) {
+        // Recover the address - this just verifies the signature is valid
+        let address = recover_address(&signature_bytes, recovery_id, &message)?;
+        request.extensions_mut().insert(Some(
+            RecoveredAddress {
+                address,
+                message,
+            }
+        ));
+        // Authentication successful - let the handler handle authorization
+        return Ok(next.run(request).await);
+    } else if is_localhost {
+        // Skip auth for localhost connections
         // Add a default service identity to the request extensions
         request.extensions_mut().insert(None::<RecoveredAddress>);
         return Ok(next.run(request).await);
+    } else {
+        return Err(SignatureError::MissingSignature)
     }
-
-    // Extract headers for verification
-    let headers = request.headers().clone();
-    
-    // Extract signature parts and verify
-    let (signature_bytes, recovery_id, message) = extract_signature_parts(&headers)?;
-    
-    // Recover the address - this just verifies the signature is valid
-    let address = recover_address(&signature_bytes, recovery_id, &message)?;
-    request.extensions_mut().insert(Some(
-        RecoveredAddress {
-            address,
-            message,
-        }
-    ));
-    
-    // Authentication successful - let the handler handle authorization
-    Ok(next.run(request).await)
 }
 
 #[cfg(test)]

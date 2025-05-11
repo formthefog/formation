@@ -1,7 +1,7 @@
 use axum::{
     async_trait,
-    extract::{FromRequestParts, Request},
-    http::{request::Parts, StatusCode, HeaderMap, Method},
+    extract::{FromRequestParts, Request, ConnectInfo},
+    http::{request::Parts, StatusCode, HeaderMap},
     response::{IntoResponse, Response},
     Json,
 };
@@ -13,7 +13,6 @@ use k256::sha2::{Sha256, Digest};
 use tiny_keccak::Hasher;
 use hex;
 use log;
-use std::sync::Arc;
 use std::net::SocketAddr;
 
 /// Error type for signature verification failures
@@ -171,32 +170,42 @@ where
 
 /// Middleware function to verify ECDSA signatures
 pub async fn ecdsa_auth_middleware(
-    request: Request,
+    mut request: Request,
     next: axum::middleware::Next,
 ) -> Result<Response, SignatureError> {
-    // Extract headers for verification
-    let headers = request.headers().clone();
+
+    let is_localhost = {
+        let connection_info = request.extensions().get::<ConnectInfo<SocketAddr>>();
+        let remote_addr = connection_info.map(|c| c.0.to_string()).unwrap_or("".to_string());
+        let is_loopback = remote_addr.starts_with("127.0.0.1") || remote_addr.starts_with("::1");
+        log::info!("Connection from: {}, is_loopback: {}", remote_addr, is_loopback);
+        is_loopback
+    };
     
     // Skip authentication for specific endpoints
-    if request.uri().path() == "/health" || request.uri().path() == "/ping" {
+    if request.uri().path() == "/health" || request.uri().path() == "/ping" || is_localhost {
+        log::info!("Bypassing authentication for {} (localhost: {})", request.uri().path(), is_localhost);
         return Ok(next.run(request).await);
     }
     
-    // Extract signature parts and verify
-    let (signature_bytes, recovery_id, message) = extract_signature_parts(&headers)?;
-    
-    // Recover the address - this just verifies the signature is valid
-    let address = recover_address(&signature_bytes, recovery_id, &message)?;
-    
-    // Store the recovered address in request extensions
-    let mut request = request;
-    request.extensions_mut().insert(RecoveredAddress {
-        address,
-        message: message.to_vec(),
-    });
-    
-    // Authentication successful - let the handler handle authorization
-    Ok(next.run(request).await)
+    // Extract headers for verification
+    let headers = request.headers().clone();
+
+    if let Ok((signature_bytes, recovery_id, message)) = extract_signature_parts(&headers) {
+        let address = recover_address(&signature_bytes, recovery_id, &message)?;
+        // Store the recovered address in request extensions
+        request.extensions_mut().insert(RecoveredAddress {
+            address,
+            message: message.to_vec(),
+        });
+        
+        // Authentication successful - let the handler handle authorization
+        return Ok(next.run(request).await);
+    } else if is_localhost {
+        return Ok(next.run(request).await);
+    } else {
+        return Err(SignatureError::MissingSignature);
+    }
 }
 
 /// Function to create a client that includes the signature in requests to form-state

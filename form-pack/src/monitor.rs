@@ -10,6 +10,7 @@ use bollard::{Docker, exec::CreateExecOptions, container::{DownloadFromContainer
 use crate::helpers::utils::{is_gzip, build_instance_id, get_host_bridge_ip};
 use crate::image_builder::IMAGE_PATH;
 use crate::formfile::Formfile;
+use log::{info, warn, error};
 
 pub struct FormPackMonitor {
     docker: Docker,
@@ -195,48 +196,59 @@ impl FormPackMonitor {
             ..Default::default()
         };
 
-        println!("Creating exec {exec_opts:?} to run on {container_id}");
+        info!("(Monitor) Creating exec for build server in container: {}", container_id);
         let exec = self.docker.create_exec(container_id, exec_opts).await?;
         self.build_server_id = Some(exec.id.clone());
-        println!("starting exec on {container_id}");
+        info!("(Monitor) Starting exec ID: {} in container: {}", exec.id, container_id);
         self.docker.start_exec(&exec.id, None).await?;
 
+        info!("(Monitor) Waiting 2 seconds for build server to initialize...");
         sleep(Duration::from_secs(2)).await;
 
         let max_retries = 5;
         let mut current_retry = 0;
-        let mut ping_resp = None;
+        let mut ping_success = false;
 
-        while current_retry < max_retries {
+        while current_retry < max_retries && !ping_success {
+            current_retry += 1;
+            info!("(Monitor) Pinging build server at {}: attempt {}/{}...", self.build_server_uri, current_retry, max_retries);
             match self.build_server_client
                 .post(format!("{}/ping", self.build_server_uri))
+                .timeout(Duration::from_secs(2))
                 .send()
                 .await {
-                    Ok(resp) if resp.status().is_success() => {
-                        ping_resp = Some(resp);
+                    Ok(resp) => {
+                        let status = resp.status();
+                        if status.is_success() {
+                            let ping_response_text = resp.text().await.unwrap_or_else(|e| format!("Error reading ping response text: {}", e));
+                            info!("(Monitor) Ping successful to {}. Status: {}. Body: {}", self.build_server_uri, status, ping_response_text);
+                            ping_success = true;
+                        } else {
+                            let err_text = resp.text().await.unwrap_or_else(|e| format!("Error reading ping error body: {}",e));
+                            warn!("(Monitor) Ping attempt {} to {} failed. Status: {}. Body: {}", current_retry, self.build_server_uri, status, err_text);
+                        }
                     }
-                    _ => {
-                        current_retry += 1;
-                        sleep(Duration::from_secs(1)).await;
+                    Err(e) => {
+                        warn!("(Monitor) Ping attempt {} to {} resulted in error: {}", current_retry, self.build_server_uri, e);
                     }
                 }
+            if !ping_success && current_retry < max_retries {
+                sleep(Duration::from_secs(1)).await;
+            }
         }
 
-        match ping_resp {
-            Some(r) => {
-                println!("Received response from ping: {r:?}");
-                return Ok(())
-            },
-            None => return Err(
-                Box::new(
-                    std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        "Build server never started, no response from ping request"
-                    )
+        if ping_success {
+            info!("(Monitor) Build server ping successful after {} attempts.", current_retry);
+            Ok(())
+        } else {
+            error!("(Monitor) Build server at {} never responded to ping after {} attempts.", self.build_server_uri, max_retries);
+            Err(Box::new(
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Build server at {} never responded to ping after {} attempts", self.build_server_uri, max_retries)
                 )
-            )
+            ))
         }
-
     }
 
     pub async fn execute_build(
@@ -252,7 +264,7 @@ impl FormPackMonitor {
             .post(format!("{}/{}/{}/formfile", self.build_server_uri, vm_name, instance_id))
             .json(formfile);
         
-        let mut headers = HeaderMap::new();
+        let headers = HeaderMap::new();
         request = request.headers(headers);
         
         let resp = request.send().await?;

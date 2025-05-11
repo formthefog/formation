@@ -345,7 +345,7 @@ pub struct ModelState {
 }
 
 impl ModelState {
-    pub fn new(pk: String, node_id: String) -> Self {
+    pub fn new(node_id: String, pk: String) -> Self {
         Self {
             map: Map::new(),
             pk,

@@ -5,7 +5,7 @@
 
 use axum::{
     extract::{State, Path, Json},
-    http::{Request, StatusCode, header},
+    http::{Request, StatusCode},
     middleware::Next,
     response::{Response, IntoResponse},
     body::Body,
@@ -14,7 +14,6 @@ use axum::{
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use serde_json::json;
-use thiserror::Error;
 
 use crate::datastore::DataStore;
 use crate::auth::RecoveredAddress;

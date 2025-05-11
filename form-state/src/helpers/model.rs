@@ -1,4 +1,4 @@
-use crate::datastore::{DataStore, ModelRequest};
+use crate::datastore::DataStore;
 use crate::billing::UsageTracker;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -6,7 +6,6 @@ use axum::{extract::{State, Path}, Json};
 use serde::{Serialize, Deserialize};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use chrono::Utc;
 use serde_json::json;
 use crate::auth::RecoveredAddress;
 use crate::model::AIModel;

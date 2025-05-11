@@ -50,6 +50,7 @@ k256 = { version = "0.13", features = ["ecdsa", "ecdsa-core"]}
 get_if_addrs = "0.5"
 form-config = { path = "../form-config" }
 log = "0.4"
+simple_logger = "4.3"
 regex = "1.10.2"
 actix-web = "4"
 serde_yaml = "0.9"

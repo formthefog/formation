@@ -6,6 +6,7 @@ use serde_json::Value;
 use std::io::Write;
 use serde::{Serialize, Deserialize};
 use crate::formfile::{BuildInstruction, Entrypoint, EnvScope, EnvVariable, Formfile, User};
+use log::{info, error};
 
 pub const IMAGE_PATH: &str = "/img/jammy-server-cloudimg-amd64.raw";
 
@@ -155,15 +156,17 @@ pub async fn serve_socket(_socket_path: &str) -> Result<(), Box<dyn std::error::
 }
 
 pub async fn serve(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Attempting to bind to {addr}");
+    info!("form-build-server attempting to bind to {}", addr);
 
     let router = routes();
     let listener = tokio::net::TcpListener::bind(
         addr
     ).await?;
 
+    info!("form-build-server successfully bound and listening on {}", addr);
+
     if let Err(e) = axum::serve(listener, router).await {
-        eprintln!("Error in FormPackManager API Server: {e}");
+        error!("Error in form-build-server: {}", e);
     }
 
     Ok(())
@@ -177,21 +180,19 @@ async fn handle_formfile(
     AxumPath((build_id, instance_id)): AxumPath<(String, String)>,
     Json(formfile): Json<Formfile>,
 ) -> Json<FormfileResponse> {
+    info!("Received /formfile request for build_id: {}, instance_id: {}", build_id, instance_id);
+    info!("Parsed Formfile content: {:#?}", formfile);
+
     println!("Received formfile: {formfile:?}");
     let formfile = formfile;
     let workdir = formfile.workdir.clone().to_string_lossy().into_owned();
+    info!("Target workdir for build: {}", workdir);
     println!("Request... Building command");
     let mut command = VirtCustomize::new()
-        //TODO: if a `DISK` option is provided in the formfile,
-        //increase the disk by running an exec to the container
-        //calling qemu-img resize
-        // Grow the filesystem to match the disk size
         .run_command("growpart /dev/sda 1")
         .run_command("resize2fs /dev/sda1")
         .ssh_keygen()
-        // Create the workdir in the root directory of the disk 
         .mkdir(&workdir)
-        // Update & Upgrade package manager
         .write("/etc/vm_name", &instance_id)
         .write("/etc/build_id", &build_id)
         .copy_in("/var/lib/formnet/formnet", "/usr/bin")
@@ -200,32 +201,48 @@ async fn handle_formfile(
         .run_command("apt-get -y update")
         .run_command("apt-get -y upgrade");
 
+    info!("Base virt-customize commands added.");
     println!("Built base command...");
 
     // Create users
     for user in &formfile.users {
+        info!("Processing user: {}", user.username());
         println!("Formfile contains users, adding users...");
         command = command.useradd(user);
         if !user.ssh_authorized_keys().is_empty() {
+            info!("Injecting SSH keys for user: {}", user.username());
             command = command.ssh_inject(user);
         }
     }
     
-    // Check if there's any copy intructions
-    // if not, recursively copy from 
-    // /artifacts (formpack) to WORKDIR
+    if formfile.users.is_empty() {
+        info!("No users specified in Formfile.");
+    }
+
     if no_copy(&formfile) {
-        println!("No Copy instructions found, copying entire artifacts folder...");
-        command = command.copy_in("/artifacts", &workdir)
+        info!("Formfile contains COPY instructions, processing them individually.");
+    } else {
+        info!("No COPY instructions in Formfile, will attempt to copy entire /artifacts to {}", workdir);
+        command = command.copy_in("/artifacts", &workdir);
     }
 
     for instruction in &formfile.build_instructions {
+        info!("Processing build instruction: {:?}", instruction);
         println!("Discovered instruction: {instruction:?}...");
         match instruction {
-            BuildInstruction::Install(opts) => { command = command.install(&opts.packages); },
-            BuildInstruction::Run(cmd) => { command = command.run_command(cmd); } 
+            BuildInstruction::Install(opts) => { 
+                info!("Adding install command for packages: {:?}", opts.packages);
+                command = command.install(&opts.packages);
+            },
+            BuildInstruction::Run(cmd) => { 
+                info!("Adding run command: {}", cmd);
+                command = command.run_command(cmd); 
+            } 
             BuildInstruction::Copy(from, to) => { 
-                let from = {
+                let from_str = from.to_string_lossy();
+                let to_str = to.to_string_lossy();
+                info!("Adding copy command from: {} to: {}", from_str, to_str);
+                let from_abs = {
                     match from.as_path()
                         .strip_prefix("./")
                         .or_else(|_| {
@@ -237,82 +254,90 @@ async fn handle_formfile(
                         }) {
                             Ok(f) => PathBuf::from("/artifacts").join(f.to_path_buf()).to_string_lossy().into_owned(),
                             Err(e) => {
-                                println!("Error trying to convert to absolute path: {e}");
+                                error!("Error trying to convert COPY source path to absolute: {}. Original: {}", e, from_str);
                                 return Json(FormfileResponse::Failure);
                             }
                         }
                 };
-
-                let to = to.to_string_lossy().into_owned();
-                command = command.copy_in(&from, &to) 
+                info!("Absolute COPY source: {}", from_abs);
+                command = command.copy_in(&from_abs, &to_str); 
             },
             BuildInstruction::Entrypoint(entrypoint) => {
-                let entrypoint = build_entrypoint(entrypoint);
-                if !entrypoint.is_empty() {
-                    command = command.write("/etc/systemd/system/form-app.service", &entrypoint);
+                info!("Processing ENTRYPOINT: command='{}', args='{:?}'", entrypoint.command(), entrypoint.args());
+                let entrypoint_service_content = build_entrypoint(entrypoint);
+                if !entrypoint_service_content.is_empty() {
+                    info!("Writing systemd service for entrypoint: form-app.service");
+                    command = command.write("/etc/systemd/system/form-app.service", &entrypoint_service_content);
                     command = command.chmod(644, "/etc/systemd/system/form-app.service");
                     command = command.run_command("systemctl enable form-app.service");
+                } else {
+                    info!("Entrypoint is empty, skipping systemd service creation.");
                 }
             },
-            BuildInstruction::Env(envvar) => {
+            BuildInstruction::Env(envvar) => { 
+                info!("Adding ENV: {:?}", envvar);
                 let (path, line) = add_env_var(envvar.clone()); 
-                command = command.append_line(&path, &line)
+                command = command.append_line(&path, &line);
             }
-            BuildInstruction::Expose(_) => {} 
+            BuildInstruction::Expose(_) => { 
+                info!("Processing EXPOSE (currently a no-op in virt-customize stage)");
+            } 
         }
-
         println!("added instruction: {instruction:?} to command...");
     }
 
-    println!("Adding netplan apply and formnet commands to command...");
+    info!("Finalizing virt-customize commands with netplan and formnet enablement.");
     command = command.run_command("netplan apply");
     command = command.run_command("systemctl enable formnet-join.service");
 
-    let command = match command.build() {
+    let final_virt_customize_script = match command.build() {
         Ok(cmd) => cmd,
         Err(e) => {
-            println!("Error building command {e}");
+            error!("Error building final virt-customize script: {}", e);
             return Json(FormfileResponse::Failure)
         }
     };
-    println!("Built command and args, running...");
-    println!("{command}");
+    info!("Generated virt-customize script:\n{}", final_virt_customize_script);
 
     let mut file = match std::fs::File::create("/scripts/run-virt-customize.sh") {
         Ok(f) => f,
         Err(e) => {
-            println!("Error creating script file: {e}");
+            error!("Error creating virt-customize script file: {}", e);
             return Json(FormfileResponse::Failure);
         }
     };
+    if let Err(e) = file.write_all(final_virt_customize_script.as_bytes()) {
+        error!("Error writing to virt-customize script file: {}", e);
+        return Json(FormfileResponse::Failure);
+    }
+
+    info!("Attempting to chmod +x /scripts/run-virt-customize.sh");
     let chmod_output = Command::new("chmod")
         .arg("+x")
         .arg("/scripts/run-virt-customize.sh")
         .output();
 
-    let _ = file.write_all(command.as_bytes());
-
     match chmod_output {
         Ok(op) => {
             if !op.status.success() {
-                println!("Failed to update script permissions");
+                let stderr = String::from_utf8_lossy(&op.stderr);
+                error!("Failed to update script permissions for /scripts/run-virt-customize.sh. Stderr: {}", stderr);
                 return Json(FormfileResponse::Failure);
             }
+            info!("Successfully set +x on /scripts/run-virt-customize.sh");
         }
         Err(e) => {
-            println!("Error attempting to chmod script permissions: {e}");
+            error!("Error attempting to chmod /scripts/run-virt-customize.sh: {}", e);
             return Json(FormfileResponse::Failure)
         }
     }
 
-    println!("Attempting to run virt customize script");
-
+    info!("Attempting to run /scripts/run-virt-customize.sh");
     let output = Command::new("bash")
         .arg("/scripts/run-virt-customize.sh")
-        .arg(&command)
         .output();
 
-    println!("ran virt-customize script getting output.");
+    info!("virt-customize script execution finished.");
 
     match output {
         Ok(op) => {
@@ -320,30 +345,28 @@ async fn handle_formfile(
                 let stderr = match std::str::from_utf8(&op.stderr) {
                     Ok(stderr) => stderr,
                     Err(e) => {
-                        println!("Unable to capture command exit error: {e}");
+                        error!("Unable to capture command exit error: {}", e);
                         return Json(FormfileResponse::Failure)
                     }
                 };
-                println!("{stderr}");
+                error!("{stderr}");
                 return Json(FormfileResponse::Failure);
             }
 
             let stdout = match std::str::from_utf8(&op.stdout) {
                 Ok(stdout) => stdout,
                 Err(e) => {
-                    println!("Build successful, but could not capture stdout: {e}");
+                    error!("Build successful, but could not capture stdout: {}", e);
                     return Json(FormfileResponse::Success)
                 }
             };
-            println!("{stdout}");
+            info!("{stdout}");
         }
         Err(e) => {
-            println!("Output return error: {e}");
+            error!("Output return error: {}", e);
             return Json(FormfileResponse::Failure)
         }
     }
-
-    println!("Successfully executed command...");
 
     return Json(FormfileResponse::Success);
 }

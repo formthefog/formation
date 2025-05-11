@@ -2,6 +2,7 @@ use crate::manager::FormPackManager;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use axum::{Router, routing::{post, get}, middleware};
+use std::net::SocketAddr;
 use crate::auth::ecdsa_auth_middleware;
 
 pub mod ping;
@@ -20,7 +21,10 @@ pub(crate) async fn serve(addr: String, manager: Arc<Mutex<FormPackManager>>) ->
     ).await?;
 
     println!("serving server on: {addr}");
-    if let Err(e) = axum::serve(listener, routes).await {
+    // Use the standard axum server with ConnectInfo
+    let app = routes.into_make_service_with_connect_info::<SocketAddr>();
+    
+    if let Err(e) = axum::serve(listener, app).await {
         eprintln!("Error in FormPackManager API Server: {e}");
     }
 
@@ -28,7 +32,6 @@ pub(crate) async fn serve(addr: String, manager: Arc<Mutex<FormPackManager>>) ->
 }
 
 async fn build_routes(manager: Arc<Mutex<FormPackManager>>) -> Router {
-
     // Build routes with middlewares
     let app = Router::new()
         .route("/ping", post(ping::handle_ping))

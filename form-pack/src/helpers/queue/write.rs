@@ -1,20 +1,17 @@
 
 use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
 use alloy_primitives::Address;
-use std::collections::BTreeMap;
 use std::time::{UNIX_EPOCH, SystemTime};
-use uuid::Uuid;
 use reqwest::Client;
 use tiny_keccak::{Sha3, Hasher};
 use serde::Serialize;
 use form_state::datastore::{AgentRequest, InstanceRequest, AccountRequest};
 use form_state::agent::AIAgent;
-use form_state::instances::{InstanceResources, InstanceStatus};
+use form_state::instances::InstanceStatus;
 use form_state::instances::Instance;
 use form_types::state::{Success, Response as StateResponse};
 use form_p2p::queue::{QueueResponse, QueueRequest};
 use form_p2p::queue::QUEUE_PORT;
-use crate::formfile::Formfile;
 use crate::types::status::PackBuildStatus;
 use crate::types::response::PackBuildResponse;
 use crate::types::request::PackBuildRequest;
@@ -106,7 +103,7 @@ pub async fn write_pack_status_started(
     )?; 
 
     // Create and register the AIAgent
-    let mut agent = create_new_agent_entry(
+    let agent = create_new_agent_entry(
         message.request.formfile.clone(),
         build_id.clone(),
         signer_address_hex.clone()

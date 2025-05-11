@@ -1,5 +1,4 @@
-use crate::datastore::{DataStore, DB_HANDLE, InstanceRequest};
-use crate::db::write_datastore;
+use crate::datastore::DataStore;
 use crate::instances::*;
 use crate::auth::RecoveredAddress;
 use reqwest::Client;
@@ -12,6 +11,7 @@ use std::net::{IpAddr, SocketAddr};
 use serde_json::json;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 // Helper function to determine if an address belongs to an admin
 // This would ideally be replaced with a proper role-based system
@@ -76,77 +76,111 @@ pub async fn create_instance(
 
 pub async fn update_instance(
     State(state): State<Arc<Mutex<DataStore>>>,
-    recovered: RecoveredAddress,
-    Json(payload): Json<serde_json::Value>,
+    recovered: Option<RecoveredAddress>,
+    ConnectInfo(connection_info): ConnectInfo<SocketAddr>,
+    Json(payload): Json<Instance>,
 ) -> impl IntoResponse {
+    log::info!("update_instance: Request from: {} for instance_id: {}", connection_info.to_string(), payload.instance_id);
     let mut datastore = state.lock().await;
     
-    // Get the address of the authenticated user
-    let user_address = recovered.as_hex();
-    
-    // Check if this is a request from an admin node with an original user address
-    let effective_address = if datastore.network_state.is_admin_address(&user_address.clone()) {
-        // If it's an admin node, extract the original user address from the payload
-        crate::auth::extract_original_user_address(&payload)
-            .unwrap_or_else(|| user_address.clone())
-    } else {
-        // If it's a regular user, use their address
-        user_address.clone()
+    let remote_addr = connection_info.to_string();
+    let is_localhost = remote_addr.starts_with("127.0.0.1") || remote_addr.starts_with("::1");
+
+    let existing_instance = match datastore.instance_state.get_instance(payload.instance_id.clone()) {
+        Some(inst) => inst,
+        None => {
+            log::warn!("update_instance: Instance_id {} not found for update.", payload.instance_id);
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "success": false,
+                    "error": "Instance not found"
+                })),
+            );
+        }
     };
-    
-    // Parse the instance data from the payload
-    let instance_data: Result<Instance, serde_json::Error> = serde_json::from_value(payload.clone());
-    
-    match instance_data {
-        Ok(instance) => {
-            // Check if the instance exists
-            let existing_instance = datastore.instance_state.get_instance(instance.instance_id.clone());
-            if let Some(existing_instance) = existing_instance {
-                // Verify ownership unless the request is from an admin
-                if existing_instance.instance_owner.to_lowercase() != effective_address.to_lowercase() && 
-                   !datastore.network_state.is_admin_address(&user_address) {
-                    return (
-                        StatusCode::FORBIDDEN,
-                        Json(json!({
-                            "error": "You don't have permission to update this instance"
-                        })),
-                    );
-                }
-                
-                // Create and apply the instance update
-                let op = datastore.instance_state.update_instance_local(instance.clone());
-                if let Err(e) = datastore.handle_instance_op(op).await {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({
-                            "error": format!("Failed to update instance: {}", e)
-                        })),
-                    );
-                }
-                
-                (
-                    StatusCode::OK,
-                    Json(json!({
-                        "status": "success",
-                        "instance": instance
-                    })),
-                )
-            } else {
-                (
-                    StatusCode::NOT_FOUND,
-                    Json(json!({
-                        "error": "Instance not found"
-                    })),
-                )
-            }
-        },
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(json!({
-                "error": format!("Invalid instance data: {}", e)
-            })),
-        ),
+
+    let mut can_update = false;
+    let mut is_caller_admin = false;
+    let mut authenticated_address_hex = String::new(); // For logging if needed
+
+    if is_localhost {
+        log::info!("update_instance: Request from localhost for instance_id: {}. Access granted to update.", payload.instance_id);
+        can_update = true;
+        // For localhost, effective_owner for permission check could be considered the one in the payload, assuming it's an internal trusted update.
+    } else if let Some(auth_data) = recovered.as_ref() { // Borrow to use auth_data later if needed
+        authenticated_address_hex = auth_data.as_hex();
+        let normalized_auth_address = authenticated_address_hex.to_lowercase();
+        let normalized_instance_owner = existing_instance.instance_owner.strip_prefix("0x").unwrap_or(&existing_instance.instance_owner).to_lowercase();
+        
+        is_caller_admin = datastore.network_state.is_admin_address(&authenticated_address_hex);
+
+        if normalized_auth_address == normalized_instance_owner {
+            log::info!("update_instance: User {} owns instance {}. Access granted.", authenticated_address_hex, payload.instance_id);
+            can_update = true;
+        } else if is_caller_admin {
+            log::info!("update_instance: Admin user {} updating instance {}. Access granted.", authenticated_address_hex, payload.instance_id);
+            can_update = true;
+        } else {
+            log::warn!("update_instance: User {} does not own instance {} and is not admin. Update denied.", authenticated_address_hex, payload.instance_id);
+        }
+    } else {
+        // Not localhost and no recovered address
+        log::warn!("update_instance: Unauthenticated non-localhost request for instance_id: {}. Update denied.", payload.instance_id);
     }
+
+    if !can_update {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "success": false,
+                "error": "You don't have permission to update this instance"
+            })),
+        );
+    }
+
+    // Prevent changing instance_owner unless localhost or admin
+    let normalized_payload_owner = payload.instance_owner.strip_prefix("0x").unwrap_or(&payload.instance_owner).to_lowercase();
+    let normalized_existing_owner = existing_instance.instance_owner.strip_prefix("0x").unwrap_or(&existing_instance.instance_owner).to_lowercase();
+
+    if normalized_payload_owner != normalized_existing_owner {
+        if !is_localhost && !is_caller_admin { // only admins or localhost can change owner via update
+            log::warn!(
+                "update_instance: Attempt to change instance_owner for {} from {} to {} by non-admin/non-localhost user {}. Denied.", 
+                payload.instance_id, existing_instance.instance_owner, payload.instance_owner, authenticated_address_hex
+            );
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({
+                    "success": false,
+                    "error": "Cannot change instance owner via this update. Use dedicated ownership transfer."
+                })),
+            );
+        }
+        log::info!("update_instance: Authorized change of instance_owner for {} to {} by {} (is_localhost: {}, is_admin: {}).", 
+            payload.instance_id, payload.instance_owner, authenticated_address_hex, is_localhost, is_caller_admin);
+    }
+    
+    // If localhost, the payload.instance_owner is trusted as the new owner if it's different.
+    // If not localhost, owner change is only allowed if current authenticated user is admin.
+    // The actual update of instance_owner happens when `payload` is used in `update_instance_local`.
+    let mut instance_to_update = payload; // payload is already the full Instance data
+    instance_to_update.updated_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64; // Ensure updated_at is fresh
+
+    let op = datastore.instance_state.update_instance_local(instance_to_update.clone());
+    if let Err(e) = datastore.handle_instance_op(op).await {
+        log::error!("update_instance: Failed to update instance {}: {}", instance_to_update.instance_id, e);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "error": format!("Failed to update instance: {}", e)
+            })),
+        );
+    }
+    
+    log::info!("update_instance: Instance {} updated successfully.", instance_to_update.instance_id);
+    (StatusCode::OK, Json(json!({ "success": true, "instance": instance_to_update })))
 }
 
 pub async fn get_instance(

@@ -6,20 +6,17 @@
 //! 3. Viewing usage statistics
 
 use axum::{
-    extract::{State, Path, Json},
+    extract::{State, Json},
     http::StatusCode,
-    response::{IntoResponse, Response},
+    response::IntoResponse,
 };
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use uuid::Uuid;
-use chrono::{Utc, DateTime};
 
 use crate::datastore::DataStore;
-use crate::billing::{SubscriptionInfo, SubscriptionStatus, SubscriptionTier, UsageTracker, PeriodUsage};
-use crate::billing::stripe::{BillingStore, BillingError, BillingTransaction};
+use crate::billing::{SubscriptionInfo, SubscriptionStatus, SubscriptionTier};
 use crate::auth::RecoveredAddress;
 
 /// Response for usage statistics

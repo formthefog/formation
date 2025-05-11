@@ -2,18 +2,29 @@ use std::sync::Arc;
 use std::io::Write;
 use std::fs::OpenOptions;
 use tokio::sync::Mutex;
-use axum::{Json, extract::{State, Multipart}, Extension};
+use axum::{Json, extract::{State, Multipart}};
 use tempfile::tempdir;
 use futures::{StreamExt, TryStreamExt};
-use crate::manager::FormPackManager;
+use tiny_keccak::{Sha3, Hasher};
+use crate::{auth::RecoveredAddress, manager::FormPackManager};
 use crate::types::response::PackResponse;
 use crate::monitor::FormPackMonitor;
+use crate::helpers::api::write::{write_pack_status_started, write_pack_status_failed, write_pack_status_completed};
 use crate::formfile::Formfile;
+use log::{info, error};
 
 pub(crate) async fn handle_pack(
     State(manager): State<Arc<Mutex<FormPackManager>>>,
+    recovered_address: RecoveredAddress,
     mut multipart: Multipart
 ) -> Json<PackResponse> {
+
+    let address_bytes = match hex::decode(recovered_address.as_hex()) {
+        Ok(addr_bytes) => addr_bytes,
+        Err(e) => return Json(PackResponse::Failure),
+    };
+
+
     println!("Received a multipart Form, attempting to extract data...");
     let packdir = if let Ok(td) = tempdir() {
         td
@@ -81,11 +92,19 @@ pub(crate) async fn handle_pack(
             Err(_) => return Json(PackResponse::Failure)
     };
 
-    println!("Building FormPackMonitor for {} build...", formfile.name);
+    let mut hasher = Sha3::v256();
+    let mut hash = [0u8; 32];
+    hasher.update(&address_bytes);
+    hasher.update(formfile.clone().name.as_bytes());
+    hasher.finalize(&mut hash);
+
+    let build_id_hex = hex::encode(hash);
+
+    info!("Building FormPackMonitor for agent name: {}, calculated build_id_hex: {}", formfile.name, build_id_hex);
     let mut monitor = match FormPackMonitor::new().await {
         Ok(monitor) => monitor,
         Err(e) => {
-            println!("Error building monitor: {e}");
+            error!("(handle_pack) Error building monitor: {}", e);
             return Json(PackResponse::Failure);
         }
     }; 
@@ -93,16 +112,23 @@ pub(crate) async fn handle_pack(
     let guard = manager.lock().await;
     let node_id = guard.node_id.clone();
     drop(guard);
-    println!("Attempting to build image for {}...", formfile.name);
+    
+    let _ = write_pack_status_started(formfile.clone(), build_id_hex.clone(), node_id.clone(), recovered_address.as_hex()).await;
+    info!("Attempting to build image for agent name: {}, using build_id_hex: {} as vm_name for monitor", formfile.name, build_id_hex);
+    
     match monitor.build_image(
         node_id.clone(),
-        formfile.name.clone(),
-        formfile,
+        build_id_hex.clone(),
+        formfile.clone(),
         artifacts_path,
     ).await {
-        Ok(_res) => Json(PackResponse::Success),
+        Ok(_res) => {
+            let _ = write_pack_status_completed(formfile.clone(), build_id_hex.clone(), node_id.clone(), recovered_address.as_hex()).await;
+            Json(PackResponse::Success)
+        },
         Err(e) => {
-            println!("Error building image: {e}");
+            error!("(handle_pack) Error building image: {}", e);
+            let _ = write_pack_status_failed(&formfile, recovered_address.as_hex(), build_id_hex.clone(), node_id.clone(), e.to_string()).await;
             Json(PackResponse::Failure)
         }
     }

@@ -10,92 +10,142 @@ use serde_json::json;
 
 pub async fn list_accounts(
     State(state): State<Arc<Mutex<DataStore>>>,
-    recovered: RecoveredAddress,
+    recovered: Option<RecoveredAddress>,
+    ConnectInfo(connection_info): ConnectInfo<SocketAddr>,
 ) -> impl IntoResponse {
-    log::info!("Account {} is requesting a list of all accounts", recovered.as_hex());
-    
-    // Get the authenticated user's address
-    let authenticated_address = recovered.as_hex();
-    
-    // Lock the datastore once to avoid multiple locking
+    let remote_addr = connection_info.to_string();
+    let is_localhost = remote_addr.starts_with("127.0.0.1") || remote_addr.starts_with("::1");
+
     let datastore = state.lock().await;
-    
-    // Check if the user is an admin
-    let is_admin = datastore.network_state.is_admin_address(&authenticated_address);
-    
-    if is_admin {
-        // Admin can see all accounts
-        log::info!("Admin user {} is listing all accounts", authenticated_address);
-        
+
+    if is_localhost {
+        // Localhost can see all accounts, regardless of `recovered`
+        log::info!("list_accounts: Request from localhost. Listing all accounts.");
         let mut accounts = Vec::new();
-        
-        // Get all accounts from the map
-        for ctx in datastore.account_state.map.iter() {
-            let (_, reg) = ctx.val;
-            if let Some(val) = reg.val() {
-                accounts.push(val.value());
+        for read_ctx in datastore.account_state.map.iter() {
+            let (_key, bft_register) = read_ctx.val;
+            if let Some(account_wrapper) = bft_register.val() {
+                accounts.push(account_wrapper.value());
             }
         }
-        
         return (
             StatusCode::OK,
             Json(json!({
                 "success": true,
-                "message": "Retrieved all accounts",
+                "message": "Retrieved all accounts (localhost access)",
                 "accounts": accounts,
                 "total": accounts.len()
             }))
         );
-    } else {
-        // Regular user can only see their own account
-        log::info!("Regular user {} is restricted to viewing only their own account", authenticated_address);
+    } 
+    // If not localhost, a signature (RecoveredAddress) is required
+    else if let Some(auth_data) = recovered {
+        let authenticated_address = auth_data.as_hex();
+        log::info!("list_accounts: Authenticated as {}. Checking admin status.", authenticated_address);
         
-        if let Some(account) = datastore.account_state.get_account(&authenticated_address) {
+        if datastore.network_state.is_admin_address(&authenticated_address) {
+            log::info!("list_accounts: Admin user {}. Listing all accounts.", authenticated_address);
+            let mut accounts = Vec::new();
+            for read_ctx in datastore.account_state.map.iter() {
+                let (_key, bft_register) = read_ctx.val;
+                if let Some(account_wrapper) = bft_register.val() {
+                    accounts.push(account_wrapper.value());
+                }
+            }
             return (
                 StatusCode::OK,
                 Json(json!({
                     "success": true,
-                    "message": "Retrieved your account",
-                    "accounts": [account],
-                    "total": 1
+                    "message": "Retrieved all accounts (admin access)",
+                    "accounts": accounts,
+                    "total": accounts.len()
                 }))
             );
         } else {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({
-                    "success": false,
-                    "error": "Your account was not found"
-                }))
-            );
+            log::info!("list_accounts: Regular user {}. Listing own account.", authenticated_address);
+            if let Some(account) = datastore.account_state.get_account(&authenticated_address) {
+                return (
+                    StatusCode::OK,
+                    Json(json!({
+                        "success": true,
+                        "message": "Retrieved your account",
+                        "accounts": [account],
+                        "total": 1
+                    }))
+                );
+            } else {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({
+                        "success": false,
+                        "error": "Your account was not found"
+                    }))
+                );
+            }
         }
+    } 
+    // Not localhost and no recovered address means forbidden
+    else {
+        log::warn!("list_accounts: Unauthenticated non-localhost request. Denying access.");
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "success": false,
+                "error": "Authentication required to list accounts"
+            }))
+        );
     }
 }
 
 pub async fn get_account(
     State(state): State<Arc<Mutex<DataStore>>>,
-    recovered: RecoveredAddress,
+    recovered: Option<RecoveredAddress>,
+    ConnectInfo(connection_info): ConnectInfo<SocketAddr>,
     Path(address): Path<String>
 ) -> impl IntoResponse {
-    // Get the authenticated user's address
-    let authenticated_address = recovered.as_hex();
-    log::info!("Account {} requesting account with address {}", authenticated_address, address);
-    
-    // Only allow users to access their own account
-    if authenticated_address.to_lowercase() != address.to_lowercase() {
-        log::warn!("Unauthorized: Address {} attempted to access account {}", authenticated_address, address);
+    let is_localhost = connection_info.to_string().starts_with("127.0.0.1") || connection_info.to_string().starts_with("::1");
+
+    if recovered.is_none() && !is_localhost {
+        log::warn!("Unauthorized: Non-localhost call to get_account for {} with no signature.", address);
         return (
-            StatusCode::FORBIDDEN,
+            StatusCode::UNAUTHORIZED,
             Json(json!({
                 "success": false,
-                "error": "You can only access your own account",
-                "authenticated_as": authenticated_address,
-                "requested": address
+                "error": "Missing signature for non-localhost call"
             }))
         );
     }
+
+    if let Some(auth_data) = recovered {
+        let authenticated_address = auth_data.as_hex();
+        log::info!("Account {} requesting account with address {}", authenticated_address, address);
+        
+        // Normalize both addresses for comparison: remove "0x" prefix if present and convert to lowercase
+        let normalized_authenticated_address = authenticated_address.to_lowercase();
+        let normalized_requested_address = address.strip_prefix("0x").unwrap_or(&address).to_lowercase();
+
+        // Only allow users to access their own account, unless it's a localhost call
+        if normalized_authenticated_address != normalized_requested_address && !is_localhost {
+            log::warn!("Unauthorized: Authenticated address {} (normalized: {}) attempted to access account {} (normalized: {})", 
+                authenticated_address, normalized_authenticated_address, address, normalized_requested_address);
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({
+                    "success": false,
+                    "error": "You can only access your own account",
+                    "authenticated_as": authenticated_address,
+                    "requested_address_in_path": address
+                }))
+            );
+        }
+    } else {
+        // This case is: recovered is None AND is_localhost is true
+        // OR recovered is None AND is_localhost is false (but this is handled by the first check already)
+        // So, this effectively means: is_localhost is true and no signature was provided (bypassed by middleware)
+        log::info!("Localhost call to get_account for address {}. No signature provided/checked.", address);
+    }
     
-    // Proceed with fetching the account data
+    // Proceed with fetching the account data using the original (potentially prefixed) address from path
     if let Some(account) = state.lock().await.account_state.get_account(&address) {
         log::info!("Found account with address {address}");
         return (
@@ -141,9 +191,13 @@ pub async fn create_account(
     };
     
     // Ensure users can only create accounts with their own address
-    if authenticated_address.to_lowercase() != account_to_create.address.to_lowercase() {
-        log::warn!("Unauthorized: Address {} attempted to create account for {}", 
-                  authenticated_address, account_to_create.address);
+    // Normalize both addresses by removing "0x" prefix if present, then converting to lowercase for comparison
+    let normalized_authenticated_address = authenticated_address.to_lowercase();
+    let normalized_requested_address = account_to_create.address.strip_prefix("0x").unwrap_or(&account_to_create.address).to_lowercase();
+
+    if normalized_authenticated_address != normalized_requested_address {
+        log::warn!("Unauthorized: Address {} (normalized: {}) attempted to create account for {} (normalized: {})", 
+                  authenticated_address, normalized_authenticated_address, account_to_create.address, normalized_requested_address);
         return (
             StatusCode::FORBIDDEN,
             Json(json!({
@@ -250,7 +304,7 @@ pub async fn update_account(
         }
     };
 
-    let authenticated_addr = if recovered.is_none() {
+    if recovered.is_none() {
         if !is_localhost {
             log::warn!(
                 "Unauthorized: Remote attempted to update account {} with no authenticated address", 

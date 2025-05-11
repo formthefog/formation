@@ -1,7 +1,5 @@
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
-use std::error::Error;
-use std::sync::Arc;
 use log;
 use super::ecdsa::{RecoveredAddress, create_auth_client};
 use thiserror::Error;
