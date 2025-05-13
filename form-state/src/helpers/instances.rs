@@ -13,14 +13,6 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-// Helper function to determine if an address belongs to an admin
-// This would ideally be replaced with a proper role-based system
-fn is_admin_address(address: &str) -> bool {
-    // For now, we'll use a simple check for a specific address pattern
-    // In a real system, this would query against a database or use JWT claims
-    address.to_lowercase() == "0xadmin" || address.starts_with("0x000admin")
-}
-
 pub async fn create_instance(
     State(state): State<Arc<Mutex<DataStore>>>,
     recovered: Option<RecoveredAddress>,
@@ -207,7 +199,7 @@ pub async fn get_instance(
             Some(account) => {
                 account.owned_instances.contains(&id) || 
                 account.get_authorization_level(&id).is_some() ||
-                is_admin_address(&authenticated_address)
+                datastore.network_state.is_admin_address(&authenticated_address)
             },
             None => false
         };
@@ -496,7 +488,7 @@ pub async fn list_instances(
     let datastore = state.lock().await;
     
     // Check if the user is an admin
-    let is_admin = is_admin_address(&authenticated_address);
+    let is_admin = datastore.network_state.is_admin_address(&authenticated_address);
     
     // Get the account
     let account = datastore.account_state.get_account(&authenticated_address);

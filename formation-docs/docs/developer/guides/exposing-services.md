@@ -1,1 +1,0 @@
----\nid: exposing-services\ntitle: Exposing Services Guide\nsidebar_label: Exposing Services\n---\n\n# Exposing Services Guide\n\nComing Soon\n\nThis document will provide guidance on exposing services to the internet from applications deployed on the Formation platform.

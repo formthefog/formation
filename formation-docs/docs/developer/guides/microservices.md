@@ -1,1 +1,0 @@
----\nid: microservices\ntitle: Microservices Deployment Guide\nsidebar_label: Microservices\n---\n\n# Microservices Deployment Guide\n\nComing Soon\n\nThis document will provide guidance on deploying microservices-based applications on the Formation platform.
