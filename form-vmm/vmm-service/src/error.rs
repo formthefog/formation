@@ -96,3 +96,9 @@ impl From<vmm::api::ApiError> for VmmError {
         VmmError::VmOperation(error)
     }
 }
+
+impl From<std::io::Error> for VmmError {
+    fn from(err: std::io::Error) -> Self {
+        VmmError::SystemError(format!("IO Error: {}", err))
+    }
+}

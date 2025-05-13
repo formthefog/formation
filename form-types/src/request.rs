@@ -19,40 +19,31 @@ pub struct BootCompleteRequest {
 pub struct CreateVmRequest {
     pub name: String,
     pub formfile: String,
-    pub signature: Option<String>,
-    pub recovery_id: u32,
+    pub owner: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartVmRequest {
     pub id: String,
     pub name: String,
-    pub signature: Option<String>,
-    pub recovery_id: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StopVmRequest {
     pub id: String,
     pub name: String,
-    pub signature: Option<String>,
-    pub recovery_id: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeleteVmRequest {
     pub id: String,
     pub name: String,
-    pub signature: Option<String>,
-    pub recovery_id: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetVmRequest {
     pub id: String,
     pub name: String,
-    pub signature: Option<String>,
-    pub recovery_id: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
