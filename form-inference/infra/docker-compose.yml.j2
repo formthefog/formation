@@ -1,6 +1,6 @@
 services:
   torch-runner:
-    image: runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04
+    image: pytorch/pytorch:2.4.1-cuda12.4-cudnn9-devel
     container_name: torch-runner
     restart: always
     runtime: nvidia
@@ -30,5 +30,5 @@ services:
           cd /workspace && 
           python3 -m venv venv && 
           . venv/bin/activate && 
-          pip install 'sglang[all]>=0.4.5' --find-links https://flashinfer.ai/whl/cu124/torch2.5/flashinfer-python && 
+          pip install "sglang[all]>=0.4.6.post4" && 
           tail -f /dev/null"

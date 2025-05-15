@@ -30,10 +30,10 @@
         path: "/home/{{ ansible_user }}/docker-compose.yml"
         state: absent
 
-    - name: Remove workspace directory
-      file:
-        path: "/home/{{ ansible_user }}/workspace"
-        state: absent
+    # - name: Remove workspace directory
+    #   file:
+    #     path: "/home/{{ ansible_user }}/workspace"
+    #     state: absent
 
     - name: Prune stopped containers
       shell: docker container prune -f
