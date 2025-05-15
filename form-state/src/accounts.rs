@@ -639,4 +639,4 @@ impl AccountState {
         log::info!("Building Rm Op for account deletion...");
         self.map.rm(address, rm_ctx)
     }
-} 
+}
