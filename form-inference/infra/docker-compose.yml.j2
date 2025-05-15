@@ -1,0 +1,34 @@
+services:
+  torch-runner:
+    image: runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04
+    container_name: torch-runner
+    restart: always
+    runtime: nvidia
+    network_mode: host
+    environment:
+      PRIMARY_ADDR: "{{ primary_addr }}"
+      PRIMARY_PORT: "{{ primary_port }}"
+      MASTER_ADDR: "{{ primary_addr }}"
+      MASTER_PORT: "{{ primary_port }}"
+      NODE_ADDR: "{{ node_addr }}"
+      NODE_RANK: "{{ node_rank }}"
+      NUM_NODES: "{{ num_nodes }}"
+      NUM_TRAINERS: "{{ num_trainers }}"
+      HOST_NODE_ADDR: "{{ primary_addr }}:{{ primary_port }}"
+      WORLD_SIZE: "{{ num_nodes | int * num_trainers | int }}"
+      GLOO_SOCKET_IFNAME: "{{ gloo_socket_ifname }}"
+      NCCL_SOCKET_IFNAME: "{{ nccl_socket_ifname }}"
+    working_dir: /workspace
+    volumes:
+      - "/home/{{ ansible_user }}/workspace:/workspace"
+    command: >
+        bash -c "
+          apt-get update && 
+          apt-get install -y build-essential tmux git nvidia-cuda-toolkit nvtop &&
+          rm -rf /workspace/torch-demo && 
+          git clone https://github.com/murat-runpod/torch-demo.git /workspace/torch-demo && 
+          cd /workspace && 
+          python3 -m venv venv && 
+          . venv/bin/activate && 
+          pip install 'sglang[all]>=0.4.5' --find-links https://flashinfer.ai/whl/cu124/torch2.5/flashinfer-python && 
+          tail -f /dev/null"

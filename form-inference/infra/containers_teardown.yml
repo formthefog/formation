@@ -1,0 +1,56 @@
+- name: Teardown torch container cluster
+  hosts: distributed
+  become: true
+  vars:
+    docker_network_name: torch-net
+
+  tasks:
+    - name: Stop and remove docker-compose containers
+      become_user: "{{ ansible_user }}"
+      shell: |
+        docker compose -f /home/{{ ansible_user }}/docker-compose.yml down || true
+      args:
+        executable: /bin/bash
+
+    - name: Force remove torch-runner container (if still exists)
+      shell: |
+        docker rm -f torch-runner || true
+      args:
+        executable: /bin/bash
+
+    - name: Remove Docker network if it exists
+      shell: |
+        docker network inspect {{ docker_network_name }} >/dev/null 2>&1 && \
+        docker network rm {{ docker_network_name }} || true
+      args:
+        executable: /bin/bash
+
+    - name: Remove docker-compose file
+      file:
+        path: "/home/{{ ansible_user }}/docker-compose.yml"
+        state: absent
+
+    - name: Remove workspace directory
+      file:
+        path: "/home/{{ ansible_user }}/workspace"
+        state: absent
+
+    - name: Prune stopped containers
+      shell: docker container prune -f
+      args:
+        executable: /bin/bash
+
+    - name: Prune unused volumes
+      shell: docker volume prune -f
+      args:
+        executable: /bin/bash
+
+    - name: Prune unused networks
+      shell: docker network prune -f
+      args:
+        executable: /bin/bash
+
+    # - name: (Optional) Prune unused images
+    #   shell: docker image prune -a -f
+    #   args:
+    #     executable: /bin/bash

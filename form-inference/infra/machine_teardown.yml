@@ -1,0 +1,130 @@
+- name: Teardown Docker and NVIDIA Container Toolkit setup
+  hosts: distributed
+  become: true
+  tasks:
+    # Stop all containers
+    - name: Get running containers
+      docker_host_info:
+        containers: yes
+      register: docker_info
+
+    - name: Stop running containers
+      docker_container:
+        name: "{{ item }}"
+        state: stopped
+      loop: "{{ docker_info.containers | map(attribute='Id') | list }}"
+
+    # Clean up Docker containers, images, volumes, networks
+    - name: Remove all stopped Docker containers
+      community.docker.docker_prune:
+        containers: true
+      ignore_errors: true
+
+    - name: Remove all unused Docker images
+      community.docker.docker_prune:
+        images: true
+      ignore_errors: true
+
+    - name: Remove all unused Docker volumes
+      community.docker.docker_prune:
+        volumes: true
+      ignore_errors: true
+
+    - name: Remove all unused Docker networks
+      community.docker.docker_prune:
+        networks: true
+      ignore_errors: true
+
+    # Uninstall NVIDIA container toolkit
+    - name: Uninstall NVIDIA container toolkit
+      apt:
+        name: nvidia-container-toolkit
+        state: absent
+        purge: true
+
+    # Remove NVIDIA toolkit repo and keys
+    - name: Remove NVIDIA container toolkit repository
+      file:
+        path: /etc/apt/sources.list.d/nvidia-container-toolkit.list
+        state: absent
+
+    - name: Remove NVIDIA GPG key
+      file:
+        path: /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+        state: absent
+
+    # Remove Docker apt repo and keys
+    - name: Remove Docker apt repository
+      file:
+        path: /etc/apt/sources.list.d/docker.list
+        state: absent
+
+    - name: Remove Docker GPG key
+      file:
+        path: /etc/apt/keyrings/docker.asc
+        state: absent
+
+    # Remove Docker config and socket
+    - name: Remove Docker daemon configuration
+      file:
+        path: /etc/docker/daemon.json
+        state: absent
+
+    - name: Remove Docker socket
+      file:
+        path: /var/run/docker.sock
+        state: absent
+
+    - name: Uninstall Docker and dependencies
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: absent
+        purge: true
+
+    # Check if Docker service exists before trying to stop it
+    - name: Check if Docker service exists
+      stat:
+        path: /lib/systemd/system/docker.service
+      register: docker_service_file
+
+    - name: Remove Docker systemd service
+      systemd:
+        name: docker
+        state: stopped
+        enabled: false
+        daemon_reload: true
+      when: docker_service_file.stat.exists
+      ignore_errors: true
+
+    # Clean up remaining Docker-related files
+    - name: Remove containerd data
+      file:
+        path: /var/lib/containerd
+        state: absent
+
+    - name: Remove Docker-related files from home directories
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/root/.docker"
+        - "/home/{{ ansible_user }}/.docker"
+        - "/home/{{ ansible_user }}/.local/share/docker"
+      ignore_errors: true
+
+    - name: Remove Docker group
+      group:
+        name: docker
+        state: absent
+      ignore_errors: true
+
+    # Clean up APT cache
+    - name: Cleanup apt cache
+      apt:
+        autoclean: yes
+        autoremove: yes
