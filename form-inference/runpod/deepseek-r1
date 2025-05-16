@@ -11,7 +11,7 @@ python3 -m sglang.launch_server --model models/deepseek-ai/DeepSeek-R1-Distill-L
 python3 -m sglang.launch_server --model deepseek-ai/DeepSeek-R1-Distill-Qwen-32B --trust-remote-code --tp 4 --port 8000 --host 0.0.0.0
 
 curl --request POST \
-  --url https://9yeihrv3ye4bvb-8000.proxy.runpod.net/generate \
+  --url http://127.0.0.1:59238/generate \
   --header 'Content-Type: application/json' \
   --data '{
  "text": "Write me a 1000 word story",

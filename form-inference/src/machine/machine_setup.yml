@@ -61,3 +61,46 @@
         name: docker
         state: restarted
         enabled: true
+
+    - name: Install NVIDIA driver
+      apt:
+        name: nvidia-driver-550
+        state: present
+        update_cache: true
+
+    - name: Download CUDA repository pin
+      get_url:
+        url: https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-ubuntu2204.pin
+        dest: /etc/apt/preferences.d/cuda-repository-pin-600
+        mode: '0644'
+
+    - name: Add NVIDIA CUDA GPG key
+      shell: |
+        curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/3bf863cc.pub | gpg --dearmor | sudo tee /etc/apt/keyrings/nvidia.gpg > /dev/null
+
+    - name: Add CUDA repository
+      shell: |
+        echo "deb [signed-by=/etc/apt/keyrings/nvidia.gpg] https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/ /" | sudo tee /etc/apt/sources.list.d/cuda.list
+
+    - name: Install CUDA toolkit
+      apt:
+        name: cuda-toolkit-12-4
+        state: present
+        update_cache: true
+
+    - name: Install NVIDIA Fabric Manager
+      apt:
+        name: nvidia-fabricmanager-550=550.144.03-1
+        state: present
+        update_cache: true
+
+    - name: Enable and start NVIDIA Fabric Manager
+      systemd:
+        name: nvidia-fabricmanager
+        state: started
+        enabled: true
+
+    - name: Reboot the system
+      reboot:
+        msg: "Reboot initiated by Ansible after NVIDIA driver and CUDA installation"
+        reboot_timeout: 3600

@@ -22,13 +22,14 @@ services:
     volumes:
       - "/home/{{ ansible_user }}/workspace:/workspace"
     command: >
-        bash -c "
-          apt-get update && 
-          apt-get install -y build-essential tmux git nvidia-cuda-toolkit nvtop &&
-          rm -rf /workspace/torch-demo && 
-          git clone https://github.com/murat-runpod/torch-demo.git /workspace/torch-demo && 
-          cd /workspace && 
-          python3 -m venv venv && 
-          . venv/bin/activate && 
-          pip install "sglang[all]>=0.4.6.post4" && 
-          tail -f /dev/null"
+      bash -c "
+        set -ex &&
+        apt-get update &&
+        apt-get install -y build-essential tmux git nvidia-cuda-toolkit nvtop &&
+        rm -rf /workspace/torch-demo &&
+        git clone https://github.com/murat-runpod/torch-demo.git /workspace/torch-demo &&
+        cd /workspace &&
+        python3 -m venv venv &&
+        . venv/bin/activate &&
+        pip install 'sglang[all]>=0.4.6.post4' &&
+        tail -f /dev/null"
