@@ -4,6 +4,8 @@ This setup runs a multi-node, multi-GPU distributed PyTorch inference environmen
 
 We use SGLang to run models with both tensor and pipeline parallelism across our own GPU stack.
 
+
+
 ## Local
 
 ### SSH
@@ -12,6 +14,19 @@ To set up the distributed environment, you need two machines, each with a set of
 
 - Node 1: `ssh user@XXX.X.X.X`
 - Node 2: `ssh user@XXX.X.X.X`
+
+### Environment Setup
+
+Before running the setup, you need to set the following environment variables:
+
+```bash
+# SSH Configuration
+MACHINE1_IP=your_machine1_ip
+MACHINE2_IP=your_machine2_ip
+ANSIBLE_USER=your_ansible_user
+```
+
+You can add these to your `.env`.
 
 ### form-inference
 
