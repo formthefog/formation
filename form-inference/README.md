@@ -8,55 +8,46 @@ We use SGLang to run models with both tensor and pipeline parallelism across our
 
 ### SSH
 
-Ensure you have two machines that each have a set of nodes. In our case, we tested this with two H200\*8 nodes.
+To set up the distributed environment, you need two machines, each with a set of nodes. In our testing, we used two H200*8 nodes:
 
-node 1 (lucky-eft):
-`ssh user@XXX.X.X.X`
-
-node 2 (smooth-alien):
-`ssh user@XXX.X.X.X`
+- Node 1: `ssh user@XXX.X.X.X`
+- Node 2: `ssh user@XXX.X.X.X`
 
 ### form-inference
 
-The `src` directory contains essential configuration files for setting up and managing the distributed multi-GPU environment using Ansible. It includes:
+The `src` directory contains three key configuration files for setting up the distributed multi-GPU environment:
 
-- `machine_setup.yml`: An Ansible playbook that installs Docker and the NVIDIA Container Toolkit on the remote machines, ensuring they are ready for containerized workloads.
-- `containers_setup.yml`: An Ansible playbook that deploys the PyTorch container cluster across the nodes, configuring network settings and launching the containers.
-- `inventory.ini`: An inventory file that lists the remote machines (nodes) under the `[distributed]` group, specifying their IP addresses and user credentials for SSH access.
-
-Ansible uses these files to automate the setup and deployment process across the nodes, ensuring a consistent and efficient environment for running distributed PyTorch inference tasks.
+1. `machine_setup.yml`: Ansible playbook for installing Docker and NVIDIA Container Toolkit on remote machines
+2. `containers_setup.yml`: Ansible playbook for deploying the PyTorch container cluster across nodes
+3. `inventory.ini`: Lists remote machines under the `[distributed]` group with their IP addresses and SSH credentials
 
 ## Machine
 
-The bare metal machine requires the installation and configuration of the following components to ensure optimal performance for distributed multi-GPU tasks.
+The bare metal machines require specific components for optimal distributed multi-GPU performance. The setup is automated through Ansible.
 
-This is defined in the ansible script. Run:
-
-```
+To set up the machines, run:
+```bash
 ansible-playbook -i src/inventory.ini src/machine/machine_setup.yml --ask-become-pass
 ```
 
 ### Docker
 
-To install Docker on Ubuntu, follow these steps:
+Install Docker on Ubuntu with these steps:
 
 1. **Install Dependencies**:
-
    ```bash
    sudo apt update
    sudo apt install -y ca-certificates curl gnupg lsb-release
    ```
 
-2. **Add Docker’s official GPG key**:
-
+2. **Add Docker's GPG Key**:
    ```bash
    sudo install -m 0755 -d /etc/apt/keyrings
    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo tee /etc/apt/keyrings/docker.asc
    sudo chmod a+r /etc/apt/keyrings/docker.asc
    ```
 
-3. **Set up the Docker repository**:
-
+3. **Configure Docker Repository**:
    ```bash
    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
    $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
@@ -70,106 +61,123 @@ To install Docker on Ubuntu, follow these steps:
 
 ### NVIDIA
 
-You need to ensure that we have the following (otherwise we risk 802 errors for incompatible setups):
+Required NVIDIA components to prevent 802 errors:
+- Driver Version: 550.144.03
+- CUDA Version: 12.4
+- NVIDIA Fabric Manager (version MUST match the driver version used)
 
-- **Driver Version**: 550.144.03
-- **CUDA Version**: 12.4
-- **NVIDIA Fabric Manager**: Ensures proper management of GPU resources across multiple nodes.
+Install NVIDIA components:
 
-1. **Install NVIDIA Container Toolkit**:
+1. **Add NVIDIA GPG key and repository**:
+   ```bash
+   curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+   curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+   sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+   tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+   ```
 
+2. **Install NVIDIA Container Toolkit**:
    ```bash
    sudo apt update
    sudo apt install -y nvidia-container-toolkit
-   ```
-
-2. **Configure NVIDIA Runtime**:
-
-   ```bash
    sudo nvidia-ctk runtime configure --runtime=docker
+   sudo systemctl restart docker
    ```
 
-3. **Restart Docker**:
+3. **Install NVIDIA Driver and CUDA**:
    ```bash
-   sudo systemctl restart docker
+   sudo apt install -y nvidia-driver-550
+   sudo apt install -y cuda-toolkit-12-4
+   ```
+
+4. **Install and Configure NVIDIA Fabric Manager**:
+   ```bash
+   sudo apt install -y nvidia-fabricmanager-550=550.144.03-1
+   sudo systemctl enable nvidia-fabricmanager
+   sudo systemctl start nvidia-fabricmanager
    ```
 
 ### Python
 
-- **pyenv**: This tool is essential for managing different Python versions and ensuring they are compatible with your testing scripts. To install pyenv, execute the following command:
-  ```bash
-  curl https://pyenv.run | bash
-  ```
-  After installation, make sure to follow the instructions to add pyenv to your shell configuration file and restart your shell for the changes to take effect.
+Install pyenv for Python version management:
+```bash
+curl https://pyenv.run | bash
+```
 
-To verify that your setup is correct and that your GPU is properly configured, run the following Python command:
-
+Verify GPU setup:
 ```python
 python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0))"
 ```
-
-It should return `True`, indicating that CUDA is available, and also display the name of the GPU device.
+Expected output: `True` and your GPU device name.
 
 ## Container
 
-After setting up the bare metal machines, the next goal is to create docker containers with envrionements capable of running our models on top of the infrastructure we have created.
-
-These environments can be setup and deployed using the following ansible script. Run:
-
+After machine setup, create Docker containers for model deployment using:
 ```bash
 ansible-playbook -i src/inventory.ini src/containers/container_setup.yml --ask-become-pass
 ```
 
 ### Container Setup
 
-- The `containers_setup.yml` file is an Ansible playbook designed to deploy a torch container cluster across distributed hosts. It sets up necessary variables, ensures the existence of a workspace directory, creates a custom Docker network if it doesn't exist, copies a Docker Compose template, and launches the container using Docker Compose. The playbook is configured to run with elevated privileges and is designed to work with a group of distributed hosts defined in an inventory file.
-- The `docker-compose.yml.j2` file defines the configuration for deploying a PyTorch container using Docker. It specifies the image, container name, restart policy, runtime, network mode, environment variables, working directory, and volumes. The container is set up to run a series of commands, including updating the package list, installing necessary packages, cloning a GitHub repository, setting up a Python virtual environment, and installing Python packages. The environment contains the following variables required to make connections work between the two nodes.
+The container setup uses two main files:
 
-| Variable           | Description                                                                                                  |
-| ------------------ | ------------------------------------------------------------------------------------------------------------ |
-| PRIMARY_ADDR       | The primary address of the node, used for communication between nodes.                                       |
-| PRIMARY_PORT       | The primary port used for communication between nodes.                                                       |
-| MASTER_ADDR        | The address of the master node, typically the same as the primary address.                                   |
-| MASTER_PORT        | The port of the master node, typically the same as the primary port.                                         |
-| NODE_ADDR          | The address of the current node.                                                                             |
-| NODE_RANK          | The rank or index of the current node in the cluster.                                                        |
-| NUM_NODES          | The total number of nodes in the cluster.                                                                    |
-| NUM_TRAINERS       | The number of trainers or processes per node.                                                                |
-| HOST_NODE_ADDR     | The combined address and port of the host node.                                                              |
-| WORLD_SIZE         | The total number of processes across all nodes, calculated as the product of `NUM_NODES` and `NUM_TRAINERS`. |
-| GLOO_SOCKET_IFNAME | The network interface name used by Gloo for communication.                                                   |
-| NCCL_SOCKET_IFNAME | The network interface name used by NCCL for communication.                                                   |
+1. `containers_setup.yml`: Ansible playbook that:
+   - Sets up variables
+   - Creates workspace directory
+   - Configures Docker network
+   - Deploys containers using Docker Compose
+
+2. `docker-compose.yml.j2`: Defines container configuration including:
+   - PyTorch image
+   - Container settings
+   - Environment variables
+   - Volume mounts
+   - Initial setup commands
+
+Required Environment Variables:
+
+| Variable           | Description                                    |
+| ------------------ | ---------------------------------------------- |
+| PRIMARY_ADDR       | Node's primary address for inter-node comms    |
+| PRIMARY_PORT       | Primary port for inter-node comms              |
+| MASTER_ADDR        | Master node address (usually = PRIMARY_ADDR)   |
+| MASTER_PORT        | Master node port (usually = PRIMARY_PORT)      |
+| NODE_ADDR          | Current node's address                         |
+| NODE_RANK          | Node's rank in cluster                         |
+| NUM_NODES          | Total nodes in cluster                         |
+| NUM_TRAINERS       | Processes per node                             |
+| HOST_NODE_ADDR     | Host node address:port                         |
+| WORLD_SIZE         | Total processes (NUM_NODES × NUM_TRAINERS)     |
+| GLOO_SOCKET_IFNAME | Network interface for Gloo comms               |
+| NCCL_SOCKET_IFNAME | Network interface for NCCL comms               |
 
 ### GPU Connections
 
-This section was inspired by the documentation available at https://docs.runpod.io/instant-clusters/pytorch.
-
-Assuming you have run both of these scripts, both containers should now be running on each node. You can run the following command to enter the container environment on each node:
-
+To access the container environment on each node:
 ```bash
 sudo docker exec -it torch-runner /bin/bash
 ```
 
-If all works well, you should be able to run both of these commands on each node and output prints from each GPU registering that commmunication is working effectively:
+Test GPU communication on each node:
 
-- On node 1 run:
-
+Node 1:
 ```bash
-torchrun --nproc_per_node=$NUM_TRAINERS --nnodes=$NUM_NODES --node_rank=$NODE_RANK   --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT torch-demo/main.py
+torchrun --nproc_per_node=$NUM_TRAINERS --nnodes=$NUM_NODES --node_rank=$NODE_RANK --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT torch-demo/main.py
 ```
 
-- On node 2 run:
-
+Node 2:
 ```bash
-torchrun --nproc_per_node=$NUM_TRAINERS --nnodes=$NUM_NODES --node_rank=$NODE_RANK   --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT torch-demo/main.py
+torchrun --nproc_per_node=$NUM_TRAINERS --nnodes=$NUM_NODES --node_rank=$NODE_RANK --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT torch-demo/main.py
 ```
 
-Consider using `nc` (netcat) to verify if TCP connections are open. Ensure that port 29500 is open on each node, and also check that ports in the range 32768–60999 are accessible.
+Verify connectivity:
+- Check port 29500 is open
+- Verify ports 32768-60999 are accessible
+- Use `nc` (netcat) to test TCP connections and consider trying out utils/cpu.py if you believe there is a GPU error to debug but want to see if CPU connections work
 
 ### Downloading the Model
 
-Run the following in the `/workspace` folder in the container. This downloads the model into the workspace which will persist across runs that we can run after this is complete.
-
+In the container's `/workspace` directory:
 ```bash
 source venv/bin/activate
 pip install huggingface_hub
@@ -178,16 +186,12 @@ huggingface-cli download deepseek-ai/DeepSeek-R1-Distill-Llama-70B --local-dir .
 
 ### Running the Model
 
-https://github.com/sgl-project/sglang/tree/main/benchmark/deepseek_v3#example-serving-with-two-h208-nodes
-
-Run the following on each node:
-
+Start the server on each node:
 ```bash
 python3 -m sglang.launch_server --model-path ./models/deepseek-ai/DeepSeek-R1-Distill-Llama-70B --tp $NUM_TRAINERS --dist-init-addr $MASTER_ADDR:$MASTER_PORT --nnodes $NUM_NODES --node-rank $NODE_RANK --trust-remote-code
 ```
 
-You can only query the master node, not a child:
-
+Query the model (only from master node):
 ```bash
 curl --request POST \
     --url http://127.0.0.1:30000/generate \

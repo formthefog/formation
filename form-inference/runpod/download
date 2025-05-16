@@ -1,2 +1,0 @@
-pip install huggingface_hub
-huggingface-cli download deepseek-ai/DeepSeek-R1-Distill-Llama-70B --local-dir ./models/deepseek-ai/DeepSeek-R1-Distill-Llama-70B
