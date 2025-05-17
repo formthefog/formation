@@ -5,3 +5,6 @@ pub mod agent;
 pub mod model;
 pub mod dns;
 pub mod nodes;
+pub mod agent_request;
+pub mod agent_response;
+pub mod agent_gateway;

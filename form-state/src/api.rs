@@ -20,6 +20,7 @@ use crate::helpers::{
     account::*, 
     agent::*, 
     model::*,
+    agent_gateway::run_agent_task_handler,
 };
 use crate::auth::{
     RecoveredAddress, ecdsa_auth_middleware
@@ -338,6 +339,7 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/agents/update", post(update_agent))
         .route("/agents/delete", post(delete_agent))
         .route("/agents/:id/hire", post(checked_agent_hire))
+        .route("/agents/:agent_id/run_task", post(run_agent_task_handler))
         
         // Model management
         .route("/models/create", post(create_model))

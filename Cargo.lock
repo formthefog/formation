@@ -3667,6 +3667,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tiny-keccak",
  "tokio",
+ "tokio-stream",
  "trust-dns-proto 0.23.2",
  "url 2.5.4",
  "uuid 1.14.0",
