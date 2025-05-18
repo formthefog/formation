@@ -13,6 +13,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use crdts::{map::Op, BFTReg, CvRDT, Map, CmRDT};
 use crate::{accounts::{Account, AccountOp, AccountState, AuthorizationLevel}, agent::{AIAgent, AgentMap, AgentOp, AgentState}, db::{open_db, write_datastore, DbHandle}, instances::{ClusterMember, Instance, InstanceOp, InstanceState}, model::{AIModel, ModelMap, ModelOp, ModelState}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}};
 use lazy_static::lazy_static;
+use url::Host;
 
 lazy_static! {
     pub static ref DB_HANDLE: DbHandle = open_db(PathBuf::from("/var/lib/formation/db/form.db"));
@@ -331,29 +332,41 @@ impl DataStore {
     }
 
     pub async fn handle_peer_op(&mut self, peer_op: PeerOp<String>) -> Result<(), Box<dyn std::error::Error>> {
-        match &peer_op {
+        let mut op_applied_successfully = false;
+        let op_to_propagate = peer_op; // Original op, will be cloned for propagation if needed, or for local apply
+
+        match &op_to_propagate { // Match on reference to the original op
             Op::Up { dot: _, key, op } => {
-                self.network_state.peer_op(peer_op.clone());
+                // Apply a clone locally, original op_to_propagate can still be used for gossip
+                self.network_state.peer_op(op_to_propagate.clone()); 
                 if let (true, _) = self.network_state.peer_op_success(key.clone(), op.clone()) {
-                    log::info!("Peer Op succesffully applied...");
-                    DataStore::write_to_queue(PeerRequest::Op(peer_op.clone()), 0).await?;
-                    write_datastore(&DB_HANDLE, &self.clone())?;
+                    log::info!("Peer Op::Up successfully applied locally.");
+                    op_applied_successfully = true;
                 } else {
-                    log::info!("Peer Op rejected...");
-                    return Err(
-                        Box::new(
-                            std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                "update was rejected".to_string()
-                            )
-                        )
-                    )
+                    log::error!("Peer Op::Up failed to apply locally or was a no-op.");
+                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Peer Op::Up failed local application")));
                 }
             }
             Op::Rm { .. } => {
-                self.network_state.peer_op(peer_op.clone());
-                return Ok(());
+                // Apply a clone locally
+                self.network_state.peer_op(op_to_propagate.clone()); 
+                log::info!("Peer Op::Rm applied locally.");
+                op_applied_successfully = true; 
             }
+        }
+
+        if op_applied_successfully {
+            #[cfg(feature = "devnet")]
+            {
+                log::info!("devnet mode: PeerOp applied locally. Gossiping directly with op: {:?}", op_to_propagate);
+                self.gossip_op_directly(&op_to_propagate, "PeerOp").await?;
+            }
+            #[cfg(not(feature = "devnet"))]
+            {
+                log::info!("production mode: Queuing PeerOp ({:?}).", op_to_propagate);
+                DataStore::write_to_queue(crate::datastore::PeerRequest::Op(op_to_propagate.clone()), 0).await?;
+            }
+            write_datastore(&DB_HANDLE, &self.clone())?;
         }
 
         Ok(())
@@ -392,29 +405,39 @@ impl DataStore {
     }
 
     pub async fn handle_cidr_op(&mut self, cidr_op: CidrOp<String>) -> Result<(), Box<dyn std::error::Error>> {
+        let mut op_applied_successfully = false;
+        let op_to_propagate = cidr_op.clone(); // Clone for propagation
+
         match &cidr_op {
             Op::Up { dot: _, key, op } => {
-                self.network_state.cidr_op(cidr_op.clone());
+                self.network_state.cidr_op(cidr_op.clone()); // Apply locally
                 if let (true, _) = self.network_state.cidr_op_success(key.clone(), op.clone()) {
-                    log::info!("CIDR Op succesffully applied...");
-                    DataStore::write_to_queue(CidrRequest::Op(cidr_op.clone()), 1).await?;
-                    write_datastore(&DB_HANDLE, &self.clone())?;
+                    log::info!("CIDR Op::Up successfully applied locally.");
+                    op_applied_successfully = true;
                 } else {
-                    log::info!("CIDR Op rejected...");
-                    return Err(
-                        Box::new(
-                            std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                "update was rejected".to_string()
-                            )
-                        )
-                    )
+                    log::error!("CIDR Op::Up failed to apply locally or was a no-op.");
+                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "CIDR Op::Up failed local application")));
                 }
             }
             Op::Rm { .. } => {
-                self.network_state.cidr_op(cidr_op.clone());
-                return Ok(());
+                self.network_state.cidr_op(cidr_op); // Apply Rm locally
+                log::info!("CIDR Op::Rm applied locally.");
+                op_applied_successfully = true;
             }
+        }
+
+        if op_applied_successfully {
+            #[cfg(feature = "devnet")]
+            {
+                log::info!("devnet mode: CIDR Op applied locally. Gossiping directly with op: {:?}", op_to_propagate);
+                self.gossip_op_directly(&op_to_propagate, "CidrOp").await?;
+            }
+            #[cfg(not(feature = "devnet"))]
+            {
+                log::info!("production mode: Queuing CIDR Op ({:?}).", op_to_propagate);
+                DataStore::write_to_queue(crate::datastore::CidrRequest::Op(op_to_propagate.clone()), 1).await?;
+            }
+            write_datastore(&DB_HANDLE, &self.clone())?;
         }
         Ok(())
     }
@@ -450,29 +473,39 @@ impl DataStore {
     }
 
     pub async fn handle_assoc_op(&mut self, assoc_op: AssocOp<String>) -> Result<(), Box<dyn std::error::Error>> {
+        let mut op_applied_successfully = false;
+        let op_to_propagate = assoc_op.clone(); // Clone for propagation
+
         match &assoc_op {
             Op::Up { dot: _, key, op } => {
-                self.network_state.associations_op(assoc_op.clone());
+                self.network_state.associations_op(assoc_op.clone()); // Apply locally
                 if let (true, _) = self.network_state.associations_op_success(key.clone(), op.clone()) {
-                    log::info!("Assoc Op succesffully applied...");
-                    DataStore::write_to_queue(AssocRequest::Op(assoc_op.clone()), 2).await?;
-                    write_datastore(&DB_HANDLE, &self.clone())?;
+                    log::info!("Assoc Op::Up successfully applied locally.");
+                    op_applied_successfully = true;
                 } else {
-                    log::info!("Assoc Op rejected...");
-                    return Err(
-                        Box::new(
-                            std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                "update was rejected".to_string()
-                            )
-                        )
-                    )
+                    log::error!("Assoc Op::Up failed to apply locally or was a no-op.");
+                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Assoc Op::Up failed local application")));
                 }
             }
             Op::Rm { .. } => {
-                self.network_state.associations_op(assoc_op.clone());
-                return Ok(());
+                self.network_state.associations_op(assoc_op); // Apply Rm locally
+                log::info!("Assoc Op::Rm applied locally.");
+                op_applied_successfully = true;
             }
+        }
+
+        if op_applied_successfully {
+            #[cfg(feature = "devnet")]
+            {
+                log::info!("devnet mode: Assoc Op applied locally. Gossiping directly with op: {:?}", op_to_propagate);
+                self.gossip_op_directly(&op_to_propagate, "AssocOp").await?;
+            }
+            #[cfg(not(feature = "devnet"))]
+            {
+                log::info!("production mode: Queuing Assoc Op ({:?}).", op_to_propagate);
+                DataStore::write_to_queue(crate::datastore::AssocRequest::Op(op_to_propagate.clone()), 2).await?;
+            }
+            write_datastore(&DB_HANDLE, &self.clone())?;
         }
         Ok(())
     }
@@ -503,31 +536,40 @@ impl DataStore {
     }
 
     pub async fn handle_dns_op(&mut self, dns_op: DnsOp) -> Result<(), Box<dyn std::error::Error>> {
+        let mut op_applied_successfully = false;
+        let op_to_propagate = dns_op.clone(); // Clone for propagation
+
         match &dns_op {
             Op::Up { dot: _, key, op } => {
-                self.network_state.dns_op(dns_op.clone());
+                self.network_state.dns_op(dns_op.clone()); // Apply locally
                 if let (true, _) = self.network_state.dns_op_success(key.clone(), op.clone()) {
-                    log::info!("DNS Op succesffully applied...");
-                    DataStore::write_to_queue(DnsRequest::Op(dns_op.clone()), 3).await?;
-                    write_datastore(&DB_HANDLE, &self.clone())?;
+                    log::info!("DNS Op::Up successfully applied locally.");
+                    op_applied_successfully = true;
                 } else {
-                    log::info!("DNS Op rejected...");
-                    return Err(
-                        Box::new(
-                            std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                "update was rejected".to_string()
-                            )
-                        )
-                    )
+                    log::error!("DNS Op::Up failed to apply locally or was a no-op.");
+                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "DNS Op::Up failed local application")));
                 }
             }
             Op::Rm { .. } => {
-                self.network_state.dns_op(dns_op.clone());
-                return Ok(());
+                self.network_state.dns_op(dns_op); // Apply Rm locally
+                log::info!("DNS Op::Rm applied locally.");
+                op_applied_successfully = true;
             }
         }
 
+        if op_applied_successfully {
+            #[cfg(feature = "devnet")]
+            {
+                log::info!("devnet mode: DNS Op applied locally. Gossiping directly with op: {:?}", op_to_propagate);
+                self.gossip_op_directly(&op_to_propagate, "DnsOp").await?;
+            }
+            #[cfg(not(feature = "devnet"))]
+            {
+                log::info!("production mode: Queuing DNS Op ({:?}).", op_to_propagate);
+                DataStore::write_to_queue(crate::datastore::DnsRequest::Op(op_to_propagate.clone()), 3).await?;
+            }
+            write_datastore(&DB_HANDLE, &self.clone())?;
+        }
         Ok(())
     }
 
@@ -645,29 +687,7 @@ impl DataStore {
         while let Some(instance) = iter_mut.next() {
             instance.cluster.insert(cluster_member.clone());
             let instance_op = self.instance_state.update_instance_local(instance.clone());
-            match instance_op {
-                Op::Up { dot: _, ref key, ref op } => {
-                    let _ = self.instance_state.instance_op(instance_op.clone());
-                    if let (true, _) = self.instance_state.instance_op_success(key.to_string(), op.clone()) {
-                        log::info!("Instance Op succesfully applied...");
-                        DataStore::write_to_queue(InstanceRequest::Op(instance_op.clone()), 4).await?;
-                        write_datastore(&DB_HANDLE, &self.clone())?;
-                    } else {
-                        return Err(
-                            Box::new(
-                                std::io::Error::new(
-                                    std::io::ErrorKind::Other,
-                                    "update was rejected".to_string()
-                                )
-                            )
-                        )
-                    }
-                }
-                Op::Rm { .. } => {
-                    self.instance_state.instance_op(instance_op.clone());
-                    return Ok(());
-                }
-            }
+            self.handle_instance_op(instance_op).await?;
         }
         Ok(())
     }
@@ -682,57 +702,45 @@ impl DataStore {
         while let Some(instance) = iter_mut.next() {
             instance.cluster.remove(&cluster_member_id);
             let instance_op = self.instance_state.update_instance_local(instance.clone());
-            match instance_op {
-                Op::Up { dot: _, ref key, ref op } => {
-                    let _ = self.instance_state.instance_op(instance_op.clone());
-                    if let (true, _) = self.instance_state.instance_op_success(key.to_string(), op.clone()) {
-                        log::info!("Instance Op succesfully applied...");
-                        DataStore::write_to_queue(InstanceRequest::Op(instance_op.clone()), 4).await?;
-                        write_datastore(&DB_HANDLE, &self.clone())?;
-                    } else {
-                        return Err(
-                            Box::new(
-                                std::io::Error::new(
-                                    std::io::ErrorKind::Other,
-                                    "update was rejected".to_string()
-                                )
-                            )
-                        )
-                    }
-                }
-                Op::Rm { .. } => {
-                    self.instance_state.instance_op(instance_op.clone());
-                    return Ok(());
-                }
-            }
+            self.handle_instance_op(instance_op).await?;
         }
         Ok(())
     }
 
     pub async fn handle_instance_op(&mut self, instance_op: InstanceOp) -> Result<(), Box<dyn std::error::Error>> {
+        let mut op_applied_successfully = false;
+        let op_to_propagate = instance_op.clone(); // Clone for propagation
+
         match &instance_op {
             Op::Up { dot: _, key, op } => {
-                self.instance_state.instance_op(instance_op.clone());
+                self.instance_state.instance_op(instance_op.clone()); // Apply locally
                 if let (true, _) = self.instance_state.instance_op_success(key.clone(), op.clone()) {
-                    log::info!("Instance Op succesffully applied...");
-                    DataStore::write_to_queue(InstanceRequest::Op(instance_op.clone()), 4).await?;
-                    write_datastore(&DB_HANDLE, &self.clone())?;
+                    log::info!("Instance Op::Up successfully applied locally.");
+                    op_applied_successfully = true;
                 } else {
-                    log::info!("Instance Op rejected...");
-                    return Err(
-                        Box::new(
-                            std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                "update was rejected".to_string()
-                            )
-                        )
-                    )
+                    log::error!("Instance Op::Up failed to apply locally or was a no-op.");
+                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Instance Op::Up failed local application")));
                 }
             }
             Op::Rm { .. } => {
-                self.instance_state.instance_op(instance_op.clone());
-                return Ok(());
+                self.instance_state.instance_op(instance_op); // Apply Rm locally
+                log::info!("Instance Op::Rm applied locally.");
+                op_applied_successfully = true;
             }
+        }
+
+        if op_applied_successfully {
+            #[cfg(feature = "devnet")]
+            {
+                log::info!("devnet mode: Instance Op applied locally. Gossiping directly with op: {:?}", op_to_propagate);
+                self.gossip_op_directly(&op_to_propagate, "InstanceOp").await?;
+            }
+            #[cfg(not(feature = "devnet"))]
+            {
+                log::info!("production mode: Queuing Instance Op ({:?}).", op_to_propagate);
+                DataStore::write_to_queue(crate::datastore::InstanceRequest::Op(op_to_propagate.clone()), 4).await?;
+            }
+            write_datastore(&DB_HANDLE, &self.clone())?;
         }
         Ok(())
     }
@@ -799,29 +807,39 @@ impl DataStore {
     }
 
     pub async fn handle_node_op(&mut self, node_op: NodeOp) -> Result<(), Box<dyn std::error::Error>> {
+        let mut op_applied_successfully = false;
+        let op_to_propagate = node_op.clone(); // Clone for propagation
+
         match &node_op {
             Op::Up { dot: _, key, op } => {
-                self.node_state.node_op(node_op.clone());
+                self.node_state.node_op(node_op.clone()); // Apply locally
                 if let (true, _) = self.node_state.node_op_success(key.clone(), op.clone()) {
-                    log::info!("Peer Op succesffully applied...");
-                    DataStore::write_to_queue(NodeRequest::Op(node_op.clone()), 5).await?;
-                    write_datastore(&DB_HANDLE, &self.clone())?;
+                    log::info!("Node Op::Up successfully applied locally.");
+                    op_applied_successfully = true;
                 } else {
-                    log::info!("Peer Op rejected...");
-                    return Err(
-                        Box::new(
-                            std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                "update was rejected".to_string()
-                            )
-                        )
-                    )
+                    log::error!("Node Op::Up failed to apply locally or was a no-op.");
+                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Node Op::Up failed local application")));
                 }
             }
             Op::Rm { .. } => {
-                self.node_state.node_op(node_op.clone());
-                return Ok(());
+                self.node_state.node_op(node_op); // Apply Rm locally
+                log::info!("Node Op::Rm applied locally.");
+                op_applied_successfully = true;
             }
+        }
+
+        if op_applied_successfully {
+            #[cfg(feature = "devnet")]
+            {
+                log::info!("devnet mode: Node Op applied locally. Gossiping directly with op: {:?}", op_to_propagate);
+                self.gossip_op_directly(&op_to_propagate, "NodeOp").await?;
+            }
+            #[cfg(not(feature = "devnet"))]
+            {
+                log::info!("production mode: Queuing Node Op ({:?}).", op_to_propagate);
+                DataStore::write_to_queue(crate::datastore::NodeRequest::Op(op_to_propagate.clone()), 5).await?;
+            }
+            write_datastore(&DB_HANDLE, &self.clone())?;
         }
         Ok(())
     }
@@ -895,29 +913,39 @@ impl DataStore {
     }
 
     pub async fn handle_account_op(&mut self, account_op: AccountOp) -> Result<(), Box<dyn std::error::Error>> {
+        let mut op_applied_successfully = false;
+        let op_to_propagate = account_op.clone(); // Clone for propagation
+
         match &account_op {
             Op::Up { dot: _, key, op } => {
-                self.account_state.account_op(account_op.clone());
+                self.account_state.account_op(account_op.clone()); // Apply locally
                 if let (true, _) = self.account_state.account_op_success(key.clone(), op.clone()) {
-                    log::info!("Account Op succesffully applied...");
-                    DataStore::write_to_queue(AccountRequest::Op(account_op.clone()), 7).await?;
-                    write_datastore(&DB_HANDLE, &self.clone())?;
+                    log::info!("Account Op::Up successfully applied locally.");
+                    op_applied_successfully = true;
                 } else {
-                    log::info!("Account Op rejected...");
-                    return Err(
-                        Box::new(
-                            std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                "update was rejected".to_string()
-                            )
-                        )
-                    )
+                    log::error!("Account Op::Up failed to apply locally or was a no-op.");
+                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Account Op::Up failed local application")));
                 }
             }
             Op::Rm { .. } => {
-                self.account_state.account_op(account_op.clone());
-                return Ok(());
+                self.account_state.account_op(account_op); // Apply Rm locally
+                log::info!("Account Op::Rm applied locally.");
+                op_applied_successfully = true;
             }
+        }
+
+        if op_applied_successfully {
+            #[cfg(feature = "devnet")]
+            {
+                log::info!("devnet mode: Account Op applied locally. Gossiping directly with op: {:?}", op_to_propagate);
+                self.gossip_op_directly(&op_to_propagate, "AccountOp").await?;
+            }
+            #[cfg(not(feature = "devnet"))]
+            {
+                log::info!("production mode: Queuing Account Op ({:?}).", op_to_propagate);
+                DataStore::write_to_queue(crate::datastore::AccountRequest::Op(op_to_propagate.clone()), 7).await?;
+            }
+            write_datastore(&DB_HANDLE, &self.clone())?;
         }
         Ok(())
     }
@@ -1291,6 +1319,67 @@ impl DataStore {
                     eprintln!("Unable to share request with {ip}: {e}");
                 }
             };
+
+        Ok(())
+    }
+
+    // New method for direct gossip in devnet mode
+    #[cfg(feature = "devnet")]
+    async fn gossip_op_directly<O: Serialize + Clone + Debug>(
+        &self, 
+        operation: &O, // Pass op by reference
+        op_type_description: &str // For logging and potentially constructing endpoint path
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        log::info!("DEVNET: Gossiping {} directly.", op_type_description);
+        
+        let mut active_peer_api_endpoints: Vec<String> = Vec::new();
+        for peer_entry in self.network_state.peers.iter() {
+            if let Some(peer_val_reg) = peer_entry.val.val() {
+                let peer = peer_val_reg.value();
+                if !peer.is_disabled && peer.id != self.node_state.node_id { 
+                    if let Some(endpoint) = &peer.endpoint {
+                        match endpoint.resolve() {
+                            Ok(socket_addr) => {
+                                let api_endpoint_url = format!("http://{}:3004", socket_addr.ip());
+                                active_peer_api_endpoints.push(api_endpoint_url);
+                            }
+                            Err(e) => {
+                                log::warn!("DEVNET: Failed to resolve endpoint for peer {}: {}", peer.id, e);
+                            }
+                        }
+                    } else {
+                        log::warn!("DEVNET: Peer {} has no endpoint, cannot gossip directly.", peer.id);
+                    }
+                }
+            }
+        }
+
+        if active_peer_api_endpoints.is_empty() {
+            log::info!("DEVNET: No active peers found to gossip {} to.", op_type_description);
+            return Ok(());
+        }
+
+        log::info!("DEVNET: Gossiping {} to peers: {:?}", op_type_description, active_peer_api_endpoints);
+
+        let client = reqwest::Client::new();
+        for target_peer_base_url in active_peer_api_endpoints {
+            let target_url = format!("{}/devnet_gossip/apply_op", target_peer_base_url);
+            log::debug!("DEVNET: Sending {} to {}", op_type_description, target_url);
+            
+            match client.post(&target_url).json(operation).send().await {
+                Ok(response) => {
+                    if response.status().is_success() {
+                        log::info!("DEVNET: Successfully gossiped {} to {}", op_type_description, target_url);
+                    } else {
+                        log::error!("DEVNET: Failed to gossip {} to {}: Status: {}, Body: {:?}", 
+                            op_type_description, target_url, response.status(), response.text().await.unwrap_or_default());
+                    }
+                }
+                Err(e) => {
+                    log::error!("DEVNET: Error gossiping {} to {}: {}", op_type_description, target_url, e);
+                }
+            }
+        }
 
         Ok(())
     }

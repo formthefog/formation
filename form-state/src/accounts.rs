@@ -15,6 +15,9 @@ pub struct Account {
     pub address: String,
     /// Optional human-readable name for the account
     pub name: Option<String>,
+    /// Flag indicating if this account has global system administrator privileges
+    #[serde(default)]
+    pub is_global_admin: bool,
     /// Set of instance IDs owned by this account
     #[serde(default)]
     pub owned_instances: BTreeSet<String>,
@@ -80,6 +83,7 @@ impl Account {
         Self {
             address,
             name: None,
+            is_global_admin: false,
             owned_instances: BTreeSet::new(),
             owned_agents: BTreeSet::new(),
             owned_models: BTreeSet::new(),
@@ -478,6 +482,7 @@ impl Default for Account {
         Self {
             address: "0x0000000000000000000000000000000000000000".to_string(), // Default Ethereum zero address
             name: None,
+            is_global_admin: false,
             owned_instances: BTreeSet::new(),
             owned_agents: BTreeSet::new(),
             owned_models: BTreeSet::new(),

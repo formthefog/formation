@@ -144,6 +144,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     
                     let address = hex::encode(Address::from_private_key(&sk));
 
+                    let formnet_cidr_to_use = op_config.formnet_cidr.clone().unwrap_or_else(|| {
+                        log::warn!("No formnet_cidr specified in config, defaulting to 10.42.0.0/16");
+                        "10.42.0.0/16".to_string()
+                    });
+
+                    let current_node_is_admin = match &op_config.initial_admin_public_key {
+                        Some(admin_pk) => op_config.public_key.as_deref() == Some(admin_pk) || &address == admin_pk,
+                        None => true, // If no initial admin is specified, this first node becomes admin
+                    };
+                    if current_node_is_admin {
+                        log::info!("This node is designated as an admin node.");
+                    }
+
                     // Build bootstrap list, combining user-provided bootstraps with the bootstrap domain
                     let mut bootstraps = parser.bootstraps.clone();
                     if bootstraps.is_empty() {
@@ -158,11 +171,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // If no bootstraps are specified, initialize the node without joining
                     if bootstraps.is_empty() {
                         log::info!("No bootstraps specified, initializing node without joining");
-                        if let Err(e) = formnet::init::init(address.clone()).await {
+                        if let Err(e) = formnet::init::init(address.clone(), formnet_cidr_to_use.clone(), current_node_is_admin).await {
                             log::error!("Error in formnet init... {e}");
                             return Ok(());
                         }
                         
+                        // Ensure admin account is set up in form-state
+                        let admin_key_to_ensure = op_config.initial_admin_public_key.as_deref().unwrap_or(&address).to_string();
+                        tokio::spawn(async move {
+                            log::info!("Attempting to ensure admin account for key: {}", admin_key_to_ensure);
+                            let client = reqwest::Client::new();
+                            let res = client.post("http://localhost:3004/bootstrap/ensure_admin_account")
+                                .json(&serde_json::json!({ "admin_public_key": admin_key_to_ensure }))
+                                .send()
+                                .await;
+                            if let Ok(response) = res {
+                                if response.status().is_success() {
+                                    log::info!("Successfully ensured admin account.");
+                                } else {
+                                    log::error!("Failed to ensure admin account, status: {}, body: {:?}", response.status(), response.text().await);
+                                }
+                            } else if let Err(e) = res {
+                                log::error!("Error calling ensure_admin_account endpoint: {}", e);
+                            }
+                        });
+
                         log::info!("Successfully initialized bootstrap node");
                         
                         // Detect public IP for bootstrap node

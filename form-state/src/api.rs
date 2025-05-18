@@ -29,6 +29,7 @@ use crate::auth::{
 use serde_json::json;
 use crate::billing::middleware::EligibilityError;
 use hex;
+use form_node_metrics::{capabilities::NodeCapabilities, capacity::NodeCapacity, metrics::NodeMetrics};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -117,14 +118,15 @@ async fn node_auth_middleware(
     // Lock the datastore to check admin status
     let datastore = state.lock().await;
     
-    // Check if this address belongs to an admin node
-    let is_admin = datastore.network_state.is_admin_address(&address_hex);
+    // Check if this address belongs to an account with global admin privileges
+    let is_system_admin = datastore.account_state.get_account(&address_hex)
+        .map_or(false, |acc| acc.is_global_admin);
     
-    if is_admin {
-        log::info!("Node authentication successful: Address 0x{} is an admin", address_hex);
+    if is_system_admin {
+        log::info!("Node authentication successful: Address 0x{} is a global system admin", address_hex);
         Ok(next.run(req).await)
     } else {
-        log::warn!("Authentication failed: Address 0x{} is not an admin", address_hex);
+        log::warn!("Authentication failed: Address 0x{} is not a global system admin", address_hex);
         Err(StatusCode::UNAUTHORIZED)
     }
 }
@@ -235,6 +237,9 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/bootstrap/peer_state", get(peer_state))
         .route("/bootstrap/cidr_state", get(cidr_state))
         .route("/bootstrap/assoc_state", get(assoc_state))
+        .route("/bootstrap/ensure_admin_account", post(ensure_admin_account))
+        // Devnet specific endpoint for receiving gossiped Ops
+        .route("/devnet_gossip/apply_op", post(devnet_apply_op_handler))
         // Add read-only endpoints for non-sensitive data
         .route("/agents", get(list_agents))
         .route("/agents/:id", get(get_agent))
@@ -265,6 +270,7 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/node/update", post(update_node))
         .route("/node/:id/get", get(get_node))
         .route("/node/:id/delete", post(delete_node))
+        .route("/node/:id/report_metrics", post(report_node_metrics))
         .route("/user/redeem", post(redeem_invite))
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -280,6 +286,7 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/user/:id/get_all_allowed", get(get_all_allowed))
         .route("/user/list", get(list_users))
         .route("/user/list_admin", get(list_admin))
+        .route("/peer/list_active", get(list_active_peers))
         .route("/user/:cidr/list", get(list_by_cidr))        
         // CIDR management
         .route("/cidr/:id/get", get(get_cidr))
@@ -310,6 +317,7 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/account/create", post(create_account))
         .route("/account/update", post(update_account))
         .route("/account/delete", post(delete_account))
+        .route("/account/:address/is_global_admin", get(is_global_admin_handler))
         .route("/account/transfer-ownership", post(transfer_instance_ownership))
         // Apply ECDSA auth middleware to all account management routes
         .layer(middleware::from_fn_with_state(
@@ -679,5 +687,330 @@ async fn remove_node_operator_key(
             "success": false,
             "error": "Failed to remove operator key from node"
         })),
+    }
+}
+
+#[derive(Deserialize)]
+struct EnsureAdminPayload {
+    admin_public_key: String,
+}
+
+async fn ensure_admin_account(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Json(payload): Json<EnsureAdminPayload>,
+) -> impl IntoResponse {
+    let admin_key = payload.admin_public_key;
+    log::info!("Ensuring admin account for key: {}", admin_key);
+    let mut datastore = state.lock().await;
+
+    let account_exists = datastore.account_state.get_account(&admin_key).is_some();
+    
+    let mut account_to_save = if account_exists {
+        let mut acc = datastore.account_state.get_account(&admin_key).unwrap(); // Safe unwrap due to check
+        acc.is_global_admin = true;
+        acc.updated_at = chrono::Utc::now().timestamp();
+        acc
+    } else {
+        let mut new_acc = crate::accounts::Account::new(admin_key.clone());
+        new_acc.is_global_admin = true;
+        new_acc
+    };
+
+    let op = datastore.account_state.update_account_local(account_to_save);
+    match datastore.handle_account_op(op).await {
+        Ok(_) => (StatusCode::OK, Json(json!({ "status": "success", "message": "Admin account ensured."}))),
+        Err(e) => {
+            log::error!("Failed to ensure admin account for {}: {}", admin_key, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "status": "error", "message": e.to_string()})))
+        }
+    }
+}
+
+// Add new handler function
+async fn is_global_admin_handler(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path(address): Path<String>,
+) -> impl IntoResponse {
+    let datastore = state.lock().await;
+    match datastore.account_state.get_account(&address) {
+        Some(account) => (StatusCode::OK, Json(json!({ "address": address, "is_global_admin": account.is_global_admin }))),
+        None => (StatusCode::NOT_FOUND, Json(json!({ "error": "Account not found" }))),
+    }
+}
+
+// New handler for listing all active (non-disabled) peers
+async fn list_active_peers(State(state): State<Arc<Mutex<DataStore>>>) -> impl IntoResponse {
+    let datastore = state.lock().await;
+    let active_peer_ips = datastore.network_state.peers.iter()
+        .filter_map(|entry| {
+            let (_, reg) = entry.val;
+            reg.val().map(|reg_val| reg_val.value())
+        })
+        .filter(|peer| !peer.is_disabled)
+        .filter_map(|peer| {
+            peer.endpoint.as_ref().and_then(|ep| {
+                ep.resolve().ok().map(|socket_addr| socket_addr.ip().to_string())
+            })
+        })
+        .collect::<Vec<String>>();
+    (StatusCode::OK, Json(active_peer_ips))
+}
+
+#[derive(Deserialize)]
+struct ReportMetricsPayload {
+    capacity: NodeCapacity,
+    metrics: NodeMetrics,
+    // Optionally, could include capabilities if they can change dynamically
+    // capabilities: Option<NodeCapabilities> 
+}
+
+async fn report_node_metrics(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path(node_id): Path<String>,
+    Json(payload): Json<ReportMetricsPayload>,
+) -> impl IntoResponse {
+    log::info!("Received metrics report for node_id: {}", node_id);
+    let mut datastore = state.lock().await;
+
+    // It's better to have a dedicated method in DataStore that calls node_state.update_node_metrics
+    // and then handle_node_op for atomicity and proper op generation.
+    // For now, directly using node_state and then queueing.
+    match datastore.node_state.update_node_metrics(node_id.clone(), payload.capacity, payload.metrics) {
+        Some(node_op) => {
+            match datastore.handle_node_op(node_op).await {
+                Ok(_) => (StatusCode::OK, Json(json!({ "status": "success", "message": "Metrics reported."}))),
+                Err(e) => {
+                    log::error!("Failed to handle node_op for metrics report {}: {}", node_id, e);
+                    (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "status": "error", "message": e.to_string()})))
+                }
+            }
+        }
+        None => {
+            log::warn!("Failed to update metrics for node_id: {} (node not found or no change)", node_id);
+            (StatusCode::NOT_FOUND, Json(json!({ "status": "error", "message": "Node not found or no metrics change to report"})))
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)] // Add Debug for logging
+struct DevnetGossipOpContainer {
+    op_type: String, // e.g., "PeerOp", "NodeOp"
+    op_payload_json: String, // The specific Op (PeerOp, NodeOp, etc.) serialized as JSON string
+}
+
+async fn devnet_apply_op_handler(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Json(payload): Json<DevnetGossipOpContainer>,
+) -> impl IntoResponse {
+    log::info!("DEVNET: Received direct gossip op: type '{}'", payload.op_type);
+    let mut datastore = state.lock().await;
+
+    // Sub-task 5.2.2.1: Deserialize the received Op (op_payload_json based on op_type)
+    // Sub-task 5.2.2.2: Verify signature (inherent in Op apply methods)
+    // Sub-task 5.2.2.3: Apply the Op to local DataStore
+    // Sub-task 5.2.2.4: Ensure no re-gossip
+    
+    // Actual deserialization and application logic will be in 5.2.2
+    // For now, just acknowledge receipt for 5.2.1
+    match payload.op_type.as_str() {
+        "PeerOp" => {
+            match serde_json::from_str::<crate::network::PeerOp<String>>(&payload.op_payload_json) {
+                Ok(peer_op) => {
+                    // Apply the Op directly to the network state's CRDT map.
+                    // The peer_op method in NetworkState should handle signature verification implicitly via map.apply.
+                    datastore.network_state.peer_op(peer_op); 
+                    // Persist the entire datastore state after applying the op.
+                    match crate::db::write_datastore(&crate::datastore::DB_HANDLE, &*datastore) { // Pass datastore by reference
+                        Ok(_) => {
+                            log::info!("DEVNET: Successfully applied and persisted PeerOp.");
+                            (StatusCode::OK, Json(json!({"status": "success", "message": "PeerOp applied."})))
+                        }
+                        Err(e) => {
+                            log::error!("DEVNET: Failed to persist datastore after applying PeerOp: {}", e);
+                            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"status": "error", "message": "Failed to persist state after applying PeerOp"})))
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!("DEVNET: Failed to deserialize PeerOp: {}", e);
+                    (StatusCode::BAD_REQUEST, Json(json!({"status": "error", "message": "Failed to deserialize PeerOp"})))
+                }
+            }
+        }
+        "NodeOp" => {
+            match serde_json::from_str::<crate::nodes::NodeOp>(&payload.op_payload_json) {
+                Ok(node_op) => {
+                    datastore.node_state.node_op(node_op); 
+                    match crate::db::write_datastore(&crate::datastore::DB_HANDLE, &*datastore) {
+                        Ok(_) => {
+                            log::info!("DEVNET: Successfully applied and persisted NodeOp.");
+                            (StatusCode::OK, Json(json!({"status": "success", "message": "NodeOp applied."})))
+                        }
+                        Err(e) => {
+                            log::error!("DEVNET: Failed to persist datastore after applying NodeOp: {}", e);
+                            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"status": "error", "message": "Failed to persist state after applying NodeOp"})))
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!("DEVNET: Failed to deserialize NodeOp: {}", e);
+                    (StatusCode::BAD_REQUEST, Json(json!({"status": "error", "message": "Failed to deserialize NodeOp"})))
+                }
+            }
+        }
+        "AccountOp" => {
+            match serde_json::from_str::<crate::accounts::AccountOp>(&payload.op_payload_json) {
+                Ok(account_op) => {
+                    datastore.account_state.account_op(account_op); 
+                    match crate::db::write_datastore(&crate::datastore::DB_HANDLE, &*datastore) {
+                        Ok(_) => {
+                            log::info!("DEVNET: Successfully applied and persisted AccountOp.");
+                            (StatusCode::OK, Json(json!({"status": "success", "message": "AccountOp applied."})))
+                        }
+                        Err(e) => {
+                            log::error!("DEVNET: Failed to persist datastore after applying AccountOp: {}", e);
+                            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"status": "error", "message": "Failed to persist state after applying AccountOp"})))
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!("DEVNET: Failed to deserialize AccountOp: {}", e);
+                    (StatusCode::BAD_REQUEST, Json(json!({"status": "error", "message": "Failed to deserialize AccountOp"})))
+                }
+            }
+        }
+        "CidrOp" => {
+            match serde_json::from_str::<crate::network::CidrOp<String>>(&payload.op_payload_json) {
+                Ok(cidr_op) => {
+                    datastore.network_state.cidr_op(cidr_op); 
+                    match crate::db::write_datastore(&crate::datastore::DB_HANDLE, &*datastore) {
+                        Ok(_) => {
+                            log::info!("DEVNET: Successfully applied and persisted CidrOp.");
+                            (StatusCode::OK, Json(json!({"status": "success", "message": "CidrOp applied."})))
+                        }
+                        Err(e) => {
+                            log::error!("DEVNET: Failed to persist datastore after applying CidrOp: {}", e);
+                            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"status": "error", "message": "Failed to persist state after applying CidrOp"})))
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!("DEVNET: Failed to deserialize CidrOp: {}", e);
+                    (StatusCode::BAD_REQUEST, Json(json!({"status": "error", "message": "Failed to deserialize CidrOp"})))
+                }
+            }
+        }
+        "AssocOp" => {
+            match serde_json::from_str::<crate::network::AssocOp<String>>(&payload.op_payload_json) {
+                Ok(assoc_op) => {
+                    datastore.network_state.associations_op(assoc_op); 
+                    match crate::db::write_datastore(&crate::datastore::DB_HANDLE, &*datastore) {
+                        Ok(_) => {
+                            log::info!("DEVNET: Successfully applied and persisted AssocOp.");
+                            (StatusCode::OK, Json(json!({"status": "success", "message": "AssocOp applied."})))
+                        }
+                        Err(e) => {
+                            log::error!("DEVNET: Failed to persist datastore after applying AssocOp: {}", e);
+                            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"status": "error", "message": "Failed to persist state after applying AssocOp"})))
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!("DEVNET: Failed to deserialize AssocOp: {}", e);
+                    (StatusCode::BAD_REQUEST, Json(json!({"status": "error", "message": "Failed to deserialize AssocOp"})))
+                }
+            }
+        }
+        "DnsOp" => {
+            match serde_json::from_str::<crate::network::DnsOp>(&payload.op_payload_json) {
+                Ok(dns_op) => {
+                    datastore.network_state.dns_op(dns_op); 
+                    match crate::db::write_datastore(&crate::datastore::DB_HANDLE, &*datastore) {
+                        Ok(_) => {
+                            log::info!("DEVNET: Successfully applied and persisted DnsOp.");
+                            (StatusCode::OK, Json(json!({"status": "success", "message": "DnsOp applied."})))
+                        }
+                        Err(e) => {
+                            log::error!("DEVNET: Failed to persist datastore after applying DnsOp: {}", e);
+                            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"status": "error", "message": "Failed to persist state after applying DnsOp"})))
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!("DEVNET: Failed to deserialize DnsOp: {}", e);
+                    (StatusCode::BAD_REQUEST, Json(json!({"status": "error", "message": "Failed to deserialize DnsOp"})))
+                }
+            }
+        }
+        "InstanceOp" => {
+            match serde_json::from_str::<crate::instances::InstanceOp>(&payload.op_payload_json) {
+                Ok(instance_op) => {
+                    datastore.instance_state.instance_op(instance_op); 
+                    match crate::db::write_datastore(&crate::datastore::DB_HANDLE, &*datastore) {
+                        Ok(_) => {
+                            log::info!("DEVNET: Successfully applied and persisted InstanceOp.");
+                            (StatusCode::OK, Json(json!({"status": "success", "message": "InstanceOp applied."})))
+                        }
+                        Err(e) => {
+                            log::error!("DEVNET: Failed to persist datastore after applying InstanceOp: {}", e);
+                            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"status": "error", "message": "Failed to persist state after applying InstanceOp"})))
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!("DEVNET: Failed to deserialize InstanceOp: {}", e);
+                    (StatusCode::BAD_REQUEST, Json(json!({"status": "error", "message": "Failed to deserialize InstanceOp"})))
+                }
+            }
+        }
+        "AgentOp" => {
+            match serde_json::from_str::<crate::agent::AgentOp>(&payload.op_payload_json) {
+                Ok(agent_op) => {
+                    // The handle_agent_op in datastore.rs currently only applies locally.
+                    // If it were to be gossiped, it would also need the #[cfg] logic.
+                    // For receiving, we just apply locally.
+                    datastore.agent_state.agent_op(agent_op); // Directly apply to the map
+                    match crate::db::write_datastore(&crate::datastore::DB_HANDLE, &*datastore) {
+                        Ok(_) => {
+                            log::info!("DEVNET: Successfully applied and persisted AgentOp.");
+                            (StatusCode::OK, Json(json!({"status": "success", "message": "AgentOp applied."})))
+                        }
+                        Err(e) => {
+                            log::error!("DEVNET: Failed to persist datastore after applying AgentOp: {}", e);
+                            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"status": "error", "message": "Failed to persist state after applying AgentOp"})))
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!("DEVNET: Failed to deserialize AgentOp: {}", e);
+                    (StatusCode::BAD_REQUEST, Json(json!({"status": "error", "message": "Failed to deserialize AgentOp"})))
+                }
+            }
+        }
+        "ModelOp" => {
+            match serde_json::from_str::<crate::model::ModelOp>(&payload.op_payload_json) {
+                Ok(model_op) => {
+                    datastore.model_state.model_op(model_op); // Directly apply to the map
+                    match crate::db::write_datastore(&crate::datastore::DB_HANDLE, &*datastore) {
+                        Ok(_) => {
+                            log::info!("DEVNET: Successfully applied and persisted ModelOp.");
+                            (StatusCode::OK, Json(json!({"status": "success", "message": "ModelOp applied."})))
+                        }
+                        Err(e) => {
+                            log::error!("DEVNET: Failed to persist datastore after applying ModelOp: {}", e);
+                            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"status": "error", "message": "Failed to persist state after applying ModelOp"})))
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!("DEVNET: Failed to deserialize ModelOp: {}", e);
+                    (StatusCode::BAD_REQUEST, Json(json!({"status": "error", "message": "Failed to deserialize ModelOp"})))
+                }
+            }
+        }
+        _ => {
+            log::warn!("DEVNET: Received unknown op_type for direct gossip: {}", payload.op_type);
+            (StatusCode::BAD_REQUEST, Json(json!({ "status": "error", "message": "Unknown op_type"})))
+        }
     }
 }

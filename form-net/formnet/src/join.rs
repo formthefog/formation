@@ -173,21 +173,16 @@ async fn try_get_bootstrap_info(bootstrap: Vec<String>) -> Result<BootstrapInfo,
 
 fn write_config_file(
     keypair: KeyPair,
-    request: BootstrapInfo,
-    ip: IpAddr,
-    bootstrap_info: BootstrapInfo,
+    _joining_node_info: &BootstrapInfo,
+    assigned_interface_info: &shared::interface_config::InterfaceInfo,
+    connected_bootstrap_info: &BootstrapInfo,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config_file = ConfigFile {
         private_key: keypair.private.to_base64(),
-        address: ip.clone(),
-        listen_port: match request.external_endpoint {
-            Some(endpoint) => {
-                Some(endpoint.port())
-            },
-            None => None
-        },
-        network_cidr_prefix: 8,
-        bootstrap: Some(hex::encode(&serde_json::to_vec(&bootstrap_info)?)) 
+        address: assigned_interface_info.address.addr(),
+        listen_port: assigned_interface_info.listen_port,
+        network_cidr_prefix: assigned_interface_info.address.prefix_len(),
+        bootstrap: Some(hex::encode(&serde_json::to_vec(connected_bootstrap_info)?)),
     };
 
     std::fs::create_dir_all(PathBuf::from(CONFIG_DIR))?;
@@ -200,22 +195,24 @@ fn write_config_file(
 
 fn try_bring_formnet_up(
     keypair: KeyPair,
-    ip: IpAddr,
-    request: BootstrapInfo,
-    bootstrap_info: BootstrapInfo,
+    assigned_interface_info: &shared::interface_config::InterfaceInfo,
+    _joining_node_info: &BootstrapInfo,
+    connected_bootstrap_info: &BootstrapInfo,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let peer_internal_ip = connected_bootstrap_info.internal_endpoint
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "Bootstrap internal endpoint missing"))?;
+    let peer_external_socketaddr = connected_bootstrap_info.external_endpoint
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "Bootstrap external endpoint missing"))?;
+
     wg::up(
-        &InterfaceName::from_str("formnet")?,
+        &InterfaceName::from_str(NETWORK_NAME)?,
         &keypair.private.to_base64(), 
-        IpNet::new(ip.clone(), 8)?,
-        match request.external_endpoint {
-            Some(addr) => Some(addr.port()),
-            None => None
-        },
+        assigned_interface_info.address,
+        assigned_interface_info.listen_port,
         Some((
-            &bootstrap_info.pubkey,
-            bootstrap_info.internal_endpoint.unwrap(),
-            bootstrap_info.external_endpoint.unwrap(),
+            &connected_bootstrap_info.pubkey,
+            peer_internal_ip,
+            peer_external_socketaddr,
         )), 
         NetworkOpts::default(),
     )?;
@@ -258,21 +255,21 @@ async fn try_join_formnet(
     .json(&request)
     .send()
     .await?.json::<Response>().await {
-        Ok(Response::Join(BootstrapResponse::Success(ip))) => {
-            log::info!("Received my IP from bootstrap: {ip}");
+        Ok(Response::Join(BootstrapResponse::Success(interface_config))) => {
+            log::info!("Received my interface config from bootstrap: {:?}", interface_config);
             log::info!("Bringing Wireguard interface up...");
-            write_config_file(keypair.clone(), request.clone(), ip.clone(), bootstrap_info.clone())?;
+            write_config_file(keypair.clone(), &request, &interface_config.interface, &bootstrap_info)?;
             thread::sleep(Duration::from_secs(5));
-            try_bring_formnet_up(keypair, ip, request, bootstrap_info)?; 
+            try_bring_formnet_up(keypair, &interface_config.interface, &request, &bootstrap_info)?;
 
-            if !try_holepunch_fetch(vec![dial.to_string()], ip.to_string()).await {
+            if !try_holepunch_fetch(vec![dial.to_string()], interface_config.interface.address.addr().to_string()).await {
                 eprintln!(
                     "Failed to fetch peers from server, you will need to manually run the 'up' command."
                 );
             };
             log_initial_endpoints();
             log::info!("Wireguard interface is up, saved config file");
-            return Ok(ip.clone());
+            return Ok(interface_config.interface.address.addr());
         }
         Err(e) => {
             log::error!("Error attempting to join network: {e}");
