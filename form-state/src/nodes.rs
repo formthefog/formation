@@ -155,8 +155,10 @@ impl NodeMetadata {
 /// Additional annotations, such as roles and datacenter info.
 #[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeAnnotations {
-    pub(crate) roles: Vec<String>,     // e.g. ["compute", "storage"]
+    pub(crate) roles: Vec<String>,     // e.g. ["compute", "storage", "builder"]
     pub(crate) datacenter: String,     // Which datacenter the node belongs to.
+    pub(crate) vmm_service_api_endpoint: Option<String>, // e.g., "http://1.2.3.4:3002"
+    pub(crate) pack_service_api_endpoint: Option<String>,  // e.g., "http://1.2.3.4:3003"
 }
 
 impl NodeAnnotations {
@@ -166,6 +168,14 @@ impl NodeAnnotations {
 
     pub fn datacenter(&self) -> &str {
         &self.datacenter
+    }
+
+    pub fn vmm_service_api_endpoint(&self) -> Option<&String> {
+        self.vmm_service_api_endpoint.as_ref()
+    }
+
+    pub fn pack_service_api_endpoint(&self) -> Option<&String> {
+        self.pack_service_api_endpoint.as_ref()
     }
 }
 

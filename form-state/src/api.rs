@@ -1,6 +1,7 @@
 use crate::datastore::{DataStore, pong, process_message, full_state};
 use std::sync::Arc;
 use std::time::Duration;
+use std::str::FromStr;
 use tokio::sync::Mutex;
 use axum::{
     Router, 
@@ -30,6 +31,7 @@ use serde_json::json;
 use crate::billing::middleware::EligibilityError;
 use hex;
 use form_node_metrics::{capabilities::NodeCapabilities, capacity::NodeCapacity, metrics::NodeMetrics};
+use crate::tasks::{TaskStatus as FormStateTaskStatus, TaskId as FormStateTaskId};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -270,6 +272,8 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/node/:id/delete", post(delete_node))
         .route("/node/:id/report_metrics", post(report_node_metrics))
         .route("/user/redeem", post(redeem_invite))
+        // Task Update Endpoint
+        .route("/task/update_status", post(update_task_status_handler))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             node_auth_middleware,
@@ -798,7 +802,7 @@ async fn check_task_responsibility(
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct ReportMetricsPayload {
     capacity: NodeCapacity,
     metrics: NodeMetrics,
@@ -1107,5 +1111,49 @@ async fn get_task_handler(
     match datastore.task_state.get_task(&task_id) {
         Some(task) => (StatusCode::OK, Json(json!(task))),
         None => (StatusCode::NOT_FOUND, Json(json!({ "error": "Task not found" }))),
+    }
+}
+
+#[derive(Deserialize, Debug)] // Added Debug
+struct UpdateTaskStatusPayload {
+    task_id: FormStateTaskId,
+    status: String, // Will be parsed into FormStateTaskStatus
+    progress: Option<u8>,
+    result_info: Option<String>,
+}
+
+async fn update_task_status_handler(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    // This endpoint is in network_writers_api, so node_auth_middleware applies.
+    // The recovered address here would be the node performing the update.
+    // We might want to verify that this node is assigned_to_node_id for the task.
+    _recovered_address: Option<RecoveredAddress>, // From node_auth_middleware or ecdsa_auth_middleware if switched
+    Json(payload): Json<UpdateTaskStatusPayload>,
+) -> impl IntoResponse {
+    log::info!("Received task status update for task_id: {}", payload.task_id);
+    
+    // Parse status string to TaskStatus enum
+    let task_status = match FormStateTaskStatus::from_str(&payload.status) { // Assuming FromStr for TaskStatus
+        Ok(s) => s,
+        Err(_) => {
+            log::error!("Invalid task status string: {}", payload.status);
+            return (StatusCode::BAD_REQUEST, Json(json!({ "status": "error", "message": "Invalid task status provided"}))).into_response();
+        }
+    };
+
+    let mut datastore = state.lock().await;
+    let task_request = crate::datastore::TaskRequest::UpdateStatus {
+        task_id: payload.task_id.clone(),
+        status: task_status,
+        progress: payload.progress,
+        result_info: payload.result_info,
+    };
+
+    match datastore.handle_task_request(task_request).await {
+        Ok(_) => (StatusCode::OK, Json(json!({ "status": "success", "message": "Task status updated."}))).into_response(),
+        Err(e) => {
+            log::error!("Failed to update task status for {}: {}", payload.task_id, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "status": "error", "message": e.to_string()}))).into_response()
+        }
     }
 }

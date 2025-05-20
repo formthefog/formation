@@ -27,6 +27,23 @@ pub enum TaskStatus {
     Cancelled,            // Cancelled by user/system before completion
 }
 
+impl std::str::FromStr for TaskStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "PendingPoCAssessment" => Ok(TaskStatus::PendingPoCAssessment),
+            "PoCAssigned" => Ok(TaskStatus::PoCAssigned),
+            "Claimed" => Ok(TaskStatus::Claimed),
+            "InProgress" => Ok(TaskStatus::InProgress),
+            "Completed" => Ok(TaskStatus::Completed),
+            "Failed" => Ok(TaskStatus::Failed),
+            "Cancelled" => Ok(TaskStatus::Cancelled),
+            _ => Err(format!("Unknown task status string: {}", s)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BuildImageParams { // Parameters to build an image artifact (e.g., a rootfs)
     pub output_artifact_name: String, // e.g., "my-app-rootfs"

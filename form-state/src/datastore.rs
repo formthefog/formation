@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, path::PathBuf, sync::Arc};
+use std::{collections::{HashMap, HashSet, BTreeSet}, path::PathBuf, sync::Arc};
 use axum::{extract::State, Json};
 use form_dns::{api::{DomainRequest, DomainResponse}, store::FormDnsRecord};
 use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
@@ -1544,6 +1544,43 @@ impl DataStore {
         }
         Ok(())
     }
+
+    // Method to dispatch a task to a specific responsible node
+    async fn dispatch_task_to_node(&self, task: &crate::tasks::Task, node: &crate::nodes::Node) -> Result<(), Box<dyn std::error::Error>> {
+        log::info!("Attempting to dispatch task {} to node {}", task.task_id, node.node_id);
+
+        // Sub-sub-task 4.3.2.2.2 will fill this method's logic
+        // - Get service endpoint from node.metadata.annotations
+        // - Construct payload (LaunchTaskInfo or PackBuildRequest + task_id)
+        // - #[cfg(devnet)] => direct HTTP POST (signed)
+        // - #[cfg(not(devnet))] => write_to_queue (specific topic for node/task_type)
+
+        match &task.task_variant {
+            crate::tasks::TaskVariant::LaunchInstance(params) => {
+                log::info!("Dispatching LaunchInstance task {} to node {}", task.task_id, node.node_id);
+                if let Some(endpoint_url) = node.metadata.annotations().vmm_service_api_endpoint() { // Using getter
+                    // TODO: Implement actual dispatch logic for LaunchInstance
+                    log::debug!("Target VMM service endpoint for node {}: {}", node.node_id, endpoint_url);
+                    // Construct LaunchTaskInfo, then devnet POST or prod queue.
+                } else {
+                    log::warn!("Node {} is responsible for LaunchInstance task {} but has no vmm_service_api_endpoint defined.", node.node_id, task.task_id);
+                }
+            }
+            crate::tasks::TaskVariant::BuildImage(params) => {
+                log::info!("Dispatching BuildImage task {} to node {}", task.task_id, node.node_id);
+                if let Some(endpoint_url) = node.metadata.annotations().pack_service_api_endpoint() { // Using getter
+                    // TODO: Implement actual dispatch logic for BuildImage (incl. pre-processing)
+                    log::debug!("Target Pack service endpoint for node {}: {}", node.node_id, endpoint_url);
+                    // Construct PackBuildRequest, then devnet POST or prod queue.
+                } else {
+                    log::warn!("Node {} is responsible for BuildImage task {} but has no pack_service_api_endpoint defined.", node.node_id, task.task_id);
+                }
+            }
+            // Add other task variants if they need dispatching
+        }
+
+        Ok(())
+    }
 }
 
 pub async fn complete_bootstrap(State(state): State<Arc<Mutex<DataStore>>>) {
@@ -1871,6 +1908,8 @@ mod tests {
                 annotations: NodeAnnotations {
                     roles: vec!["compute".to_string()],
                     datacenter: "dc1".to_string(),
+                    vmm_service_api_endpoint: None, // Added field
+                    pack_service_api_endpoint: None, // Added field
                 },
                 monitoring: NodeMonitoring {
                     logging_enabled: true,

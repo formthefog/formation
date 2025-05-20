@@ -308,13 +308,12 @@
 
 ## Phase 4: Task 4 (Node State Communication & Task Selection with Proof of Claim)
 
-**Goal:** Implement a deterministic task self-selection mechanism ("Proof of Claim") for image building and image hosting tasks within `form-state`, and ensure nodes can determine their responsibility for such tasks. Other state changes are already handled by general gossip.
+**Goal:** Implement a deterministic task self-selection mechanism ("Proof of Claim") for image building and image hosting tasks within `form-state`. `form-state` will determine responsible node(s) and dispatch tasks directly to them.
 
 **Preamble:**
 *   "Proof of Claim": For a given task (`task_id`) and a set of capable nodes (`node_id`s), responsibility is determined by `XOR(task_id, node_id)`. Nodes with the lowest XOR result(s) are selected.
 *   This applies specifically to "BuildImage" and "LaunchInstance" (image hosting) tasks.
-*   All nodes must be able to run this algorithm to identify responsible parties.
-*   `form-state` will house the core logic and expose an API for services to check responsibility.
+*   `form-state` will house the PoC logic and dispatch tasks to responsible worker services.
 
 ### Task 4.1: (Already Completed - Verify and Enhance Node State Communication)
 - [x] **Sub-task 4.1.1:** Ensure `Node` updates (capabilities, metrics, etc.) are reliably gossiped.
@@ -323,62 +322,67 @@
 
 ### Task 4.2: Task Definition and Representation (for Proof of Claim tasks)
 - [x] **Sub-task 4.2.1:** Define specific "tasks" (e.g., "build image," "launch instance").
-    - *Completed definitions: `BuildImage`, `LaunchInstance`.*
 - [x] **Sub-task 4.2.2:** Decide how tasks are represented and stored.
     - *Decision:* Core tasks like `BuildImage` and `LaunchInstance` will be represented as CRDTs in `form-state`.
 - [x] **Sub-task 4.2.3:** Define `Task` struct in `form-state` for Proof of Claim tasks.
-    - [x] **Sub-sub-task 4.2.3.1:** Create `form-state/src/tasks.rs` (or similar module).
-    - [x] **Sub-sub-task 4.2.3.2:** Define `TaskId` (e.g., `type TaskId = String; // Should be a UUID`).
-    - [x] **Sub-sub-task 4.2.3.3:** Define `TaskStatus` enum (e.g., `PendingPoCAssessment`, `PoCAssigned`, `InProgress`, `Completed`, `Failed`).
-    - [x] **Sub-sub-task 4.2.3.4:** Define parameter structs for relevant tasks:
-        *   `BuildImageParams { source_url: String, image_name: String, image_tag: String, ... }`
-        *   `LaunchInstanceParams { instance_name: String, image_id: String, instance_type: String, ... }`
-    - [x] **Sub-sub-task 4.2.3.5:** Define `TaskVariant` enum to encapsulate different task types and their parameters (e.g., `BuildImage(BuildImageParams)`, `LaunchInstance(LaunchInstanceParams)`).
-    - [x] **Sub-sub-task 4.2.3.6:** Define the main `Task` struct:
-        *   `task_id: TaskId`
-        *   `task_variant: TaskVariant`
-        *   `status: TaskStatus`
-        *   `required_capabilities: Vec<String>`
-        *   `target_redundancy: u8`
-        *   `responsible_nodes: Option<BTreeSet<String>>`
-        *   `created_at: i64`, `updated_at: i64`
-        *   `submitted_by: String`
-        *   `result_info: Option<String>`
+    - [x] **Sub-sub-task 4.2.3.1:** Create `form-state/src/tasks.rs`.
+    - [x] **Sub-sub-task 4.2.3.2:** Define `TaskId`.
+    - [x] **Sub-sub-task 4.2.3.3:** Define `TaskStatus` enum.
+    - [x] **Sub-sub-task 4.2.3.4:** Define `BuildImageParams`, `LaunchInstanceParams` (aligned with worker service inputs).
+    - [x] **Sub-sub-task 4.2.3.5:** Define `TaskVariant` enum.
+    - [x] **Sub-sub-task 4.2.3.6:** Define the main `Task` struct.
 - [x] **Sub-task 4.2.4:** Implement `TaskState` CRDT in `form-state`.
-    - [x] **Sub-sub-task 4.2.4.1:** Define `TaskOp` (CRDT operation type for tasks).
-    - [x] **Sub-sub-task 4.2.4.2:** Define `TaskState` struct in `form-state` wrapping a `Map<TaskId, BFTReg<Task, Actor>, Actor>`.
+    - [x] **Sub-sub-task 4.2.4.1:** Define `TaskOp`.
+    - [x] **Sub-sub-task 4.2.4.2:** Define `TaskState` struct.
     - [x] **Sub-sub-task 4.2.4.3:** Implement methods in `TaskState` for `update_task_local` and `task_op`.
-    - [x] **Sub-sub-task 4.2.4.4:** Add `TaskState` to the main `DataStore` struct.
-    - [x] **Sub-sub-task 4.2.4.5:** Add `handle_task_op` and related request handlers to `DataStore` with conditional gossip.
+    - [x] **Sub-sub-task 4.2.4.4:** Add `TaskState` to `DataStore`.
+    - [x] **Sub-sub-task 4.2.4.5:** Add `handle_task_op` and `handle_task_request` to `DataStore`.
 
-### Task 4.3: Implement Proof of Claim Algorithm in `form-state`
-- [x] **Sub-task 4.3.1:** Create a utility function/module for "Proof of Claim" logic within `form-state`.
+### Task 4.3: Implement Proof of Claim and Task Dispatch in `form-state`
+- [x] **Sub-task 4.3.1:** Create utility functions for "Proof of Claim" logic within `form-state/src/tasks.rs`.
     - [x] **Sub-sub-task 4.3.1.1:** Implement `fn calculate_poc_score(task_id: &str, node_id: &str) -> u64`.
     - [x] **Sub-sub-task 4.3.1.2:** Implement `fn determine_responsible_nodes(task: &Task, all_nodes: &[Node], datastore: &DataStore) -> BTreeSet<String>`.
-- [x] **Sub-task 4.3.2:** Integrate PoC into Task lifecycle.
-    - [x] **Sub-sub-task 4.3.2.1:** When a new PoC-eligible `Task` is created, determine and store `responsible_nodes` and update status.
-        - *Decision:* Favor API handler for this for now.
-    - [x] **Sub-sub-task 4.3.2.2:** Ensure the updated `Task` (with `responsible_nodes`) is gossiped.
+- [x] **Sub-task 4.3.2:** Integrate PoC and Task Dispatch into Task lifecycle within `form-state`.
+    - [x] **Sub-sub-task 4.3.2.1:** When a new PoC-eligible `Task` is created (`TaskRequest::Create` in `DataStore::handle_task_request`):
+        - Set initial status (e.g., `PendingPoCAssessment`).
+        - Create initial `Task` CRDT entry.
+        - Run `determine_responsible_nodes`.
+        - Update the `Task` CRDT entry with `responsible_nodes` and set status to `PoCAssigned` (this update is gossiped).
+    - [ ] **Sub-sub-task 4.3.2.2 (NEW):** After `Task` is `PoCAssigned`, `form-state` prepares and dispatches it to each responsible node.
+        - [x] **Sub-sub-task 4.3.2.2.1 (Plan & Implement):** Define and implement storage for worker service API endpoint information (for `form-pack`, `form-vmm-service`, etc.) within `form-state`.
+            - *Decision & Implementation:* Added `vmm_service_api_endpoint: Option<String>` and `pack_service_api_endpoint: Option<String>` to `NodeAnnotations` struct in `form-state/src/nodes.rs`. Nodes will report these during their registration/update.
+        - [ ] **Sub-sub-task 4.3.2.2.2 (Implement):** Implement the dispatch logic in `form-state/src/datastore.rs` (e.g., in a new method like `async fn dispatch_task_to_node(&self, task: &crate::tasks::Task, node_id: &str, node_info: &crate::nodes::Node)` called from `handle_task_request` after PoC assignment).
+            - *Detail:* This method will be called for each `node_id` in `task.responsible_nodes`.
+            - **If Task is `LaunchInstance`:**
+                - Construct `form_types::event::LaunchTaskInfo` from `task.task_variant` (LaunchInstanceParams) and other `task` fields (`task_id`, `submitted_by`).
+                - Retrieve `node_info.metadata.annotations.vmm_service_api_endpoint()`.
+                - **`devnet` mode (`#[cfg(feature = "devnet")]`):**
+                    - `form-state` makes a direct, authenticated HTTP POST of `LaunchTaskInfo` to the retrieved `vmm_service_api_endpoint` (e.g., to a path like `/internal/dispatch_launch_task`). (Authentication requires `form-state` to sign the request).
+                - **Production mode (`#[cfg(not(feature = "devnet"))]`):**
+                    - `form-state` constructs a `form_types::VmmEvent::ProcessLaunchTask(launch_task_info)`.
+                    - This `VmmEvent` is serialized and sent via `DataStore::write_to_queue` using a specific `sub_topic` and potentially a `topic` string that includes the target `node_id` (e.g., `vmm_task_for_node_{node_id}`).
+            - **If Task is `BuildImage`:**
+                - **Pre-processing by `form-state` (or a helper service it calls):**
+                    - Fetch build context from `BuildImageParams.source_url`.
+                    - Package context into `artifacts: Vec<u8>` (e.g., tarball) if needed by `form-pack` alongside `Formfile`.
+                    - Generate/construct a `form_pack::formfile::Formfile` object/string based on `BuildImageParams` and context.
+                - Construct `form_pack::types::request::PackRequest` (using `output_artifact_name`, the generated `Formfile`, and `artifacts` blob).
+                - Construct `form_pack::types::request::PackBuildRequest` (signing the `PackRequest`).
+                    - *Note:* The `PackBuildRequest` contains `sig` and `hash`. `form-state` needs a mechanism/identity to sign this appropriately, or the receiving `form-pack` endpoint needs to handle an unsigned `PackRequest` if the HTTP dispatch itself is authenticated by `form-state`'s node key.
+                - Add `task.task_id` to the payload for correlation if not part of `PackBuildRequest`.
+                - Retrieve `node_info.metadata.annotations.pack_service_api_endpoint()`.
+                - **`devnet` mode (`#[cfg(feature = "devnet")]`):**
+                    - `form-state` makes a direct, authenticated HTTP POST of the `PackBuildRequest` (or derived simpler payload with `task_id`) to the `pack_service_api_endpoint` (e.g., `/internal/dispatch_build_task`).
+                - **Production mode (`#[cfg(not(feature = "devnet"))]`):**
+                    - `form-state` enqueues the `PackBuildRequest` (or derived payload with `task_id`) via `form-p2p` to a topic like `pack_task_for_node_{node_id}`.
+            - *Authentication for devnet direct dispatch:* The HTTP request from `form-state` to worker services must be signed by `form-state`'s node key, and worker services must verify this signature.
 
-### Task 4.4: Expose API Endpoint for Responsibility Check
-- [x] **Sub-task 4.4.1:** In `form-state/src/api.rs`, define an API endpoint for checking task responsibility.
-    - [x] **Sub-sub-task 4.4.1.1:** Implement the handler to fetch task, node, run PoC if needed, and return responsibility status.
-
-### Task 4.5: Node-Side Logic (Conceptual - for `form-pack` / `form-vmm-service`)
-- [x] **Sub-task 4.5.1:** Nodes running `form-pack` or `form-vmm-service` monitor `form-state` for relevant tasks.
-- [x] **Sub-task 4.5.2:** When a task appears, they call the responsibility check endpoint.
-- [x] **Sub-task 4.5.3:** If responsible, node updates task status to `InProgress` (or `Claimed`) and executes.
-- [x] **Sub-task 4.5.4 (Task Execution):** Node executes build/launch (details deferred).
-- [x] **Sub-task 4.5.5 (Status Updates):** Node updates task status/result in `form-state` via API.
-
-### Task 4.6: Testing Proof of Claim Mechanism (Manual Multi-Machine Setup)
-- [ ] **Sub-task 4.6.1:** Setup multiple nodes with varying capabilities.
-- [ ] **Sub-task 4.6.2:** Create a "BuildImage" task requiring specific capabilities.
-    - *Verification:* `Task.responsible_nodes` populated correctly by PoC.
-- [ ] **Sub-task 4.6.3:** On each node, call responsibility check API.
-    - *Verification:* Only designated nodes return `true`.
-- [ ] **Sub-task 4.6.4:** Simulate responsible node starting task; verify status propagation.
-- [ ] **Sub-task 4.6.5:** Test with `target_redundancy > 1`.
+### Task 4.4: Testing Proof of Claim & Dispatch Mechanism (within `form-state`)
+- [ ] **Sub-task 4.4.1:** Setup `form-state` with multiple mock `Node` entries with varying capabilities and service endpoints.
+- [ ] **Sub-task 4.4.2:** Create a "BuildImage" task via `form-state` API.
+    - *Verification:* `Task.responsible_nodes` populated by PoC. Status `PoCAssigned`.
+    - *Verification:* `form-state` attempts to dispatch (logs API calls for `devnet` or queue writes for prod to correct responsible nodes).
+- [ ] **Sub-task 4.4.3:** Test with `target_redundancy > 1`.
 
 ---
 
@@ -402,40 +406,40 @@
 - [x] **Sub-task 5.2.1:** In `form-state/src/api.rs`, define an API endpoint for checking task responsibility.
     - [x] **Sub-sub-task 5.2.1.1:** Implement the handler to fetch task, node, run PoC if needed, and return responsibility status.
 
-## Phase 6: Implement Node-Side PoC Task Handling (in `form-pack` and `form-vmm-service`)
+## Phase 6: Implement Node-Side Task Reception & Execution (in `form-pack` and `form-vmm-service`)
 
-**Goal:** Enable `form-pack` and `form-vmm-service` to monitor `form-state` for relevant tasks, use the Proof of Claim mechanism to determine responsibility, and execute tasks they are responsible for, updating status in `form-state`.
+**Goal:** Enable `form-pack` and `form-vmm-service` to receive dispatched tasks from `form-state` and execute them, updating status back to `form-state`.
 
-### Task 6.1: Enhance `form-vmm-service` for PoC-based `LaunchInstance` Tasks
-- [ ] **Sub-task 6.1.1:** Implement a task monitoring loop in `form-vmm-service`.
-    - [x] **Sub-sub-task 6.1.1.1:** Add task polling to `VmManager::run` loop to fetch tasks and check responsibility, sending `VmmEvent::ProcessLaunchTask` if responsible. (Logic for sending event to self is in place).
-    - [x] **Sub-sub-task 6.1.1.2 (was 6.1.1.1 in plan):** Define `VmmEvent::ProcessLaunchTask(LaunchTaskInfo)` in `form-types/src/event.rs`.
-    - [x] **Sub-sub-task 6.1.1.3 (was 6.1.1.2 in plan):** Add handler for `VmmEvent::ProcessLaunchTask` in `VmManager::handle_vmm_event`.
-        - *Note: Handles status updates to form-state (assuming endpoint exists) and calls self.create(). Construction of `VmInstanceConfig` from formfile_content needs to be robust. `self.create()` itself needs full implementation.*
-- [x] **Sub-task 6.1.2:** For each relevant task found, check responsibility via `form-state` API. (Covered by 6.1.1.1)
-- [ ] **Sub-task 6.1.3:** If responsible for a `LaunchInstance` task:
-    - [x] **Sub-sub-task 6.1.3.1:** Update task status in `form-state` (e.g., to `Claimed`/`InProgress`). (Initial call implemented in 6.1.1.3 handler)
-    - [x] **Sub-sub-task 6.1.3.2:** Extract `formfile_content` and `instance_name`. (Done in 6.1.1.3 handler)
-    - [ ] **Sub-sub-task 6.1.3.3:** Construct `VmInstanceConfig` using these parameters robustly (parsing `formfile_content`).
-    - [x] **Sub-sub-task 6.1.3.4:** Call existing VM creation logic (i.e., ensure `self.create()` is fully implemented).
-    - [x] **Sub-sub-task 6.1.3.5:** Update final task status in `form-state` (`Completed`/`Failed` with `result_info`). (Implemented in 6.1.1.3 handler)
-- [ ] **Sub-task 6.1.4:** Modify `VmInstanceConfig` (if necessary) to be driven by `formfile_content`.
-    - *Note: `VmInstanceConfig` seems to already support `formfile: String`. The key is parsing this string to populate other fields like kernel/rootfs paths, memory, vcpus if `VmManager::create` doesn't do this parsing itself via `Formfile` struct.*
+### Task 6.1: Enhance `form-vmm-service` to Receive and Execute Dispatched `LaunchInstance` Tasks
+- [ ] **Sub-task 6.1.1:** Define a mechanism for `form-vmm-service` to receive dispatched `LaunchTaskInfo` from `form-state`.
+    - [ ] **Sub-sub-task 6.1.1.1 (`devnet`):** Implement an internal, authenticated HTTP API endpoint in `form-vmm-service` (e.g., `POST /internal/dispatch_launch_task`) that accepts `form_types::event::LaunchTaskInfo`.
+        - *Handler will trigger `VmmEvent::ProcessLaunchTask`.*
+    - [ ] **Sub-sub-task 6.1.1.2 (Production):** `VmManager` already has `api_rx` for `VmmEvent`. Ensure `form-state` can enqueue a `VmmEvent::ProcessLaunchTask` that `form-p2p` delivers to this existing channel, or adapt `VmmSubscriber` if a new topic is used.
+- [x] **Sub-task 6.1.2:** When a `VmmEvent::ProcessLaunchTask(launch_info)` is received by `VmManager::handle_vmm_event`:
+    - [x] **Sub-sub-task 6.1.2.1:** Update task status in `form-state` to `InProgress` via API call.
+    - [x] **Sub-sub-task 6.1.2.2:** Extract `formfile_content`, `instance_name` from `launch_info`.
+    - [x] **Sub-sub-task 6.1.2.3:** Construct `VmInstanceConfig` robustly (parsing `formfile_content`).
+    - [x] **Sub-sub-task 6.1.2.4:** Call `VmManager::create()`.
+    - [x] **Sub-sub-task 6.1.2.5:** Update final task status in `form-state`.
 
-### Task 6.2: Implement/Enhance `form-pack` Service/Agent for PoC-based `BuildImage` Tasks
-- [ ] **Sub-task 6.2.1:** Design and implement a long-running service/agent mode for `form-pack`.
-    - [ ] **Sub-sub-task 6.2.1.1:** Service needs node identity and `form-state` communication.
-- [ ] **Sub-task 6.2.2:** Implement a task monitoring loop in the `form-pack` service.
-    - [ ] **Sub-sub-task 6.2.2.1:** Periodically query `form-state` API for `BuildImage` tasks.
-- [ ] **Sub-task 6.2.3:** For each relevant task, check responsibility via `form-state` API.
-- [ ] **Sub-task 6.2.4:** If responsible for a `BuildImage` task:
-    - [ ] **Sub-sub-task 6.2.4.1:** Update task status in `form-state`.
-    - [ ] **Sub-sub-task 6.2.4.2:** Extract `BuildImageParams`.
-    - [ ] **Sub-sub-task 6.2.4.3:** Execute image build using `form-pack` core logic.
-    - [ ] **Sub-sub-task 6.2.4.4:** Update final task status in `form-state` with `result_info` (artifact ID/path, Formfile content/ID).
-- [ ] **Sub-task 6.2.5:** Define/ensure clear handoff from `BuildImage` output to `LaunchInstance` input (Formfile).
+### Task 6.2: Enhance `form-pack` (or new agent) to Receive and Execute Dispatched `BuildImage` Tasks
+- [ ] **Sub-task 6.2.1:** Define a mechanism for `form-pack` service/agent to receive dispatched build tasks (payload should align with or be transformable into `PackBuildRequest`, including `task_id`).
+    - [ ] **Sub-sub-task 6.2.1.1 (`devnet`):** Implement an internal, authenticated API endpoint in `form-pack` service (e.g., `POST /internal/dispatch_build_task`).
+        - *Handler will call existing build logic, e.g., `handle_pack_request`.*
+    - [ ] **Sub-sub-task 6.2.1.2 (Production):** `FormPackManager` already polls a queue via `read_from_queue` and calls `handle_message` which processes `PackBuildRequest`. Ensure `form-state` can publish to this queue for the correct node, including `task_id` for correlation.
+- [ ] **Sub-task 6.2.2:** When a build task (e.g., `PackBuildRequest` with `task_id`) is received:
+    - [ ] **Sub-sub-task 6.2.2.1:** Update corresponding task status to `InProgress` in `form-state` (using the `task_id`).
+    - [ ] **Sub-sub-task 6.2.2.2:** Execute image build via existing `handle_pack_request` or core build logic.
+    - [ ] **Sub-sub-task 6.2.2.3:** Update final task status in `form-state` with `result_info` (e.g., resulting Formfile content/ID, artifact path/ID).
 
-### Task 6.3: Testing Node-Side Task Handling (Manual Multi-Machine Setup)
-- [ ] **Sub-task 6.3.1:** Setup Node-A (bootstrap), Node-B (builder/host), Node-C (builder/host).
-- [ ] **Sub-task 6.3.2:** Create `BuildImage` task; verify PoC selection and execution by a builder node.
-- [ ] **Sub-task 6.3.3:** Create `LaunchInstance` task using output from build task; verify PoC selection and execution by a host node.
+### Task 6.3: Testing Node-Side Task Reception & Execution (Manual Multi-Machine Setup)
+- [ ] **Sub-task 6.3.1:** Setup `form-pack` and `form-vmm-service` with a mock `Node` and task.
+- [ ] **Sub-task 6.3.2:** Verify `form-pack` and `form-vmm-service` can receive and execute a dispatched task.
+    - *Verification:* `form-pack` and `form-vmm-service` should be able to process the task and update status in `form-state`.
+
+---
+
+## Phase 7: Testing Node-Side Task Reception & Execution (Manual Multi-Machine Setup)
+- [ ] **Sub-task 7.1:** Setup `form-pack` and `form-vmm-service` with a mock `Node` and task.
+- [ ] **Sub-task 7.2:** Verify `form-pack` and `form-vmm-service` can receive and execute a dispatched task.
+    - *Verification:* `form-pack` and `form-vmm-service` should be able to process the task and update status in `form-state`.
