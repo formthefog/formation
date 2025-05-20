@@ -11,9 +11,10 @@ use tiny_keccak::{Hasher, Sha3};
 use tokio::sync::Mutex;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use crdts::{map::Op, BFTReg, CvRDT, Map, CmRDT};
-use crate::{accounts::{Account, AccountOp, AccountState, AuthorizationLevel}, agent::{AIAgent, AgentMap, AgentOp, AgentState}, db::{open_db, write_datastore, DbHandle}, instances::{ClusterMember, Instance, InstanceOp, InstanceState}, model::{AIModel, ModelMap, ModelOp, ModelState}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}};
+use crate::{accounts::{Account, AccountOp, AccountState, AuthorizationLevel}, agent::{AIAgent, AgentMap, AgentOp, AgentState}, db::{open_db, write_datastore, DbHandle}, instances::{ClusterMember, Instance, InstanceOp, InstanceState}, model::{AIModel, ModelMap, ModelOp, ModelState}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}, tasks::{TaskState, Task, TaskOp, TaskStatus, TaskId}};
 use lazy_static::lazy_static;
 use url::Host;
+use hex;
 
 lazy_static! {
     pub static ref DB_HANDLE: DbHandle = open_db(PathBuf::from("/var/lib/formation/db/form.db"));
@@ -70,7 +71,7 @@ impl From<DataStore> for MergeableState {
             nodes: value.node_state.map.clone(),
             accounts: value.account_state.map.clone(),
             agents: value.agent_state.map.clone(),
-            models: value.model_state.map.clone()
+            models: value.model_state.map.clone(),
         }
     }
 }
@@ -82,7 +83,8 @@ pub struct DataStore {
     pub node_state: NodeState,
     pub account_state: AccountState,
     pub agent_state: AgentState,
-    pub model_state: ModelState
+    pub model_state: ModelState,
+    pub task_state: TaskState,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -203,6 +205,23 @@ pub enum ModelRequest {
     Delete(String),
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum TaskRequest {
+    Op(TaskOp),
+    Create(Task),
+    UpdateStatus { // For a node to report progress/completion/failure
+        task_id: TaskId,
+        status: TaskStatus,
+        progress: Option<u8>,
+        result_info: Option<String>,
+    },
+    AssignNode { // For an admin/scheduler to assign a node
+        task_id: TaskId,
+        node_id: Option<String>, // Option to unassign
+        status_after_assign: Option<TaskStatus>, // e.g., PoCAssigned or Claimed
+    },
+    // Add other specific update requests as needed, e.g., UpdateResponsibleNodes
+}
 
 impl DataStore {
     pub fn new(node_id: String, pk: String) -> Self {
@@ -212,6 +231,7 @@ impl DataStore {
         let account_state = AccountState::new(node_id.clone(), pk.clone());
         let agent_state = AgentState::new(node_id.clone(), pk.clone());
         let model_state = ModelState::new(node_id.clone(), pk.clone());
+        let task_state = TaskState::new(node_id.clone(), pk.clone());
 
 
         Self { 
@@ -221,6 +241,7 @@ impl DataStore {
             account_state,
             agent_state,
             model_state,
+            task_state,
         } 
     }
 
@@ -1187,11 +1208,123 @@ impl DataStore {
         Ok(())
     }
 
-    pub async fn handle_model_op(&mut self, agent_op: ModelOp) -> Result<(), Box<dyn std::error::Error>> {
-        self.model_state.map.apply(agent_op);
+    pub async fn handle_model_op(&mut self, model_op: ModelOp) -> Result<(), Box<dyn std::error::Error>> {
+        self.model_state.map.apply(model_op);
         Ok(())
     }
 
+    // Task handler methods
+    pub async fn handle_task_request(&mut self, task_request: TaskRequest) -> Result<(), Box<dyn std::error::Error>> {
+        match task_request {
+            TaskRequest::Op(op) => self.handle_task_op(op).await?,
+            TaskRequest::Create(mut task_to_create) => {
+                // Ensure initial status for PoC tasks
+                if matches!(task_to_create.task_variant, crate::tasks::TaskVariant::BuildImage(_) | crate::tasks::TaskVariant::LaunchInstance(_)) {
+                    task_to_create.status = crate::tasks::TaskStatus::PendingPoCAssessment;
+                }
+                // TODO: task_id generation if not provided by client.
+                // For now, assume task_to_create.task_id is unique and set.
+                task_to_create.created_at = chrono::Utc::now().timestamp();
+                task_to_create.updated_at = task_to_create.created_at;
+
+                let op = self.task_state.update_task_local(task_to_create.clone()); // Create the task first
+                self.handle_task_op(op).await?;
+
+                // If it's a PoC eligible task, immediately determine responsible nodes and update it.
+                if matches!(task_to_create.task_variant, crate::tasks::TaskVariant::BuildImage(_) | crate::tasks::TaskVariant::LaunchInstance(_)) {
+                    // Fetch the just-created task to ensure we have its latest CRDT state (though task_to_create is what we just put in)
+                    // It might be cleaner if update_task_local returned the created task state or if handle_task_op did.
+                    // For now, let's re-fetch or use task_to_create if we trust its state is what was persisted before gossip.
+                    // For simplicity, we use task_to_create, but a fetch would be safer if there were concurrent writes (unlikely for a new task ID).
+                    
+                    // We need all nodes from the datastore.
+                    let all_nodes = self.node_state.list_nodes(); // Assuming list_nodes() exists and returns Vec<Node>
+                    
+                    let responsible_nodes = crate::tasks::determine_responsible_nodes(&task_to_create, &all_nodes, self);
+                    
+                    log::info!("PoC determined responsible nodes for task {}: {:?}", task_to_create.task_id, responsible_nodes);
+
+                    // Now, update the task with responsible_nodes and new status
+                    if let Some(mut task_to_update) = self.task_state.get_task(&task_to_create.task_id) { // Removed .cloned()
+                        task_to_update.responsible_nodes = Some(responsible_nodes);
+                        task_to_update.status = crate::tasks::TaskStatus::PoCAssigned;
+                        task_to_update.updated_at = chrono::Utc::now().timestamp();
+                        let update_op = self.task_state.update_task_local(task_to_update);
+                        self.handle_task_op(update_op).await?;
+                    } else {
+                        log::error!("Failed to re-fetch task {} for PoC update.", task_to_create.task_id);
+                        // Not returning error here, as initial task creation succeeded. PoC can be retried.
+                    }
+                }
+            }
+            TaskRequest::UpdateStatus{ task_id, status, progress, result_info } => {
+                if let Some(mut task) = self.task_state.get_task(&task_id) {
+                    task.status = status;
+                    task.progress = progress;
+                    task.result_info = result_info;
+                    task.updated_at = chrono::Utc::now().timestamp();
+                    let op = self.task_state.update_task_local(task);
+                    self.handle_task_op(op).await?;
+                } else {
+                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::NotFound, format!("Task not found: {}", task_id))));
+                }
+            }
+            TaskRequest::AssignNode{ task_id, node_id, status_after_assign } => {
+                 if let Some(mut task) = self.task_state.get_task(&task_id) {
+                    task.assigned_to_node_id = node_id;
+                    if let Some(new_status) = status_after_assign {
+                        task.status = new_status;
+                    }
+                    task.updated_at = chrono::Utc::now().timestamp();
+                    let op = self.task_state.update_task_local(task);
+                    self.handle_task_op(op).await?;
+                } else {
+                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::NotFound, format!("Task not found: {}", task_id))));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn handle_task_op(&mut self, task_op: TaskOp) -> Result<(), Box<dyn std::error::Error>> {
+        let mut op_applied_successfully = false;
+        let op_to_propagate = task_op.clone();
+
+        match &task_op {
+            Op::Up { dot: _, key, op } => {
+                self.task_state.task_op(task_op.clone()); // Apply locally, clone task_op as it's borrowed in match
+                // Using task_id from the successfully applied op for verification
+                if let (true, Some(_)) = self.task_state.task_op_success(&op.op().value.task_id, op) {
+                    log::info!("Task Op::Up successfully applied locally for task_id: {}", key);
+                    op_applied_successfully = true;
+                } else {
+                    log::error!("Task Op::Up failed to apply locally or was a no-op for task_id: {}.", key);
+                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Task Op::Up failed local application for task_id: {}", key))));
+                }
+            }
+            Op::Rm { .. } => {
+                self.task_state.task_op(task_op); // Apply Rm locally
+                log::info!("Task Op::Rm applied locally.");
+                op_applied_successfully = true;
+            }
+        }
+
+        if op_applied_successfully {
+            #[cfg(feature = "devnet")]
+            {
+                log::info!("devnet mode: Task Op applied locally. Gossiping directly with op: {:?}", op_to_propagate);
+                self.gossip_op_directly(&op_to_propagate, "TaskOp").await?;
+            }
+            #[cfg(not(feature = "devnet"))]
+            {
+                log::info!("production mode: Queuing Task Op ({:?}).", op_to_propagate);
+                DataStore::write_to_queue(crate::datastore::TaskRequest::Op(op_to_propagate.clone()), 10).await?;
+            }
+            write_datastore(&DB_HANDLE, &self.clone())?;
+        }
+
+        Ok(())
+    }
     #[cfg(not(feature = "devnet"))]
     pub async fn write_to_queue(
         message: impl Serialize + Clone,
@@ -1319,67 +1452,6 @@ impl DataStore {
                     eprintln!("Unable to share request with {ip}: {e}");
                 }
             };
-
-        Ok(())
-    }
-
-    // New method for direct gossip in devnet mode
-    #[cfg(feature = "devnet")]
-    async fn gossip_op_directly<O: Serialize + Clone + Debug>(
-        &self, 
-        operation: &O, // Pass op by reference
-        op_type_description: &str // For logging and potentially constructing endpoint path
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        log::info!("DEVNET: Gossiping {} directly.", op_type_description);
-        
-        let mut active_peer_api_endpoints: Vec<String> = Vec::new();
-        for peer_entry in self.network_state.peers.iter() {
-            if let Some(peer_val_reg) = peer_entry.val.val() {
-                let peer = peer_val_reg.value();
-                if !peer.is_disabled && peer.id != self.node_state.node_id { 
-                    if let Some(endpoint) = &peer.endpoint {
-                        match endpoint.resolve() {
-                            Ok(socket_addr) => {
-                                let api_endpoint_url = format!("http://{}:3004", socket_addr.ip());
-                                active_peer_api_endpoints.push(api_endpoint_url);
-                            }
-                            Err(e) => {
-                                log::warn!("DEVNET: Failed to resolve endpoint for peer {}: {}", peer.id, e);
-                            }
-                        }
-                    } else {
-                        log::warn!("DEVNET: Peer {} has no endpoint, cannot gossip directly.", peer.id);
-                    }
-                }
-            }
-        }
-
-        if active_peer_api_endpoints.is_empty() {
-            log::info!("DEVNET: No active peers found to gossip {} to.", op_type_description);
-            return Ok(());
-        }
-
-        log::info!("DEVNET: Gossiping {} to peers: {:?}", op_type_description, active_peer_api_endpoints);
-
-        let client = reqwest::Client::new();
-        for target_peer_base_url in active_peer_api_endpoints {
-            let target_url = format!("{}/devnet_gossip/apply_op", target_peer_base_url);
-            log::debug!("DEVNET: Sending {} to {}", op_type_description, target_url);
-            
-            match client.post(&target_url).json(operation).send().await {
-                Ok(response) => {
-                    if response.status().is_success() {
-                        log::info!("DEVNET: Successfully gossiped {} to {}", op_type_description, target_url);
-                    } else {
-                        log::error!("DEVNET: Failed to gossip {} to {}: Status: {}, Body: {:?}", 
-                            op_type_description, target_url, response.status(), response.text().await.unwrap_or_default());
-                    }
-                }
-                Err(e) => {
-                    log::error!("DEVNET: Error gossiping {} to {}: {}", op_type_description, target_url, e);
-                }
-            }
-        }
 
         Ok(())
     }

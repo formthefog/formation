@@ -306,192 +306,120 @@
 
 ---
 
-## Phase 4: Task 4 (Node State Communication & Task Selection)
+## Phase 4: Task 4 (Node State Communication & Task Selection with Proof of Claim)
 
-## Phase 5: Implement `devnet` Direct API Gossip
+**Goal:** Implement a deterministic task self-selection mechanism ("Proof of Claim") for image building and image hosting tasks within `form-state`, and ensure nodes can determine their responsibility for such tasks. Other state changes are already handled by general gossip.
 
-**Goal:** In `devnet` mode, bypass the `form-p2p` queue for CRDT operations from `form-state` and instead gossip these operations directly to other known peers via authenticated API calls.
+**Preamble:**
+*   "Proof of Claim": For a given task (`task_id`) and a set of capable nodes (`node_id`s), responsibility is determined by `XOR(task_id, node_id)`. Nodes with the lowest XOR result(s) are selected.
+*   This applies specifically to "BuildImage" and "LaunchInstance" (image hosting) tasks.
+*   All nodes must be able to run this algorithm to identify responsible parties.
+*   `form-state` will house the core logic and expose an API for services to check responsibility.
 
-### Task 5.1: Conditional Gossip Logic in `form-state`
-- [x] **Sub-task 5.1.1:** Modify `form-state/src/datastore.rs` in methods like `handle_peer_op`, `handle_node_op`, `handle_account_op`, etc.
-    - [x] **Sub-sub-task 5.1.1.1:** After a local CRDT `Op` is successfully applied, check if the `devnet` feature is enabled (`#[cfg(feature = "devnet")]`).
-        - *Note: Implemented for `handle_peer_op`. This pattern to be replicated for all other `handle_..._op` methods that propagate ops.*
-    - [x] **Sub-sub-task 5.1.1.2:**
-        - If `devnet` is enabled: Instead of calling `DataStore::write_to_queue`, initiate a new direct gossip mechanism for the `Op`.
-        - If `devnet` is NOT enabled (production mode): Call `DataStore::write_to_queue` as it currently does.
-- [x] **Sub-task 5.1.2:** Implement the direct gossip mechanism function within `DataStore` (e.g., `async fn gossip_op_directly<O: Serialize + Clone>(&self, operation: O, op_type_marker: &str)`).
-    - [x] **Sub-sub-task 5.1.2.1:** This function will retrieve the list of active peers (their external `form-state` API endpoints) from its own `network_state.peers` or local `/peer/list_active` endpoint (excluding self).
-    - [x] **Sub-sub-task 5.1.2.2:** For each peer, construct the target URL for the new `Op` application endpoint (e.g., `http://{peer_endpoint}/devnet_gossip/apply_op`).
-    - [x] **Sub-sub-task 5.1.2.3:** Serialize the `operation` (signed CRDT `Op`) and POST it to the target peer.
-    - [x] **Sub-sub-task 5.1.2.4:** Log success/failure for each gossip attempt.
+### Task 4.1: (Already Completed - Verify and Enhance Node State Communication)
+- [x] **Sub-task 4.1.1:** Ensure `Node` updates (capabilities, metrics, etc.) are reliably gossiped.
+    - [x] **Sub-sub-task 4.1.1.1:** Review `form-p2p` gossip for `NodeOp`s; adjust if broader dissemination is needed.
+- [x] **Sub-task 4.1.2:** Implement or verify periodic updates of `Node.metrics` and `Node.capacity` in `form-state`.
 
-### Task 5.2: Create `Op` Application Endpoints in `form-state` API
-- [x] **Sub-task 5.2.1:** In `form-state/src/api.rs`, define new API endpoint(s) for receiving gossiped CRDT `Op`s in `devnet` mode (e.g., `POST /devnet_gossip/apply_op`).
-- [x] **Sub-task 5.2.2:** Implement handlers for these endpoints.
-    - [x] **Sub-sub-task 5.2.2.1:** Deserialize the received `Op`.
-    - [x] **Sub-sub-task 5.2.2.2:** Verify the signature within the received CRDT `Op` (likely handled by `Map::apply`).
-    - [x] **Sub-sub-task 5.2.2.3:** Apply the verified `Op` to the local `DataStore`'s corresponding CRDT map.
-    - [x] **Sub-sub-task 5.2.2.4:** Ensure the handler does NOT re-queue or re-gossip this received `Op`.
-    - [ ] **Sub-sub-task 5.2.2.5 (Optional Auth):** Consider if additional auth (beyond CRDT Op signature) is needed for these `devnet` gossip endpoints.
+### Task 4.2: Task Definition and Representation (for Proof of Claim tasks)
+- [x] **Sub-task 4.2.1:** Define specific "tasks" (e.g., "build image," "launch instance").
+    - *Completed definitions: `BuildImage`, `LaunchInstance`.*
+- [x] **Sub-task 4.2.2:** Decide how tasks are represented and stored.
+    - *Decision:* Core tasks like `BuildImage` and `LaunchInstance` will be represented as CRDTs in `form-state`.
+- [x] **Sub-task 4.2.3:** Define `Task` struct in `form-state` for Proof of Claim tasks.
+    - [x] **Sub-sub-task 4.2.3.1:** Create `form-state/src/tasks.rs` (or similar module).
+    - [x] **Sub-sub-task 4.2.3.2:** Define `TaskId` (e.g., `type TaskId = String; // Should be a UUID`).
+    - [x] **Sub-sub-task 4.2.3.3:** Define `TaskStatus` enum (e.g., `PendingPoCAssessment`, `PoCAssigned`, `InProgress`, `Completed`, `Failed`).
+    - [x] **Sub-sub-task 4.2.3.4:** Define parameter structs for relevant tasks:
+        *   `BuildImageParams { source_url: String, image_name: String, image_tag: String, ... }`
+        *   `LaunchInstanceParams { instance_name: String, image_id: String, instance_type: String, ... }`
+    - [x] **Sub-sub-task 4.2.3.5:** Define `TaskVariant` enum to encapsulate different task types and their parameters (e.g., `BuildImage(BuildImageParams)`, `LaunchInstance(LaunchInstanceParams)`).
+    - [x] **Sub-sub-task 4.2.3.6:** Define the main `Task` struct:
+        *   `task_id: TaskId`
+        *   `task_variant: TaskVariant`
+        *   `status: TaskStatus`
+        *   `required_capabilities: Vec<String>`
+        *   `target_redundancy: u8`
+        *   `responsible_nodes: Option<BTreeSet<String>>`
+        *   `created_at: i64`, `updated_at: i64`
+        *   `submitted_by: String`
+        *   `result_info: Option<String>`
+- [x] **Sub-task 4.2.4:** Implement `TaskState` CRDT in `form-state`.
+    - [x] **Sub-sub-task 4.2.4.1:** Define `TaskOp` (CRDT operation type for tasks).
+    - [x] **Sub-sub-task 4.2.4.2:** Define `TaskState` struct in `form-state` wrapping a `Map<TaskId, BFTReg<Task, Actor>, Actor>`.
+    - [x] **Sub-sub-task 4.2.4.3:** Implement methods in `TaskState` for `update_task_local` and `task_op`.
+    - [x] **Sub-sub-task 4.2.4.4:** Add `TaskState` to the main `DataStore` struct.
+    - [x] **Sub-sub-task 4.2.4.5:** Add `handle_task_op` and related request handlers to `DataStore` with conditional gossip.
 
-### Task 5.3: Configuration and Startup for `devnet`
-- [x] **Sub-task 5.3.1:** Ensure the `form-state` binary is compiled with the `devnet` feature when intended.
-- [x] **Sub-task 5.3.2:** Review if `form-p2p` service (`form-mq` binary) should still run in `devnet` mode and adjust startup scripts/docs if necessary.
+### Task 4.3: Implement Proof of Claim Algorithm in `form-state`
+- [x] **Sub-task 4.3.1:** Create a utility function/module for "Proof of Claim" logic within `form-state`.
+    - [x] **Sub-sub-task 4.3.1.1:** Implement `fn calculate_poc_score(task_id: &str, node_id: &str) -> u64`.
+    - [x] **Sub-sub-task 4.3.1.2:** Implement `fn determine_responsible_nodes(task: &Task, all_nodes: &[Node], datastore: &DataStore) -> BTreeSet<String>`.
+- [x] **Sub-task 4.3.2:** Integrate PoC into Task lifecycle.
+    - [x] **Sub-sub-task 4.3.2.1:** When a new PoC-eligible `Task` is created, determine and store `responsible_nodes` and update status.
+        - *Decision:* Favor API handler for this for now.
+    - [x] **Sub-sub-task 4.3.2.2:** Ensure the updated `Task` (with `responsible_nodes`) is gossiped.
 
-### Task 5.4: Testing `devnet` Direct API Gossip (Manual Multi-Machine Setup)
+### Task 4.4: Expose API Endpoint for Responsibility Check
+- [x] **Sub-task 4.4.1:** In `form-state/src/api.rs`, define an API endpoint for checking task responsibility.
+    - [x] **Sub-sub-task 4.4.1.1:** Implement the handler to fetch task, node, run PoC if needed, and return responsibility status.
 
-**Goal:** Verify that CRDT operations are gossiped directly via API calls between `form-state` instances in `devnet` mode, bypassing the `form-p2p` queue.
+### Task 4.5: Node-Side Logic (Conceptual - for `form-pack` / `form-vmm-service`)
+- [x] **Sub-task 4.5.1:** Nodes running `form-pack` or `form-vmm-service` monitor `form-state` for relevant tasks.
+- [x] **Sub-task 4.5.2:** When a task appears, they call the responsibility check endpoint.
+- [x] **Sub-task 4.5.3:** If responsible, node updates task status to `InProgress` (or `Claimed`) and executes.
+- [x] **Sub-task 4.5.4 (Task Execution):** Node executes build/launch (details deferred).
+- [x] **Sub-task 4.5.5 (Status Updates):** Node updates task status/result in `form-state` via API.
 
-**Preamble:** Requires at least two machines (`Node-A`, `Node-B`) with `form-state` compiled with the `devnet` feature. `formnet` should also be running on both, with Node-A as bootstrap and Node-B joined.
-
-- [ ] **Sub-task 5.4.1: Build and Setup Nodes for `devnet` Test**
-    - [ ] **Sub-sub-task 5.4.1.1:** Build `form-state` binary with `--features devnet`.
-    - [ ] **Sub-sub-task 5.4.1.2:** On `Node-A` (Bootstrap):
-        - Start `form-state` (devnet version) with appropriate logging (e.g., `RUST_LOG=info,form_state=debug`).
-        - Start `formnet` to initialize the network (as done in Task 1.3 tests).
-        - *Verify:* `form-state` logs show "devnet mode" and attempts direct gossip for its own initial ops (though no peers yet).
-    - [ ] **Sub-sub-task 5.4.1.3:** On `Node-B` (Joining Node):
-        - Start `form-state` (devnet version) with appropriate logging, configured to sync from Node-A's `form-state` (e.g., via `--to-dial` if that's how it syncs initial full state).
-        - Start `formnet` to join Node-A's network.
-        - *Verify:* Node-B joins successfully. Both nodes see each other in `form-state` peer list.
-
-- [ ] **Sub-task 5.4.2: Trigger and Observe Direct API Gossip**
-    - [ ] **Sub-sub-task 5.4.2.1:** On `Node-A`, trigger a new CRDT state change by making an API call to its local `form-state` (e.g., create a new dummy peer via `POST /user/create`, or a DNS record).
-    - [ ] **Sub-sub-task 5.4.2.2:** Monitor logs on `Node-A`'s `form-state`.
-        - *Verification:* Should log applying the Op locally, then "devnet mode: ... Gossiping directly..." to Node-B's `form-state` API endpoint (e.g., `http://<Node-B-IP>:3004/devnet_gossip/apply_op`). Should *not* log "Queuing Op".
-    - [ ] **Sub-sub-task 5.4.2.3:** Monitor logs on `Node-B`'s `form-state`.
-        - *Verification:* Should log "DEVNET: Received direct gossip op...", successful deserialization, and successful local application & persistence of the Op. Should *not* log any attempt to re-gossip this received Op.
-    - [ ] **Sub-sub-task 5.4.2.4:** Query `Node-B`'s `form-state` API for the new state object (e.g., the dummy peer or DNS record).
-        - *Verification:* The new object created on Node-A should now be present and correct on Node-B.
-
-- [ ] **Sub-task 5.4.3: Verify No Queue Interaction (Optional)**
-    - [ ] **Sub-sub-task 5.4.3.1:** If `form-p2p` service is *not* running on either node, confirm `form-state` still operates and gossips successfully in `devnet` mode.
-    - [ ] **Sub-sub-task 5.4.3.2:** If `form-p2p` *is* running, check its logs to ensure no new messages related to these CRDT Ops are being enqueued via `/enqueue` calls from `form-state`.
-
----
-
-## Phase 4: Task 4 (Node State Communication & Task Selection)
-
-## Phase 5: Implement `devnet` Direct API Gossip
-
-**Goal:** In `devnet` mode, bypass the `form-p2p` queue for CRDT operations from `form-state` and instead gossip these operations directly to other known peers via authenticated API calls.
-
-### Task 5.1: Conditional Gossip Logic in `form-state`
-- [x] **Sub-task 5.1.1:** Modify `form-state/src/datastore.rs` in methods like `handle_peer_op`, `handle_node_op`, `handle_account_op`, etc.
-    - [x] **Sub-sub-task 5.1.1.1:** After a local CRDT `Op` is successfully applied, check if the `devnet` feature is enabled (`#[cfg(feature = "devnet")]`).
-        - *Note: Implemented for `handle_peer_op`. This pattern to be replicated for all other `handle_..._op` methods that propagate ops.*
-    - [x] **Sub-sub-task 5.1.1.2:**
-        - If `devnet` is enabled: Instead of calling `DataStore::write_to_queue`, initiate a new direct gossip mechanism for the `Op`.
-        - If `devnet` is NOT enabled (production mode): Call `DataStore::write_to_queue` as it currently does.
-- [x] **Sub-task 5.1.2:** Implement the direct gossip mechanism function within `DataStore` (e.g., `async fn gossip_op_directly<O: Serialize + Clone>(&self, operation: O, op_type_marker: &str)`).
-    - [x] **Sub-sub-task 5.1.2.1:** This function will retrieve the list of active peers (their external `form-state` API endpoints) from its own `network_state.peers` or local `/peer/list_active` endpoint (excluding self).
-    - [x] **Sub-sub-task 5.1.2.2:** For each peer, construct the target URL for the new `Op` application endpoint (e.g., `http://{peer_endpoint}/devnet_gossip/apply_op`).
-    - [x] **Sub-sub-task 5.1.2.3:** Serialize the `operation` (signed CRDT `Op`) and POST it to the target peer.
-    - [x] **Sub-sub-task 5.1.2.4:** Log success/failure for each gossip attempt.
-
-### Task 5.2: Create `Op` Application Endpoints in `form-state` API
-- [x] **Sub-task 5.2.1:** In `form-state/src/api.rs`, define new API endpoint(s) for receiving gossiped CRDT `Op`s in `devnet` mode (e.g., `POST /devnet_gossip/apply_op`).
-- [x] **Sub-task 5.2.2:** Implement handlers for these endpoints.
-    - [x] **Sub-sub-task 5.2.2.1:** Deserialize the received `Op`.
-    - [x] **Sub-sub-task 5.2.2.2:** Verify the signature within the received CRDT `Op` (likely handled by `Map::apply`).
-    - [x] **Sub-sub-task 5.2.2.3:** Apply the verified `Op` to the local `DataStore`'s corresponding CRDT map.
-    - [x] **Sub-sub-task 5.2.2.4:** Ensure the handler does NOT re-queue or re-gossip this received `Op`.
-    - [ ] **Sub-sub-task 5.2.2.5 (Optional Auth):** Consider if additional auth (beyond CRDT Op signature) is needed for these `devnet` gossip endpoints.
-
-### Task 5.3: Configuration and Startup for `devnet`
-- [x] **Sub-task 5.3.1:** Ensure the `form-state` binary is compiled with the `devnet` feature when intended.
-- [x] **Sub-task 5.3.2:** Review if `form-p2p` service (`form-mq` binary) should still run in `devnet` mode and adjust startup scripts/docs if necessary.
-
-### Task 5.4: Testing `devnet` Direct API Gossip (Manual Multi-Machine Setup)
-
-**Goal:** Verify that CRDT operations are gossiped directly via API calls between `form-state` instances in `devnet` mode, bypassing the `form-p2p` queue.
-
-**Preamble:** Requires at least two machines (`Node-A`, `Node-B`) with `form-state` compiled with the `devnet` feature. `formnet` should also be running on both, with Node-A as bootstrap and Node-B joined.
-
-- [ ] **Sub-task 5.4.1: Build and Setup Nodes for `devnet` Test**
-    - [ ] **Sub-sub-task 5.4.1.1:** Build `form-state` binary with `--features devnet`.
-    - [ ] **Sub-sub-task 5.4.1.2:** On `Node-A` (Bootstrap):
-        - Start `form-state` (devnet version) with appropriate logging (e.g., `RUST_LOG=info,form_state=debug`).
-        - Start `formnet` to initialize the network (as done in Task 1.3 tests).
-        - *Verify:* `form-state` logs show "devnet mode" and attempts direct gossip for its own initial ops (though no peers yet).
-    - [ ] **Sub-sub-task 5.4.1.3:** On `Node-B` (Joining Node):
-        - Start `form-state` (devnet version) with appropriate logging, configured to sync from Node-A's `form-state` (e.g., via `--to-dial` if that's how it syncs initial full state).
-        - Start `formnet` to join Node-A's network.
-        - *Verify:* Node-B joins successfully. Both nodes see each other in `form-state` peer list.
-
-- [ ] **Sub-task 5.4.2: Trigger and Observe Direct API Gossip**
-    - [ ] **Sub-sub-task 5.4.2.1:** On `Node-A`, trigger a new CRDT state change by making an API call to its local `form-state` (e.g., create a new dummy peer via `POST /user/create`, or a DNS record).
-    - [ ] **Sub-sub-task 5.4.2.2:** Monitor logs on `Node-A`'s `form-state`.
-        - *Verification:* Should log applying the Op locally, then "devnet mode: ... Gossiping directly..." to Node-B's `form-state` API endpoint (e.g., `http://<Node-B-IP>:3004/devnet_gossip/apply_op`). Should *not* log "Queuing Op".
-    - [ ] **Sub-sub-task 5.4.2.3:** Monitor logs on `Node-B`'s `form-state`.
-        - *Verification:* Should log "DEVNET: Received direct gossip op...", successful deserialization, and successful local application & persistence of the Op. Should *not* log any attempt to re-gossip this received Op.
-    - [ ] **Sub-sub-task 5.4.2.4:** Query `Node-B`'s `form-state` API for the new state object (e.g., the dummy peer or DNS record).
-        - *Verification:* The new object created on Node-A should now be present and correct on Node-B.
-
-- [ ] **Sub-task 5.4.3: Verify No Queue Interaction (Optional)**
-    - [ ] **Sub-sub-task 5.4.3.1:** If `form-p2p` service is *not* running on either node, confirm `form-state` still operates and gossips successfully in `devnet` mode.
-    - [ ] **Sub-sub-task 5.4.3.2:** If `form-p2p` *is* running, check its logs to ensure no new messages related to these CRDT Ops are being enqueued via `/enqueue` calls from `form-state`.
+### Task 4.6: Testing Proof of Claim Mechanism (Manual Multi-Machine Setup)
+- [ ] **Sub-task 4.6.1:** Setup multiple nodes with varying capabilities.
+- [ ] **Sub-task 4.6.2:** Create a "BuildImage" task requiring specific capabilities.
+    - *Verification:* `Task.responsible_nodes` populated correctly by PoC.
+- [ ] **Sub-task 4.6.3:** On each node, call responsibility check API.
+    - *Verification:* Only designated nodes return `true`.
+- [ ] **Sub-task 4.6.4:** Simulate responsible node starting task; verify status propagation.
+- [ ] **Sub-task 4.6.5:** Test with `target_redundancy > 1`.
 
 ---
 
-## Phase 4: Task 4 (Node State Communication & Task Selection)
-
 ## Phase 5: Implement `devnet` Direct API Gossip
 
 **Goal:** In `devnet` mode, bypass the `form-p2p` queue for CRDT operations from `form-state` and instead gossip these operations directly to other known peers via authenticated API calls.
 
 ### Task 5.1: Conditional Gossip Logic in `form-state`
 - [x] **Sub-task 5.1.1:** Modify `form-state/src/datastore.rs` in methods like `handle_peer_op`, `handle_node_op`, `handle_account_op`, etc.
-    - [x] **Sub-sub-task 5.1.1.1:** After a local CRDT `Op` is successfully applied, check if the `devnet` feature is enabled (`#[cfg(feature = "devnet")]`).
-        - *Note: Implemented for `handle_peer_op`. This pattern to be replicated for all other `handle_..._op` methods that propagate ops.*
-    - [x] **Sub-sub-task 5.1.1.2:**
-        - If `devnet` is enabled: Instead of calling `DataStore::write_to_queue`, initiate a new direct gossip mechanism for the `Op`.
-        - If `devnet` is NOT enabled (production mode): Call `DataStore::write_to_queue` as it currently does.
-- [x] **Sub-task 5.1.2:** Implement the direct gossip mechanism function within `DataStore` (e.g., `async fn gossip_op_directly<O: Serialize + Clone>(&self, operation: O, op_type_marker: &str)`).
-    - [x] **Sub-sub-task 5.1.2.1:** This function will retrieve the list of active peers (their external `form-state` API endpoints) from its own `network_state.peers` or local `/peer/list_active` endpoint (excluding self).
-    - [x] **Sub-sub-task 5.1.2.2:** For each peer, construct the target URL for the new `Op` application endpoint (e.g., `http://{peer_endpoint}/devnet_gossip/apply_op`).
-    - [x] **Sub-sub-task 5.1.2.3:** Serialize the `operation` (signed CRDT `Op`) and POST it to the target peer.
-    - [x] **Sub-sub-task 5.1.2.4:** Log success/failure for each gossip attempt.
+    - [x] **Sub-sub-task 5.1.1.1:** After a local CRDT `Op` is successfully applied, check if the `devnet`
 
-### Task 5.2: Create `Op` Application Endpoints in `form-state` API
-- [x] **Sub-task 5.2.1:** In `form-state/src/api.rs`, define new API endpoint(s) for receiving gossiped CRDT `Op`s in `devnet` mode (e.g., `POST /devnet_gossip/apply_op`).
-- [x] **Sub-task 5.2.2:** Implement handlers for these endpoints.
-    - [x] **Sub-sub-task 5.2.2.1:** Deserialize the received `Op`.
-    - [x] **Sub-sub-task 5.2.2.2:** Verify the signature within the received CRDT `Op` (likely handled by `Map::apply`).
-    - [x] **Sub-sub-task 5.2.2.3:** Apply the verified `Op` to the local `DataStore`'s corresponding CRDT map.
-    - [x] **Sub-sub-task 5.2.2.4:** Ensure the handler does NOT re-queue or re-gossip this received `Op`.
-    - [ ] **Sub-sub-task 5.2.2.5 (Optional Auth):** Consider if additional auth (beyond CRDT Op signature) is needed for these `devnet` gossip endpoints.
+## Phase 6: Implement Node-Side PoC Task Handling (in `form-pack` and `form-vmm-service`)
 
-### Task 5.3: Configuration and Startup for `devnet`
-- [x] **Sub-task 5.3.1:** Ensure the `form-state` binary is compiled with the `devnet` feature when intended.
-- [x] **Sub-task 5.3.2:** Review if `form-p2p` service (`form-mq` binary) should still run in `devnet` mode and adjust startup scripts/docs if necessary.
+**Goal:** Enable `form-pack` and `form-vmm-service` to monitor `form-state` for relevant tasks, use the Proof of Claim mechanism to determine responsibility, and execute tasks they are responsible for, updating status in `form-state`.
 
-### Task 5.4: Testing `devnet` Direct API Gossip (Manual Multi-Machine Setup)
+### Task 6.1: Enhance `form-vmm-service` for PoC-based `LaunchInstance` Tasks
+- [ ] **Sub-task 6.1.1:** Implement a task monitoring loop in `form-vmm-service`.
+    - [ ] **Sub-sub-task 6.1.1.1:** Periodically query its local `form-state` API for `LaunchInstance` tasks.
+- [ ] **Sub-task 6.1.2:** For each relevant task found, check responsibility via `form-state` API.
+- [ ] **Sub-task 6.1.3:** If responsible for a `LaunchInstance` task:
+    - [ ] **Sub-sub-task 6.1.3.1:** Update task status in `form-state` (e.g., to `Claimed`/`InProgress`).
+    - [ ] **Sub-sub-task 6.1.3.2:** Extract `formfile_content` and `instance_name`.
+    - [ ] **Sub-sub-task 6.1.3.3:** Construct `VmInstanceConfig` using these parameters.
+    - [ ] **Sub-sub-task 6.1.3.4:** Call existing VM creation logic.
+    - [ ] **Sub-sub-task 6.1.3.5:** Update final task status in `form-state` (`Completed`/`Failed` with `result_info`).
+- [ ] **Sub-task 6.1.4:** Modify `VmInstanceConfig` (if necessary) to be driven by `formfile_content`.
 
-**Goal:** Verify that CRDT operations are gossiped directly via API calls between `form-state` instances in `devnet` mode, bypassing the `form-p2p` queue.
+### Task 6.2: Implement/Enhance `form-pack` Service/Agent for PoC-based `BuildImage` Tasks
+- [ ] **Sub-task 6.2.1:** Design and implement a long-running service/agent mode for `form-pack`.
+    - [ ] **Sub-sub-task 6.2.1.1:** Service needs node identity and `form-state` communication.
+- [ ] **Sub-task 6.2.2:** Implement a task monitoring loop in the `form-pack` service.
+    - [ ] **Sub-sub-task 6.2.2.1:** Periodically query `form-state` API for `BuildImage` tasks.
+- [ ] **Sub-task 6.2.3:** For each relevant task, check responsibility via `form-state` API.
+- [ ] **Sub-task 6.2.4:** If responsible for a `BuildImage` task:
+    - [ ] **Sub-sub-task 6.2.4.1:** Update task status in `form-state`.
+    - [ ] **Sub-sub-task 6.2.4.2:** Extract `BuildImageParams`.
+    - [ ] **Sub-sub-task 6.2.4.3:** Execute image build using `form-pack` core logic.
+    - [ ] **Sub-sub-task 6.2.4.4:** Update final task status in `form-state` with `result_info` (artifact ID/path, Formfile content/ID).
+- [ ] **Sub-task 6.2.5:** Define/ensure clear handoff from `BuildImage` output to `LaunchInstance` input (Formfile).
 
-**Preamble:** Requires at least two machines (`Node-A`, `Node-B`) with `form-state` compiled with the `devnet` feature. `formnet` should also be running on both, with Node-A as bootstrap and Node-B joined.
-
-- [ ] **Sub-task 5.4.1: Build and Setup Nodes for `devnet` Test**
-    - [ ] **Sub-sub-task 5.4.1.1:** Build `form-state` binary with `--features devnet`.
-    - [ ] **Sub-sub-task 5.4.1.2:** On `Node-A` (Bootstrap):
-        - Start `form-state` (devnet version) with appropriate logging (e.g., `RUST_LOG=info,form_state=debug`).
-        - Start `formnet` to initialize the network (as done in Task 1.3 tests).
-        - *Verify:* `form-state` logs show "devnet mode" and attempts direct gossip for its own initial ops (though no peers yet).
-    - [ ] **Sub-sub-task 5.4.1.3:** On `Node-B` (Joining Node):
-        - Start `form-state` (devnet version) with appropriate logging, configured to sync from Node-A's `form-state` (e.g., via `--to-dial` if that's how it syncs initial full state).
-        - Start `formnet` to join Node-A's network.
-        - *Verify:* Node-B joins successfully. Both nodes see each other in `form-state` peer list.
-
-- [ ] **Sub-task 5.4.2: Trigger and Observe Direct API Gossip**
-    - [ ] **Sub-sub-task 5.4.2.1:** On `Node-A`, trigger a new CRDT state change by making an API call to its local `form-state` (e.g., create a new dummy peer via `POST /user/create`, or a DNS record).
-    - [ ] **Sub-sub-task 5.4.2.2:** Monitor logs on `Node-A`'s `form-state`.
-        - *Verification:* Should log applying the Op locally, then "devnet mode: ... Gossiping directly..." to Node-B's `form-state` API endpoint (e.g., `http://<Node-B-IP>:3004/devnet_gossip/apply_op`). Should *not* log "Queuing Op".
-    - [ ] **Sub-sub-task 5.4.2.3:** Monitor logs on `Node-B`'s `form-state`.
-        - *Verification:* Should log "DEVNET: Received direct gossip op...", successful deserialization, and successful local application & persistence of the Op. Should *not* log any attempt to re-gossip this received Op.
-    - [ ] **Sub-sub-task 5.4.2.4:** Query `Node-B`'s `form-state` API for the new state object (e.g., the dummy peer or DNS record).
-        - *Verification:* The new object created on Node-A should now be present and correct on Node-B.
-
-- [ ] **Sub-task 5.4.3: Verify No Queue Interaction (Optional)**
-    - [ ] **Sub-sub-task 5.4.3.1:** If `form-p2p` service is *not* running on either node, confirm `form-state` still operates and gossips successfully in `devnet` mode.
-    - [ ] **Sub-sub-task 5.4.3.2:** If `form-p2p` *is* running, check its logs to ensure no new messages related to these CRDT Ops are being enqueued via `/enqueue` calls from `form-state`.
+### Task 6.3: Testing Node-Side Task Handling (Manual Multi-Machine Setup)
+- [ ] **Sub-task 6.3.1:** Setup Node-A (bootstrap), Node-B (builder/host), Node-C (builder/host).
+- [ ] **Sub-task 6.3.2:** Create `BuildImage` task; verify PoC selection and execution by a builder node.
+- [ ] **Sub-task 6.3.3:** Create `LaunchInstance` task using output from build task; verify PoC selection and execution by a host node.

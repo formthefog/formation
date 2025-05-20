@@ -12,5 +12,9 @@ pub mod helpers;
 pub mod api;
 pub mod auth;
 pub mod billing;
+pub mod tasks;
 
 pub type Actor = String;
+
+// Re-export key types for easier use, if necessary
+pub use datastore::DataStore;

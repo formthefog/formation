@@ -1,4 +1,4 @@
-use crate::datastore::{DataStore, pong, complete_bootstrap, process_message, full_state};
+use crate::datastore::{DataStore, pong, process_message, full_state};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -231,7 +231,7 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         // Health check and bootstrap endpoints
         .route("/ping", get(pong))
         .route("/health", get(health_check))
-        .route("/bootstrap/joined_formnet", post(complete_bootstrap))
+        .route("/bootstrap/joined_formnet", post(crate::datastore::complete_bootstrap))
         .route("/bootstrap/full_state", get(full_state))
         .route("/bootstrap/network_state", get(network_state))
         .route("/bootstrap/peer_state", get(peer_state))
@@ -305,10 +305,15 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         // Node management
         .route("/node/:id/metrics", get(get_node_metrics))
         .route("/node/list/metrics", get(list_node_metrics))
+        // Task related endpoints
+        .route("/task/:task_id/is_responsible/:node_id_to_check", get(check_task_responsibility))
         
         // Node authentication key management
         .route("/node/:id/operator-key", post(add_node_operator_key))
-        .route("/node/:id/operator-key/:key", post(remove_node_operator_key));
+        .route("/node/:id/operator-key/:key", post(remove_node_operator_key))
+        // Task query endpoints
+        .route("/tasks", get(list_tasks_handler))
+        .route("/task/:task_id/get", get(get_task_handler));
         
     let account_api = Router::new()
         // Account management
@@ -756,6 +761,36 @@ async fn list_active_peers(State(state): State<Arc<Mutex<DataStore>>>) -> impl I
     (StatusCode::OK, Json(active_peer_ips))
 }
 
+async fn check_task_responsibility(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path((task_id, node_id_to_check)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let datastore = state.lock().await;
+    match datastore.task_state.get_task(&task_id) {
+        Some(task) => {
+            let is_responsible = task.responsible_nodes.as_ref()
+                .map_or(false, |nodes_set| nodes_set.contains(&node_id_to_check));
+            
+            // Additionally, ensure the node actually has the capabilities for the task
+            // This is a sanity check, as PoC should only select capable nodes.
+            let node_is_capable = datastore.node_state.get_node(node_id_to_check.clone())
+                .map_or(false, |node| {
+                    // Check against node.metadata.tags
+                    task.required_capabilities.iter().all(|cap| node.metadata.tags.contains(cap))
+                });
+
+            if !node_is_capable && is_responsible {
+                log::warn!("Node {} was marked responsible for task {} but does not have required capabilities.", node_id_to_check, task_id);
+                 // Decide if this discrepancy should make it not responsible for execution.
+                 // For now, if PoC assigned it, we trust that (but log warning).
+            }
+
+            (StatusCode::OK, Json(json!({ "task_id": task_id, "node_id": node_id_to_check, "is_responsible": is_responsible && node_is_capable })))
+        }
+        None => (StatusCode::NOT_FOUND, Json(json!({ "error": "Task not found" }))),
+    }
+}
+
 #[derive(Deserialize)]
 struct ReportMetricsPayload {
     capacity: NodeCapacity,
@@ -1012,5 +1047,58 @@ async fn devnet_apply_op_handler(
             log::warn!("DEVNET: Received unknown op_type for direct gossip: {}", payload.op_type);
             (StatusCode::BAD_REQUEST, Json(json!({ "status": "error", "message": "Unknown op_type"})))
         }
+    }
+}
+
+#[derive(Deserialize, Debug)]
+pub struct ListTasksQuery {
+    task_type: Option<String>,
+    status: Option<String>,
+    assigned_to_node_id: Option<String>,
+    submitted_by: Option<String>,
+}
+
+async fn list_tasks_handler(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    axum::extract::Query(query): axum::extract::Query<ListTasksQuery>,
+) -> impl IntoResponse {
+    let datastore = state.lock().await;
+    let mut tasks = datastore.task_state.list_tasks(); // Gets Vec<Task>
+
+    if let Some(task_type_filter) = query.task_type {
+        tasks.retain(|task| 
+            match &task.task_variant {
+                crate::tasks::TaskVariant::BuildImage(_) => task_type_filter == "BuildImage",
+                crate::tasks::TaskVariant::LaunchInstance(_) => task_type_filter == "LaunchInstance",
+                // Add other variants if/when they exist
+            }
+        );
+    }
+
+    if let Some(status_filter_str) = query.status {
+        // This requires TaskStatus to be easily convertible from/to string, or more complex matching
+        // For now, assuming direct string match on debug representation (not robust)
+        tasks.retain(|task| format!("{:?}", task.status) == status_filter_str);
+    }
+
+    if let Some(node_id_filter) = query.assigned_to_node_id {
+        tasks.retain(|task| task.assigned_to_node_id.as_deref() == Some(node_id_filter.as_str()));
+    }
+
+    if let Some(submitter_filter) = query.submitted_by {
+        tasks.retain(|task| task.submitted_by == submitter_filter);
+    }
+
+    (StatusCode::OK, Json(tasks))
+}
+
+async fn get_task_handler(
+    State(state): State<Arc<Mutex<DataStore>>>,
+    Path(task_id): Path<String>,
+) -> impl IntoResponse {
+    let datastore = state.lock().await;
+    match datastore.task_state.get_task(&task_id) {
+        Some(task) => (StatusCode::OK, Json(json!(task))),
+        None => (StatusCode::NOT_FOUND, Json(json!({ "error": "Task not found" }))),
     }
 }

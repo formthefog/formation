@@ -321,6 +321,14 @@ impl NodeState {
         None
     }
 
+    /// List all nodes.
+    pub fn list_nodes(&self) -> Vec<Node> {
+        self.map.iter().filter_map(|entry| {
+            let (_key, val_reg) = entry.val; // Destructure the tuple from IterEntry.val
+            val_reg.val().map(|v_ctx| v_ctx.value()) 
+        }).collect()
+    }
+
     /// Add an operator key to a node
     pub fn add_operator_key(&mut self, node_id: String, key: String) -> Option<NodeOp> {
         if let Some(node_reg) = self.map.get(&node_id).val {
