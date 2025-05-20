@@ -14,7 +14,8 @@ use tiny_keccak::Hasher;
 use hex;
 use log;
 use std::net::SocketAddr;
-
+use std::sync::Arc;
+use tokio::sync::Mutex;
 /// Error type for signature verification failures
 #[derive(Debug, Serialize)]
 pub enum SignatureError {
@@ -199,6 +200,70 @@ pub async fn ecdsa_auth_middleware(
         return Ok(next.run(request).await);
     } else {
         return Err(SignatureError::MissingSignature)
+    }
+}
+
+/// Middleware to authenticate requests from active (non-disabled) Formation nodes.
+/// Expects an ECDSA signature in the Authorization header, similar to ecdsa_auth_middleware.
+pub async fn active_node_auth_middleware(
+    axum::extract::State(state): axum::extract::State<Arc<Mutex<crate::datastore::DataStore>>>, // Fully qualified State
+    mut req: Request<axum::body::Body>, 
+    next: axum::middleware::Next,
+) -> Result<Response, StatusCode> {
+    let headers = req.headers().clone();
+
+    let (signature_bytes, recovery_id, message_to_verify) = 
+        match extract_signature_parts(&headers) {
+            Ok(parts) => parts,
+            Err(SignatureError::MissingSignature) => {
+                log::warn!("ACTIVE_NODE_AUTH: Missing signature.");
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+            Err(e) => {
+                log::warn!("ACTIVE_NODE_AUTH: Invalid signature format: {:?}.", e);
+                return Err(StatusCode::BAD_REQUEST);
+            }
+        };
+
+    let recovered_eth_address = 
+        match recover_address(&signature_bytes, recovery_id, &message_to_verify) {
+            Ok(addr) => addr,
+            Err(e) => {
+                log::warn!("ACTIVE_NODE_AUTH: Could not recover address: {:?}.", e);
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+        };
+    
+    let recovered_address_hex = hex::encode(recovered_eth_address.as_slice());
+    log::debug!("ACTIVE_NODE_AUTH: Recovered sender address for gossip: 0x{}", recovered_address_hex);
+        
+    let datastore = state.lock().await;
+    
+    // Check if the recovered address corresponds to an active, non-disabled peer
+    match datastore.network_state.peers.get(&recovered_address_hex).val { // CrdtPeer ID is hex address
+        Some(peer_reg) => {
+            if let Some(peer_val) = peer_reg.val() {
+                let peer = peer_val.value(); // Get the CrdtPeer struct
+                if !peer.is_disabled {
+                    log::info!("ACTIVE_NODE_AUTH: Auth success for active peer: 0x{}", recovered_address_hex);
+                    req.extensions_mut().insert(RecoveredAddress {
+                        address: recovered_eth_address,
+                        message: message_to_verify, // Pass along the verified message if needed by handler
+                    });
+                    Ok(next.run(req).await)
+                } else {
+                    log::warn!("ACTIVE_NODE_AUTH: Auth failed: Peer 0x{} is disabled.", recovered_address_hex);
+                    Err(StatusCode::FORBIDDEN)
+                }
+            } else {
+                log::warn!("ACTIVE_NODE_AUTH: Auth failed: Peer 0x{} in map, but value is None.", recovered_address_hex);
+                Err(StatusCode::INTERNAL_SERVER_ERROR) 
+            }
+        }
+        None => {
+            log::warn!("ACTIVE_NODE_AUTH: Auth failed: Peer 0x{} not found.", recovered_address_hex);
+            Err(StatusCode::UNAUTHORIZED)
+        }
     }
 }
 

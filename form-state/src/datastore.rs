@@ -15,6 +15,7 @@ use crate::{accounts::{Account, AccountOp, AccountState, AuthorizationLevel}, ag
 use lazy_static::lazy_static;
 use url::Host;
 use hex;
+use sha2::Sha256;
 
 lazy_static! {
     pub static ref DB_HANDLE: DbHandle = open_db(PathBuf::from("/var/lib/formation/db/form.db"));
@@ -1453,6 +1454,94 @@ impl DataStore {
                 }
             };
 
+        Ok(())
+    }
+
+    #[cfg(feature = "devnet")]
+    async fn gossip_op_directly<O: Serialize + Clone + std::fmt::Debug>(
+        &self, 
+        operation: &O, 
+        op_type_description: &str
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use k256::ecdsa::SigningKey;
+        use k256::ecdsa::signature::Signer; // For sign_recoverable
+        use sha2::{Sha256, Digest as Sha2Digest}; // Import and alias Digest
+        use crate::api::DevnetGossipOpContainer; // Make sure this path is correct
+
+        log::info!("DEVNET: Gossiping {} directly.", op_type_description);
+        
+        let mut active_peer_api_endpoints: Vec<String> = Vec::new();
+        for peer_entry in self.network_state.peers.iter() {
+            if let Some(peer_val_reg) = peer_entry.val.1.val() { // Corrected iteration
+                let peer = peer_val_reg.value();
+                if !peer.is_disabled && peer.id != self.node_state.node_id { 
+                    if let Some(endpoint) = &peer.endpoint {
+                        match endpoint.resolve() {
+                            Ok(socket_addr) => {
+                                let api_endpoint_url = format!("http://{}:3004", socket_addr.ip());
+                                active_peer_api_endpoints.push(api_endpoint_url);
+                            }
+                            Err(e) => {
+                                log::warn!("DEVNET: Failed to resolve endpoint for peer {}: {}", peer.id, e);
+                            }
+                        }
+                    } else {
+                        log::warn!("DEVNET: Peer {} has no endpoint, cannot gossip directly.", peer.id);
+                    }
+                }
+            }
+        }
+
+        if active_peer_api_endpoints.is_empty() {
+            log::info!("DEVNET: No active peers found to gossip {} to.", op_type_description);
+            return Ok(());
+        }
+
+        let signing_key = SigningKey::from_slice(&hex::decode(&self.pk).map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("Invalid hex for PK: {}", e))))?)?;
+
+        let op_payload_json_string = serde_json::to_string(operation)?;
+        let gossip_payload_container = DevnetGossipOpContainer {
+            op_type: op_type_description.to_string(),
+            op_payload_json: op_payload_json_string,
+        };
+        
+        let message_to_sign_for_http = serde_json::to_string(&gossip_payload_container)?;
+        let message_bytes_for_http = message_to_sign_for_http.as_bytes();
+
+        let mut hasher = Sha256::new();
+        hasher.update(message_bytes_for_http);
+        let message_hash_for_http = hasher.finalize();
+
+        let (signature, recovery_id) = signing_key.sign_recoverable(&message_hash_for_http)
+            .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to sign gossip message: {}", e))))?;
+
+        let signature_hex = hex::encode(signature.to_bytes());
+        let recovery_id_byte = recovery_id.to_byte();
+        let message_hex_for_header = hex::encode(message_bytes_for_http);
+        let auth_header_value = format!("Signature {}.{}.{}", signature_hex, recovery_id_byte, message_hex_for_header);
+
+        let client = reqwest::Client::new();
+        for target_peer_base_url in active_peer_api_endpoints {
+            let target_url = format!("{}/devnet_gossip/apply_op", target_peer_base_url);
+            log::debug!("DEVNET: Sending {} to {} with auth header", op_type_description, target_url);
+            
+            match client.post(&target_url)
+                .header(reqwest::header::AUTHORIZATION, &auth_header_value)
+                .json(&gossip_payload_container)
+                .send().await {
+                Ok(response) => {
+                    if response.status().is_success() {
+                        log::info!("DEVNET: Successfully gossiped {} to {}", op_type_description, target_url);
+                    } else {
+                        log::error!("DEVNET: Failed to gossip {} to {}: Status: {}, Body: {:?}", 
+                            op_type_description, target_url, response.status(), response.text().await.unwrap_or_default());
+                    }
+                }
+                Err(e) => {
+                    log::error!("DEVNET: Error gossiping {} to {}: {}", op_type_description, target_url, e);
+                }
+            }
+        }
         Ok(())
     }
 }

@@ -389,6 +389,18 @@
 ### Task 5.1: Conditional Gossip Logic in `form-state`
 - [x] **Sub-task 5.1.1:** Modify `form-state/src/datastore.rs` in methods like `handle_peer_op`, `handle_node_op`, `handle_account_op`, etc.
     - [x] **Sub-sub-task 5.1.1.1:** After a local CRDT `Op` is successfully applied, check if the `devnet`
+    - [x] **Sub-sub-task 5.1.1.2:**
+        - If `devnet` is enabled: Instead of calling `DataStore::write_to_queue`, initiate a new direct gossip mechanism for the `Op`.
+        - If `devnet` is NOT enabled (production mode): Call `DataStore::write_to_queue` as it currently does.
+- [x] **Sub-task 5.1.2:** Implement the direct gossip mechanism function within `DataStore` (e.g., `async fn gossip_op_directly<O: Serialize + Clone>(&self, operation: O, op_type_marker: &str)`).
+    - [x] **Sub-sub-task 5.1.2.1:** This function will retrieve the list of active peers (their external `form-state` API endpoints) from its own `network_state.peers` or local `/peer/list_active` endpoint (excluding self).
+    - [x] **Sub-sub-task 5.1.2.2:** For each peer, construct the target URL for the new `Op` application endpoint (e.g., `http://{peer_endpoint}/devnet_gossip/apply_op`).
+    - [x] **Sub-sub-task 5.1.2.3:** Serialize the `operation` (as `DevnetGossipOpContainer`) and POST it to the target peer, **adding required authentication headers signed by the sending node's operator key.**
+    - [x] **Sub-sub-task 5.1.2.4:** Log success/failure for each gossip attempt.
+
+### Task 5.2: Create `Op` Application Endpoints in `form-state` API
+- [x] **Sub-task 5.2.1:** In `form-state/src/api.rs`, define an API endpoint for checking task responsibility.
+    - [x] **Sub-sub-task 5.2.1.1:** Implement the handler to fetch task, node, run PoC if needed, and return responsibility status.
 
 ## Phase 6: Implement Node-Side PoC Task Handling (in `form-pack` and `form-vmm-service`)
 

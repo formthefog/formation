@@ -5,6 +5,7 @@ pub use ecdsa::{
     OptionalRecoveredAddress,
     SignatureError,
     ecdsa_auth_middleware,
+    active_node_auth_middleware,
     extract_signature_parts,
     recover_address,
 };

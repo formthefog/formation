@@ -23,7 +23,7 @@ use crate::helpers::{
     agent_gateway::run_agent_task_handler,
 };
 use crate::auth::{
-    RecoveredAddress, ecdsa_auth_middleware
+    RecoveredAddress, ecdsa_auth_middleware, active_node_auth_middleware
 };
 
 use serde_json::json;
@@ -238,8 +238,6 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/bootstrap/cidr_state", get(cidr_state))
         .route("/bootstrap/assoc_state", get(assoc_state))
         .route("/bootstrap/ensure_admin_account", post(ensure_admin_account))
-        // Devnet specific endpoint for receiving gossiped Ops
-        .route("/devnet_gossip/apply_op", post(devnet_apply_op_handler))
         // Add read-only endpoints for non-sensitive data
         .route("/agents", get(list_agents))
         .route("/agents/:id", get(get_agent))
@@ -366,13 +364,22 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
             ecdsa_auth_middleware
         ));
     
+    // New router for devnet gossip, protected by active_node_auth_middleware
+    let devnet_gossip_api = Router::new()
+        .route("/apply_op", post(devnet_apply_op_handler))
+        .layer(middleware::from_fn_with_state(
+            state.clone(), 
+            crate::auth::active_node_auth_middleware,
+        ));
+    
     // Merge all route groups into a single router
     Router::new()
         .merge(public_api)
-        .merge(network_writers_api)  // Add the node-authenticated network API
+        .merge(network_writers_api)  
         .merge(network_readers_api)
+        .nest("/devnet_gossip", devnet_gossip_api) // Nest the new router
         .merge(account_api)
-        .merge(instance_api)  // Add the authenticated instance API
+        .merge(instance_api)  
         .merge(api_routes)
         .with_state(state)
 }
