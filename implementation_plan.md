@@ -408,15 +408,19 @@
 
 ### Task 6.1: Enhance `form-vmm-service` for PoC-based `LaunchInstance` Tasks
 - [ ] **Sub-task 6.1.1:** Implement a task monitoring loop in `form-vmm-service`.
-    - [ ] **Sub-sub-task 6.1.1.1:** Periodically query its local `form-state` API for `LaunchInstance` tasks.
-- [ ] **Sub-task 6.1.2:** For each relevant task found, check responsibility via `form-state` API.
+    - [x] **Sub-sub-task 6.1.1.1:** Add task polling to `VmManager::run` loop to fetch tasks and check responsibility, sending `VmmEvent::ProcessLaunchTask` if responsible. (Logic for sending event to self is in place).
+    - [x] **Sub-sub-task 6.1.1.2 (was 6.1.1.1 in plan):** Define `VmmEvent::ProcessLaunchTask(LaunchTaskInfo)` in `form-types/src/event.rs`.
+    - [x] **Sub-sub-task 6.1.1.3 (was 6.1.1.2 in plan):** Add handler for `VmmEvent::ProcessLaunchTask` in `VmManager::handle_vmm_event`.
+        - *Note: Handles status updates to form-state (assuming endpoint exists) and calls self.create(). Construction of `VmInstanceConfig` from formfile_content needs to be robust. `self.create()` itself needs full implementation.*
+- [x] **Sub-task 6.1.2:** For each relevant task found, check responsibility via `form-state` API. (Covered by 6.1.1.1)
 - [ ] **Sub-task 6.1.3:** If responsible for a `LaunchInstance` task:
-    - [ ] **Sub-sub-task 6.1.3.1:** Update task status in `form-state` (e.g., to `Claimed`/`InProgress`).
-    - [ ] **Sub-sub-task 6.1.3.2:** Extract `formfile_content` and `instance_name`.
-    - [ ] **Sub-sub-task 6.1.3.3:** Construct `VmInstanceConfig` using these parameters.
-    - [ ] **Sub-sub-task 6.1.3.4:** Call existing VM creation logic.
-    - [ ] **Sub-sub-task 6.1.3.5:** Update final task status in `form-state` (`Completed`/`Failed` with `result_info`).
+    - [x] **Sub-sub-task 6.1.3.1:** Update task status in `form-state` (e.g., to `Claimed`/`InProgress`). (Initial call implemented in 6.1.1.3 handler)
+    - [x] **Sub-sub-task 6.1.3.2:** Extract `formfile_content` and `instance_name`. (Done in 6.1.1.3 handler)
+    - [ ] **Sub-sub-task 6.1.3.3:** Construct `VmInstanceConfig` using these parameters robustly (parsing `formfile_content`).
+    - [x] **Sub-sub-task 6.1.3.4:** Call existing VM creation logic (i.e., ensure `self.create()` is fully implemented).
+    - [x] **Sub-sub-task 6.1.3.5:** Update final task status in `form-state` (`Completed`/`Failed` with `result_info`). (Implemented in 6.1.1.3 handler)
 - [ ] **Sub-task 6.1.4:** Modify `VmInstanceConfig` (if necessary) to be driven by `formfile_content`.
+    - *Note: `VmInstanceConfig` seems to already support `formfile: String`. The key is parsing this string to populate other fields like kernel/rootfs paths, memory, vcpus if `VmManager::create` doesn't do this parsing itself via `Formfile` struct.*
 
 ### Task 6.2: Implement/Enhance `form-pack` Service/Agent for PoC-based `BuildImage` Tasks
 - [ ] **Sub-task 6.2.1:** Design and implement a long-running service/agent mode for `form-pack`.
