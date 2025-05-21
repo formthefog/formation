@@ -508,7 +508,7 @@ mod prompts {
             Ok(Some(cidr))
         }
     }
-
+ 
     pub fn initial_admin_public_key(theme: &ColorfulTheme) -> Result<Option<String>> {
         println!("\n{}", "Initial Admin Public Key Configuration".bold().green());
         println!("Configure the public key (hex format) of the account that will be the initial system administrator.");

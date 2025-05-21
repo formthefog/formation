@@ -1547,38 +1547,84 @@ impl DataStore {
 
     // Method to dispatch a task to a specific responsible node
     async fn dispatch_task_to_node(&self, task: &crate::tasks::Task, node: &crate::nodes::Node) -> Result<(), Box<dyn std::error::Error>> {
-        log::info!("Attempting to dispatch task {} to node {}", task.task_id, node.node_id);
+        log::info!("Dispatching task {} to node {}", task.task_id, node.node_id);
 
-        // Sub-sub-task 4.3.2.2.2 will fill this method's logic
-        // - Get service endpoint from node.metadata.annotations
-        // - Construct payload (LaunchTaskInfo or PackBuildRequest + task_id)
-        // - #[cfg(devnet)] => direct HTTP POST (signed)
-        // - #[cfg(not(devnet))] => write_to_queue (specific topic for node/task_type)
+        let client = reqwest::Client::new(); // Used for devnet direct HTTP calls
 
         match &task.task_variant {
             crate::tasks::TaskVariant::LaunchInstance(params) => {
-                log::info!("Dispatching LaunchInstance task {} to node {}", task.task_id, node.node_id);
-                if let Some(endpoint_url) = node.metadata.annotations().vmm_service_api_endpoint() { // Using getter
-                    // TODO: Implement actual dispatch logic for LaunchInstance
-                    log::debug!("Target VMM service endpoint for node {}: {}", node.node_id, endpoint_url);
-                    // Construct LaunchTaskInfo, then devnet POST or prod queue.
+                if let Some(target_service_base_url) = node.metadata.annotations().vmm_service_api_endpoint() {
+                    let launch_info = form_types::event::LaunchTaskInfo {
+                        task_id: task.task_id.clone(),
+                        instance_name: params.instance_name.clone(),
+                        formfile_content: params.formfile_content.clone(),
+                        submitted_by: task.submitted_by.clone(),
+                        runtime_env_vars: params.runtime_env_vars.clone(),
+                    };
+
+                    #[cfg(feature = "devnet")]
+                    {
+                        let target_url = format!("{}/internal/dispatch_launch_task", target_service_base_url); // Assuming this endpoint on vmm-service
+                        log::info!("DEVNET: Dispatching LaunchInstance task {} to {} at {}", task.task_id, node.node_id, target_url);
+                        
+                        // Prepare payload & sign request (similar to gossip_op_directly)
+                        let signing_key = k256::ecdsa::SigningKey::from_slice(&hex::decode(&self.pk)?)?;
+                        let message_to_sign = serde_json::to_string(&launch_info)?;
+                        let mut hasher = sha2::Sha256::new();
+                        hasher.update(message_to_sign.as_bytes());
+                        let message_hash = hasher.finalize();
+                        let (signature, recovery_id) = signing_key.sign_recoverable(&message_hash)
+                            .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to sign dispatch message: {}", e))))?;
+                        
+                        let auth_header_value = format!("Signature {}.{}.{}", 
+                            hex::encode(signature.to_bytes()), 
+                            recovery_id.to_byte(), 
+                            hex::encode(message_to_sign.as_bytes())
+                        );
+
+                        match client.post(&target_url)
+                            .header(reqwest::header::AUTHORIZATION, auth_header_value)
+                            .json(&launch_info)
+                            .send().await {
+                            Ok(response) => {
+                                if response.status().is_success() {
+                                    log::info!("DEVNET: Successfully dispatched LaunchInstance task {} to {}", task.task_id, target_url);
+                                } else {
+                                    log::error!("DEVNET: Failed to dispatch LaunchInstance task {} to {}: Status: {}, Body: {:?}", 
+                                        task.task_id, target_url, response.status(), response.text().await.unwrap_or_default());
+                                }
+                            }
+                            Err(e) => {
+                                log::error!("DEVNET: Error dispatching LaunchInstance task {} to {}: {}", task.task_id, target_url, e);
+                            }
+                        }
+                    }
+                    #[cfg(not(feature = "devnet"))]
+                    {
+                        log::info!("PRODUCTION: Dispatching LaunchInstance task {} to node {} via queue", task.task_id, node.node_id);
+                        let vmm_event = form_types::VmmEvent::ProcessLaunchTask(launch_info);
+                        // Use a unique sub_topic for VmmEvents, or a specific one for task dispatch
+                        // The topic string for form_p2p queue needs to incorporate node.node_id for targeted delivery.
+                        // DataStore::write_to_queue currently takes a generic topic hash and a sub_topic u8.
+                        // This needs refinement for node-specific topic dispatch via form-p2p.
+                        // For now, placeholder for queue write with a generic task event sub_topic (e.g., 20).
+                        log::warn!("PRODUCTION: Queue dispatch for VmmEvent::ProcessLaunchTask TBD. Event: {:?}", vmm_event);
+                        // DataStore::write_to_queue(vmm_event, 20).await?; 
+                    }
                 } else {
                     log::warn!("Node {} is responsible for LaunchInstance task {} but has no vmm_service_api_endpoint defined.", node.node_id, task.task_id);
                 }
             }
-            crate::tasks::TaskVariant::BuildImage(params) => {
+            crate::tasks::TaskVariant::BuildImage(_params) => {
                 log::info!("Dispatching BuildImage task {} to node {}", task.task_id, node.node_id);
-                if let Some(endpoint_url) = node.metadata.annotations().pack_service_api_endpoint() { // Using getter
-                    // TODO: Implement actual dispatch logic for BuildImage (incl. pre-processing)
-                    log::debug!("Target Pack service endpoint for node {}: {}", node.node_id, endpoint_url);
-                    // Construct PackBuildRequest, then devnet POST or prod queue.
+                if let Some(_endpoint_url) = node.metadata.annotations().pack_service_api_endpoint() { 
+                    // TODO: Implement actual dispatch logic for BuildImage (incl. pre-processing, PackBuildRequest)
+                    log::warn!("DEVNET/PROD: Dispatch for BuildImage task {} TBD.", task.task_id);
                 } else {
                     log::warn!("Node {} is responsible for BuildImage task {} but has no pack_service_api_endpoint defined.", node.node_id, task.task_id);
                 }
             }
-            // Add other task variants if they need dispatching
         }
-
         Ok(())
     }
 }

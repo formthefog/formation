@@ -175,15 +175,25 @@ pub async fn ecdsa_auth_middleware(
     next: axum::middleware::Next,
 ) -> Result<Response, SignatureError> {
     // Check for localhost connection
+    log::debug!("ECDSA_AUTH: Checking for localhost connection.");
     let is_localhost = {
         let connection_info = request.extensions().get::<ConnectInfo<SocketAddr>>();
         let remote_addr = connection_info.map(|c| c.0.to_string()).unwrap_or("".to_string());
         remote_addr.starts_with("127.0.0.1") || remote_addr.starts_with("::1")
     };
+
+    if is_localhost {
+        // Skip auth for localhost connections
+        // Add a default service identity to the request extensions
+        log::debug!("ECDSA_AUTH: Localhost connection detected. Skipping auth.");
+        request.extensions_mut().insert(None::<RecoveredAddress>);
+        return Ok(next.run(request).await);
+    }
     
     let headers = request.headers().clone();
     if let Ok((signature_bytes, recovery_id, message)) = extract_signature_parts(&headers) {
         // Recover the address - this just verifies the signature is valid
+        log::debug!("ECDSA_AUTH: Recovering address from signature.");
         let address = recover_address(&signature_bytes, recovery_id, &message)?;
         request.extensions_mut().insert(Some(
             RecoveredAddress {
@@ -193,12 +203,8 @@ pub async fn ecdsa_auth_middleware(
         ));
         // Authentication successful - let the handler handle authorization
         return Ok(next.run(request).await);
-    } else if is_localhost {
-        // Skip auth for localhost connections
-        // Add a default service identity to the request extensions
-        request.extensions_mut().insert(None::<RecoveredAddress>);
-        return Ok(next.run(request).await);
     } else {
+        log::warn!("ECDSA_AUTH: Invalid signature format.");
         return Err(SignatureError::MissingSignature)
     }
 }
@@ -211,7 +217,7 @@ pub async fn active_node_auth_middleware(
     next: axum::middleware::Next,
 ) -> Result<Response, StatusCode> {
     let headers = req.headers().clone();
-
+    log::debug!("ACTIVE_NODE_AUTH: Checking for active node auth.");
     let (signature_bytes, recovery_id, message_to_verify) = 
         match extract_signature_parts(&headers) {
             Ok(parts) => parts,
@@ -234,6 +240,7 @@ pub async fn active_node_auth_middleware(
             }
         };
     
+    log::debug!("ACTIVE_NODE_AUTH: Recovered address: 0x{}", hex::encode(recovered_eth_address.as_slice()));
     let recovered_address_hex = hex::encode(recovered_eth_address.as_slice());
     log::debug!("ACTIVE_NODE_AUTH: Recovered sender address for gossip: 0x{}", recovered_address_hex);
         
@@ -242,13 +249,14 @@ pub async fn active_node_auth_middleware(
     // Check if the recovered address corresponds to an active, non-disabled peer
     match datastore.network_state.peers.get(&recovered_address_hex).val { // CrdtPeer ID is hex address
         Some(peer_reg) => {
+            log::debug!("ACTIVE_NODE_AUTH: Peer found in datastore.");
             if let Some(peer_val) = peer_reg.val() {
                 let peer = peer_val.value(); // Get the CrdtPeer struct
                 if !peer.is_disabled {
                     log::info!("ACTIVE_NODE_AUTH: Auth success for active peer: 0x{}", recovered_address_hex);
                     req.extensions_mut().insert(RecoveredAddress {
                         address: recovered_eth_address,
-                        message: message_to_verify, // Pass along the verified message if needed by handler
+                        message: message_to_verify.to_vec(), // Pass along the verified message if needed by handler
                     });
                     Ok(next.run(req).await)
                 } else {

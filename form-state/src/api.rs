@@ -786,8 +786,8 @@ async fn check_task_responsibility(
             // This is a sanity check, as PoC should only select capable nodes.
             let node_is_capable = datastore.node_state.get_node(node_id_to_check.clone())
                 .map_or(false, |node| {
-                    // Check against node.metadata.tags
-                    task.required_capabilities.iter().all(|cap| node.metadata.tags.contains(cap))
+                    // Check against node.metadata.annotations.roles()
+                    task.required_capabilities.iter().all(|cap| node.metadata.annotations().roles().contains(cap))
                 });
 
             if !node_is_capable && is_responsible {

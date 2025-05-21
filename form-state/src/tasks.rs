@@ -254,8 +254,8 @@ pub fn determine_responsible_nodes(
     
     // 1. Filter nodes by required capabilities
     let capable_nodes: Vec<&Node> = all_nodes.iter().filter(|node| {
-        // Check against node.metadata.tags
-        task.required_capabilities.iter().all(|cap| node.metadata.tags.contains(cap))
+        // Check against node.metadata.annotations.roles()
+        task.required_capabilities.iter().all(|cap| node.metadata.annotations().roles().contains(cap))
     }).collect();
 
     if capable_nodes.is_empty() {
