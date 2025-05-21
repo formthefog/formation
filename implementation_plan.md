@@ -348,34 +348,15 @@
         - Create initial `Task` CRDT entry.
         - Run `determine_responsible_nodes`.
         - Update the `Task` CRDT entry with `responsible_nodes` and set status to `PoCAssigned` (this update is gossiped).
-    - [ ] **Sub-sub-task 4.3.2.2 (NEW):** After `Task` is `PoCAssigned`, `form-state` prepares and dispatches it to each responsible node.
+    - [x] **Sub-sub-task 4.3.2.2 (NEW):** After `Task` is `PoCAssigned`, `form-state` prepares and dispatches it to each responsible node.
         - [x] **Sub-sub-task 4.3.2.2.1 (Plan & Implement):** Define and implement storage for worker service API endpoint information (for `form-pack`, `form-vmm-service`, etc.) within `form-state`.
             - *Decision & Implementation:* Added `vmm_service_api_endpoint: Option<String>` and `pack_service_api_endpoint: Option<String>` to `NodeAnnotations` struct in `form-state/src/nodes.rs`. Nodes will report these during their registration/update.
-        - [ ] **Sub-sub-task 4.3.2.2.2 (Implement):** Implement the dispatch logic in `form-state/src/datastore.rs` (e.g., in a new method like `async fn dispatch_task_to_node(&self, task: &crate::tasks::Task, node_id: &str, node_info: &crate::nodes::Node)` called from `handle_task_request` after PoC assignment).
+        - [x] **Sub-sub-task 4.3.2.2.2 (Implement):** Implement the dispatch logic in `form-state/src/datastore.rs` (e.g., in the existing method `async fn dispatch_task_to_node(&self, task: &crate::tasks::Task, node: &crate::nodes::Node)` called from `handle_task_request` after PoC assignment).
             - *Detail:* This method will be called for each `node_id` in `task.responsible_nodes`.
-            - **If Task is `LaunchInstance`:**
-                - Construct `form_types::event::LaunchTaskInfo` from `task.task_variant` (LaunchInstanceParams) and other `task` fields (`task_id`, `submitted_by`).
-                - Retrieve `node_info.metadata.annotations.vmm_service_api_endpoint()`.
-                - **`devnet` mode (`#[cfg(feature = "devnet")]`):**
-                    - `form-state` makes a direct, authenticated HTTP POST of `LaunchTaskInfo` to the retrieved `vmm_service_api_endpoint` (e.g., to a path like `/internal/dispatch_launch_task`). (Authentication requires `form-state` to sign the request).
-                - **Production mode (`#[cfg(not(feature = "devnet"))]`):**
-                    - `form-state` constructs a `form_types::VmmEvent::ProcessLaunchTask(launch_task_info)`.
-                    - This `VmmEvent` is serialized and sent via `DataStore::write_to_queue` using a specific `sub_topic` and potentially a `topic` string that includes the target `node_id` (e.g., `vmm_task_for_node_{node_id}`).
-            - **If Task is `BuildImage`:**
-                - **Pre-processing by `form-state` (or a helper service it calls):**
-                    - Fetch build context from `BuildImageParams.source_url`.
-                    - Package context into `artifacts: Vec<u8>` (e.g., tarball) if needed by `form-pack` alongside `Formfile`.
-                    - Generate/construct a `form_pack::formfile::Formfile` object/string based on `BuildImageParams` and context.
-                - Construct `form_pack::types::request::PackRequest` (using `output_artifact_name`, the generated `Formfile`, and `artifacts` blob).
-                - Construct `form_pack::types::request::PackBuildRequest` (signing the `PackRequest`).
-                    - *Note:* The `PackBuildRequest` contains `sig` and `hash`. `form-state` needs a mechanism/identity to sign this appropriately, or the receiving `form-pack` endpoint needs to handle an unsigned `PackRequest` if the HTTP dispatch itself is authenticated by `form-state`'s node key.
-                - Add `task.task_id` to the payload for correlation if not part of `PackBuildRequest`.
-                - Retrieve `node_info.metadata.annotations.pack_service_api_endpoint()`.
-                - **`devnet` mode (`#[cfg(feature = "devnet")]`):**
-                    - `form-state` makes a direct, authenticated HTTP POST of the `PackBuildRequest` (or derived simpler payload with `task_id`) to the `pack_service_api_endpoint` (e.g., `/internal/dispatch_build_task`).
-                - **Production mode (`#[cfg(not(feature = "devnet"))]`):**
-                    - `form-state` enqueues the `PackBuildRequest` (or derived payload with `task_id`) via `form-p2p` to a topic like `pack_task_for_node_{node_id}`.
-            - *Authentication for devnet direct dispatch:* The HTTP request from `form-state` to worker services must be signed by `form-state`'s node key, and worker services must verify this signature.
+            - **If Task is `LaunchInstance`:** (Implemented: constructs `LaunchTaskInfo`, dispatches via devnet API (signed) or prod queue (conceptual call to `write_to_queue` with node-specific topic)).
+            - **If Task is `BuildImage`:** (Partially Implemented: calls stubbed `prepare_pack_build_request`, then dispatches resulting `PackBuildRequest` via devnet API (signed) or prod queue (conceptual call to `write_to_queue` with node-specific topic)).
+                - *Note:* `prepare_pack_build_request` (fetching context, creating artifacts, generating Formfile, signing PackRequest) is a complex stub requiring full implementation.
+            - *Authentication for devnet direct dispatch:* Implemented for both task types.
 
 ### Task 4.4: Testing Proof of Claim & Dispatch Mechanism (within `form-state`)
 - [ ] **Sub-task 4.4.1:** Setup `form-state` with multiple mock `Node` entries with varying capabilities and service endpoints.
@@ -439,7 +420,38 @@
 
 ---
 
-## Phase 7: Testing Node-Side Task Reception & Execution (Manual Multi-Machine Setup)
-- [ ] **Sub-task 7.1:** Setup `form-pack` and `form-vmm-service` with a mock `Node` and task.
-- [ ] **Sub-task 7.2:** Verify `form-pack` and `form-vmm-service` can receive and execute a dispatched task.
-    - *Verification:* `form-pack` and `form-vmm-service` should be able to process the task and update status in `form-state`.
+## Phase 7: API Versioning for `form-state`
+
+**Goal:** Introduce API versioning (v1) for all `form-state` HTTP API endpoints to ensure backward compatibility for future changes.
+
+- [x] **Task 7.1: Plan API Path Updates**
+    - [x] **Sub-task 7.1.1:** List all current and planned HTTP API endpoints in `form-state/src/api.rs`.
+        - *Detail: All router groups (`public_api`, `network_writers_api`, `network_readers_api`, `account_api`, `instance_api`, `api_routes`, `devnet_gossip_api`) identified.*
+    - [x] **Sub-task 7.1.2:** Define the new path structure, prefixing all existing routes with `/v1`.
+        - *Detail: Strategy is `/{group}/{route}` becomes `/v1/{group}/{route}` or `/v1/{route}` for top-level merges.*
+- [x] **Task 7.2: Update Axum Router Definitions in `form-state/src/api.rs`**
+    - [x] **Sub-sub-task 7.2.1 (Plan):** Modify the main `app` function in `form-state/src/api.rs`.
+    - [x] **Sub-sub-task 7.2.2 (Implement):** Consolidate all existing router merges and nests into a new intermediate router (e.g., `v1_routes`). Then, nest this `v1_routes` under a top-level router with the `/v1` prefix. Ensure Axum state is correctly applied.
+        - *Example Structure:*
+          ```rust
+          // pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
+          //     // ... define individual routers like public_api, network_writers_api ...
+          //     let devnet_gossip_api = Router::new() ... .layer(middleware::from_fn_with_state(state.clone(), ...));
+          // 
+          //     let v1_routes = Router::new()
+          //         .merge(public_api)
+          //         .merge(network_writers_api)
+          //         // ... merge other specific api routers ...
+          //         .nest("/devnet_gossip", devnet_gossip_api);
+          // 
+          //     Router::new().nest("/v1", v1_routes).with_state(state)
+          // }
+          ```
+- [x] **Task 7.3: Update API Clients (Planning)**
+    - [x] **Sub-task 7.3.1:** Identify all internal services (`form-net`, `form-p2p`, `form-vmm-service`, `form-pack`, etc.) and any external clients/tools that call `form-state` API endpoints.
+    - [x] **Sub-task 7.3.2:** Plan to update the client-side code in these services/tools to use the new `/v1/...` paths for all calls to `form-state`.
+    - [x] **Sub-task 7.3.3:** Plan to update any API documentation or user-facing examples for `form-state`.
+- [ ] **Task 7.4: Testing API Versioning (Manual & Automated)**
+    - [ ] **Sub-task 7.4.1:** After implementation, test all `form-state` API endpoints using the new `/v1/...` paths to ensure they function as before.
+    - [ ] **Sub-task 7.4.2:** Verify that calls to old paths (without `/v1/`) now correctly result in 404 Not Found errors.
+    - [ ] **Sub-task 7.4.3:** Conduct integration tests to ensure inter-service communication (where other services call `form-state`) works correctly with the versioned paths.

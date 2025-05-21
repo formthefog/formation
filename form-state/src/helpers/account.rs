@@ -244,7 +244,7 @@ pub async fn create_account(
                 let _ = write_datastore(&DB_HANDLE, &datastore.clone());
                 
                 // Add to message queue
-                if let Err(e) = DataStore::write_to_queue(AccountRequest::Op(op), 7).await {
+                if let Err(e) = DataStore::write_to_queue(AccountRequest::Op(op), 7, "global_crdt_ops".to_string()).await {
                     log::error!("Error writing to queue: {}", e);
                 }
                 
@@ -374,7 +374,7 @@ pub async fn update_account(
                         let _ = write_datastore(&DB_HANDLE, &datastore.clone());
                         
                         // Add to message queue
-                        if let Err(e) = DataStore::write_to_queue(AccountRequest::Op(op), 7).await {
+                        if let Err(e) = DataStore::write_to_queue(AccountRequest::Op(op), 7, "global_crdt_ops".to_string()).await {
                             log::error!("Error writing to queue: {}", e);
                         }
                         
@@ -628,7 +628,7 @@ pub async fn transfer_instance_ownership(
                 to_address: to_address.clone(),
                 instance_id: instance_id.clone(),
             };
-            if let Err(e) = DataStore::write_to_queue(transfer_request, 7).await {
+            if let Err(e) = DataStore::write_to_queue(transfer_request, 7, "global_crdt_ops".to_string()).await {
                 log::error!("Error writing transfer operation to queue: {}", e);
             }
             

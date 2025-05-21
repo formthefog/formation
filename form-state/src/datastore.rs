@@ -386,7 +386,7 @@ impl DataStore {
             #[cfg(not(feature = "devnet"))]
             {
                 log::info!("production mode: Queuing PeerOp ({:?}).", op_to_propagate);
-                DataStore::write_to_queue(crate::datastore::PeerRequest::Op(op_to_propagate.clone()), 0).await?;
+                DataStore::write_to_queue(crate::datastore::PeerRequest::Op(op_to_propagate.clone()), 0, "global_crdt_ops".to_string()).await?;
             }
             write_datastore(&DB_HANDLE, &self.clone())?;
         }
@@ -457,7 +457,7 @@ impl DataStore {
             #[cfg(not(feature = "devnet"))]
             {
                 log::info!("production mode: Queuing CIDR Op ({:?}).", op_to_propagate);
-                DataStore::write_to_queue(crate::datastore::CidrRequest::Op(op_to_propagate.clone()), 1).await?;
+                DataStore::write_to_queue(crate::datastore::CidrRequest::Op(op_to_propagate.clone()), 1, "global_crdt_ops".to_string()).await?;
             }
             write_datastore(&DB_HANDLE, &self.clone())?;
         }
@@ -525,7 +525,7 @@ impl DataStore {
             #[cfg(not(feature = "devnet"))]
             {
                 log::info!("production mode: Queuing Assoc Op ({:?}).", op_to_propagate);
-                DataStore::write_to_queue(crate::datastore::AssocRequest::Op(op_to_propagate.clone()), 2).await?;
+                DataStore::write_to_queue(crate::datastore::AssocRequest::Op(op_to_propagate.clone()), 2, "global_crdt_ops".to_string()).await?;
             }
             write_datastore(&DB_HANDLE, &self.clone())?;
         }
@@ -588,7 +588,7 @@ impl DataStore {
             #[cfg(not(feature = "devnet"))]
             {
                 log::info!("production mode: Queuing DNS Op ({:?}).", op_to_propagate);
-                DataStore::write_to_queue(crate::datastore::DnsRequest::Op(op_to_propagate.clone()), 3).await?;
+                DataStore::write_to_queue(crate::datastore::DnsRequest::Op(op_to_propagate.clone()), 3, "global_crdt_ops".to_string()).await?;
             }
             write_datastore(&DB_HANDLE, &self.clone())?;
         }
@@ -760,7 +760,7 @@ impl DataStore {
             #[cfg(not(feature = "devnet"))]
             {
                 log::info!("production mode: Queuing Instance Op ({:?}).", op_to_propagate);
-                DataStore::write_to_queue(crate::datastore::InstanceRequest::Op(op_to_propagate.clone()), 4).await?;
+                DataStore::write_to_queue(crate::datastore::InstanceRequest::Op(op_to_propagate.clone()), 4, "global_crdt_ops".to_string()).await?;
             }
             write_datastore(&DB_HANDLE, &self.clone())?;
         }
@@ -859,7 +859,7 @@ impl DataStore {
             #[cfg(not(feature = "devnet"))]
             {
                 log::info!("production mode: Queuing Node Op ({:?}).", op_to_propagate);
-                DataStore::write_to_queue(crate::datastore::NodeRequest::Op(op_to_propagate.clone()), 5).await?;
+                DataStore::write_to_queue(crate::datastore::NodeRequest::Op(op_to_propagate.clone()), 5, "global_crdt_ops".to_string()).await?;
             }
             write_datastore(&DB_HANDLE, &self.clone())?;
         }
@@ -965,7 +965,7 @@ impl DataStore {
             #[cfg(not(feature = "devnet"))]
             {
                 log::info!("production mode: Queuing Account Op ({:?}).", op_to_propagate);
-                DataStore::write_to_queue(crate::datastore::AccountRequest::Op(op_to_propagate.clone()), 7).await?;
+                DataStore::write_to_queue(crate::datastore::AccountRequest::Op(op_to_propagate.clone()), 7, "global_crdt_ops".to_string()).await?;
             }
             write_datastore(&DB_HANDLE, &self.clone())?;
         }
@@ -998,7 +998,7 @@ impl DataStore {
         self.account_state.map.apply(op.clone());
         
         // Write to queue
-        if let Err(e) = DataStore::write_to_queue(AccountRequest::Op(op), 7).await {
+        if let Err(e) = DataStore::write_to_queue(AccountRequest::Op(op), 7, "global_crdt_ops".to_string()).await {
             log::error!("Error writing to queue: {}", e);
         }
         
@@ -1145,7 +1145,7 @@ impl DataStore {
         self.agent_state.map.apply(op.clone());
         
         // Write to queue
-        if let Err(e) = DataStore::write_to_queue(AgentRequest::Op(op), 8).await {
+        if let Err(e) = DataStore::write_to_queue(AgentRequest::Op(op), 8, "global_crdt_ops".to_string()).await {
             log::error!("Error writing to queue: {}", e);
         }
 
@@ -1202,7 +1202,7 @@ impl DataStore {
         self.model_state.map.apply(op.clone());
         
         // Write to queue
-        if let Err(e) = DataStore::write_to_queue(ModelRequest::Op(op), 9).await {
+        if let Err(e) = DataStore::write_to_queue(ModelRequest::Op(op), 9, "global_crdt_ops".to_string()).await {
             log::error!("Error writing to queue: {}", e);
         }
 
@@ -1319,7 +1319,7 @@ impl DataStore {
             #[cfg(not(feature = "devnet"))]
             {
                 log::info!("production mode: Queuing Task Op ({:?}).", op_to_propagate);
-                DataStore::write_to_queue(crate::datastore::TaskRequest::Op(op_to_propagate.clone()), 10).await?;
+                DataStore::write_to_queue(crate::datastore::TaskRequest::Op(op_to_propagate.clone()), 10, "global_crdt_ops".to_string()).await?;
             }
             write_datastore(&DB_HANDLE, &self.clone())?;
         }
@@ -1328,41 +1328,59 @@ impl DataStore {
     }
     #[cfg(not(feature = "devnet"))]
     pub async fn write_to_queue(
-        message: impl Serialize + Clone,
+        message: impl Serialize + Clone + std::fmt::Debug, 
         sub_topic: u8,
+        topic_string: String, // New parameter
     ) -> Result<(), Box<dyn std::error::Error>> {
+        use reqwest::Client; 
+        use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
+        use tiny_keccak::{Hasher, Sha3};
+        use hex;
+
         let mut hasher = Sha3::v256();
-        let mut topic_hash = [0u8; 32];
-        hasher.update(b"state");
-        hasher.finalize(&mut topic_hash);
+        let mut topic_hash_bytes = [0u8; 32];
+        hasher.update(topic_string.as_bytes()); // Use dynamic topic_string for hashing
+        hasher.finalize(&mut topic_hash_bytes);
+        
         let mut message_code = vec![sub_topic];
         message_code.extend(serde_json::to_vec(&message)?);
-        let request = QueueRequest::Write { 
+        
+        let request_payload = QueueRequest::Write { 
             content: message_code, 
-            topic: hex::encode(topic_hash) 
+            topic: hex::encode(topic_hash_bytes) 
         };
+
+        log::debug!("Writing to queue (topic: '{}', sub_topic: {}): {:?}", topic_string, sub_topic, request_payload);
 
         match Client::new()
             .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
-            .json(&request)
-            .send().await?
-            .json::<QueueResponse>().await? {
-                QueueResponse::OpSuccess => return Ok(()),
-                QueueResponse::Failure { reason } => return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("{reason:?}")))),
-                _ => return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Invalid response variant for write_local endpoint")))
+            .json(&request_payload)
+            .send().await {
+            Ok(response) => {
+                if response.status().is_success() {
+                    match response.json::<QueueResponse>().await {
+                        Ok(QueueResponse::OpSuccess) => Ok(()),
+                        Ok(QueueResponse::Failure { reason }) => Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Queue write failed for topic '{}': {:?}", topic_string, reason)))),
+                        Ok(other_resp) => Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Queue write for topic '{}': Unexpected response variant: {:?}", topic_string, other_resp)))),
+                        Err(e) => Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Queue write for topic '{}': Failed to parse response JSON: {}", topic_string, e))))
+                    }
+                } else {
+                    let status = response.status(); // Store status before consuming response for text
+                    let err_text = response.text().await.unwrap_or_default();
+                    Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Queue write for topic '{}' failed with status: {}, body: {}", topic_string, status, err_text))))
+                }
+            }
+            Err(e) => Err(Box::new(e)), // This error already implies context of the call
         }
     }
 
     #[cfg(feature = "devnet")]
     pub async fn write_to_queue(
-        message: impl Serialize + Clone,
+        message: impl Serialize + Clone + std::fmt::Debug,
         sub_topic: u8,
+        topic_string: String, // New parameter, used in log
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // Log operation details without actually writing to the queue
-        log::info!("DEVNET MODE: Skipping queue write for subtopic {}", sub_topic);
-        log::debug!("DEVNET MODE: Would have written message: {:?}", serde_json::to_string(&message));
-        
-        // Success with no-op in devnet mode
+        log::info!("DEVNET MODE: Skipped queue write for topic '{}', subtopic {}. Message: {:?}", topic_string, sub_topic, serde_json::to_string(&message).unwrap_or_else(|_| "<serialization error>".to_string()));
         Ok(())
     }
 
@@ -1602,17 +1620,23 @@ impl DataStore {
                     #[cfg(not(feature = "devnet"))]
                     {
                         log::info!("PRODUCTION: Dispatching LaunchInstance task {} to node {} via queue", task.task_id, node.node_id);
-                        let vmm_event = form_types::VmmEvent::ProcessLaunchTask(launch_info);
-                        // Use a unique sub_topic for VmmEvents, or a specific one for task dispatch
-                        // The topic string for form_p2p queue needs to incorporate node.node_id for targeted delivery.
-                        // DataStore::write_to_queue currently takes a generic topic hash and a sub_topic u8.
-                        // This needs refinement for node-specific topic dispatch via form-p2p.
-                        // For now, placeholder for queue write with a generic task event sub_topic (e.g., 20).
-                        log::warn!("PRODUCTION: Queue dispatch for VmmEvent::ProcessLaunchTask TBD. Event: {:?}", vmm_event);
-                        // DataStore::write_to_queue(vmm_event, 20).await?; 
+                        let vmm_event = form_types::VmmEvent::ProcessLaunchTask(launch_info); // launch_info was constructed above
+                        
+                        // Define a node-specific topic for VMM tasks
+                        let target_topic_string = format!("vmm_tasks_for_node_{}", node.node_id);
+                        let vmm_task_sub_topic = 20; // Define a sub-topic for these events, e.g., 20
+
+                        if let Err(e) = DataStore::write_to_queue(vmm_event, vmm_task_sub_topic, target_topic_string.clone()).await {
+                            log::error!("PRODUCTION: Failed to queue LaunchInstance task {} for node {}: {}", task.task_id, node.node_id, e);
+                            // Potentially update task state to an error here or retry later
+                        } else {
+                            log::info!("PRODUCTION: Successfully queued LaunchInstance task {} for node {} on topic '{}'", task.task_id, node.node_id, target_topic_string);
+                        }
                     }
                 } else {
-                    log::warn!("Node {} is responsible for LaunchInstance task {} but has no vmm_service_api_endpoint defined.", node.node_id, task.task_id);
+                    log::warn!("Node {} is responsible for LaunchInstance task {} but has no vmm_service_api_endpoint defined (needed for devnet, checked anyway).", node.node_id, task.task_id);
+                    // For production queue, endpoint isn't strictly needed for dispatch FROM form-state,
+                    // but indicates the node might not be set up to run vmm-service correctly.
                 }
             }
             crate::tasks::TaskVariant::BuildImage(_params) => {

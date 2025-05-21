@@ -230,7 +230,6 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
     
     // Define public routes (no authentication required)
     let public_api = Router::new()
-        // Health check and bootstrap endpoints
         .route("/ping", get(pong))
         .route("/health", get(health_check))
         .route("/bootstrap/joined_formnet", post(crate::datastore::complete_bootstrap))
@@ -240,7 +239,6 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/bootstrap/cidr_state", get(cidr_state))
         .route("/bootstrap/assoc_state", get(assoc_state))
         .route("/bootstrap/ensure_admin_account", post(ensure_admin_account))
-        // Add read-only endpoints for non-sensitive data
         .route("/agents", get(list_agents))
         .route("/agents/:id", get(get_agent))
         .route("/models", get(list_model))
@@ -250,7 +248,6 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/instance/list/metrics", get(list_instance_metrics))
         .route("/cluster/:build_id/metrics", get(get_cluster_metrics));
     
-    // Keep the original network API routes
     let network_writers_api = Router::new()
         .route("/user/create", post(create_user))
         .route("/user/update", post(update_user))
@@ -272,17 +269,13 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/node/:id/delete", post(delete_node))
         .route("/node/:id/report_metrics", post(report_node_metrics))
         .route("/user/redeem", post(redeem_invite))
-        // Task Update Endpoint
-        .route("/task/update_status", post(update_task_status_handler))
+        .route("/task/update_status", post(update_task_status_handler)) // Task update endpoint
         .layer(middleware::from_fn_with_state(
             state.clone(),
-            node_auth_middleware,
+            node_auth_middleware, // Admin auth for these writer APIs
         ));
     
-    // Define network/infrastructure routes (node authentication)
-    // These routes are only accessible to Formation nodes via operator key auth
     let network_readers_api = Router::new()
-        // User management for networking
         .route("/user/:id/get", get(get_user))
         .route("/user/:ip/get_from_ip", get(get_user_from_ip))
         .route("/user/:id/get_all_allowed", get(get_all_allowed))
@@ -290,35 +283,23 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/user/list_admin", get(list_admin))
         .route("/peer/list_active", get(list_active_peers))
         .route("/user/:cidr/list", get(list_by_cidr))        
-        // CIDR management
         .route("/cidr/:id/get", get(get_cidr))
         .route("/cidr/list", get(list_cidr))
-        
-        // Association management
         .route("/assoc/:cidr_id/relationships", get(relationships))
-        
-        // DNS management
         .route("/dns/:domain/:build_id/request_vanity", post(request_vanity))
         .route("/dns/:domain/:build_id/request_public", post(request_public))
         .route("/dns/:domain/get", get(get_dns_record))
         .route("/dns/:node_ip/list", get(get_dns_records_by_node_ip))
         .route("/dns/list", get(list_dns_records))
-        
-        // Node management
         .route("/node/:id/metrics", get(get_node_metrics))
         .route("/node/list/metrics", get(list_node_metrics))
-        // Task related endpoints
         .route("/task/:task_id/is_responsible/:node_id_to_check", get(check_task_responsibility))
-        
-        // Node authentication key management
+        .route("/tasks", get(list_tasks_handler)) // Task query endpoints
+        .route("/task/:task_id/get", get(get_task_handler))
         .route("/node/:id/operator-key", post(add_node_operator_key))
-        .route("/node/:id/operator-key/:key", post(remove_node_operator_key))
-        // Task query endpoints
-        .route("/tasks", get(list_tasks_handler))
-        .route("/task/:task_id/get", get(get_task_handler));
+        .route("/node/:id/operator-key/:key", post(remove_node_operator_key));
         
     let account_api = Router::new()
-        // Account management
         .route("/account/:address/get", get(get_account))
         .route("/account/list", get(list_accounts))
         .route("/account/create", post(create_account))
@@ -326,13 +307,11 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/account/delete", post(delete_account))
         .route("/account/:address/is_global_admin", get(is_global_admin_handler))
         .route("/account/transfer-ownership", post(transfer_instance_ownership))
-        // Apply ECDSA auth middleware to all account management routes
         .layer(middleware::from_fn_with_state(
             state.clone(),
             ecdsa_auth_middleware
         ));
     
-    // User-authenticated instance API routes 
     let instance_api = Router::new()
         .route("/instance/create", post(create_instance))
         .route("/instance/update", post(update_instance))
@@ -341,34 +320,26 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/instance/:instance_id/get", get(get_instance))
         .route("/instance/:build_id/get_by_build_id", get(get_instance_by_build_id))
         .route("/instance/:build_id/get_instance_ips", get(get_instance_ips))
-        // Apply ECDSA auth middleware to all instance API routes
         .layer(middleware::from_fn_with_state(
             state.clone(),
             ecdsa_auth_middleware
         ));
 
-    // Define API routes (primarily for developers, using API key authentication)
     let api_routes = Router::new()
-        // Agent management
         .route("/agents/create", post(create_agent))
         .route("/agents/update", post(update_agent))
         .route("/agents/delete", post(delete_agent))
         .route("/agents/:id/hire", post(checked_agent_hire))
         .route("/agents/:agent_id/run_task", post(run_agent_task_handler))
-        
-        // Model management
         .route("/models/create", post(create_model))
         .route("/models/update", post(update_model))
         .route("/models/delete", post(delete_model))
         .route("/models/:id/inference", post(checked_model_inference))
-        
-        // Apply ECDSA authentication middleware to all API routes
         .layer(middleware::from_fn_with_state(
             state.clone(),
             ecdsa_auth_middleware
         ));
     
-    // New router for devnet gossip, protected by active_node_auth_middleware
     let devnet_gossip_api = Router::new()
         .route("/apply_op", post(devnet_apply_op_handler))
         .layer(middleware::from_fn_with_state(
@@ -376,16 +347,20 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
             crate::auth::active_node_auth_middleware,
         ));
     
-    // Merge all route groups into a single router
-    Router::new()
+    // Consolidate all current top-level routes into a single v1_router
+    let v1_router = Router::new()
         .merge(public_api)
         .merge(network_writers_api)  
         .merge(network_readers_api)
-        .nest("/devnet_gossip", devnet_gossip_api) // Nest the new router
         .merge(account_api)
         .merge(instance_api)  
         .merge(api_routes)
-        .with_state(state)
+        .nest("/devnet_gossip", devnet_gossip_api); // Devnet gossip is also under /v1
+    
+    // Create the final app router with the /v1 prefix for all formation state routes
+    Router::new()
+        .nest("/v1", v1_router) 
+        .with_state(state) // Apply state to the top-level router for handlers that extract it directly
 }
 
 /// Run the API server without queue processing
