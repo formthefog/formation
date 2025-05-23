@@ -32,14 +32,16 @@ pub(crate) async fn serve(addr: String, manager: Arc<Mutex<FormPackManager>>) ->
 }
 
 async fn build_routes(manager: Arc<Mutex<FormPackManager>>) -> Router {
-    // Build routes with middlewares
-    let app = Router::new()
+    // Define current routes without the /v1 prefix
+    let core_api_routes = Router::new()
         .route("/ping", post(ping::handle_ping))
         .route("/health", get(health::health_check))
         .route("/build", post(build::handle_pack))
         .route("/:build_id/get_status", get(status::get_status))
         .layer(middleware::from_fn_with_state(manager.clone(), ecdsa_auth_middleware))
-        .with_state(manager.clone());
+        .with_state(manager.clone()); // Apply state to the core routes
     
-    app
+    // Create the final app router with the /v1 prefix
+    Router::new()
+        .nest("/v1", core_api_routes)
 }

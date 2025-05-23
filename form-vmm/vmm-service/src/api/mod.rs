@@ -379,12 +379,12 @@ impl VmmApi {
             .route("/ping", post(ping))
             .with_state(channel.clone());
         
-        // Combine public and protected routes
-        let app = Router::new()
-            .with_state(channel.clone())
+        let v1_routes = Router::new()
             .merge(public_routes)
             .merge(protected_routes);
-        
+        // Combine public and protected routes
+        let app = Router::new()
+            .nest("/v1", v1_routes);
         // Start the server
         let listener = tokio::net::TcpListener::bind(&self.addr).await?;
         axum::serve(listener, app).await.map_err(|e| {

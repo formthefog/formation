@@ -455,3 +455,41 @@
     - [ ] **Sub-task 7.4.1:** After implementation, test all `form-state` API endpoints using the new `/v1/...` paths to ensure they function as before.
     - [ ] **Sub-task 7.4.2:** Verify that calls to old paths (without `/v1/`) now correctly result in 404 Not Found errors.
     - [ ] **Sub-task 7.4.3:** Conduct integration tests to ensure inter-service communication (where other services call `form-state`) works correctly with the versioned paths.
+
+---
+
+## Phase 8: API Versioning for Other Services
+
+**Goal:** Introduce API versioning (v1) for other core service APIs like `form-pack`, `form-vmm-service`, etc., for consistency and future compatibility.
+
+### Task 8.1: Version `form-pack` API Endpoints
+- [x] **Sub-task 8.1.1 (Plan):** Identify `form-pack` API routes in `form-pack/src/helpers/api/mod.rs`.
+    - *Detail: Routes `/ping`, `/health`, `/build`, `/:build_id/get_status` identified.*
+- [x] **Sub-task 8.1.2 (Implement):** Modify `build_routes` in `form-pack/src/helpers/api/mod.rs` to nest all routes under `/v1`.
+    - *Detail: Implemented by creating `core_api_routes` and returning `Router::new().nest("/v1", core_api_routes)`.*
+- [ ] **Sub-task 8.1.3 (Planning):** Identify and plan updates for any clients of `form-pack` API (e.g., CLIs, other services if any).
+- [ ] **Sub-task 8.1.4 (Test):** Test new `/v1/...` `form-pack` endpoints and ensure old paths are 404.
+
+### Task 8.2: Version `form-vmm-service` API Endpoints
+- [x] **Sub-task 8.2.1 (Plan):** Identify `form-vmm-service` API routes (likely in `form-vmm-service/src/api/mod.rs` or similar).
+    - *Detail: `public_routes` and `protected_routes` identified in `start_api_server`.*
+- [x] **Sub-sub-task 8.2.2 (Implement):** Plan to nest all its routes under `/v1` similar to `form-state` and `form-pack`.
+    - *Detail: Implemented by merging existing routers into `v1_routes` and nesting under `/v1` in `start_api_server`.*
+- [ ] **Sub-sub-task 8.2.3 (Planning):** Identify clients and plan for their updates.
+    - *Detail: Clients like `form-state` (for `BootComplete`) or any direct CLI/UI tools would need updates.*
+
+### Task 8.3: Version `form-dns` API Endpoints
+- [x] **Sub-task 8.3.1 (Plan):** Identify `form-dns` API routes.
+    - *Detail: Routes like `/record/...`, `/bootstrap/...` identified in `form-dns/src/api.rs`.*
+- [ ] **Sub-sub-task 8.3.2 (Plan):** Plan to nest all its routes under `/v1` in `form-dns/src/api.rs`.
+    - *Detail: Modify `build_routes` to consolidate current routes and nest under a new top-level `/v1` router.*
+- [ ] **Sub-sub-task 8.3.3 (Planning):** Identify clients (`form-state`, `form-config-wizard`) and plan updates to their API calls to use `/v1` paths.
+- [ ] **Sub-task 8.3.4 (Implement):** (To be done after planning approval)
+    - Implement changes in `form-dns/src/api.rs`.
+    - Implement changes in client call sites in `form-state` and `form-config`.
+- [ ] **Sub-task 8.3.5 (Test):** Test new `/v1/...` `form-dns` endpoints and client interactions.
+
+### Task 8.4: Version `form-net` API Endpoints (Planning - if applicable for `formnet-server`)
+- [ ] **Sub-task 8.4.1 (Plan):** Identify any `formnet-server` API routes exposed for peer joining or management.
+- [ ] **Sub-sub-task 8.4.2 (Plan):** Plan to nest these under `/v1` if applicable.
+- [ ] **Sub-sub-task 8.4.3 (Planning):** Identify clients (e.g., `formnet` CLI, other nodes) and plan for their updates.
