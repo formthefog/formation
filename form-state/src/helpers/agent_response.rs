@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
+use axum::{response::{IntoResponse, Response as AxumResponse}, http::StatusCode};
+use axum::Json;
 
 /// Response format for non-streaming task response
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,22 +86,19 @@ pub struct UsageInfo {
     /// Total tokens used (prompt + completion)
     pub total_tokens: u32,
     
-    /// Time taken to process the request in milliseconds
+    /// Time taken to process the request in milliseconds by the agent
     pub duration_ms: u64,
     
-    /// Billable time for the request in milliseconds (may differ from duration)
+    /// Billable time for the request in milliseconds (may differ from duration, if applicable)
     pub billable_duration_ms: u64,
     
-    /// LLM API cost if an external provider was used
+    /// LLM API cost if an external provider was used by the agent
     pub provider_cost: Option<f64>,
     
     /// Currency for the provider cost (e.g., "USD")
     pub cost_currency: Option<String>,
     
-    /// Formation internal cost metrics for the task
-    pub formation_cost: Option<f64>,
-    
-    /// Computational resources used (CPU, memory, etc.)
+    /// Computational resources used (CPU, memory, etc.) - reported by agent
     pub resources: Option<ResourceUsage>,
 }
 
@@ -303,6 +302,13 @@ impl ApiError {
     pub fn with_request_id(mut self, request_id: &str) -> Self {
         self.request_id = request_id.to_string();
         self
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> AxumResponse {
+        let status = StatusCode::from_u16(self.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        (status, Json(self)).into_response()
     }
 }
 

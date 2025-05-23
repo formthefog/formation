@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, path::PathBuf, sync::Arc};
+use std::{collections::{HashMap, HashSet, BTreeSet}, path::PathBuf, sync::Arc};
 use axum::{extract::State, Json};
 use form_dns::{api::{DomainRequest, DomainResponse}, store::FormDnsRecord};
 use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
@@ -11,9 +11,11 @@ use tiny_keccak::{Hasher, Sha3};
 use tokio::sync::Mutex;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use crdts::{map::Op, BFTReg, CvRDT, Map, CmRDT};
-use crate::{accounts::{Account, AccountOp, AccountState, AuthorizationLevel}, agent::{AIAgent, AgentMap, AgentOp, AgentState}, db::{open_db, write_datastore, DbHandle}, instances::{ClusterMember, Instance, InstanceOp, InstanceState}, model::{AIModel, ModelMap, ModelOp, ModelState}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}};
+use crate::{accounts::{Account, AccountOp, AccountState, AuthorizationLevel}, agent::{AIAgent, AgentMap, AgentOp, AgentState}, db::{open_db, write_datastore, DbHandle}, instances::{ClusterMember, Instance, InstanceOp, InstanceState}, model::{AIModel, ModelMap, ModelOp, ModelState}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}, tasks::{TaskState, Task, TaskOp, TaskStatus, TaskId}};
 use lazy_static::lazy_static;
 use url::Host;
+use hex;
+use sha2::Sha256;
 
 lazy_static! {
     pub static ref DB_HANDLE: DbHandle = open_db(PathBuf::from("/var/lib/formation/db/form.db"));
@@ -70,7 +72,7 @@ impl From<DataStore> for MergeableState {
             nodes: value.node_state.map.clone(),
             accounts: value.account_state.map.clone(),
             agents: value.agent_state.map.clone(),
-            models: value.model_state.map.clone()
+            models: value.model_state.map.clone(),
         }
     }
 }
@@ -82,7 +84,8 @@ pub struct DataStore {
     pub node_state: NodeState,
     pub account_state: AccountState,
     pub agent_state: AgentState,
-    pub model_state: ModelState
+    pub model_state: ModelState,
+    pub task_state: TaskState,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -203,6 +206,23 @@ pub enum ModelRequest {
     Delete(String),
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum TaskRequest {
+    Op(TaskOp),
+    Create(Task),
+    UpdateStatus { // For a node to report progress/completion/failure
+        task_id: TaskId,
+        status: TaskStatus,
+        progress: Option<u8>,
+        result_info: Option<String>,
+    },
+    AssignNode { // For an admin/scheduler to assign a node
+        task_id: TaskId,
+        node_id: Option<String>, // Option to unassign
+        status_after_assign: Option<TaskStatus>, // e.g., PoCAssigned or Claimed
+    },
+    // Add other specific update requests as needed, e.g., UpdateResponsibleNodes
+}
 
 impl DataStore {
     pub fn new(node_id: String, pk: String) -> Self {
@@ -212,6 +232,7 @@ impl DataStore {
         let account_state = AccountState::new(node_id.clone(), pk.clone());
         let agent_state = AgentState::new(node_id.clone(), pk.clone());
         let model_state = ModelState::new(node_id.clone(), pk.clone());
+        let task_state = TaskState::new(node_id.clone(), pk.clone());
 
 
         Self { 
@@ -221,6 +242,7 @@ impl DataStore {
             account_state,
             agent_state,
             model_state,
+            task_state,
         } 
     }
 
@@ -332,29 +354,41 @@ impl DataStore {
     }
 
     pub async fn handle_peer_op(&mut self, peer_op: PeerOp<String>) -> Result<(), Box<dyn std::error::Error>> {
-        match &peer_op {
+        let mut op_applied_successfully = false;
+        let op_to_propagate = peer_op; // Original op, will be cloned for propagation if needed, or for local apply
+
+        match &op_to_propagate { // Match on reference to the original op
             Op::Up { dot: _, key, op } => {
-                self.network_state.peer_op(peer_op.clone());
+                // Apply a clone locally, original op_to_propagate can still be used for gossip
+                self.network_state.peer_op(op_to_propagate.clone()); 
                 if let (true, _) = self.network_state.peer_op_success(key.clone(), op.clone()) {
-                    log::info!("Peer Op succesffully applied...");
-                    DataStore::write_to_queue(PeerRequest::Op(peer_op.clone()), 0).await?;
-                    write_datastore(&DB_HANDLE, &self.clone())?;
+                    log::info!("Peer Op::Up successfully applied locally.");
+                    op_applied_successfully = true;
                 } else {
-                    log::info!("Peer Op rejected...");
-                    return Err(
-                        Box::new(
-                            std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                "update was rejected".to_string()
-                            )
-                        )
-                    )
+                    log::error!("Peer Op::Up failed to apply locally or was a no-op.");
+                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Peer Op::Up failed local application")));
                 }
             }
             Op::Rm { .. } => {
-                self.network_state.peer_op(peer_op.clone());
-                return Ok(());
+                // Apply a clone locally
+                self.network_state.peer_op(op_to_propagate.clone()); 
+                log::info!("Peer Op::Rm applied locally.");
+                op_applied_successfully = true; 
             }
+        }
+
+        if op_applied_successfully {
+            #[cfg(feature = "devnet")]
+            {
+                log::info!("devnet mode: PeerOp applied locally. Gossiping directly with op: {:?}", op_to_propagate);
+                self.gossip_op_directly(&op_to_propagate, "PeerOp").await?;
+            }
+            #[cfg(not(feature = "devnet"))]
+            {
+                log::info!("production mode: Queuing PeerOp ({:?}).", op_to_propagate);
+                DataStore::write_to_queue(crate::datastore::PeerRequest::Op(op_to_propagate.clone()), 0, "global_crdt_ops".to_string()).await?;
+            }
+            write_datastore(&DB_HANDLE, &self.clone())?;
         }
 
         Ok(())
@@ -393,29 +427,39 @@ impl DataStore {
     }
 
     pub async fn handle_cidr_op(&mut self, cidr_op: CidrOp<String>) -> Result<(), Box<dyn std::error::Error>> {
+        let mut op_applied_successfully = false;
+        let op_to_propagate = cidr_op.clone(); // Clone for propagation
+
         match &cidr_op {
             Op::Up { dot: _, key, op } => {
-                self.network_state.cidr_op(cidr_op.clone());
+                self.network_state.cidr_op(cidr_op.clone()); // Apply locally
                 if let (true, _) = self.network_state.cidr_op_success(key.clone(), op.clone()) {
-                    log::info!("CIDR Op succesffully applied...");
-                    DataStore::write_to_queue(CidrRequest::Op(cidr_op.clone()), 1).await?;
-                    write_datastore(&DB_HANDLE, &self.clone())?;
+                    log::info!("CIDR Op::Up successfully applied locally.");
+                    op_applied_successfully = true;
                 } else {
-                    log::info!("CIDR Op rejected...");
-                    return Err(
-                        Box::new(
-                            std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                "update was rejected".to_string()
-                            )
-                        )
-                    )
+                    log::error!("CIDR Op::Up failed to apply locally or was a no-op.");
+                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "CIDR Op::Up failed local application")));
                 }
             }
             Op::Rm { .. } => {
-                self.network_state.cidr_op(cidr_op.clone());
-                return Ok(());
+                self.network_state.cidr_op(cidr_op); // Apply Rm locally
+                log::info!("CIDR Op::Rm applied locally.");
+                op_applied_successfully = true;
             }
+        }
+
+        if op_applied_successfully {
+            #[cfg(feature = "devnet")]
+            {
+                log::info!("devnet mode: CIDR Op applied locally. Gossiping directly with op: {:?}", op_to_propagate);
+                self.gossip_op_directly(&op_to_propagate, "CidrOp").await?;
+            }
+            #[cfg(not(feature = "devnet"))]
+            {
+                log::info!("production mode: Queuing CIDR Op ({:?}).", op_to_propagate);
+                DataStore::write_to_queue(crate::datastore::CidrRequest::Op(op_to_propagate.clone()), 1, "global_crdt_ops".to_string()).await?;
+            }
+            write_datastore(&DB_HANDLE, &self.clone())?;
         }
         Ok(())
     }
@@ -451,29 +495,39 @@ impl DataStore {
     }
 
     pub async fn handle_assoc_op(&mut self, assoc_op: AssocOp<String>) -> Result<(), Box<dyn std::error::Error>> {
+        let mut op_applied_successfully = false;
+        let op_to_propagate = assoc_op.clone(); // Clone for propagation
+
         match &assoc_op {
             Op::Up { dot: _, key, op } => {
-                self.network_state.associations_op(assoc_op.clone());
+                self.network_state.associations_op(assoc_op.clone()); // Apply locally
                 if let (true, _) = self.network_state.associations_op_success(key.clone(), op.clone()) {
-                    log::info!("Assoc Op succesffully applied...");
-                    DataStore::write_to_queue(AssocRequest::Op(assoc_op.clone()), 2).await?;
-                    write_datastore(&DB_HANDLE, &self.clone())?;
+                    log::info!("Assoc Op::Up successfully applied locally.");
+                    op_applied_successfully = true;
                 } else {
-                    log::info!("Assoc Op rejected...");
-                    return Err(
-                        Box::new(
-                            std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                "update was rejected".to_string()
-                            )
-                        )
-                    )
+                    log::error!("Assoc Op::Up failed to apply locally or was a no-op.");
+                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Assoc Op::Up failed local application")));
                 }
             }
             Op::Rm { .. } => {
-                self.network_state.associations_op(assoc_op.clone());
-                return Ok(());
+                self.network_state.associations_op(assoc_op); // Apply Rm locally
+                log::info!("Assoc Op::Rm applied locally.");
+                op_applied_successfully = true;
             }
+        }
+
+        if op_applied_successfully {
+            #[cfg(feature = "devnet")]
+            {
+                log::info!("devnet mode: Assoc Op applied locally. Gossiping directly with op: {:?}", op_to_propagate);
+                self.gossip_op_directly(&op_to_propagate, "AssocOp").await?;
+            }
+            #[cfg(not(feature = "devnet"))]
+            {
+                log::info!("production mode: Queuing Assoc Op ({:?}).", op_to_propagate);
+                DataStore::write_to_queue(crate::datastore::AssocRequest::Op(op_to_propagate.clone()), 2, "global_crdt_ops".to_string()).await?;
+            }
+            write_datastore(&DB_HANDLE, &self.clone())?;
         }
         Ok(())
     }
@@ -504,31 +558,40 @@ impl DataStore {
     }
 
     pub async fn handle_dns_op(&mut self, dns_op: DnsOp) -> Result<(), Box<dyn std::error::Error>> {
+        let mut op_applied_successfully = false;
+        let op_to_propagate = dns_op.clone(); // Clone for propagation
+
         match &dns_op {
             Op::Up { dot: _, key, op } => {
-                self.network_state.dns_op(dns_op.clone());
+                self.network_state.dns_op(dns_op.clone()); // Apply locally
                 if let (true, _) = self.network_state.dns_op_success(key.clone(), op.clone()) {
-                    log::info!("DNS Op succesffully applied...");
-                    DataStore::write_to_queue(DnsRequest::Op(dns_op.clone()), 3).await?;
-                    write_datastore(&DB_HANDLE, &self.clone())?;
+                    log::info!("DNS Op::Up successfully applied locally.");
+                    op_applied_successfully = true;
                 } else {
-                    log::info!("DNS Op rejected...");
-                    return Err(
-                        Box::new(
-                            std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                "update was rejected".to_string()
-                            )
-                        )
-                    )
+                    log::error!("DNS Op::Up failed to apply locally or was a no-op.");
+                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "DNS Op::Up failed local application")));
                 }
             }
             Op::Rm { .. } => {
-                self.network_state.dns_op(dns_op.clone());
-                return Ok(());
+                self.network_state.dns_op(dns_op); // Apply Rm locally
+                log::info!("DNS Op::Rm applied locally.");
+                op_applied_successfully = true;
             }
         }
 
+        if op_applied_successfully {
+            #[cfg(feature = "devnet")]
+            {
+                log::info!("devnet mode: DNS Op applied locally. Gossiping directly with op: {:?}", op_to_propagate);
+                self.gossip_op_directly(&op_to_propagate, "DnsOp").await?;
+            }
+            #[cfg(not(feature = "devnet"))]
+            {
+                log::info!("production mode: Queuing DNS Op ({:?}).", op_to_propagate);
+                DataStore::write_to_queue(crate::datastore::DnsRequest::Op(op_to_propagate.clone()), 3, "global_crdt_ops".to_string()).await?;
+            }
+            write_datastore(&DB_HANDLE, &self.clone())?;
+        }
         Ok(())
     }
 
@@ -646,29 +709,7 @@ impl DataStore {
         while let Some(instance) = iter_mut.next() {
             instance.cluster.insert(cluster_member.clone());
             let instance_op = self.instance_state.update_instance_local(instance.clone());
-            match instance_op {
-                Op::Up { dot: _, ref key, ref op } => {
-                    let _ = self.instance_state.instance_op(instance_op.clone());
-                    if let (true, _) = self.instance_state.instance_op_success(key.to_string(), op.clone()) {
-                        log::info!("Instance Op succesfully applied...");
-                        DataStore::write_to_queue(InstanceRequest::Op(instance_op.clone()), 4).await?;
-                        write_datastore(&DB_HANDLE, &self.clone())?;
-                    } else {
-                        return Err(
-                            Box::new(
-                                std::io::Error::new(
-                                    std::io::ErrorKind::Other,
-                                    "update was rejected".to_string()
-                                )
-                            )
-                        )
-                    }
-                }
-                Op::Rm { .. } => {
-                    self.instance_state.instance_op(instance_op.clone());
-                    return Ok(());
-                }
-            }
+            self.handle_instance_op(instance_op).await?;
         }
         Ok(())
     }
@@ -683,57 +724,45 @@ impl DataStore {
         while let Some(instance) = iter_mut.next() {
             instance.cluster.remove(&cluster_member_id);
             let instance_op = self.instance_state.update_instance_local(instance.clone());
-            match instance_op {
-                Op::Up { dot: _, ref key, ref op } => {
-                    let _ = self.instance_state.instance_op(instance_op.clone());
-                    if let (true, _) = self.instance_state.instance_op_success(key.to_string(), op.clone()) {
-                        log::info!("Instance Op succesfully applied...");
-                        DataStore::write_to_queue(InstanceRequest::Op(instance_op.clone()), 4).await?;
-                        write_datastore(&DB_HANDLE, &self.clone())?;
-                    } else {
-                        return Err(
-                            Box::new(
-                                std::io::Error::new(
-                                    std::io::ErrorKind::Other,
-                                    "update was rejected".to_string()
-                                )
-                            )
-                        )
-                    }
-                }
-                Op::Rm { .. } => {
-                    self.instance_state.instance_op(instance_op.clone());
-                    return Ok(());
-                }
-            }
+            self.handle_instance_op(instance_op).await?;
         }
         Ok(())
     }
 
     pub async fn handle_instance_op(&mut self, instance_op: InstanceOp) -> Result<(), Box<dyn std::error::Error>> {
+        let mut op_applied_successfully = false;
+        let op_to_propagate = instance_op.clone(); // Clone for propagation
+
         match &instance_op {
             Op::Up { dot: _, key, op } => {
-                self.instance_state.instance_op(instance_op.clone());
+                self.instance_state.instance_op(instance_op.clone()); // Apply locally
                 if let (true, _) = self.instance_state.instance_op_success(key.clone(), op.clone()) {
-                    log::info!("Instance Op succesffully applied...");
-                    DataStore::write_to_queue(InstanceRequest::Op(instance_op.clone()), 4).await?;
-                    write_datastore(&DB_HANDLE, &self.clone())?;
+                    log::info!("Instance Op::Up successfully applied locally.");
+                    op_applied_successfully = true;
                 } else {
-                    log::info!("Instance Op rejected...");
-                    return Err(
-                        Box::new(
-                            std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                "update was rejected".to_string()
-                            )
-                        )
-                    )
+                    log::error!("Instance Op::Up failed to apply locally or was a no-op.");
+                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Instance Op::Up failed local application")));
                 }
             }
             Op::Rm { .. } => {
-                self.instance_state.instance_op(instance_op.clone());
-                return Ok(());
+                self.instance_state.instance_op(instance_op); // Apply Rm locally
+                log::info!("Instance Op::Rm applied locally.");
+                op_applied_successfully = true;
             }
+        }
+
+        if op_applied_successfully {
+            #[cfg(feature = "devnet")]
+            {
+                log::info!("devnet mode: Instance Op applied locally. Gossiping directly with op: {:?}", op_to_propagate);
+                self.gossip_op_directly(&op_to_propagate, "InstanceOp").await?;
+            }
+            #[cfg(not(feature = "devnet"))]
+            {
+                log::info!("production mode: Queuing Instance Op ({:?}).", op_to_propagate);
+                DataStore::write_to_queue(crate::datastore::InstanceRequest::Op(op_to_propagate.clone()), 4, "global_crdt_ops".to_string()).await?;
+            }
+            write_datastore(&DB_HANDLE, &self.clone())?;
         }
         Ok(())
     }
@@ -800,29 +829,39 @@ impl DataStore {
     }
 
     pub async fn handle_node_op(&mut self, node_op: NodeOp) -> Result<(), Box<dyn std::error::Error>> {
+        let mut op_applied_successfully = false;
+        let op_to_propagate = node_op.clone(); // Clone for propagation
+
         match &node_op {
             Op::Up { dot: _, key, op } => {
-                self.node_state.node_op(node_op.clone());
+                self.node_state.node_op(node_op.clone()); // Apply locally
                 if let (true, _) = self.node_state.node_op_success(key.clone(), op.clone()) {
-                    log::info!("Peer Op succesffully applied...");
-                    DataStore::write_to_queue(NodeRequest::Op(node_op.clone()), 5).await?;
-                    write_datastore(&DB_HANDLE, &self.clone())?;
+                    log::info!("Node Op::Up successfully applied locally.");
+                    op_applied_successfully = true;
                 } else {
-                    log::info!("Peer Op rejected...");
-                    return Err(
-                        Box::new(
-                            std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                "update was rejected".to_string()
-                            )
-                        )
-                    )
+                    log::error!("Node Op::Up failed to apply locally or was a no-op.");
+                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Node Op::Up failed local application")));
                 }
             }
             Op::Rm { .. } => {
-                self.node_state.node_op(node_op.clone());
-                return Ok(());
+                self.node_state.node_op(node_op); // Apply Rm locally
+                log::info!("Node Op::Rm applied locally.");
+                op_applied_successfully = true;
             }
+        }
+
+        if op_applied_successfully {
+            #[cfg(feature = "devnet")]
+            {
+                log::info!("devnet mode: Node Op applied locally. Gossiping directly with op: {:?}", op_to_propagate);
+                self.gossip_op_directly(&op_to_propagate, "NodeOp").await?;
+            }
+            #[cfg(not(feature = "devnet"))]
+            {
+                log::info!("production mode: Queuing Node Op ({:?}).", op_to_propagate);
+                DataStore::write_to_queue(crate::datastore::NodeRequest::Op(op_to_propagate.clone()), 5, "global_crdt_ops".to_string()).await?;
+            }
+            write_datastore(&DB_HANDLE, &self.clone())?;
         }
         Ok(())
     }
@@ -896,29 +935,39 @@ impl DataStore {
     }
 
     pub async fn handle_account_op(&mut self, account_op: AccountOp) -> Result<(), Box<dyn std::error::Error>> {
+        let mut op_applied_successfully = false;
+        let op_to_propagate = account_op.clone(); // Clone for propagation
+
         match &account_op {
             Op::Up { dot: _, key, op } => {
-                self.account_state.account_op(account_op.clone());
+                self.account_state.account_op(account_op.clone()); // Apply locally
                 if let (true, _) = self.account_state.account_op_success(key.clone(), op.clone()) {
-                    log::info!("Account Op succesffully applied...");
-                    DataStore::write_to_queue(AccountRequest::Op(account_op.clone()), 7).await?;
-                    write_datastore(&DB_HANDLE, &self.clone())?;
+                    log::info!("Account Op::Up successfully applied locally.");
+                    op_applied_successfully = true;
                 } else {
-                    log::info!("Account Op rejected...");
-                    return Err(
-                        Box::new(
-                            std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                "update was rejected".to_string()
-                            )
-                        )
-                    )
+                    log::error!("Account Op::Up failed to apply locally or was a no-op.");
+                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Account Op::Up failed local application")));
                 }
             }
             Op::Rm { .. } => {
-                self.account_state.account_op(account_op.clone());
-                return Ok(());
+                self.account_state.account_op(account_op); // Apply Rm locally
+                log::info!("Account Op::Rm applied locally.");
+                op_applied_successfully = true;
             }
+        }
+
+        if op_applied_successfully {
+            #[cfg(feature = "devnet")]
+            {
+                log::info!("devnet mode: Account Op applied locally. Gossiping directly with op: {:?}", op_to_propagate);
+                self.gossip_op_directly(&op_to_propagate, "AccountOp").await?;
+            }
+            #[cfg(not(feature = "devnet"))]
+            {
+                log::info!("production mode: Queuing Account Op ({:?}).", op_to_propagate);
+                DataStore::write_to_queue(crate::datastore::AccountRequest::Op(op_to_propagate.clone()), 7, "global_crdt_ops".to_string()).await?;
+            }
+            write_datastore(&DB_HANDLE, &self.clone())?;
         }
         Ok(())
     }
@@ -949,7 +998,7 @@ impl DataStore {
         self.account_state.map.apply(op.clone());
         
         // Write to queue
-        if let Err(e) = DataStore::write_to_queue(AccountRequest::Op(op), 7).await {
+        if let Err(e) = DataStore::write_to_queue(AccountRequest::Op(op), 7, "global_crdt_ops".to_string()).await {
             log::error!("Error writing to queue: {}", e);
         }
         
@@ -1096,7 +1145,7 @@ impl DataStore {
         self.agent_state.map.apply(op.clone());
         
         // Write to queue
-        if let Err(e) = DataStore::write_to_queue(AgentRequest::Op(op), 8).await {
+        if let Err(e) = DataStore::write_to_queue(AgentRequest::Op(op), 8, "global_crdt_ops".to_string()).await {
             log::error!("Error writing to queue: {}", e);
         }
 
@@ -1153,55 +1202,185 @@ impl DataStore {
         self.model_state.map.apply(op.clone());
         
         // Write to queue
-        if let Err(e) = DataStore::write_to_queue(ModelRequest::Op(op), 9).await {
+        if let Err(e) = DataStore::write_to_queue(ModelRequest::Op(op), 9, "global_crdt_ops".to_string()).await {
             log::error!("Error writing to queue: {}", e);
         }
 
         Ok(())
     }
 
-    pub async fn handle_model_op(&mut self, agent_op: ModelOp) -> Result<(), Box<dyn std::error::Error>> {
-        self.model_state.map.apply(agent_op);
+    pub async fn handle_model_op(&mut self, model_op: ModelOp) -> Result<(), Box<dyn std::error::Error>> {
+        self.model_state.map.apply(model_op);
         Ok(())
     }
 
+    // Task handler methods
+    pub async fn handle_task_request(&mut self, task_request: TaskRequest) -> Result<(), Box<dyn std::error::Error>> {
+        match task_request {
+            TaskRequest::Op(op) => self.handle_task_op(op).await?,
+            TaskRequest::Create(mut task_to_create) => {
+                // Ensure initial status for PoC tasks
+                if matches!(task_to_create.task_variant, crate::tasks::TaskVariant::BuildImage(_) | crate::tasks::TaskVariant::LaunchInstance(_)) {
+                    task_to_create.status = crate::tasks::TaskStatus::PendingPoCAssessment;
+                }
+                // TODO: task_id generation if not provided by client.
+                // For now, assume task_to_create.task_id is unique and set.
+                task_to_create.created_at = chrono::Utc::now().timestamp();
+                task_to_create.updated_at = task_to_create.created_at;
+
+                let op = self.task_state.update_task_local(task_to_create.clone()); // Create the task first
+                self.handle_task_op(op).await?;
+
+                // If it's a PoC eligible task, immediately determine responsible nodes and update it.
+                if matches!(task_to_create.task_variant, crate::tasks::TaskVariant::BuildImage(_) | crate::tasks::TaskVariant::LaunchInstance(_)) {
+                    // Fetch the just-created task to ensure we have its latest CRDT state (though task_to_create is what we just put in)
+                    // It might be cleaner if update_task_local returned the created task state or if handle_task_op did.
+                    // For now, let's re-fetch or use task_to_create if we trust its state is what was persisted before gossip.
+                    // For simplicity, we use task_to_create, but a fetch would be safer if there were concurrent writes (unlikely for a new task ID).
+                    
+                    // We need all nodes from the datastore.
+                    let all_nodes = self.node_state.list_nodes(); // Assuming list_nodes() exists and returns Vec<Node>
+                    
+                    let responsible_nodes = crate::tasks::determine_responsible_nodes(&task_to_create, &all_nodes, self);
+                    
+                    log::info!("PoC determined responsible nodes for task {}: {:?}", task_to_create.task_id, responsible_nodes);
+
+                    // Now, update the task with responsible_nodes and new status
+                    if let Some(mut task_to_update) = self.task_state.get_task(&task_to_create.task_id) { // Removed .cloned()
+                        task_to_update.responsible_nodes = Some(responsible_nodes);
+                        task_to_update.status = crate::tasks::TaskStatus::PoCAssigned;
+                        task_to_update.updated_at = chrono::Utc::now().timestamp();
+                        let update_op = self.task_state.update_task_local(task_to_update);
+                        self.handle_task_op(update_op).await?;
+                    } else {
+                        log::error!("Failed to re-fetch task {} for PoC update.", task_to_create.task_id);
+                        // Not returning error here, as initial task creation succeeded. PoC can be retried.
+                    }
+                }
+            }
+            TaskRequest::UpdateStatus{ task_id, status, progress, result_info } => {
+                if let Some(mut task) = self.task_state.get_task(&task_id) {
+                    task.status = status;
+                    task.progress = progress;
+                    task.result_info = result_info;
+                    task.updated_at = chrono::Utc::now().timestamp();
+                    let op = self.task_state.update_task_local(task);
+                    self.handle_task_op(op).await?;
+                } else {
+                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::NotFound, format!("Task not found: {}", task_id))));
+                }
+            }
+            TaskRequest::AssignNode{ task_id, node_id, status_after_assign } => {
+                 if let Some(mut task) = self.task_state.get_task(&task_id) {
+                    task.assigned_to_node_id = node_id;
+                    if let Some(new_status) = status_after_assign {
+                        task.status = new_status;
+                    }
+                    task.updated_at = chrono::Utc::now().timestamp();
+                    let op = self.task_state.update_task_local(task);
+                    self.handle_task_op(op).await?;
+                } else {
+                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::NotFound, format!("Task not found: {}", task_id))));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn handle_task_op(&mut self, task_op: TaskOp) -> Result<(), Box<dyn std::error::Error>> {
+        let mut op_applied_successfully = false;
+        let op_to_propagate = task_op.clone();
+
+        match &task_op {
+            Op::Up { dot: _, key, op } => {
+                self.task_state.task_op(task_op.clone()); // Apply locally, clone task_op as it's borrowed in match
+                // Using task_id from the successfully applied op for verification
+                if let (true, Some(_)) = self.task_state.task_op_success(&op.op().value.task_id, op) {
+                    log::info!("Task Op::Up successfully applied locally for task_id: {}", key);
+                    op_applied_successfully = true;
+                } else {
+                    log::error!("Task Op::Up failed to apply locally or was a no-op for task_id: {}.", key);
+                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Task Op::Up failed local application for task_id: {}", key))));
+                }
+            }
+            Op::Rm { .. } => {
+                self.task_state.task_op(task_op); // Apply Rm locally
+                log::info!("Task Op::Rm applied locally.");
+                op_applied_successfully = true;
+            }
+        }
+
+        if op_applied_successfully {
+            #[cfg(feature = "devnet")]
+            {
+                log::info!("devnet mode: Task Op applied locally. Gossiping directly with op: {:?}", op_to_propagate);
+                self.gossip_op_directly(&op_to_propagate, "TaskOp").await?;
+            }
+            #[cfg(not(feature = "devnet"))]
+            {
+                log::info!("production mode: Queuing Task Op ({:?}).", op_to_propagate);
+                DataStore::write_to_queue(crate::datastore::TaskRequest::Op(op_to_propagate.clone()), 10, "global_crdt_ops".to_string()).await?;
+            }
+            write_datastore(&DB_HANDLE, &self.clone())?;
+        }
+
+        Ok(())
+    }
     #[cfg(not(feature = "devnet"))]
     pub async fn write_to_queue(
-        message: impl Serialize + Clone,
+        message: impl Serialize + Clone + std::fmt::Debug, 
         sub_topic: u8,
+        topic_string: String, // New parameter
     ) -> Result<(), Box<dyn std::error::Error>> {
+        use reqwest::Client; 
+        use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
+        use tiny_keccak::{Hasher, Sha3};
+        use hex;
+
         let mut hasher = Sha3::v256();
-        let mut topic_hash = [0u8; 32];
-        hasher.update(b"state");
-        hasher.finalize(&mut topic_hash);
+        let mut topic_hash_bytes = [0u8; 32];
+        hasher.update(topic_string.as_bytes()); // Use dynamic topic_string for hashing
+        hasher.finalize(&mut topic_hash_bytes);
+        
         let mut message_code = vec![sub_topic];
         message_code.extend(serde_json::to_vec(&message)?);
-        let request = QueueRequest::Write { 
+        
+        let request_payload = QueueRequest::Write { 
             content: message_code, 
-            topic: hex::encode(topic_hash) 
+            topic: hex::encode(topic_hash_bytes) 
         };
+
+        log::debug!("Writing to queue (topic: '{}', sub_topic: {}): {:?}", topic_string, sub_topic, request_payload);
 
         match Client::new()
             .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
-            .json(&request)
-            .send().await?
-            .json::<QueueResponse>().await? {
-                QueueResponse::OpSuccess => return Ok(()),
-                QueueResponse::Failure { reason } => return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("{reason:?}")))),
-                _ => return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Invalid response variant for write_local endpoint")))
+            .json(&request_payload)
+            .send().await {
+            Ok(response) => {
+                if response.status().is_success() {
+                    match response.json::<QueueResponse>().await {
+                        Ok(QueueResponse::OpSuccess) => Ok(()),
+                        Ok(QueueResponse::Failure { reason }) => Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Queue write failed for topic '{}': {:?}", topic_string, reason)))),
+                        Ok(other_resp) => Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Queue write for topic '{}': Unexpected response variant: {:?}", topic_string, other_resp)))),
+                        Err(e) => Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Queue write for topic '{}': Failed to parse response JSON: {}", topic_string, e))))
+                    }
+                } else {
+                    let status = response.status(); // Store status before consuming response for text
+                    let err_text = response.text().await.unwrap_or_default();
+                    Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Queue write for topic '{}' failed with status: {}, body: {}", topic_string, status, err_text))))
+                }
+            }
+            Err(e) => Err(Box::new(e)), // This error already implies context of the call
         }
     }
 
     #[cfg(feature = "devnet")]
     pub async fn write_to_queue(
-        message: impl Serialize + Clone,
+        message: impl Serialize + Clone + std::fmt::Debug,
         sub_topic: u8,
+        topic_string: String, // New parameter, used in log
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // Log operation details without actually writing to the queue
-        log::info!("DEVNET MODE: Skipping queue write for subtopic {}", sub_topic);
-        log::debug!("DEVNET MODE: Would have written message: {:?}", serde_json::to_string(&message));
-        
-        // Success with no-op in devnet mode
+        log::info!("DEVNET MODE: Skipped queue write for topic '{}', subtopic {}. Message: {:?}", topic_string, sub_topic, serde_json::to_string(&message).unwrap_or_else(|_| "<serialization error>".to_string()));
         Ok(())
     }
 
@@ -1293,6 +1472,183 @@ impl DataStore {
                 }
             };
 
+        Ok(())
+    }
+
+    #[cfg(feature = "devnet")]
+    async fn gossip_op_directly<O: Serialize + Clone + std::fmt::Debug>(
+        &self, 
+        operation: &O, 
+        op_type_description: &str
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use k256::ecdsa::SigningKey;
+        use k256::ecdsa::signature::Signer; // For sign_recoverable
+        use sha2::{Sha256, Digest as Sha2Digest}; // Import and alias Digest
+        use crate::api::DevnetGossipOpContainer; // Make sure this path is correct
+
+        log::info!("DEVNET: Gossiping {} directly.", op_type_description);
+        
+        let mut active_peer_api_endpoints: Vec<String> = Vec::new();
+        for peer_entry in self.network_state.peers.iter() {
+            if let Some(peer_val_reg) = peer_entry.val.1.val() { // Corrected iteration
+                let peer = peer_val_reg.value();
+                if !peer.is_disabled && peer.id != self.node_state.node_id { 
+                    if let Some(endpoint) = &peer.endpoint {
+                        match endpoint.resolve() {
+                            Ok(socket_addr) => {
+                                let api_endpoint_url = format!("http://{}:3004", socket_addr.ip());
+                                active_peer_api_endpoints.push(api_endpoint_url);
+                            }
+                            Err(e) => {
+                                log::warn!("DEVNET: Failed to resolve endpoint for peer {}: {}", peer.id, e);
+                            }
+                        }
+                    } else {
+                        log::warn!("DEVNET: Peer {} has no endpoint, cannot gossip directly.", peer.id);
+                    }
+                }
+            }
+        }
+
+        if active_peer_api_endpoints.is_empty() {
+            log::info!("DEVNET: No active peers found to gossip {} to.", op_type_description);
+            return Ok(());
+        }
+
+        let signing_key = SigningKey::from_slice(&hex::decode(&self.pk).map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("Invalid hex for PK: {}", e))))?)?;
+
+        let op_payload_json_string = serde_json::to_string(operation)?;
+        let gossip_payload_container = DevnetGossipOpContainer {
+            op_type: op_type_description.to_string(),
+            op_payload_json: op_payload_json_string,
+        };
+        
+        let message_to_sign_for_http = serde_json::to_string(&gossip_payload_container)?;
+        let message_bytes_for_http = message_to_sign_for_http.as_bytes();
+
+        let mut hasher = Sha256::new();
+        hasher.update(message_bytes_for_http);
+        let message_hash_for_http = hasher.finalize();
+
+        let (signature, recovery_id) = signing_key.sign_recoverable(&message_hash_for_http)
+            .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to sign gossip message: {}", e))))?;
+
+        let signature_hex = hex::encode(signature.to_bytes());
+        let recovery_id_byte = recovery_id.to_byte();
+        let message_hex_for_header = hex::encode(message_bytes_for_http);
+        let auth_header_value = format!("Signature {}.{}.{}", signature_hex, recovery_id_byte, message_hex_for_header);
+
+        let client = reqwest::Client::new();
+        for target_peer_base_url in active_peer_api_endpoints {
+            let target_url = format!("{}/devnet_gossip/apply_op", target_peer_base_url);
+            log::debug!("DEVNET: Sending {} to {} with auth header", op_type_description, target_url);
+            
+            match client.post(&target_url)
+                .header(reqwest::header::AUTHORIZATION, &auth_header_value)
+                .json(&gossip_payload_container)
+                .send().await {
+                Ok(response) => {
+                    if response.status().is_success() {
+                        log::info!("DEVNET: Successfully gossiped {} to {}", op_type_description, target_url);
+                    } else {
+                        log::error!("DEVNET: Failed to gossip {} to {}: Status: {}, Body: {:?}", 
+                            op_type_description, target_url, response.status(), response.text().await.unwrap_or_default());
+                    }
+                }
+                Err(e) => {
+                    log::error!("DEVNET: Error gossiping {} to {}: {}", op_type_description, target_url, e);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    // Method to dispatch a task to a specific responsible node
+    async fn dispatch_task_to_node(&self, task: &crate::tasks::Task, node: &crate::nodes::Node) -> Result<(), Box<dyn std::error::Error>> {
+        log::info!("Dispatching task {} to node {}", task.task_id, node.node_id);
+
+        let client = reqwest::Client::new(); // Used for devnet direct HTTP calls
+
+        match &task.task_variant {
+            crate::tasks::TaskVariant::LaunchInstance(params) => {
+                if let Some(target_service_base_url) = node.metadata.annotations().vmm_service_api_endpoint() {
+                    let launch_info = form_types::event::LaunchTaskInfo {
+                        task_id: task.task_id.clone(),
+                        instance_name: params.instance_name.clone(),
+                        formfile_content: params.formfile_content.clone(),
+                        submitted_by: task.submitted_by.clone(),
+                        runtime_env_vars: params.runtime_env_vars.clone(),
+                    };
+
+                    #[cfg(feature = "devnet")]
+                    {
+                        let target_url = format!("{}/internal/dispatch_launch_task", target_service_base_url); // Assuming this endpoint on vmm-service
+                        log::info!("DEVNET: Dispatching LaunchInstance task {} to {} at {}", task.task_id, node.node_id, target_url);
+                        
+                        // Prepare payload & sign request (similar to gossip_op_directly)
+                        let signing_key = k256::ecdsa::SigningKey::from_slice(&hex::decode(&self.pk)?)?;
+                        let message_to_sign = serde_json::to_string(&launch_info)?;
+                        let mut hasher = sha2::Sha256::new();
+                        hasher.update(message_to_sign.as_bytes());
+                        let message_hash = hasher.finalize();
+                        let (signature, recovery_id) = signing_key.sign_recoverable(&message_hash)
+                            .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to sign dispatch message: {}", e))))?;
+                        
+                        let auth_header_value = format!("Signature {}.{}.{}", 
+                            hex::encode(signature.to_bytes()), 
+                            recovery_id.to_byte(), 
+                            hex::encode(message_to_sign.as_bytes())
+                        );
+
+                        match client.post(&target_url)
+                            .header(reqwest::header::AUTHORIZATION, auth_header_value)
+                            .json(&launch_info)
+                            .send().await {
+                            Ok(response) => {
+                                if response.status().is_success() {
+                                    log::info!("DEVNET: Successfully dispatched LaunchInstance task {} to {}", task.task_id, target_url);
+                                } else {
+                                    log::error!("DEVNET: Failed to dispatch LaunchInstance task {} to {}: Status: {}, Body: {:?}", 
+                                        task.task_id, target_url, response.status(), response.text().await.unwrap_or_default());
+                                }
+                            }
+                            Err(e) => {
+                                log::error!("DEVNET: Error dispatching LaunchInstance task {} to {}: {}", task.task_id, target_url, e);
+                            }
+                        }
+                    }
+                    #[cfg(not(feature = "devnet"))]
+                    {
+                        log::info!("PRODUCTION: Dispatching LaunchInstance task {} to node {} via queue", task.task_id, node.node_id);
+                        let vmm_event = form_types::VmmEvent::ProcessLaunchTask(launch_info); // launch_info was constructed above
+                        
+                        // Define a node-specific topic for VMM tasks
+                        let target_topic_string = format!("vmm_tasks_for_node_{}", node.node_id);
+                        let vmm_task_sub_topic = 20; // Define a sub-topic for these events, e.g., 20
+
+                        if let Err(e) = DataStore::write_to_queue(vmm_event, vmm_task_sub_topic, target_topic_string.clone()).await {
+                            log::error!("PRODUCTION: Failed to queue LaunchInstance task {} for node {}: {}", task.task_id, node.node_id, e);
+                            // Potentially update task state to an error here or retry later
+                        } else {
+                            log::info!("PRODUCTION: Successfully queued LaunchInstance task {} for node {} on topic '{}'", task.task_id, node.node_id, target_topic_string);
+                        }
+                    }
+                } else {
+                    log::warn!("Node {} is responsible for LaunchInstance task {} but has no vmm_service_api_endpoint defined (needed for devnet, checked anyway).", node.node_id, task.task_id);
+                    // For production queue, endpoint isn't strictly needed for dispatch FROM form-state,
+                    // but indicates the node might not be set up to run vmm-service correctly.
+                }
+            }
+            crate::tasks::TaskVariant::BuildImage(_params) => {
+                log::info!("Dispatching BuildImage task {} to node {}", task.task_id, node.node_id);
+                if let Some(_endpoint_url) = node.metadata.annotations().pack_service_api_endpoint() { 
+                    // TODO: Implement actual dispatch logic for BuildImage (incl. pre-processing, PackBuildRequest)
+                    log::warn!("DEVNET/PROD: Dispatch for BuildImage task {} TBD.", task.task_id);
+                } else {
+                    log::warn!("Node {} is responsible for BuildImage task {} but has no pack_service_api_endpoint defined.", node.node_id, task.task_id);
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -1622,6 +1978,8 @@ mod tests {
                 annotations: NodeAnnotations {
                     roles: vec!["compute".to_string()],
                     datacenter: "dc1".to_string(),
+                    vmm_service_api_endpoint: None, // Added field
+                    pack_service_api_endpoint: None, // Added field
                 },
                 monitoring: NodeMonitoring {
                     logging_enabled: true,

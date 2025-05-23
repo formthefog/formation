@@ -1,5 +1,4 @@
-use crate::datastore::{DataStore, ModelRequest};
-use crate::api_keys::ApiKeyAuth;
+use crate::datastore::DataStore;
 use crate::billing::UsageTracker;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -7,311 +6,280 @@ use axum::{extract::{State, Path}, Json};
 use serde::{Serialize, Deserialize};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use chrono::Utc;
 use serde_json::json;
+use crate::auth::RecoveredAddress;
+use crate::model::AIModel;
+
+// Helper function to determine if an address belongs to an admin
+// This would ideally be replaced with a proper role-based system
+fn is_admin_address(address: &str) -> bool {
+    // For now, we'll use a simple check for a specific address pattern
+    // In a real system, this would query against a database or use JWT claims
+    address.to_lowercase() == "0xadmin" || address.starts_with("0x000admin")
+}
 
 pub async fn create_model(
     State(state): State<Arc<Mutex<DataStore>>>,
-    auth: ApiKeyAuth,
-    Json(model_data): Json<ModelRequest>,
+    recovered: RecoveredAddress,
+    Json(payload): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    log::info!("Account {} is attempting to create a new model", auth.account.address);
+    let mut datastore = state.lock().await;
     
-    // Check operation permission
-    if !auth.api_key.can_perform_operation("models.create") {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "success": false,
-                "error": "API key does not have permission to create models"
-            }))
-        );
-    }
+    // Get the address of the authenticated user
+    let user_address = recovered.as_hex();
     
-    // Validate the model data
-    let model_id = match &model_data {
-        ModelRequest::Create(model) => {
-            if model.name.is_empty() {
+    // Check if this is a request from an admin node with an original user address
+    let effective_address = if datastore.network_state.is_admin_address(&user_address) {
+        // If it's an admin node, extract the original user address from the payload
+        crate::auth::extract_original_user_address(&payload)
+            .unwrap_or_else(|| user_address.clone())
+    } else {
+        // If it's a regular user, use their address
+        user_address
+    };
+    
+    // Parse the model data from the payload
+    let model_data: Result<AIModel, serde_json::Error> = serde_json::from_value(payload.clone());
+    
+    match model_data {
+        Ok(mut model) => {
+            // Ensure the model has the correct owner set to the authenticated user
+            model.owner_id = effective_address.to_lowercase();
+            
+            // Create and apply the model update
+            let op = datastore.model_state.update_model_local(model.clone());
+            if let Err(e) = datastore.handle_model_op(op).await {
                 return (
-                    StatusCode::BAD_REQUEST,
+                    StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({
-                        "success": false,
-                        "error": "Model name cannot be empty"
-                    }))
+                        "error": format!("Failed to create model: {}", e)
+                    })),
                 );
             }
-            model.model_id.clone()
-        },
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
+            
+            (
+                StatusCode::CREATED,
                 Json(json!({
-                    "success": false,
-                    "error": "Invalid request type for model creation"
-                }))
-            );
-        }
-    };
-    
-    // Check for duplicate model ID/name
-    let mut datastore = state.lock().await;
-    if let Some(existing) = datastore.model_state.get_model(&model_id) {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({
-                "success": false,
-                "error": format!("Model with ID {} already exists", model_id),
-                "existing_model": existing
-            }))
-        );
-    }
-    
-    // Set the owner to the current account
-    let model = match model_data {
-        ModelRequest::Create(mut model) => {
-            model.owner_id = auth.account.address.clone();
-            model.created_at = Utc::now().timestamp();
-            model.updated_at = Utc::now().timestamp();
-            model
+                    "status": "success",
+                    "model": model
+                })),
+            )
         },
-        _ => unreachable!(), // We already checked this above
-    };
-    
-    // Create the model in the datastore
-    let op = datastore.model_state.update_model_local(model.clone());
-    
-    // Apply the operation
-    if let Err(e) = datastore.handle_model_op(op.clone()).await {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
             Json(json!({
-                "success": false,
-                "error": format!("Failed to create model: {}", e)
-            }))
-        );
+                "error": format!("Invalid model data: {}", e)
+            })),
+        ),
     }
-    
-    // Record creation in account usage stats
-    if let Some(ref mut usage) = auth.account.usage.clone() {
-        // Track model creation in usage statistics
-        // This would be more complex in a real implementation
-        log::info!("Recording model creation in usage statistics");
-    }
-    
-    // Return success with the created model
-    (
-        StatusCode::CREATED,
-        Json(json!({
-            "success": true,
-            "message": format!("Model {} created successfully", model.model_id),
-            "model": model
-        }))
-    )
 }
 
 pub async fn update_model(
     State(state): State<Arc<Mutex<DataStore>>>,
-    auth: ApiKeyAuth,
-    Json(model_data): Json<ModelRequest>,
+    recovered: RecoveredAddress,
+    Json(payload): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    log::info!("Account {} is attempting to update a model", auth.account.address);
-    
-    // Check operation permission
-    if !auth.api_key.can_perform_operation("models.update") {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "success": false,
-                "error": "API key does not have permission to update models"
-            }))
-        );
-    }
-    
-    // Ensure we have a valid update request
-    let model_id = match &model_data {
-        ModelRequest::Update(model) => model.model_id.clone(),
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "success": false,
-                    "error": "Invalid request type for model update"
-                }))
-            );
-        }
-    };
-    
-    // Get the existing model
     let mut datastore = state.lock().await;
-    let existing_model = match datastore.model_state.get_model(&model_id) {
-        Some(model) => model,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({
-                    "success": false,
-                    "error": format!("Model with ID {} not found", model_id)
-                }))
-            );
-        }
+    
+    // Get the address of the authenticated user
+    let user_address = recovered.as_hex();
+    
+    // Check if this is a request from an admin node with an original user address
+    let effective_address = if datastore.network_state.is_admin_address(&user_address.clone()) {
+        // If it's an admin node, extract the original user address from the payload
+        crate::auth::extract_original_user_address(&payload)
+            .unwrap_or_else(|| user_address.clone())
+    } else {
+        // If it's a regular user, use their address
+        user_address.clone()
     };
     
-    // Verify ownership/permissions - only the owner or an admin can update
-    if existing_model.owner_id != auth.account.address && !auth.api_key.can_perform_operation("admin.models") {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "success": false,
-                "error": "You do not have permission to update this model"
-            }))
-        );
-    }
+    // Parse the model data from the payload
+    let model_data: Result<AIModel, serde_json::Error> = serde_json::from_value(payload.clone());
     
-    // Update the model
-    let updated_model = match model_data {
-        ModelRequest::Update(mut model) => {
-            // Preserve owner and creation timestamp
-            model.owner_id = existing_model.owner_id.clone();
-            model.created_at = existing_model.created_at;
-            // Update the timestamp
-            model.updated_at = Utc::now().timestamp();
-            model
+    match model_data {
+        Ok(model) => {
+            // Check if the model exists
+            let existing_model = datastore.model_state.get_model(&model.model_id);
+            if let Some(existing_model) = existing_model {
+                // Verify ownership unless the request is from an admin
+                if existing_model.owner_id.to_lowercase() != effective_address.to_lowercase() && 
+                   !datastore.network_state.is_admin_address(&user_address) {
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(json!({
+                            "error": "You don't have permission to update this model"
+                        })),
+                    );
+                }
+                
+                // Create and apply the model update
+                let op = datastore.model_state.update_model_local(model.clone());
+                if let Err(e) = datastore.handle_model_op(op).await {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({
+                            "error": format!("Failed to update model: {}", e)
+                        })),
+                    );
+                }
+                
+                (
+                    StatusCode::OK,
+                    Json(json!({
+                        "status": "success",
+                        "model": model
+                    })),
+                )
+            } else {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({
+                        "error": "Model not found"
+                    })),
+                )
+            }
         },
-        _ => unreachable!(), // We already checked this above
-    };
-    
-    // Create the model update operation
-    let op = datastore.model_state.update_model_local(updated_model.clone());
-    
-    // Apply the operation
-    if let Err(e) = datastore.handle_model_op(op.clone()).await {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
             Json(json!({
-                "success": false,
-                "error": format!("Failed to update model: {}", e)
-            }))
-        );
+                "error": format!("Invalid model data: {}", e)
+            })),
+        ),
     }
-    
-    // Return success with the updated model
-    (
-        StatusCode::OK,
-        Json(json!({
-            "success": true,
-            "message": format!("Model {} updated successfully", model_id),
-            "model": updated_model
-        }))
-    )
 }
 
 pub async fn delete_model(
     State(state): State<Arc<Mutex<DataStore>>>,
-    auth: ApiKeyAuth,
-    Json(model_data): Json<ModelRequest>,
+    recovered: RecoveredAddress,
+    Json(payload): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    log::info!("Account {} is attempting to delete a model", auth.account.address);
-    
-    // Check operation permission
-    if !auth.api_key.can_perform_operation("models.delete") {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "success": false,
-                "error": "API key does not have permission to delete models"
-            }))
-        );
-    }
-    
-    // Ensure we have a valid delete request
-    let model_id = match &model_data {
-        ModelRequest::Delete(id) => id.clone(),
-        _ => {
+    // Extract the model ID from the payload
+    let model_id = match payload.get("id") {
+        Some(id) => match id.as_str() {
+            Some(s) => s.to_string(),
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "error": "Invalid model ID format"
+                    })),
+                );
+            }
+        },
+        None => {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({
-                    "success": false,
-                    "error": "Invalid request type for model deletion"
-                }))
+                    "error": "Model ID is required"
+                })),
             );
         }
     };
     
-    // Get the existing model to verify ownership
     let mut datastore = state.lock().await;
-    let existing_model = match datastore.model_state.get_model(&model_id) {
-        Some(model) => model,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({
-                    "success": false,
-                    "error": format!("Model with ID {} not found", model_id)
-                }))
-            );
-        }
+    
+    // Get the address of the authenticated user
+    let user_address = recovered.as_hex();
+    
+    // Check if this is a request from an admin node with an original user address
+    let effective_address = if datastore.network_state.is_admin_address(&user_address.clone()) {
+        // If it's an admin node, extract the original user address from the payload
+        crate::auth::extract_original_user_address(&payload)
+            .unwrap_or_else(|| user_address.clone())
+    } else {
+        // If it's a regular user, use their address
+        user_address.clone()
     };
     
-    // Verify ownership/permissions - only the owner or an admin can delete
-    if existing_model.owner_id != auth.account.address && !auth.api_key.can_perform_operation("admin.models") {
-        return (
-            StatusCode::FORBIDDEN,
+    // Check if the model exists
+    let existing_model = datastore.model_state.get_model(&model_id.clone());
+    if let Some(existing_model) = existing_model {
+        // Verify ownership unless the request is from an admin
+        if existing_model.owner_id.to_lowercase() != effective_address.to_lowercase() && 
+           !datastore.network_state.is_admin_address(&user_address) {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({
+                    "error": "You don't have permission to delete this model"
+                })),
+            );
+        }
+        
+        // Delete the model
+        let op = datastore.model_state.remove_model_local(model_id.clone());
+        if let Err(e) = datastore.handle_model_op(op).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": format!("Failed to delete model: {}", e)
+                })),
+            );
+        }
+        
+        (
+            StatusCode::OK,
             Json(json!({
-                "success": false,
-                "error": "You do not have permission to delete this model"
-            }))
-        );
-    }
-    
-    // Create the model deletion operation
-    let op = datastore.model_state.remove_model_local(model_id.clone());
-    
-    // Apply the operation
-    if let Err(e) = datastore.handle_model_op(op.clone()).await {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
+                "status": "success",
+                "message": "Model deleted successfully"
+            })),
+        )
+    } else {
+        (
+            StatusCode::NOT_FOUND,
             Json(json!({
-                "success": false,
-                "error": format!("Failed to delete model: {}", e)
-            }))
-        );
+                "error": "Model not found"
+            })),
+        )
     }
-    
-    // Return success
-    (
-        StatusCode::OK,
-        Json(json!({
-            "success": true,
-            "message": format!("Model {} deleted successfully", model_id)
-        }))
-    )
 }
 
 /// Get information about a specific AI model
 pub async fn get_model(
     State(state): State<Arc<Mutex<DataStore>>>,
-    auth: ApiKeyAuth,
+    recovered: RecoveredAddress,
     Path(model_id): Path<String>,
 ) -> impl IntoResponse {
-    log::info!("User {} is requesting model {}", auth.account.address, model_id);
+    log::info!("User {} is requesting model {}", recovered.as_hex(), model_id);
     
-    // Check operation permission (in a real implementation, we'd check the API key scope)
-    if !auth.api_key.can_perform_operation("models.get") {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "success": false,
-                "error": "API key does not have permission to view models"
-            }))
-        );
-    }
+    // Get the authenticated user's address
+    let authenticated_address = recovered.as_hex();
     
     // Get the model from datastore
     let datastore = state.lock().await;
+    
     match datastore.model_state.get_model(&model_id) {
         Some(model) => {
+            // Check authorization if the model is private
+            if model.is_private {
+                // Check if user is the owner, has authorization, or is an admin
+                let account = datastore.account_state.get_account(&authenticated_address);
+                
+                // Determine if the user has access to this model
+                let is_authorized = match account {
+                    Some(account) => {
+                        // User is authorized if they own the model or are an admin
+                        account.owned_models.contains(&model_id) || 
+                        is_admin_address(&authenticated_address) ||
+                        model.owner_id == authenticated_address
+                    },
+                    None => false
+                };
+                
+                if !is_authorized {
+                    log::warn!("Unauthorized attempt to access private model: {} by {}", model_id, authenticated_address);
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(json!({
+                            "success": false,
+                            "error": "You don't have permission to access this private model"
+                        }))
+                    );
+                }
+            }
+            
             // Log access for auditing
-            log::info!("Model access: {} by account {}", model_id, auth.account.address);
+            log::info!("Model access: {} by account {}", model_id, recovered.as_hex());
             
             // Return the model with 200 OK
             (
@@ -338,32 +306,64 @@ pub async fn get_model(
 /// List all available models
 pub async fn list_model(
     State(state): State<Arc<Mutex<DataStore>>>,
-    auth: ApiKeyAuth,
+    recovered: RecoveredAddress,
 ) -> impl IntoResponse {
-    log::info!("Account {} is requesting list of all models", auth.account.address);
+    log::info!("Account {} is requesting list of all models", recovered.as_hex());
     
-    // Check operation permission
-    if !auth.api_key.can_perform_operation("models.list") {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "success": false,
-                "error": "API key does not have permission to list models"
-            }))
-        );
-    }
+    // Get the authenticated user's address
+    let authenticated_address = recovered.as_hex();
     
     // Get all models from datastore
     let datastore = state.lock().await;
+    
+    // Check if the user is an admin
+    let is_admin = is_admin_address(&authenticated_address);
+    
+    // Get the account
+    let account = datastore.account_state.get_account(&authenticated_address);
+    
+    // Get all models
     let all_models = datastore.model_state.list_models();
     
-    // Return the models with 200 OK
+    // Filter the models based on authorization
+    let filtered_models: Vec<_> = all_models
+        .into_iter()
+        .filter(|(model_id, model)| {
+            // If model is not private, everyone can see it
+            if !model.is_private {
+                return true;
+            }
+            
+            // Admins can see all models
+            if is_admin {
+                return true;
+            }
+            
+            // Owner can see their own models
+            if model.owner_id == authenticated_address {
+                return true;
+            }
+            
+            // Check if user has ownership in their account records
+            if let Some(acc) = &account {
+                if acc.owned_models.contains(model_id) {
+                    return true;
+                }
+            }
+            
+            // Otherwise, the user can't see this model
+            false
+        })
+        .map(|(_, model)| model)
+        .collect();
+    
+    // Return the filtered models with 200 OK
     (
         StatusCode::OK, 
         Json(json!({
             "success": true,
-            "models": all_models,
-            "total": all_models.len()
+            "models": filtered_models,
+            "total": filtered_models.len()
         }))
     )
 }
@@ -371,29 +371,64 @@ pub async fn list_model(
 /// Handler for model inference
 pub async fn model_inference(
     State(state): State<Arc<Mutex<DataStore>>>,
-    auth: ApiKeyAuth,
+    recovered: RecoveredAddress,
     Path(model_id): Path<String>,
     Json(payload): Json<ModelInferenceRequest>,
 ) -> impl IntoResponse {
-    log::info!("Account {} is requesting inference from model {}", auth.account.address, model_id);
-    
-    // Check operation permission
-    if !auth.api_key.can_perform_operation("models.inference") {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "success": false,
-                "error": "API key does not have permission to use model inference"
-            }))
-        );
-    }
+    let account_address = recovered.as_hex();
+    log::info!("Account {} is requesting inference from model {}", account_address, model_id);
     
     let mut datastore = state.lock().await;
     
     // Check if the model exists
     if let Some(model) = datastore.model_state.get_model(&model_id) {
-        // Get the user's account
-        let mut account = auth.account.clone();
+        // Check authorization if the model is private
+        if model.is_private {
+            // Check if user is the owner, has authorization, or is an admin
+            let account = datastore.account_state.get_account(&account_address);
+            
+            // Determine if the user has access to this model
+            let is_authorized = match &account {
+                Some(account) => {
+                    // User is authorized if they own the model or are an admin
+                    account.owned_models.contains(&model_id) || 
+                    is_admin_address(&account_address) ||
+                    model.owner_id == account_address
+                },
+                None => false
+            };
+            
+            if !is_authorized {
+                log::warn!("Unauthorized attempt to use private model for inference: {} by {}", model_id, account_address);
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({
+                        "success": false,
+                        "error": "You don't have permission to use this private model for inference"
+                    }))
+                );
+            }
+        }
+        
+        // Get or create the user's account
+        let mut account = match datastore.account_state.get_account(&account_address) {
+            Some(acc) => acc,
+            None => {
+                // Create a new account if it doesn't exist
+                let new_account = crate::accounts::Account::new(account_address.clone());
+                let op = datastore.account_state.update_account_local(new_account.clone());
+                if let Err(_) = datastore.handle_account_op(op).await {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({
+                            "success": false,
+                            "error": "Failed to create new account"
+                        }))
+                    );
+                }
+                new_account
+            }
+        };
         
         // Calculate token usage
         let input_tokens = payload.input_tokens.unwrap_or(0);
@@ -423,23 +458,20 @@ pub async fn model_inference(
             );
         }
         
-        // Clone the account for usage tracking
-        let mut account_clone = account.clone();
-        
         // Initialize usage tracker if needed
-        if account_clone.usage.is_none() {
-            account_clone.usage = Some(UsageTracker::new());
+        if account.usage.is_none() {
+            account.usage = Some(UsageTracker::new());
         }
         
         // Now we know usage exists, we can use expect safely
-        let cost = account_clone.usage.as_mut().expect("Usage tracker exists")
+        let cost = account.usage.as_mut().expect("Usage tracker exists")
             .record_token_usage(&model_id, input_tokens, output_tokens);
         
         log::info!("Recorded {} tokens ({}+{}) for model {}, cost: {} credits", 
             total_tokens, input_tokens, output_tokens, model_id, cost);
         
         // Update the account
-        let op = datastore.account_state.update_account_local(account_clone);
+        let op = datastore.account_state.update_account_local(account.clone());
         if let Err(err) = datastore.handle_account_op(op).await {
             log::error!("Failed to update account usage tracking: {}", err);
             return (
@@ -451,8 +483,7 @@ pub async fn model_inference(
             );
         }
         
-        // Return success with mock inference result
-        // In a real implementation, this would call the actual model inference service
+        // Return successful response
         return (
             StatusCode::OK,
             Json(json!({

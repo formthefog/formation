@@ -1,1 +1,0 @@
----\nid: storage-management\ntitle: Storage Management Guide\nsidebar_label: Storage Management\n---\n\n# Storage Management Guide\n\nComing Soon\n\nThis document will provide information on advanced storage configuration and optimization for Formation operator nodes.

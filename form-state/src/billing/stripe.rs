@@ -6,7 +6,7 @@
 //! Instead of connecting directly to Stripe, it receives data from the frontend
 //! and provides eligibility checks based on stored data.
 
-use crate::billing::{SubscriptionInfo, SubscriptionStatus, SubscriptionTier};
+use crate::billing::{SubscriptionInfo, SubscriptionStatus};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

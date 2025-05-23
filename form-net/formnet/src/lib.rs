@@ -33,7 +33,6 @@ pub const DATA_DIR: &'static str = "/var/lib/formnet";
 pub const SERVER_CONFIG_DIR: &'static str = "/etc/formnet";
 pub const SERVER_DATA_DIR: &'static str = "/var/lib/formnet";
 pub const NETWORK_NAME: &str = "formnet";
-pub const NETWORK_CIDR: &str = "10.0.0.0/8"; 
 
 pub async fn api_shutdown_handler(
     mut rx: tokio::sync::broadcast::Receiver<()>

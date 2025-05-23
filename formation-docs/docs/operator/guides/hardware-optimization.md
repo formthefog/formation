@@ -1,1 +1,0 @@
----\nid: hardware-optimization\ntitle: Hardware Optimization Guide\nsidebar_label: Hardware Optimization\n---\n\n# Hardware Optimization Guide\n\nComing Soon\n\nThis document will provide guidance on how to select and configure hardware for optimal performance with Formation.

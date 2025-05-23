@@ -49,6 +49,7 @@ use std::convert::TryFrom;
 use std::error::Error;
 use crate::ChError;
 use crate::IMAGE_DIR;
+use form_pack::helpers::utils::build_instance_id;
 
 type VmmResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
 type ApiResult<T> = Result<ApiResponse<T>, Box<dyn std::error::Error + Send + Sync + 'static>>; 
@@ -577,9 +578,9 @@ impl VmManager {
         let formfile: Formfile = serde_json::from_str(&config.formfile)?;
 
         let node_id = self.derive_address().await?;
-        let build_id = config.name.clone();
-        log::info!("Deriving instance id from node_id: {node_id} and build_id: {build_id}");
-        let instance_id = form_pack::manager::build_instance_id(node_id, build_id)?; 
+        let build_id_param = config.name.clone();
+        log::info!("Deriving instance id from node_id: {node_id} and build_id_param: {build_id_param}");
+        let instance_id = build_instance_id(node_id, build_id_param)?;
         let mut instance = Instance {
             instance_id, 
             node_id: self.derive_address().await?,
@@ -979,8 +980,8 @@ Formpack for {name} doesn't exist:
             VmmEvent::Stop { id, .. } => {
                 //TODO: verify ownership/authorization, etc.
                 self.pause(id).await?;
-                let instance_id = form_pack::manager::build_instance_id(self.derive_address().await?, id.to_string())?;
-                let mut instance = Instance::get(&instance_id).await.ok_or(
+                let instance_id_val = build_instance_id(self.derive_address().await?, id.to_string())?;
+                let mut instance = Instance::get(&instance_id_val).await.ok_or(
                     Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Instance doesn't exist"))
                 )?;
                 instance.status = InstanceStatus::Stopped;
@@ -1007,8 +1008,8 @@ Formpack for {name} doesn't exist:
             VmmEvent::Start {  id, .. } => {
                 //TODO: verify ownership/authorization, etc.
                 self.boot(id).await?;
-                let instance_id = form_pack::manager::build_instance_id(self.derive_address().await?, id.to_string())?;
-                let mut instance = Instance::get(&instance_id).await.ok_or(
+                let instance_id_val = build_instance_id(self.derive_address().await?, id.to_string())?;
+                let mut instance = Instance::get(&instance_id_val).await.ok_or(
                     Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Instance doesn't exist"))
                 )?;
                 instance.status = InstanceStatus::Started;

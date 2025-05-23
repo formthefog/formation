@@ -150,15 +150,17 @@ impl FormMQ<Vec<u8>> {
     }
 
     pub async fn get_peers() -> Result<Vec<IpAddr>, Box<dyn std::error::Error>> {
-        let uri = "http://127.0.0.1:3004/user/list_admin";
-        let resp = Client::new().get(uri).send().await?.json::<Response<Peer<String>>>().await?;
-        match resp {
-            Response::Success(Success::List(admins)) => return Ok(admins.iter().map(|peer| peer.ip.clone()).collect()), 
-            Response::Success(Success::None) => return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Returned Success::None, instead of Success::List"))),
-            Response::Success(Success::Some(_)) => return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Returned Success::Some(peer) instead of Success::List"))),
-            Response::Success(Success::Relationships(_)) => return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Returned Success::Relationship((cidr1, cidr2)) instead of Success::List"))),
-            Response::Failure { reason } => return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Returned Failure: {reason:?}"))))
+        let uri = "http://127.0.0.1:3004/peer/list_active";
+        let resp = Client::new().get(uri).send().await?.json::<Vec<String>>().await?;
+        
+        let mut peer_ips = Vec::new();
+        for ip_str in resp {
+            match ip_str.parse::<IpAddr>() {
+                Ok(ip) => peer_ips.push(ip),
+                Err(e) => log::warn!("Failed to parse IP string '{}' from active peer list: {}", ip_str, e),
+            }
         }
+        Ok(peer_ips)
     }
 }
 

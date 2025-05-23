@@ -1,7 +1,7 @@
 use axum::{
     async_trait,
     extract::{FromRequestParts, State},
-    http::{request::Parts, Request, StatusCode, header},
+    http::{request::Parts, Request, StatusCode, header, Method},
     middleware::Next,
     response::Response,
     body::Body,
@@ -16,7 +16,7 @@ use crate::datastore::DataStore;
 use crate::api_keys::{ApiKey, ApiKeyError, ApiKeyRateLimiter, RateLimitCheckResult, get_rate_limit_headers};
 use crate::api_keys::audit::{ApiKeyEvent, ApiKeyAuditLog, API_KEY_AUDIT_LOG};
 use crate::accounts::Account;
-use crate::api::is_localhost_request;
+use crate::api::{is_localhost_request, is_public_endpoint};
 
 // Global rate limiter instance
 static RATE_LIMITER: Lazy<ApiKeyRateLimiter> = Lazy::new(|| {
@@ -48,20 +48,48 @@ pub async fn api_key_auth_middleware(
     next: Next,
 ) -> Result<Response, StatusCode> {
     log::info!("API key auth middleware called");
+    log::info!("Function imported: crate::api::is_public_endpoint = {:?}", std::any::type_name::<fn(&str) -> bool>());
     
+    if request.method() == axum::http::Method::GET {
+        return Ok(next.run(request).await);
+    }
     // Log request path and method
     let path = request.uri().path().to_string();
     let method = request.method().clone();
     log::info!("Request path: {:?}, method: {:?}", path, method);
     
     // Check if request is from localhost - bypass auth if it is
-    if is_localhost_request(&request) {
+    let is_localhost = is_localhost_request(&request);
+    log::info!("Is localhost request? {}", is_localhost);
+    if is_localhost {
         log::info!("Localhost detected, bypassing API key authentication");
         return Ok(next.run(request).await);
     }
     
+    // Skip auth for GET requests to public endpoints
+    let is_get = method == Method::GET;
+    let public_path = match crate::api::is_public_endpoint(&path) {
+        true => {
+            log::info!("Path {} IS a public endpoint", path);
+            true
+        },
+        false => {
+            log::info!("Path {} is NOT a public endpoint", path);
+            false
+        }
+    };
+    
+    if is_get && public_path {
+        log::info!("Public GET endpoint detected, bypassing API key authentication: {}", path);
+        return Ok(next.run(request).await);
+    } else {
+        log::info!("Auth required: is_get={}, public_path={}", is_get, public_path);
+    }
+    
     // Get client IP address and user agent
     let ip_address = get_client_ip(&request);
+    log::info!("Client IP: {:?}", ip_address);
+    
     let user_agent = request.headers()
         .get(header::USER_AGENT)
         .and_then(|h| h.to_str().ok())

@@ -7,9 +7,6 @@ use uuid::Uuid;
 /// Main request structure for the run_task endpoint, compatible with fama-ai
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunTaskRequest {
-    /// JWT token for authentication
-    pub jwt: String,
-    // Core fields
     /// ID of the agent to run (also extracted from URL path)
     pub agent_id: String,
     
@@ -26,7 +23,7 @@ pub struct RunTaskRequest {
     /// Provider of the model (e.g., "openai", "anthropic", "formation")
     pub model_provider: String,
     
-    /// API key for the model provider (if not using Formation credits)
+    /// API key for the model provider (if not using Formation credits, agent might use this)
     pub provider_api_key: Option<String>,
     
     // Knowledge retrieval configuration
@@ -121,12 +118,6 @@ pub struct RunTaskRequest {
     
     /// Timeout in seconds (default: 300)
     pub timeout_seconds: Option<u32>,
-    
-    /// Formation API key (for billing and auth)
-    pub formation_api_key: Option<String>,
-    
-    /// Formation authentication token
-    pub formation_auth_token: Option<String>,
     
     // Memory configuration specific to Formation
     /// Detailed memory configuration
@@ -372,7 +363,6 @@ impl RunTaskRequest {
     /// Create a new request with minimal required fields
     pub fn new(agent_id: String, model_id: String, model_provider: String, task: String) -> Self {
         Self {
-            jwt: "".to_string(),
             agent_id,
             task_id: None,
             task,
@@ -408,8 +398,6 @@ impl RunTaskRequest {
             filesystem_root_path: None,
             streaming: Some(true),
             timeout_seconds: None,
-            formation_api_key: None,
-            formation_auth_token: None,
             memory_config: None,
             storage_config: None,
             knowledge_base_config: None,
@@ -417,18 +405,6 @@ impl RunTaskRequest {
             formation_custom_tools: None,
             custom_parameters: None,
         }
-    }
-    
-    /// Add an auth token to the request
-    pub fn with_auth_token(mut self, token: String) -> Self {
-        self.formation_auth_token = Some(token);
-        self
-    }
-    
-    /// Add a Formation API key to the request
-    pub fn with_api_key(mut self, api_key: String) -> Self {
-        self.formation_api_key = Some(api_key);
-        self
     }
     
     /// Configure streaming option

@@ -1,1 +1,0 @@
----\nid: high-availability\ntitle: High Availability Setup Guide\nsidebar_label: High Availability\n---\n\n# High Availability Setup Guide\n\nComing Soon\n\nThis document will provide instructions for setting up redundant operator nodes for high availability.

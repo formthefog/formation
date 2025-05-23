@@ -1,6 +1,6 @@
 # Formation
 
-A vertically integrated 2-sided marketplace for AI Agents & Models built on a public verifiable and self-replicating protocol for trustless, confidential virtual private servers (VPS) coordinating as a Fog Compute network to power the Age of Autonomy.
+A vertically integrated 2-sided marketplace for AI Agents & Models to power the Age of Autonomy.
 
 ---
 
@@ -48,7 +48,7 @@ Built on a foundation of trustless, confidential computing, Formation manages th
 - **2-Sided Marketplace**: Connects AI providers with users through structured authentication, access controls, and usage-based billing
 - **Fog Computing Infrastructure**: Leverages a distributed network of nodes for resilient, decentralized computation without central points of failure
 
-This comprehensive platform serves as the foundation for the next generation of AI applications and autonomous systems.
+This comprehensive platform serves as the foundation for the next generation of AI applications and autonomous systems. The core infrastructure of Formation is deployed as a suite of services, currently including `form-state` for state management, `form-dns` for network routing, `form-net` for secure mesh networking, `form-vmm` for virtual machine management, and `form-pack-manager` for agent and model packaging. These services work in concert to provide the platform's capabilities and are typically deployed using Docker Compose for ease of setup.
 
 ## Marketplace Features
 
@@ -67,56 +67,22 @@ The Formation marketplace provides comprehensive infrastructure for AI model and
 - **Usage Tracking**: Monitor token consumption, agent usage, and credit balances
 
 ### Core Technology
-- **Authentication**: JWT-based authentication with JWKS verification and role-based access control
-- **Billing Integration**: Usage-based metering with credit system and Stripe integration
+- **Authentication**: ECDSA based authentication means no API keys needed, and all interactions are verifiable. 
+- **Billing Integration**: Flexible payment options with both Subscription based billing and Usage-based metering with credit system and Stripe integration
 - **Resource Eligibility**: Automated enforcement of plan limitations and quota management
 - **API Access**: Comprehensive API for programmatic interaction with all marketplace components
 
 ## Deployment Architecture
 
-Formation now operates as a Vertically Integrated 2-Sided Marketplace for AI Agents & Models, supported by these core components:
+Formation's current deployment model revolves around a set of core microservices orchestrated via Docker Compose. These services provide the foundational capabilities for the AI marketplace:
 
-- **form-vmm**: Virtual Machine Monitor for secure execution of AI workloads
-- **form-pack**: Packaging system for AI models and agents
-- **form-net**: Secure networking between components using WireGuard
-- **form-p2p**: Decentralized communication infrastructure
-- **form-state**: State management with authentication, billing, and marketplace features
-- **form-dns**: DNS and routing services for the network
-- **form-node-metrics**: Node performance and health monitoring
+- **`form-state`**: Manages the overall state of the network, including user accounts, instance information, and marketplace data. It serves as the central source of truth.
+- **`form-dns`**: Provides DNS resolution within the Formation network, enabling service discovery and human-readable names for instances and services.
+- **`form-net`**: Establishes a secure WireGuard-based mesh network (Formnet) for communication between nodes, instances, and users.
+- **`form-vmm`**: The Virtual Machine Monitor responsible for creating, running, and managing the lifecycle of virtual machines that host AI agents and models.
+- **`form-pack-manager`**: Handles the packaging of AI models and agents from `Formfile` definitions into runnable VM images.
 
-The system supports three deployment configurations:
-
-### 1. Single Node Developer Network
-A self-contained deployment for testing and development, using the `formation-minimal` container with local-only components.
-
-### 2. Multi-Node Test Network
-A distributed test environment with coordinated state management and inter-node communication.
-
-### 3. Production Grade Multi-Node Network
-Full production deployment with distributed authentication, billing, and high availability.
-
-## Docker Configuration
-
-The Formation system can be deployed using Docker containers. For a development environment, we provide the `formation-minimal` container:
-
-```bash
-docker run --rm --privileged --network=host \
-    --device=/dev/kvm \
-    --device=/dev/vhost-net \
-    --device=/dev/null \
-    --device=/dev/zero \
-    --device=/dev/random \
-    --device=/dev/urandom \
-    -v /lib/modules:/lib/modules:ro \
-    -v /var/run/docker.sock:/var/run/docker.sock \
-    -v /path/to/operator/config:/etc/formation/config \
-    -e SECRET_PATH=/path/to/config \
-    -e PASSWORD=<your-encryption-password> \
-    --mount type=tmpfs,destination=/dev/hugepages,tmpfs-mode=1770 \
-    -dit formation-minimal
-```
-
-For a full production deployment, additional components are needed. The system now includes authentication, billing infrastructure, and marketplace components. Contact us for production deployment guidance.
+These components are designed to work together to deliver a seamless experience for developing, deploying, and utilizing AI assets.
 
 ## Special Thanks
 
@@ -142,25 +108,25 @@ As an open source project, we welcome your contributions. Before submitting chan
 
 ### System Requirements
 
-- **Operating System:** Ubuntu 22.04
-- **Resources:** Minimum of 32 physical cores, 64 GB of RAM, and at least 8TB of storage (full devnet participation).
+- **Operating System:** Ubuntu 22.04 LTS (or a compatible Linux distribution).
+- **For local development & testing with Docker Compose:**
+    - **Minimum:** 4+ CPU cores, 8GB RAM, 50GB+ free disk space.
+    - **Recommended:** 8+ CPU cores, 16GB+ RAM, 100GB+ free disk space.
+- **For participating as a full Formation Network provider node:**
+    - Significant resources are required (e.g., 32+ physical cores, 64GB+ RAM, 8TB+ storage). Please refer to future documentation or contact the team for details on provider node requirements.
 
 ### System Dependencies
 
-Install required packages:
+Install required packages for running the Dockerized services and network setup scripts:
 ```bash
 sudo apt update
-sudo apt install -y build-essential bridge-utils kmod pkg-config libssl-dev libudev-dev protobuf-compiler libsqlite3-dev
-   ```
+sudo apt install -y curl bridge-utils # dnsmasq is installed by the network validation script
+```
 
-   - `build-essential`: Required for compiling code.
-   - `bridge-utils`: For setting up the network bridge.
-   - `kmod`: For managing kernel modules.
-   - `pkg-config`: For finding library dependencies.
-   - `libssl-dev`: SSL library for cryptography.
-   - `libudev-dev`: Library required by HIDAPI.
-   - `protobuf-compiler`: Protocol Buffers compiler.
-   - `libsqlite3-dev`: Required for SQLite support.
+   - `curl`: For downloading Docker installation scripts and other resources.
+   - `bridge-utils`: For creating and managing network bridges (e.g., `br0`) required by Formation.
+   - `dnsmasq`: Provides DHCP and DNS services for VMs; installed by the `scripts/validate-network-config.sh` if not present.
+   - *(Note: If building services from source, additional dependencies like `build-essential`, `pkg-config`, `libssl-dev`, `libudev-dev`, `protobuf-compiler`, and `libsqlite3-dev` will be required.)*
 
 ### Rust Toolchain & Docker
 
@@ -191,261 +157,426 @@ If missing, install via `build-essential`.
    sudo usermod -aG docker $USER
    ```
 
+### Network Preparation
+
+**Crucial:** Proper network configuration is essential *before* launching Formation services. This ensures that virtual machines can access the internet and that Formnet (the internal mesh network) functions correctly.
+
+**1. Port Forwarding (If behind a NAT/Router):**
+
+Ensure the following ports are open and forwarded on your router/firewall to the machine hosting Formation, if you intend to access services or instances from outside your local network or if specific Formation features require external reachability:
+
+*   **`3002/tcp`**: `form-vmm` API
+*   **`3003/tcp`**: `form-pack-manager` API
+*   **`3004/tcp`**: `form-state` API
+*   **`51820/udp`**: `form-net` (WireGuard for Formnet)
+
+*(Note: Port 53333 for `form-p2p` is not required for the default `docker-compose` setup at this time.)*
+
+**2. Bridge Interface (`br0`) and Local Networking Setup:**
+
+Formation requires a network bridge named `br0` for VMs to connect to your local network and access the internet.
+
+*   **Recommended Method: Using the Validation Script**
+
+    The easiest way to configure the bridge, NAT, and `dnsmasq` (for VM IP assignment) is to run the provided script. From the root of the repository:
+    ```bash
+    sudo bash scripts/validate-network-config.sh
+    ```
+    This script will attempt to find an unused private IP range, create `br0`, set up NAT, and configure `dnsmasq`. Review the script's output for any errors.
+
+*   **Manual Setup (Alternative/Advanced)**
+
+    If you prefer or need to set up the network manually, follow these steps. These are condensed from the script's logic and original documentation:
+
+    1.  **Find an available IP range:** Use a private range like `192.168.x.x` or `172.16.x.x`. Avoid `10.x.x.x` as Formnet may use it.
+    2.  **Install `bridge-utils` and `dnsmasq`** (if not already installed by the script or dependency steps):
+        ```bash
+        sudo apt-get update && sudo apt-get upgrade
+        sudo apt-get install bridge-utils dnsmasq
+        ```
+    3.  **Create the bridge:**
+        ```bash
+        sudo brctl addbr br0
+        ```
+    4.  **Assign an IP address to the bridge** (e.g., for `192.168.100.0/24` range):
+        ```bash
+        sudo ip addr add 192.168.100.1/24 dev br0
+        ```
+    5.  **Set the bridge interface up:**
+        ```bash
+        sudo ip link set br0 up
+        ```
+        *(Note: `ip addr show br0` may still show `DOWN` until a device is attached, this is normal.)*
+    6.  **Enable IP forwarding:**
+        ```bash
+        sudo sysctl -w net.ipv4.ip_forward=1
+        ```
+    7.  **Add NAT rule using `iptables`** (replace `192.168.100.0/24` with your chosen range, and `eth0` with your main internet-facing interface if different):
+        ```bash
+        # First, find your main internet-facing interface (e.g., eth0, enpXsY)
+        # export MAIN_IFACE=$(ip route show default | awk '{print $5}' | head -n1)
+        # sudo iptables -t nat -A POSTROUTING -s 192.168.100.0/24 -o $MAIN_IFACE -j MASQUERADE
+        # Example assuming 192.168.100.0/24 range. Adjust your main interface if not eth0.
+        sudo iptables -t nat -A POSTROUTING -s 192.168.100.0/24 ! -o br0 -j MASQUERADE
+        ```
+        *To make this persistent, you might need `iptables-persistent`.* 
+    8.  **Configure `dnsmasq` for `br0`:**
+        Create or edit `/etc/dnsmasq.d/br0.conf` (adjust IP ranges as needed):
+        ```ini
+        interface=br0
+        port=0 # Listen on all available ports for DNS, set to 53 if you want to restrict it to only br0
+        dhcp-range=192.168.100.10,192.168.100.250,24h
+        dhcp-option=option:router,192.168.100.1
+        dhcp-option=option:dns-server,192.168.100.1,8.8.8.8,1.1.1.1 # Use bridge as DNS, then fallback
+        # Ensure your host system's /etc/resolv.conf doesn't point to 127.0.0.53 if systemd-resolved is running dnsmasq
+        # or if you run into issues, consider setting `port=0` in /etc/dnsmasq.conf and let dnsmasq run on port 53 for br0 only.
+        ```
+    9.  **Restart `dnsmasq`:**
+        ```bash
+        sudo systemctl restart dnsmasq
+        ```
+    10. **(Optional) Test with a network namespace:** (Commands from original README can be used here for verification).
+
 ---
-## Network Configuration
-### Configuring Your Local Network
-Before launching Formation, ensure that the necessary ports are open/forwarded:
 
-**3002:** `form-vmm` API
+## Deploying Core Services with Docker Compose
 
-**3003:** `form-pack-manager` API
+The primary method for deploying the Formation core services for local development and testing is by using the provided `docker-compose.yml` file. This file defines and configures all the necessary services: `form-state`, `form-dns`, `form-net`, `form-vmm`, and `form-pack-manager`.
 
-**51820:** `formnet` interface
+**Steps:**
 
-**3004:** for `form-state` API (BFT-CRDT Globally Replicated Datastore)
+1.  **Clone the Repository (if you haven't already):**
+    ```bash
+    git clone https://github.com/formthefog/formation.git # Replace with the actual repository URL if different
+    cd formation
+    ```
 
-**53333** for `form-p2p` BFT-CRDT Message queue.
+2.  **Ensure Network Prerequisites are Met:**
+    Before proceeding, make sure you have completed all steps in the "Network Preparation" section under "Prerequisites & Setup". This includes setting up the `br0` bridge interface and ensuring necessary ports are available.
 
-Search for router/ISP-specific instructions on port forwarding if needed.
+3.  **Configure Environment Variables:**
+    The `docker-compose.yml` file uses environment variables for sensitive or configurable paths. You'll need to create a `.env` file in the same directory as the `docker-compose.yml` file (usually the project root) or ensure these variables are set in your shell environment.
 
-### Setting Up a Bridge Interface
+    Create a file named `.env` with the following content, adjusting paths and passwords as necessary:
 
-Formation requires a primary bridge interface named `br0`. If not already set up, follow these steps:
+    ```env
+    # Path to your operator configuration file (e.g., .operator-config.json)
+    # This file contains cryptographic keys and operator settings.
+    # Ensure this file exists. For a first-time setup, you might need to use a tool like form-config-wizard (if available and updated)
+    # or manually create a properly structured JSON file according to the expected format.
+    # Example: SECRET_PATH=/home/user/.config/formation/.operator-config.json
+    SECRET_PATH=/path/to/your/.operator-config.json
 
+    # Password to encrypt/decrypt sensitive information in the operator config.
+    PASSWORD=your-strong-encryption-password
 
-Ensure that you have a `br0` primary bridge interface set up on you machine with an IP address
-on a valid private IP range with a default route. You will also need to setup NAT.
+    # Optional: You can set other environment variables used by docker-compose services here if needed.
+    # Refer to the docker-compose.yml for variables like DYNAMIC_JWKS_URL, FORMNET_LOG_LEVEL etc.
+    ```
+    *   **Important for `SECRET_PATH`**: The `.operator-config.json` file is critical. It contains your node's identity (cryptographic keys) and operational settings. Without a valid configuration file pointed to by `SECRET_PATH`, core services like `form-state` and `form-net` may fail to initialize correctly or will operate with default/insecure settings if they generate placeholders.
+    *   **For `PASSWORD`**: Choose a strong password. This is used by services to decrypt sensitive parts of the operator configuration if it's encrypted.
 
-By running this script, assuming you do not have significant amounts of customized networking on the 
-machine you are running Formation on, you should get a properly configured network and be able to move forward.
+4.  **Start the Services:**
+    Navigate to the directory containing `docker-compose.yml` and run:
+    ```bash
+    docker-compose up -d
+    ```
+    This command will pull the necessary Docker images (if not already present) from Docker Hub (e.g., `formationai/*`) and start all services in detached mode (`-d`).
 
-If you do not follow these steps, it is very likely that VPS instances launched by Formation
-will not have internet access, will not be able to join formnet, and will not be able to be accessed by 
-the developer that owns and manages the instances.
+5.  **Verify the Services:**
+    *   Check that all containers are running:
+        ```bash
+        docker-compose ps
+        ```
+        You should see containers for `formation-state`, `formation-dns`, `formation-network` (for `form-net`), `formation-vmm`, and `formation-pack-manager` in an "Up" or "healthy" state.
 
-If you do have significant amounts of custom networking set up on the machine you
-are running formation on, or simply would rather manually set up the bridge network
-here is how:
+    *   Check the logs for any errors:
+        ```bash
+        docker-compose logs -f # View logs for all services
+        docker-compose logs -f form-state # View logs for a specific service
+        ```
 
-1. Find an available IP range within the `192.168.x.x` range or the `172.16.x.x` range 
-(do not use the `10.x.x.x` range as formnet uses this range for the P2P Mesh Network).
+    *   **Check Health Endpoints:** Most services expose a health check endpoint:
+        *   `form-state`: `curl http://localhost:3004/health`
+        *   `form-dns`: The `docker-compose.yml` uses `dig @localhost -p 5453 formation +short`. Manual check might involve querying through it.
+        *   `form-net`: `curl http://localhost:8080/health` (as its API server `FORMNET_SERVER_PORT` defaults to 8080).
+        *   `vmm-service` (`formation-vmm` container): `curl http://localhost:3002/health`
+        *   `form-pack-manager`: `curl http://localhost:3003/health`
 
-2. Install bridge-utils
+        A successful response (often JSON with a "Healthy" status) indicates the service is operational.
+
+Once these steps are completed, the Formation core services should be running and ready for interaction.
+
+## Deploying Your First Agent (via API)
+
+Once the core Formation services are running, you can deploy an "agent." In Formation, an agent is essentially a program or service running inside a dedicated Virtual Machine (VM) instance. This guide demonstrates how to deploy a basic agent using `curl` to interact with the Formation API. The `form-cli` tool is under development and will provide a more streamlined interface in the future.
+
+### Agent and Formfile Concepts
+
+*   **Agent:** An AI model, a web service, or any other application you want to run securely and managed within the Formation network. It's packaged and executed within a VM.
+*   **`Formfile`:** A text file that defines how your agent is built and configured. Similar to a `Dockerfile`, it specifies:
+    *   Base operating system components.
+    *   System resources required (vCPUs, memory, disk).
+    *   Files to be copied into the VM (e.g., your agent's code, models, configuration).
+    *   Build commands to set up the environment (e.g., installing dependencies).
+    *   User accounts and SSH access.
+    *   The `ENTRYPOINT` or command that starts your agent's service when the VM boots.
+*   **`form-pack-manager`:** This core service is responsible for taking your `Formfile` and project files, building a VM image from them, and storing it for deployment by `form-vmm`.
+
+For this first example, we'll assume a very simple `Formfile` that runs a basic web server. The actual content of the agent's code or a complex `Formfile` is beyond this initial guide, but understanding the concept is key.
+
+### Creating the Agent Instance
+
+To deploy an agent, you send a request to the `form-state` service, which then coordinates with `form-pack-manager` to build the image (if not already built from a previous identical request) and `form-vmm` to launch the instance.
+
+**Endpoint:** `POST http://localhost:3004/instance/create`
+
+**Request Body (`CreateInstanceRequest`):**
+A JSON object containing:
+*   `formfile` (string): The complete content of your `Formfile`.
+*   `name` (string): A unique name for this agent build. This name can be used to identify and manage instances of this agent type. The combination of the owner (derived from your signature) and this name typically forms a unique `build_id`.
+
+**Authentication:**
+All Formation API endpoints that modify state or access private resources are protected. The `/instance/create` endpoint uses ECDSA signature-based authentication. You need to:
+1.  Generate an Ethereum-style keypair. The public key (address) will be the owner of the instance.
+2.  Construct the JSON payload for the `CreateInstanceRequest`.
+3.  Hash the JSON payload string (e.g., using Keccak256 or SHA256).
+4.  Sign the resulting hash using your private key.
+5.  Include the hash, signature, and recovery ID in the request headers.
+
+**Headers for Authentication:**
+*   `Content-Type: application/json`
+*   `X-Message: <The hash (e.g., Keccak256 or SHA256) of the JSON payload string>`
+*   `X-Signature: <hex-encoded signature of the hash specified in X-Message>`
+*   `X-Recovery-Id: <recovery_id (0, 1, 2, or 3) as a string>`
+
+**Example `curl` Request:**
+
+First, create an example `Formfile` in your current directory. Let's name it `Formfile.my-simple-agent`:
+
+```formfile
+NAME my-simple-agent
+VCPU 1
+MEM 512
+DISK 5
+
+USER username:agentuser passwd:somepassword ssh_authorized_keys:"your-ssh-public-key"
+
+INSTALL python3
+
+# Create a dummy app directory for the COPY command to succeed
+RUN mkdir -p /app
+COPY ./app /app 
+WORKDIR /app
+RUN echo "from http.server import SimpleHTTPRequestHandler, HTTPServer; server_address = ('', 8000); httpd = HTTPServer(server_address, SimpleHTTPRequestHandler); print('Server running on port 8000...'); httpd.serve_forever()" > /app/server.py
+
+EXPOSE 8000
+ENTRYPOINT ["python3", "server.py"]
+```
+*(Note: In a real scenario, `./app` would contain your agent's code. The `RUN mkdir -p /app` is included so the `COPY` command doesn't fail if an empty `./app` directory is used for this example.)*
+
+Now, use the following bash script to send the request. This script uses `jq` to construct the JSON payload and `sha256sum` to hash it for the `X-Message` header (replace with Keccak256 or the appropriate hashing algorithm if specified by the API).
 
 ```bash
-sudo apt-get update 
-sudo apt-get upgrade
+# 1. Define the path to your Formfile
+FORMFILE_PATH="Formfile.my-simple-agent"
 
-sudo apt-get install bridge-utils
+# 2. Read Formfile content
+FORMFILE_CONTENT=$(cat "${FORMFILE_PATH}")
+
+# 3. Define your agent build name
+AGENT_BUILD_NAME="my-first-agent-from-file"
+
+# 4. Construct the JSON payload string using jq (recommended for robustness)
+#    jq handles escaping of special characters within FORMFILE_CONTENT.
+JSON_PAYLOAD=$(jq -n --arg ff "$FORMFILE_CONTENT" --arg name "$AGENT_BUILD_NAME" \
+                 '{formfile: $ff, name: $name}')
+
+# 5. Hash the JSON_PAYLOAD for the X-Message header
+#    Replace sha256sum with the correct hashing algorithm (e.g., keccak256sum -l | awk '{print $1}')
+#    if required by the API, and adjust prefix if needed (e.g., "0x").
+HASH_OF_PAYLOAD=$(echo -n "${JSON_PAYLOAD}" | sha256sum | awk '{print $1}')
+X_MESSAGE_HEADER_CONTENT="0x${HASH_OF_PAYLOAD}" # Assuming 0x prefix for the hash
+
+# 6. Sign the HASH_OF_PAYLOAD (i.e., the value that will be in X-Message header)
+#    This is a placeholder for actual signing.
+#    Replace <...> placeholders with your actual signature data.
+#    The signature must be over the exact string provided in X-Message.
+MESSAGE_TO_SIGN="${X_MESSAGE_HEADER_CONTENT}" 
+SIGNATURE_HEX="<your-hex-encoded-signature-of-MESSAGE_TO_SIGN>"
+RECOVERY_ID_STR="<your-recovery-id-as-a-string-e.g.-0-or-1>"
+
+# 7. Make the API call
+curl -X POST http://localhost:3004/instance/create \\
+     -H "Content-Type: application/json" \\
+     -H "X-Message: ${X_MESSAGE_HEADER_CONTENT}" \\
+     -H "X-Signature: ${SIGNATURE_HEX}" \\
+     -H "X-Recovery-Id: ${RECOVERY_ID_STR}" \\
+     -d "${JSON_PAYLOAD}"
 ```
 
-3. create the bridge network
+**Important Notes on the Example:**
+*   **`Formfile.my-simple-agent`**: Ensure this file exists in the directory where you run the script and that its content is valid.
+*   **`jq` for JSON Construction**: Using `jq` (as shown in the primary example for `JSON_PAYLOAD`) is highly recommended. It correctly handles escaping special characters from the `Formfile` content when embedding it into the JSON string. If `jq` is not available, manual string manipulation for escaping is fragile.
+*   **Hashing for `X-Message`**: The `X-Message` header must contain the hash of the JSON payload. The example uses `sha256sum` and prepends "0x"; verify the exact hashing algorithm (e.g., Keccak256) and format required by the Formation API.
+*   **Signature Generation**: The `X-Signature` must be a signature of the exact hash string sent in the `X-Message` header. Use appropriate cryptographic libraries or tools for this.
+
+**Expected Response:**
+A successful request will return a JSON object, possibly including an `instanceId` or `buildId` and a status indicating that the instance creation process has started. The exact structure may vary.
+
+```json
+{
+  "instanceId": "0xabcdef0123456789...", 
+  "buildId": "<instance-build-id>",
+  "status": "REQUEST_RECEIVED",
+  "message": "Instance creation request received and is being processed."
+}
+```
+*(The `instanceId` is typically a unique identifier for this specific deployment attempt or resulting instance, while `buildId` refers to the version of the agent defined by the `name` and `formfile` content.)*
+
+### Checking Agent Status and Boot Completion
+
+After requesting instance creation, you'll want to check its status. The build process and VM boot can take some time.
+
+**Endpoints:**
+*   To get a specific instance by its unique `instanceId` (obtained from the create response or other listings):
+    `GET http://localhost:3004/instance/:instance_id/get`
+*   To get (potentially multiple) instances associated with a `build_id` (the `name` you provided during creation):
+    `GET http://localhost:3004/instance/:build_id/get_by_build_id`
+
+**Authentication:**
+These GET endpoints also require ECDSA signature authentication, similar to the create request.
+1.  The message to sign for a GET request is typically the request path string itself (e.g., `/instance/your_instance_id_here/get`).
+2.  Include `X-Message` (the request path), `X-Signature`, and `X-Recovery-Id` in the headers.
+
+**Example `curl` Request (to get by `instanceId`):
+
+Assume `INSTANCE_ID` is the ID you received from the creation step or from listing instances.
 
 ```bash
-sudo brctl addbr br0
+# 1. Define the instance ID you want to query
+INSTANCE_ID="0xabcdef0123456789..." # Replace with the actual instance ID
+
+# 2. Define the request path (this is what you will sign)
+REQUEST_PATH="/instance/${INSTANCE_ID}/get"
+
+# 3. Sign the REQUEST_PATH string (placeholder for actual signing)
+#    Obtain these values using an appropriate ECDSA signing tool/library.
+#    The X-Message header MUST be this exact REQUEST_PATH string.
+SIGNED_MESSAGE_PATH="${REQUEST_PATH}"
+SIGNATURE_HEX_GET="<your-hex-encoded-signature-of-SIGNED_MESSAGE_PATH>"
+RECOVERY_ID_STR_GET="<your-recovery-id-as-a-string-e.g.-0-or-1>"
+
+# 4. Make the API call
+curl -X GET "http://localhost:3004${REQUEST_PATH}" \\
+     -H "X-Message: ${SIGNED_MESSAGE_PATH}" \\
+     -H "X-Signature: ${SIGNATURE_HEX_GET}" \\
+     -H "X-Recovery-Id: ${RECOVERY_ID_STR_GET}"
 ```
 
-4. give it an IP address within the range you selected assuming you selected `192.168.100.0/24` 
+**Expected Response:**
+A JSON object describing the instance, including its status, IP address (once assigned), and other metadata.
+
+```json
+{
+  "instanceId": "0xabcdef0123456789...",
+  "buildId": "<instance-build-id>",
+  "ownerAddress": "0xYourAddress...",
+  "status": "RUNNING", // Could be PENDING_BUILD, BUILDING, STARTING, RUNNING, FAILED, STOPPED, etc.
+  "formnetIp": "10.x.x.x", // Assigned once the VM boots and joins Formnet
+  "createdAt": "2023-10-27T10:00:00Z",
+  "updatedAt": "2023-10-27T10:05:00Z"
+  // ... other fields like resources, node_id where it's running, etc.
+}
+```
+You would poll one of these endpoints until the `status` is "RUNNING" (or your desired state) and `formnetIp` is populated if network access is needed.
+
+### Interacting with Your Deployed Agent
+
+Once your agent instance's status is "RUNNING", you don't typically interact with it directly via its Formnet IP from outside the network if you are an end-user. Instead, `form-state` acts as an authenticated gateway, proxying your requests to the agent running securely within the Formnet.
+
+One common way to interact is by sending a JSON payload to your agent through a specific `form-state` API endpoint, such as `/agents/:agent_id/hire`. This endpoint takes your payload, authenticates your request, and then `form-state` forwards the payload to the correct agent instance over Formnet.
+
+**Endpoint for Agent Interaction (Example via `form-state`):**
+`POST http://localhost:3004/agents/:agent_id/hire`
+
+*   `:agent_id`: This is the identifier for your agent. It could be the `buildId` (the `name` you provided during instance creation) or another ID assigned upon agent registration.
+
+**Request Body:**
+The request body is a JSON payload that you want to send to your agent. The agent's application (defined by its `ENTRYPOINT` in the `Formfile`) must be designed to receive and process this payload.
+
+**Authentication:**
+This `form-state` endpoint is protected by ECDSA signature authentication, identical to the `/instance/create` call:
+1.  The message to sign is the exact JSON payload string of your request body.
+2.  Include `X-Message` (the JSON payload string), `X-Signature` (hex-encoded signature), and `X-Recovery-Id` (as a string) in the request headers.
+
+**Example `curl` Request (sending a task to an agent via `form-state`):
+
+Assuming:
+*   `AGENT_ID` is "my-first-agent-from-file".
+*   Your agent is designed to process a JSON payload (e.g., a Flask/FastAPI app rather than a simple static file server). Let's imagine it expects a task.
+*   You have generated the necessary signature for the payload.
 
 ```bash
-sudo ip addr add 192.168.100.1/24
+# 1. Define the Agent ID
+AGENT_ID="my-first-agent-from-file" # Replace with your agent's actual buildId or registered agent ID
+
+# 2. Construct the JSON payload intended for your agent
+AGENT_JSON_PAYLOAD='{"task": "translate_text", "source_language": "en", "target_language": "es", "text": "Hello, world!"}'
+
+# 3. Sign the AGENT_JSON_PAYLOAD string (placeholder for actual signing)
+#    - The X-Message header MUST be this exact AGENT_JSON_PAYLOAD string.
+#    - Obtain these values using an appropriate ECDSA signing tool/library.
+SIGNED_AGENT_MESSAGE="${AGENT_JSON_PAYLOAD}"
+SIGNATURE_HEX_HIRE="<your-hex-encoded-signature-of-SIGNED_AGENT_MESSAGE>"
+RECOVERY_ID_STR_HIRE="<your-recovery-id-as-a-string>" # e.g., "0" or "1"
+
+# 4. Make the API call to form-state
+curl -X POST "http://localhost:3004/agents/${AGENT_ID}/run_task" \\
+     -H "Content-Type: application/json" \\
+     -H "X-Message: ${SIGNED_AGENT_MESSAGE}" \\
+     -H "X-Signature: ${SIGNATURE_HEX_HIRE}" \\
+     -H "X-Recovery-Id: ${RECOVERY_ID_STR_HIRE}" \\
+     -d "${AGENT_JSON_PAYLOAD}"
 ```
 
-5. set the bridge to `up`
+**Expected Response from `form-state`:**
+`form-state` will proxy the request to your agent and stream the agent's response directly back to you. Therefore, the structure and content of the JSON response you receive will be whatever your agent application sends.
 
-```bash
-sudo ip link set br0 up
+For example, if your agent was an LLM designed for text summarization and received a payload like:
+`{"text_to_summarize": "A very long article about renewable energy...", "max_length": 100}`
+
+A realistic proxied response from your agent, returned via `form-state`, might look like this:
+
+```json
+{
+  "summary": "Renewable energy sources are pivotal for sustainable development, offering environmental benefits and energy independence. Key technologies include solar, wind, and hydro power, with ongoing research focusing on efficiency and storage solutions.",
+  "original_char_count": 5832,
+  "summary_char_count": 285,
+  "model_used": "form-summarizer-xl-v2.1",
+  "processing_time_seconds": 3.75
+}
+```
+Or, if your agent performed a question-answering task based on a given context, the response might be:
+```json
+{
+  "question": "What are the main advantages of decentralization?",
+  "answer": "The main advantages of decentralization include increased resilience against single points of failure, enhanced censorship resistance, and often greater transparency and user autonomy.",
+  "confidence": 0.92,
+  "sources_consulted": ["document_A.pdf", "internal_knowledge_base_v3"]
+}
 ```
 
-running `ip addr show br0` may still show that br0 is `DOWN`, however, this is because
-bridges stay `DOWN` until something is attached to them. This is expected
+**Important Considerations for Agent Interaction:**
+*   **Agent Application Design:** Your agent's `ENTRYPOINT` application needs to be a service (e.g., a web server using Flask, FastAPI, Node.js Express, etc.) capable of receiving the JSON payload (or other content types as configured) from `form-state`, processing it, and returning a JSON response (or other appropriate content type).
+*   **Streaming and Timeouts:** Since `form-state` streams the response, be mindful of potential timeouts. Long-running agent tasks should be designed with appropriate client-side and server-side timeout handling, or consider asynchronous patterns if the platform supports them for such tasks.
+*   **Interaction Patterns:** The `/agents/:id/hire` endpoint implies a general way to invoke an agent. The specifics of how your agent interprets the payload and what endpoints it exposes internally are up to your agent's design. `form-state` facilitates authenticated access and proxies the communication. Always refer to the latest Formation API documentation for any specific requirements or additional supported interaction patterns (e.g., different endpoints for different types of agent interactions).
 
-6. ensure ip forwarding iss enabled
-
-```bash
-sudo sysctl -w net.ipv4.ip_forward=1 >/dev/null
-```
-
-7. add a nat `POSTROUTING` rule to `iptables` 
-
-```bash
-sudo iptables -t nat -A POSTROUTING -s 192.168.100.1/24
-```
-
-8. install dnsmasq
-
-```bash
-sudo apt-get update
-sudo apt-get upgrade
-
-sudo apt-get install dnsmasq
-```
-
-Beware, this may throw an error, as you likely have a DNS resolver running already
-do not fret, this is expected, just move on.
-
-9. setup dnsmasq
-
-```bash
-sudo mkdir -p /etc/dnsmasq.d
-sudo cat > /etc/dnsmasq.d/br0.conf <<EOF
-interface=br0
-port=0
-dhcp-range=192.168.100.10,192.168.100.250,24h
-dhcp-option=6,8.8.8.8,8.8.4.4,1.1.1.1
-EOF
-```
-
-Replace the range with your selected range.
-
-10. restart dnsmasq
-
-```bash
-sudo systemctl restart dnsmasq
-```
-
-11. OPTIONAL test in a local network namespace
-
-```bash
-sudo ip netns add testns
-sudo ip link add veth-host type veth peer name veth-ns
-sudo ip link set veth-host master br0
-sudo ip link set veth-host up
-sudo ip link set veth-ns netns testns
-sudo ip netns exec testns ip addr add 192.168.100.5
-sudo ip netns exec testns ip link set veth-ns up
-sudo ip netns exec testns ip link set lo up
-sudo ip netns exec testns ip route add default via 192.168.100.0
-sudo ip netns exec testns ping -c 3 -W 8.8.8.8
-sudo ip netns del testns
-```
-
-<hr>
-
-There are a few different ways that you can run a Formation node and participate in the network. For full documentation see our [Official Docs](docs.formation.cloud), and navigate to the **Operators** section.
-
-The easiest way to get started is to simply run our Docker image in privileged mode with --network=host.
-
-First, you will need to build an Operator config file, from within the formation repo run:
-
-```bash
-cargo build --release --bin form-config-wizard
-
-form-config-wizard 
-```
-
-This will walk you through a wizard, which will ask a series of questions. If you a running a single node developer network
-or joining the official devnet using the official docker images, you will likely want to select all of the defaults.
-
-Currently, ports related to service apis are hardcoded in many places throughout the system components, and as such,
-we as you for the time being to only use the default ports, unless you are actively contributing to the project
-and making changes to this default.
-
-The reason for this, for now, is that different identification information does not currently include service ports for external facing services,
-and in many cases, right now, due to the age of the project, we haven't gotten around to making internal service API ports configurable.
-if you would like to contribute to this, please see [#16](https://github.com/formthefog/formation/issues/16)
-
-Second, you will need to pull the official images:
-
-```bash
-# Pull formation-minimal 
-
-# First you will need to pull the 
-docker pull cryptonomikhan/formation-minimal:v0.1.0
-
-# Retag it
-docker tag cryptonomikhan/formation-minimal:v0.1.0 formation-minimal
-
-# Pull form-build-server
-docker pull cryptonomikhan/form-build-server:v0.1.0
-
-# Retag it
-docker tag cryptonomikhan/form-build-server:v0.1.0 form-build-server
-```
-
-Then you can run it, ensure you use the `--privileged` flag `--network=host` and
-provide it with the necessary devices and volumes (`/lib/modules` & `/var/run/docker.sock`)
-
-The **Formation** docker image requires that it be run in *privileged* mode, and while privileged mode is outside the scope of this particular document, we highly suggest you take the time to understand the implications of such. 
-
-It also requires that you provide the `kvm` device and other devices, as it 
-needs access to host hypervisor and devices to run virtual machines, some of 
-these are likely able to be left out, but as best practice, and for the sake 
-of thoroughness and the reduction of operator headaches, we suggest that you do 
-provide the devices, as well as the hosts kernel modules to the container, 
-as the Formation Virtual Machine Manager, Monitors and Hypervisor 
-relies on KVM & other devices under the hood. 
-
-Lastly, for now, we highly suggest your run it with the host network. 
-The way that Formation provisions developers secure, confidential access 
-to their instances is over a private VPN tunnel mesh network that runs 
-wireguard under the hood. Configuring public access to the mesh network 
-over the docker bridge network is still experimental, and you are likely to 
-run into some headaches as a result. If you're looking to contribute to the 
-project, and have expertise in container networking, linux networking, and 
-would like to help make this process simpler so that the Formation node 
-image can run without the host network access, please see the 
-**Contributing to Formation** section above.
-
-Running the image as described above will bootstrap you into an unofficial developer network. To join the official devnet please join our discord, navigate to the **Operators channel** and reach out to the core team there for more information on how to participate. 
-
-### Run Single Node Local Test
-<hr>
-
-For a single node local test, we provide the `formation-minimal` docker image.
-
-`formation-minimal`, unlike the `formation` image, does not provide the form-p2p
-service, and therefore is not able to connect to the broader network. Further, `formation-minimal` does not register the node running it with the orchestration smart contract, and is therefore unable to be bootstrapped into the network, or verify the workloads it is responsible for. 
-
-Nonetheless, it is valuable, as an operator or developer, to run locally for testing purposes, and makes the process of contributing to the protocol easier, faster, and more convenient. It also provides a minimal test environment for app developers planning to deploy to the broader network, and allows them to test their applications in a more production like scenario before deploying.
-
-Similar to the formation image, you do need to provide `formation-minimal` with `kvm`, it does need to run in privilege mode, it still needs access to the docker socket, however, given that it is designed for a local test network it may not be necessary to run it on the host network, unless you plan on attempting to access instances or applications from a different machine or network.
-
-To run a single local formation node, run the following command:
-
-```bash
-docker run --rm --privileged --network=host \
-    --device=/dev/kvm \
-    --device=/dev/vhost-net \
-    --device=/dev/null \
-    --device=/dev/zero \
-    --device=/dev/random \
-    --device=/dev/urandom \
-    -v /lib/modules:/lib/modules:ro \
-    -v /var/run/docker.sock:/var/run/docker.sock \
-    -v /path/to/operator/config \ 
-    -e SECRET_PATH=/path/to/config \
-    -e PASSWORD=<your-encryption-password> \
-    --mount type=tmpfs,destination=/dev/hugepages,tmpfs-mode=1770 \
-    -dit formation-minimal
-
-```
-
-<hr>
-
-### Run Multinode Local Test 
-
-<hr>
-
-To run multiple local nodes, effectively building a localized test network, you will want to run the complete `formation` image, but you will have to do so on the docker bridge network or a custom docker network, which means that in order to gain access to instances, applications and nodes on the network from outside the local machine & network, you will need to set up port forwarding on the router, and customized rules in the local machines networking configuration.
-
-<hr>
-
-##### Join Official Developer Network
-
-<hr>
-
-To join the official developer network, we suggest you avoid using the docker images, and instead run the full suite of services on a clean ubuntu 22.04 installation, on hardware with a bare minimum of 32 physical cores, 64 GB of RAM, and at least 8TB of storage, though much more storage is preferred in order to enable larger workloads and applications with significantly larger data requirements. 
-
-To participate as an official developer network node, join our [discord]() navigate
-to the operator channel, and let our core team know you would like to participate as a devnet node operator. The devnet operator cohort is small, and is compensated, however there is a significant 
-time commitment as the protocol will be iterated on, stopped and restarted frequently, and there will be coordinated live test scenarios that devnet operators will be asked to participate in,
-all in an effort to ensure the network is hardened and ready for a more public and open testnet phase as the protocol will be iterated on, stopped and restarted frequently, and there will be coordinated live test scenarios that devnet operators will be asked to participate in,
-all in an effort to ensure the network is hardened and ready for a more public and open testnet phase..
-
-<hr>
+This revised interaction model, where `form-state` serves as an authenticated gateway that streams the agent's response, is crucial for the security and architecture of the Formation network.
 
 # Formation Development Guide
+
+> **Note on `form` CLI Usage:** The `form` Command Line Interface (CLI) described in parts of this guide is currently under active development and alignment with the latest API changes and authentication mechanisms. While it represents the intended future user experience, the most stable way to interact with Formation at this time is through direct API calls as demonstrated in the "Deploying Your First Agent (via API)" section. Information regarding `form` CLI commands should be considered preliminary.
 
 Formation is a platform for building, deploying, and managing verifiable confidential VPS instances in the Formation network. This guide will walk you through the core development workflow and key concepts.
 
@@ -952,7 +1083,9 @@ ENTRYPOINT ["python3", "model/serve.py"]
 
 AI assets deployed through the marketplace will automatically integrate with Formation's billing, authentication, and access control systems.
 
-## Marketplace Deployment Process
+#### Marketplace Deployment Process
+
+> **Note:** The web interface and streamlined marketplace deployment process described below are part of the planned future functionality and are currently under development.
 
 While developers will primarily interact with the Formation marketplace through our web interface, understanding the underlying deployment process is helpful:
 
@@ -964,5 +1097,72 @@ While developers will primarily interact with the Formation marketplace through 
 6. **Monetization**: Users can discover and use the asset based on the specified pricing model
 
 This streamlined process handles all the complexity of deployment, security, and billing infrastructure automatically.
+
+<hr>
+
+## Project Roadmap
+
+This section outlines the current status and future direction of the Formation project.
+
+### Production Ready
+
+*   **Core Services Suite:**
+    *   `form-state`: For robust state management, accounts, and instance tracking.
+    *   `form-dns`: For internal network DNS resolution.
+    *   `form-net`: Secure WireGuard-based mesh networking (Formnet).
+    *   `form-vmm`: Virtual Machine Management for agent instances.
+    *   `form-pack-manager`: Packaging agents from `Formfile` definitions.
+*   **Deployment:**
+    *   Simplified core service deployment using `docker-compose`.
+    *   Network setup script (`scripts/validate-network-config.sh`) for bridge and local network preparation.
+*   **Basic Agent Lifecycle (via API):**
+    *   API-driven creation of agent instances using `Formfile`s.
+    *   API-driven status checking of instances.
+    *   Interaction with deployed agents over the Formnet network.
+*   **Authentication:**
+    *   ECDSA signature-based authentication for core API interactions.
+
+### Under Construction (Nearing Production Readiness)
+
+*   **Enhanced API Functionality:**
+    *   More comprehensive instance management features via API (e.g., stop, start, delete instances with robust ownership checks).
+    *   Refined API responses and error handling.
+*   **Marketplace Foundations in `form-state`:**
+    *   User account management features.
+    *   Basic structures for agent/model registration and discovery (further development ongoing).
+*   **`form-cli` Tool:**
+    *   Initial version available but requires further development, testing, and alignment with current API authentication and workflows before being recommended for general use.
+*   **Monitoring (Initial Stages):**
+    *   `form-node-metrics` and `form-vm-metrics` components exist; integration into the main operational flow and data exposure are under development.
+*   **Developer Experience:**
+    *   Improved documentation for `Formfile` creation and advanced agent deployment patterns.
+    *   Clearer guides for cryptographic key management and API signature generation.
+
+### Planned (Future Work)
+
+*   **Full Marketplace Functionality:**
+    *   Complete agent/model publishing workflows for AI Creators.
+    *   Monetization features (subscriptions, pay-per-use, credit systems).
+    *   Discovery mechanisms for AI Consumers.
+    *   User-facing dashboard/UI for marketplace interaction.
+*   **`form-p2p` Integration:**
+    *   Transition to a fully event-driven architecture using the `form-p2p` message queue for all inter-service communication, enhancing resilience and scalability. (Currently, some direct API calls or other queue mechanisms might be in use).
+*   **Advanced Networking:**
+    *   `form-bgp` integration for more complex network routing scenarios and external network peering.
+    *   Simplified external access to agents/instances.
+*   **Enhanced Security:**
+    *   Integration with Trusted Execution Environments (TEEs) and Hardware Security Modules (HSMs).
+    *   More granular access control and permissions.
+*   **Scalability and Reliability:**
+    *   Automated instance scaling based on demand.
+    *   High-availability configurations for core services.
+    *   Advanced load balancing.
+*   **Broader AI/Agent Support:**
+    *   Pre-packaged environments and templates for common AI frameworks.
+    *   Support for a wider variety of agent types and use cases.
+*   **Comprehensive Documentation Site:**
+    *   A dedicated documentation website with in-depth guides, API references, tutorials, and architectural overviews.
+
+This roadmap is subject to change as development progresses and community feedback is incorporated.
 
 <hr>

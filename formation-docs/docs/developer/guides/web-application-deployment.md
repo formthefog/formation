@@ -1,1 +1,0 @@
----\nid: web-application-deployment\ntitle: Web Application Deployment Guide\nsidebar_label: Web Application Deployment\n---\n\n# Web Application Deployment Guide\n\nComing Soon\n\nThis document will provide comprehensive guidance on deploying web applications on the Formation platform, including configuration, scaling, and monitoring.

@@ -3061,6 +3061,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "envconfig"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea81cc7e21f55a9d9b1efb6816904978d0bfbe31a50347cb24b2e75564bcac9b"
+dependencies = [
+ "envconfig_derive",
+]
+
+[[package]]
+name = "envconfig_derive"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7dfca278e5f84b45519acaaff758ebfa01f18e96998bc24b8f1b722dd804b9bf"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
 name = "epoll"
 version = "4.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3533,12 +3553,16 @@ dependencies = [
 name = "form-pack"
 version = "0.1.0"
 dependencies = [
+ "actix-web",
  "alloy-primitives",
+ "async-trait",
  "axum",
  "base64 0.22.1",
  "bollard",
+ "chrono",
  "clap",
  "crdts",
+ "envconfig",
  "flate2",
  "form-config",
  "form-p2p",
@@ -3551,6 +3575,8 @@ dependencies = [
  "hyper 1.6.0",
  "hyper-util",
  "hyperlocal",
+ "jsonwebtoken 8.3.0",
+ "jwt",
  "k256",
  "lazy_static",
  "log",
@@ -3560,13 +3586,21 @@ dependencies = [
  "reqwest 0.12.12",
  "serde",
  "serde_json",
+ "serde_yaml",
  "sha-crypt",
  "sha3",
+ "simple_logger 4.3.3",
  "tar",
  "tempfile",
+ "thiserror 1.0.69",
  "tiny-keccak",
  "tokio",
+ "tokio-util",
  "tower 0.5.2",
+ "tower-http 0.4.4",
+ "tracing",
+ "tracing-subscriber",
+ "url 2.5.4",
  "uuid 1.14.0",
 ]
 
@@ -3603,6 +3637,7 @@ dependencies = [
  "clap",
  "crdts",
  "dotenv",
+ "flate2",
  "form-config",
  "form-dns",
  "form-node-metrics",
@@ -3612,7 +3647,7 @@ dependencies = [
  "futures",
  "hex",
  "ipnet",
- "jsonwebtoken",
+ "jsonwebtoken 9.3.1",
  "jwt-authorizer",
  "k256",
  "lazy_static",
@@ -3625,11 +3660,14 @@ dependencies = [
  "serde_json",
  "sha2",
  "shared",
- "simple_logger 5.0.0",
+ "simple_logger 4.3.3",
  "subtle",
+ "tar",
+ "tempfile",
  "thiserror 1.0.69",
  "tiny-keccak",
  "tokio",
+ "tokio-stream",
  "trust-dns-proto 0.23.2",
  "url 2.5.4",
  "uuid 1.14.0",
@@ -4404,6 +4442,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "http-range-header"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "add0ab9360ddbd88cfeb3bd9574a1d85cfdfa14db10b3e21d3700dbc4328758f"
+
+[[package]]
 name = "http-types"
 version = "2.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5083,13 +5127,27 @@ dependencies = [
 
 [[package]]
 name = "jsonwebtoken"
+version = "8.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6971da4d9c3aa03c3d8f3ff0f4155b534aad021292003895a469716b2a230378"
+dependencies = [
+ "base64 0.21.7",
+ "pem 1.1.1",
+ "ring 0.16.20",
+ "serde",
+ "serde_json",
+ "simple_asn1",
+]
+
+[[package]]
+name = "jsonwebtoken"
 version = "9.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a87cc7a48537badeae96744432de36f4be2b4a34a05a5ef32e9dd8a1c169dde"
 dependencies = [
  "base64 0.22.1",
  "js-sys",
- "pem",
+ "pem 3.0.5",
  "ring 0.17.10",
  "serde",
  "serde_json",
@@ -5124,14 +5182,14 @@ dependencies = [
  "headers",
  "http 1.2.0",
  "http-body-util",
- "jsonwebtoken",
+ "jsonwebtoken 9.3.1",
  "pin-project",
  "reqwest 0.12.12",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
- "tower-http",
+ "tower-http 0.5.2",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -6388,6 +6446,15 @@ dependencies = [
 
 [[package]]
 name = "pem"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8835c273a76a90455d7344889b0964598e3316e2a79ede8e36f16bdcf2228b8"
+dependencies = [
+ "base64 0.13.1",
+]
+
+[[package]]
+name = "pem"
 version = "3.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "38af38e8470ac9dee3ce1bae1af9c1671fffc44ddfd8bd1d0a3445bf349a8ef3"
@@ -7143,7 +7210,7 @@ version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75e669e5202259b5314d1ea5397316ad400819437857b90861765f24c4cf80a2"
 dependencies = [
- "pem",
+ "pem 3.0.5",
  "ring 0.17.10",
  "rustls-pki-types",
  "time 0.3.37",
@@ -9130,7 +9197,7 @@ dependencies = [
  "futures",
  "log",
  "num-bigint",
- "pem",
+ "pem 3.0.5",
  "proc-macro2",
  "rcgen",
  "reqwest 0.12.12",
@@ -9296,6 +9363,24 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "tower-http"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61c5bb1d698276a2443e5ecfabc1008bf15a36c12e6a7176e7bf089ea9131140"
+dependencies = [
+ "bitflags 2.8.0",
+ "bytes",
+ "futures-core",
+ "futures-util",
+ "http 0.2.12",
+ "http-body 0.4.6",
+ "http-range-header",
+ "pin-project-lite",
+ "tower-layer",
+ "tower-service",
 ]
 
 [[package]]

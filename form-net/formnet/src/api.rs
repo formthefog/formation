@@ -48,7 +48,7 @@ pub enum Response {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum JoinResponse {
-    Success(IpAddr),
+    Success(shared::interface_config::InterfaceConfig),
     Failure { reason: String }
 }
 
@@ -99,13 +99,14 @@ async fn join(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(request): Json<BootstrapInfo>,
 ) -> Json<Response> {
-    log::info!("Received join request");
+    log::info!("Received join request from {:?} for peer {}", addr, request.id);
     match add_peer(&NetworkOpts::default(), &request.peer_type, &request.id, request.external_endpoint, request.pubkey, addr).await {
-        Ok(ip) => {
-            log::info!("Added peer, returning IP {ip}");
-            Json(Response::Join(JoinResponse::Success(ip)))
+        Ok(interface_config) => {
+            log::info!("Peer added successfully. Returning interface config: {:?}", interface_config);
+            Json(Response::Join(JoinResponse::Success(interface_config)))
         }
         Err(e) => {
+            log::error!("Failed to add peer for {}: {}", request.id, e);
             Json(Response::Join(JoinResponse::Failure { reason: e.to_string() }))
         }
     } 

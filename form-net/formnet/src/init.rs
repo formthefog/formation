@@ -12,7 +12,7 @@ use wireguard_control::{InterfaceName, KeyPair};
 use crate::{CONFIG_DIR, DATA_DIR};
 
 
-pub async fn init(address: String) -> Result<IpAddr, Box<dyn std::error::Error>> {
+pub async fn init(address: String, formnet_cidr_str: String, current_node_is_admin: bool) -> Result<IpAddr, Box<dyn std::error::Error>> {
     let config_dir = PathBuf::from(CONFIG_DIR);
     let data_dir = PathBuf::from(DATA_DIR);
     shared::ensure_dirs_exist(&[&config_dir, &data_dir]).map_err(|e| {
@@ -22,12 +22,14 @@ pub async fn init(address: String) -> Result<IpAddr, Box<dyn std::error::Error>>
         )
     })?;
 
+    let root_cidr: IpNet = formnet_cidr_str.parse()?;
+
     let name: Interface = InterfaceName::from_str("formnet")?.into();
 
-    let root_cidr: IpNet = IpNet::new(
-        IpAddr::V4(Ipv4Addr::new(10,0,0,0)),
-        8
-    )?;
+    // let root_cidr: IpNet = IpNet::new(
+    //     IpAddr::V4(Ipv4Addr::new(10,0,0,0)),
+    //     8
+    // )?;
 
     let listen_port: u16 = 51820;
 
@@ -70,7 +72,8 @@ pub async fn init(address: String) -> Result<IpAddr, Box<dyn std::error::Error>>
     log::info!("Populating CRDT datastore with: server_name: {}", address);
     populate_crdt_datastore(
         db_init_data,
-        address
+        address,
+        current_node_is_admin
     ).await?;
 
     // After creating config and database, actually create the WireGuard interface
@@ -140,7 +143,8 @@ pub async fn ensure_crdt_datastore() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn populate_crdt_datastore(
     db_init_data: DbInitData,
-    server_name: String
+    server_name: String,
+    current_node_is_admin: bool
 ) -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Creating root cidr");
     let root_cidr = DatabaseCidr::<String, CrdtMap>::create(
@@ -166,7 +170,7 @@ async fn populate_crdt_datastore(
             cidr_id: root_cidr.id,
             public_key: db_init_data.public_key_base64,
             endpoint: Some(db_init_data.endpoint),
-            is_admin: true,
+            is_admin: current_node_is_admin,
             is_disabled: false,
             is_redeemed: true,
             persistent_keepalive_interval: Some(PERSISTENT_KEEPALIVE_INTERVAL_SECS),

@@ -3,6 +3,7 @@ use alloy_core::primitives::Address;
 use serde::{Serialize, Deserialize};
 use uuid::Uuid;
 use form_traits::{Event as EventTrait, IntoEvent};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Event {
@@ -175,6 +176,15 @@ pub enum QuorumEvent {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LaunchTaskInfo {
+    pub task_id: String,
+    pub instance_name: String,
+    pub formfile_content: String,
+    pub submitted_by: String,
+    pub runtime_env_vars: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum VmmEvent {
     Ping {
         name: String,
@@ -248,6 +258,7 @@ pub enum VmmEvent {
     Migrate,
     Copy,
     Snapshot,
+    ProcessLaunchTask(LaunchTaskInfo),
 }
 
 impl IntoEvent for VmmEvent {

@@ -23,6 +23,8 @@ pub struct OperatorConfig {
     pub public_key: Option<String>,
     #[clap(long, short)]
     pub address: Option<String>,
+    #[clap(long="initial-admin-public-key", help="Public key (hex) of the initial system administrator.")]
+    pub initial_admin_public_key: Option<String>,
     #[clap(long="bootstrap-nodes", short='b', alias="to-dial")]
     pub bootstrap_nodes: Vec<String>,
     #[clap(long="bootstrap-domain", short='B', aliases=["domain"])]
@@ -37,6 +39,8 @@ pub struct OperatorConfig {
     pub formnet_join_server_port: u16,
     #[clap(long="formnet-service-port", short='f', default_value="51820")]
     pub formnet_service_port: u16,
+    #[clap(long="formnet-cidr", help="The CIDR for the formnet network (e.g., 10.42.0.0/16)")]
+    pub formnet_cidr: Option<String>,
     #[clap(long="vmm-service-port", short='v', default_value="3002")]
     pub vmm_service_port: u16,
     #[clap(long="pack-manager-port", short='p', default_value="3003")]
@@ -484,6 +488,44 @@ mod prompts {
 
         Ok(if address.is_empty() { None } else { Some(address) })
     }
+
+    pub fn formnet_cidr(theme: &ColorfulTheme) -> Result<Option<String>> {
+        println!("\n{}", "Formnet CIDR Configuration".bold().green());
+        println!("Configure the IP address range for the internal Formnet VPN (e.g., 10.42.0.0/16).");
+        println!("Ensure this does not conflict with existing networks in your environment.");
+        
+        let cidr: String = Input::with_theme(theme)
+            .with_prompt("Enter Formnet CIDR (e.g., 10.42.0.0/16, leave empty for none/default behavior elsewhere)")
+            .default("10.42.0.0/16".to_string())
+            .allow_empty(true)
+            .interact_text()?;
+
+        if cidr.is_empty() {
+            Ok(None)
+        } else {
+            // Basic validation could be added here if desired, e.g., using ipnet::IpNet::from_str
+            // For now, just returning the string.
+            Ok(Some(cidr))
+        }
+    }
+ 
+    pub fn initial_admin_public_key(theme: &ColorfulTheme) -> Result<Option<String>> {
+        println!("\n{}", "Initial Admin Public Key Configuration".bold().green());
+        println!("Configure the public key (hex format) of the account that will be the initial system administrator.");
+        println!("If left empty, the first node's own operator key might be designated as admin by default (behavior defined elsewhere).");
+        
+        let key: String = Input::with_theme(theme)
+            .with_prompt("Enter initial admin public key (hex, leave empty to skip/use default)")
+            .allow_empty(true)
+            .interact_text()?;
+
+        if key.is_empty() {
+            Ok(None)
+        } else {
+            // Basic validation for hex string could be added here.
+            Ok(Some(key))
+        }
+    }
 }
 
 // Main wizard function
@@ -515,6 +557,8 @@ pub fn run_config_wizard() -> Result<OperatorConfig> {
     let event_queue_port = prompts::service_port(&theme, "Event Queue", 3005)?;
     
     let contract_address = prompts::contract_address(&theme)?;
+    let formnet_cidr = prompts::formnet_cidr(&theme)?;
+    let initial_admin_public_key = prompts::initial_admin_public_key(&theme)?;
 
     // Create the config
     let config = OperatorConfig {
@@ -524,6 +568,7 @@ pub fn run_config_wizard() -> Result<OperatorConfig> {
         mnemonic,
         public_key,
         address,
+        initial_admin_public_key,
         bootstrap_nodes,
         bootstrap_domain,
         is_bootstrap_node,
@@ -535,6 +580,7 @@ pub fn run_config_wizard() -> Result<OperatorConfig> {
         pack_manager_port,
         event_queue_port,
         contract_address,
+        formnet_cidr,
     };
 
     Ok(config)

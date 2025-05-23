@@ -9,7 +9,7 @@ use form_types::state::{Response, Success};
 
 pub async fn create_node(
     State(state): State<Arc<Mutex<DataStore>>>,
-    Json(mut request): Json<NodeRequest>
+    Json(request): Json<NodeRequest>
 ) -> Json<Response<Node>> {
     let mut datastore = state.lock().await;
     

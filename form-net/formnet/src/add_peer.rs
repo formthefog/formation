@@ -8,67 +8,87 @@ use wireguard_control::{Device, DeviceUpdate, InterfaceName, KeyPair, PeerConfig
 use crate::NETWORK_NAME;
 
 pub async fn add_peer(
-    network: &NetworkOpts,
+    _network: &NetworkOpts,
     peer_type: &PeerType,
     peer_id: &str,
-    endpoint: Option<SocketAddr>,
-    pubkey: String,
-    addr: SocketAddr,
-) -> Result<IpAddr, Box<dyn std::error::Error>> {
+    client_endpoint_info: Option<SocketAddr>,
+    client_pubkey: String,
+    _client_conn_addr: SocketAddr,
+) -> Result<shared::interface_config::InterfaceConfig, Box<dyn std::error::Error>> {
     log::warn!("ATTEMPTING TO ADD PEER {peer_id}...");
-    log::info!("Getting config from file...");
-    log::info!("Getting interface name...");
-    let interface = InterfaceName::from_str(NETWORK_NAME)?;
+    let interface_name = InterfaceName::from_str(NETWORK_NAME)?;
 
-    log::info!("Gathering peers...");
-    let mut peers = DatabasePeer::<String, CrdtMap>::list().await?
+    let peers_from_db = DatabasePeer::<String, CrdtMap>::list().await?
         .into_iter()
         .map(|dp| dp.inner)
         .collect::<Vec<_>>();
 
-    if let Some(ref mut peer) = peers.iter_mut().find(|p| p.id == peer_id) {
-        if peer.public_key != pubkey {
-            return Err(
-                Box::new(
-                    std::io::Error::new(
-                        std::io::ErrorKind::Other, 
-                        "Peer ID Match: peer already exists, but public key provided does not match"
-                    )
-                )
-            );
+    let root_cidr_obj = DatabaseCidr::<String, CrdtMap>::get(NETWORK_NAME.to_string()).await
+        .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::NotFound, format!("Root CIDR '{}' not found in datastore: {}", NETWORK_NAME, e))))?;
+    let root_ipnet = root_cidr_obj.cidr;
+
+    if let Some(existing_peer) = peers_from_db.iter().find(|p| p.id == peer_id) {
+        if existing_peer.public_key != client_pubkey {
+            return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Peer ID Match: peer already exists, but public key provided does not match")));
         }
+        let server_peer_info = peers_from_db.iter().find(|p| p.is_admin)
+            .ok_or_else(|| Box::new(std::io::Error::new(std::io::ErrorKind::NotFound, "Server peer info not found")))?;
+        
+        let server_api_socket_addr = SocketAddr::new(server_peer_info.ip, 51820);
 
-        return Ok(peer.ip.clone());
+        return Ok(InterfaceConfig {
+            interface: InterfaceInfo {
+                network_name: NETWORK_NAME.to_string(),
+                address: IpNet::new(existing_peer.ip, root_ipnet.prefix_len())?,
+                private_key: String::new(),
+                listen_port: client_endpoint_info.map(|s| s.port()),
+            },
+            server: ServerInfo {
+                public_key: server_peer_info.public_key.clone(),
+                external_endpoint: server_peer_info.endpoint.clone().ok_or_else(|| Box::new(std::io::Error::new(std::io::ErrorKind::NotFound, "Server external endpoint not found")))?, 
+                internal_endpoint: server_api_socket_addr,
+            },
+        });
     }
 
-    log::info!("Building peer...");
-    let peer_request = build_peer(
-        &peers,
-        &peer_type,
+    let peer_contents_req = build_peer(
+        &peers_from_db,
+        peer_type,
         peer_id,
-        endpoint,
-        pubkey,
-        addr
-    ).await?; 
+        client_endpoint_info,
+        client_pubkey.clone(),
+        _client_conn_addr,
+        &root_ipnet
+    ).await?;
 
-    let ip = peer_request.ip;
+    let assigned_ip = peer_contents_req.ip;
 
-    log::info!("Built peer, attempting to add peer {peer_id} to datastore");
-    let peer = DatabasePeer::<String, CrdtMap>::create(peer_request).await?;
-    log::info!("Added peer {peer_id} to datastore");
-    if Device::get(&interface, network.backend).is_ok() {
-        // Update the current WireGuard interface with the new peers.
-        log::info!("Adding peer to device");
-        DeviceUpdate::new()
-            .add_peer(PeerConfigBuilder::from(&*peer))
-            .apply(&interface, network.backend)
-            .map_err(|_| ServerError::WireGuard)?;
-        tokio::time::sleep(REDEEM_TRANSITION_WAIT).await;
+    let _peer_db_entry = DatabasePeer::<String, CrdtMap>::create(peer_contents_req).await?;
 
-        log::info!("adding to WireGuard interface: {}", &*peer);
+    let mut server_peer_info_opt = peers_from_db.iter().find(|p| p.is_admin).cloned();
+    if server_peer_info_opt.is_none() {
+        if let Ok(updated_peers) = DatabasePeer::<String, CrdtMap>::list().await {
+            server_peer_info_opt = updated_peers.into_iter().find(|p|p.is_admin).map(|p|p.inner);
+        }
     }
+    let server_peer_info = server_peer_info_opt
+        .ok_or_else(|| Box::new(std::io::Error::new(std::io::ErrorKind::NotFound, "Server peer info not found after peer creation")))?;
+    
+    let server_api_socket_addr = SocketAddr::new(server_peer_info.ip, 51820);
 
-    return Ok(ip)
+    Ok(InterfaceConfig {
+        interface: InterfaceInfo {
+            network_name: NETWORK_NAME.to_string(),
+            address: IpNet::new(assigned_ip, root_ipnet.prefix_len())?,
+            private_key: String::new(),
+            listen_port: client_endpoint_info.map(|s| s.port()),
+        },
+        server: ServerInfo {
+            public_key: server_peer_info.public_key.clone(),
+            external_endpoint: server_peer_info.endpoint.clone().ok_or_else(|| Box::new(std::io::Error::new(std::io::ErrorKind::NotFound, "Server external endpoint not found")))?, 
+            internal_endpoint: server_api_socket_addr,
+        },
+    })
 }
 
 pub async fn build_peer(
@@ -78,48 +98,37 @@ pub async fn build_peer(
     endpoint: Option<SocketAddr>,
     pubkey: String,
     _addr: SocketAddr,
+    root_ipnet: &IpNet
 ) -> Result<PeerContents<String>, Box<dyn std::error::Error>> {
-    let cidr = DatabaseCidr::<String, CrdtMap>::get("formnet".to_string()).await?; 
     let mut available_ip = None;
-    let candidate_ips = cidr.hosts().filter(|ip| cidr.is_assignable(ip));
+    let candidate_ips = root_ipnet.hosts().filter(|ip| root_ipnet.is_assignable(ip));
     for ip in candidate_ips {
         if !peers.iter().any(|peer| peer.ip == ip) {
             available_ip = Some(ip);
             break;
         }
     }
+    let available_ip = available_ip.ok_or_else(|| Box::new(std::io::Error::new(std::io::ErrorKind::Other, "No IPs in this CIDR are available")))?;
 
-    let available_ip = available_ip.expect("No IPs in this CIDR are avavilable");
-
-    log::info!("Checking valid host name for {peer_id}");
-    let is_admin = match peer_type {
-        PeerType::Operator => true,
-        _ => false,
-    }; 
+    let is_admin = matches!(peer_type, PeerType::Operator);
 
     let invite_expires: Timestring = "1d".parse()?;
-    let invite_expires: Duration = invite_expires.into();
+    let invite_duration: Duration = invite_expires.into();
 
-    let peer_request = PeerContents {
+    Ok(PeerContents {
         name: Hostname::from_str(peer_id)?,
         ip: available_ip,
-        cidr_id: cidr.id.clone(),
+        cidr_id: NETWORK_NAME.to_string(),
         public_key: pubkey,
-        endpoint: match endpoint {
-            Some(addr) => Some(addr.into()),
-            None => None
-        },
+        endpoint: endpoint.map(Into::into),
         is_admin,
         is_disabled: false,
         is_redeemed: true,
         persistent_keepalive_interval: Some(PERSISTENT_KEEPALIVE_INTERVAL_SECS),
-        invite_expires: Some(SystemTime::now() + invite_expires),
+        invite_expires: Some(SystemTime::now() + invite_duration),
         candidates: vec![],
-    };
-
-    Ok(peer_request)
+    })
 }
-
 
 pub fn build_peer_invitation(
     network_name: &InterfaceName,

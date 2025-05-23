@@ -106,6 +106,23 @@ impl Node {
     pub fn remove_operator_key(&mut self, key: &str) {
         self.operator_keys.retain(|k| k != key);
     }
+
+    /// Check if an address is authorized as an admin for this node
+    pub fn is_admin_address(&self, address: &str) -> bool {
+        // First check if the address matches the node owner (always admin)
+        if self.node_owner.to_lowercase() == address.to_lowercase() {
+            return true;
+        }
+        
+        // Then check if the address is in operator_keys
+        // This is a temporary solution that assumes operator keys might contain addresses
+        // In a production environment, you might want a separate field for admin addresses
+        if self.has_operator_key(address) {
+            return true;
+        }
+        
+        false
+    }
 }
 
 /// Additional metadata for operational context.
@@ -138,8 +155,10 @@ impl NodeMetadata {
 /// Additional annotations, such as roles and datacenter info.
 #[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeAnnotations {
-    pub(crate) roles: Vec<String>,     // e.g. ["compute", "storage"]
+    pub(crate) roles: Vec<String>,     // e.g. ["compute", "storage", "builder"]
     pub(crate) datacenter: String,     // Which datacenter the node belongs to.
+    pub(crate) vmm_service_api_endpoint: Option<String>, // e.g., "http://1.2.3.4:3002"
+    pub(crate) pack_service_api_endpoint: Option<String>,  // e.g., "http://1.2.3.4:3003"
 }
 
 impl NodeAnnotations {
@@ -149,6 +168,14 @@ impl NodeAnnotations {
 
     pub fn datacenter(&self) -> &str {
         &self.datacenter
+    }
+
+    pub fn vmm_service_api_endpoint(&self) -> Option<&String> {
+        self.vmm_service_api_endpoint.as_ref()
+    }
+
+    pub fn pack_service_api_endpoint(&self) -> Option<&String> {
+        self.pack_service_api_endpoint.as_ref()
     }
 }
 
@@ -302,6 +329,14 @@ impl NodeState {
             }
         }
         None
+    }
+
+    /// List all nodes.
+    pub fn list_nodes(&self) -> Vec<Node> {
+        self.map.iter().filter_map(|entry| {
+            let (_key, val_reg) = entry.val; // Destructure the tuple from IterEntry.val
+            val_reg.val().map(|v_ctx| v_ctx.value()) 
+        }).collect()
     }
 
     /// Add an operator key to a node

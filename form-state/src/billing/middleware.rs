@@ -5,7 +5,7 @@
 
 use axum::{
     extract::{State, Path, Json},
-    http::{Request, StatusCode, header},
+    http::{Request, StatusCode},
     middleware::Next,
     response::{Response, IntoResponse},
     body::Body,
@@ -14,10 +14,9 @@ use axum::{
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use serde_json::json;
-use thiserror::Error;
 
 use crate::datastore::DataStore;
-use crate::auth::{DynamicClaims, JwtClaims};
+use crate::auth::RecoveredAddress;
 use crate::billing::BillingConfig;
 
 /// Error types for eligibility checks
@@ -165,18 +164,18 @@ pub struct EligibilityContext {
 /// Middleware for checking if an account can use an agent
 pub async fn check_agent_eligibility(
     State(state): State<Arc<Mutex<DataStore>>>,
-    JwtClaims(claims): JwtClaims,
+    recovered: RecoveredAddress,
     Path(agent_id): Path<String>,
     mut request: Request<Body>,
     next: Next,
 ) -> Result<Response, EligibilityError> {
-    // Get user ID from claims
-    let user_id = claims.sub.clone();
+    // Get account ID from recoverable address
+    let account_id = recovered.as_hex();
     
     // Get account information
     let datastore = state.lock().await;
-    let account = datastore.account_state.get_account(&user_id)
-        .ok_or(EligibilityError::AccountNotFound(user_id.clone()))?;
+    let account = datastore.account_state.get_account(&account_id)
+        .ok_or(EligibilityError::AccountNotFound(account_id.clone()))?;
     
     // Check if the agent exists
     if datastore.agent_state.get_agent(&agent_id).is_none() {
@@ -192,7 +191,7 @@ pub async fn check_agent_eligibility(
             },
             SubscriptionStatus::PastDue => {
                 // Past due but still active, continue with warning
-                log::warn!("Account {} has past due subscription", user_id);
+                log::warn!("Account {} has past due subscription", account_id);
             },
             _ => {
                 // Inactive subscription
@@ -244,18 +243,18 @@ pub async fn check_agent_eligibility(
 /// Middleware for checking if tokens can be consumed
 pub async fn check_token_eligibility(
     State(state): State<Arc<Mutex<DataStore>>>,
-    JwtClaims(claims): JwtClaims,
+    recovered: RecoveredAddress,
     Json(payload): Json<serde_json::Value>,
     mut request: Request<Body>,
     next: Next,
 ) -> Result<Response, EligibilityError> {
-    // Get user ID from claims
-    let user_id = claims.sub.clone();
+    // Get account ID from recoverable address
+    let account_id = recovered.as_hex();
     
     // Get account information
     let datastore = state.lock().await;
-    let account = datastore.account_state.get_account(&user_id)
-        .ok_or(EligibilityError::AccountNotFound(user_id.clone()))?;
+    let account = datastore.account_state.get_account(&account_id)
+        .ok_or(EligibilityError::AccountNotFound(account_id.clone()))?;
     
     // Extract token count from payload (simplified - actual would depend on API structure)
     let token_count = payload.get("max_tokens")
