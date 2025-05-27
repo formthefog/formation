@@ -6,8 +6,33 @@ pub use ecdsa::{
     SignatureError,
     ecdsa_auth_middleware,
     active_node_auth_middleware,
+    global_admin_auth_middleware,
     extract_signature_parts,
     recover_address,
+    is_admin_key,
+    AuthenticationContext,
+    AdminRecoveredAddress,
+    // Authorization helper types and functions
+    AuthorizationError,
+    ResourceType,
+    OperationType,
+    AuthorizationContext,
+    check_authorization,
+    extract_owner_from_payload,
+    validate_resource_ownership,
+    extract_resource_id,
+    log_authorization_decision,
+    log_admin_operation,
+    log_security_event,
+    log_authorization_failure,
+    create_auth_context_for_operation,
+    // Runtime admin key management functions (Sub-sub-task 3.4.1.3)
+    RuntimeAdminKeys,
+    add_runtime_admin_key,
+    remove_runtime_admin_key,
+    list_runtime_admin_keys,
+    clear_runtime_admin_keys,
+    get_runtime_admin_key_stats,
 };
 
 // Placeholder implementations to make the codebase compile

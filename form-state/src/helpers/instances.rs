@@ -1,6 +1,6 @@
 use crate::datastore::DataStore;
 use crate::instances::*;
-use crate::auth::RecoveredAddress;
+use crate::auth::{RecoveredAddress, AuthenticationContext};
 use reqwest::Client;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -13,70 +13,129 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Create instance with admin bypass logic
+/// 
+/// Sub-sub-task 3.5.3.1: Add admin bypass logic to instance management handlers
+/// Sub-sub-task 3.5.3.2: Implement admin context extraction for instance operations
 pub async fn create_instance(
     State(state): State<Arc<Mutex<DataStore>>>,
-    recovered: Option<RecoveredAddress>,
-    ConnectInfo(connection_info): ConnectInfo<SocketAddr>,
+    auth_context: AuthenticationContext,
     Json(payload): Json<Instance>,
 ) -> impl IntoResponse {
+    log::info!("Received instance create request from {}", auth_context.description());
+    
     let mut datastore = state.lock().await;
     
-    let remote_addr = connection_info.to_string();
-    let is_localhost = remote_addr.starts_with("127.0.0.1") || remote_addr.starts_with("::1");
-    
-    // Check if this is a request from an admin node with an original user address
-    let effective_address = if is_localhost {
-        payload.instance_owner.clone()
-    } else {
-        // If it's a regular user, use their address
-        match recovered {
-            Some(address) => address.as_hex(),
-            None => {
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    Json(
-                        json!({
-                            "error": format!("Failed to create agent: requests from remote address must included a valid recovered address")
-                        })
-                    )
-                )
-            }
+    // Admin bypass: Admins can create instances for any owner
+    if auth_context.is_admin() {
+        log::info!("create_instance: Admin {} creating instance for owner {}", 
+                   auth_context.description(), payload.instance_owner);
+        
+        let mut instance = payload.clone();
+        instance.instance_owner = instance.instance_owner.to_lowercase();
+        instance.created_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+        instance.updated_at = instance.created_at;
+        
+        let op = datastore.instance_state.update_instance_local(instance.clone());
+        if let Err(e) = datastore.handle_instance_op(op).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "success": false,
+                    "error": format!("Failed to create instance: {}", e),
+                    "access_level": "admin"
+                })),
+            );
         }
-    };
-    
-    let mut instance = payload.clone();
-    instance.instance_owner = effective_address.to_lowercase();
-            
-    let op = datastore.instance_state.update_instance_local(instance.clone());
-    if let Err(e) = datastore.handle_instance_op(op).await {
+        
         return (
-            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::CREATED,
             Json(json!({
-                "error": format!("Failed to create instance: {}", e)
+                "success": true,
+                "message": format!("Instance created successfully by admin {}", auth_context.description()),
+                "instance": instance,
+                "access_level": "admin",
+                "created_by": auth_context.description()
             })),
         );
     }
+
+    // Normal user access: can only create instances with their own address as owner
+    match auth_context {
+        AuthenticationContext::User { address, .. } => {
+            let authenticated_address = address.as_hex();
             
-    (
-        StatusCode::CREATED,
-        Json(json!({
-            "status": "success",
-            "instance": instance
-        })),
-    )
+            // Ensure users can only create instances with their own address as owner
+            let normalized_authenticated_address = authenticated_address.to_lowercase();
+            let normalized_payload_owner = payload.instance_owner.strip_prefix("0x").unwrap_or(&payload.instance_owner).to_lowercase();
+
+            if normalized_authenticated_address != normalized_payload_owner {
+                log::warn!("Unauthorized: Address {} attempted to create instance for owner {}", 
+                          authenticated_address, payload.instance_owner);
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({
+                        "success": false,
+                        "error": "You can only create instances with your own authenticated address as owner",
+                        "authenticated_as": authenticated_address,
+                        "requested_owner": payload.instance_owner,
+                        "access_level": "user"
+                    })),
+                );
+            }
+            
+            let mut instance = payload.clone();
+            instance.instance_owner = authenticated_address.to_lowercase();
+            instance.created_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+            instance.updated_at = instance.created_at;
+            
+            let op = datastore.instance_state.update_instance_local(instance.clone());
+            if let Err(e) = datastore.handle_instance_op(op).await {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "success": false,
+                        "error": format!("Failed to create instance: {}", e),
+                        "access_level": "user"
+                    })),
+                );
+            }
+            
+            return (
+                StatusCode::CREATED,
+                Json(json!({
+                    "success": true,
+                    "message": "Instance created successfully",
+                    "instance": instance,
+                    "access_level": "user"
+                })),
+            );
+        }
+        _ => {
+            // This shouldn't happen since middleware should handle authentication
+            log::error!("create_instance: Unexpected authentication context: {:?}", auth_context);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "success": false,
+                    "error": "Internal authentication error"
+                })),
+            );
+        }
+    }
 }
 
+/// Update instance with admin bypass logic
+/// 
+/// Sub-sub-task 3.5.3.1: Add admin bypass logic to instance management handlers
+/// Sub-sub-task 3.5.3.2: Implement admin context extraction for instance operations
 pub async fn update_instance(
     State(state): State<Arc<Mutex<DataStore>>>,
-    recovered: Option<RecoveredAddress>,
-    ConnectInfo(connection_info): ConnectInfo<SocketAddr>,
+    auth_context: AuthenticationContext,
     Json(payload): Json<Instance>,
 ) -> impl IntoResponse {
-    log::info!("update_instance: Request from: {} for instance_id: {}", connection_info.to_string(), payload.instance_id);
+    log::info!("update_instance: Request from {} for instance_id: {}", auth_context.description(), payload.instance_id);
     let mut datastore = state.lock().await;
-    
-    let remote_addr = connection_info.to_string();
-    let is_localhost = remote_addr.starts_with("127.0.0.1") || remote_addr.starts_with("::1");
 
     let existing_instance = match datastore.instance_state.get_instance(payload.instance_id.clone()) {
         Some(inst) => inst,
@@ -92,135 +151,201 @@ pub async fn update_instance(
         }
     };
 
-    let mut can_update = false;
-    let mut is_caller_admin = false;
-    let mut authenticated_address_hex = String::new(); // For logging if needed
-
-    if is_localhost {
-        log::info!("update_instance: Request from localhost for instance_id: {}. Access granted to update.", payload.instance_id);
-        can_update = true;
-        // For localhost, effective_owner for permission check could be considered the one in the payload, assuming it's an internal trusted update.
-    } else if let Some(auth_data) = recovered.as_ref() { // Borrow to use auth_data later if needed
-        authenticated_address_hex = auth_data.as_hex();
-        let normalized_auth_address = authenticated_address_hex.to_lowercase();
-        let normalized_instance_owner = existing_instance.instance_owner.strip_prefix("0x").unwrap_or(&existing_instance.instance_owner).to_lowercase();
+    // Admin bypass: Admins can update any instance
+    if auth_context.is_admin() {
+        log::info!("update_instance: Admin {} updating instance {}", 
+                   auth_context.description(), payload.instance_id);
         
-        is_caller_admin = datastore.network_state.is_admin_address(&authenticated_address_hex);
+        let mut instance_to_update = payload;
+        instance_to_update.updated_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
 
-        if normalized_auth_address == normalized_instance_owner {
-            log::info!("update_instance: User {} owns instance {}. Access granted.", authenticated_address_hex, payload.instance_id);
-            can_update = true;
-        } else if is_caller_admin {
-            log::info!("update_instance: Admin user {} updating instance {}. Access granted.", authenticated_address_hex, payload.instance_id);
-            can_update = true;
-        } else {
-            log::warn!("update_instance: User {} does not own instance {} and is not admin. Update denied.", authenticated_address_hex, payload.instance_id);
-        }
-    } else {
-        // Not localhost and no recovered address
-        log::warn!("update_instance: Unauthenticated non-localhost request for instance_id: {}. Update denied.", payload.instance_id);
-    }
-
-    if !can_update {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "success": false,
-                "error": "You don't have permission to update this instance"
-            })),
-        );
-    }
-
-    // Prevent changing instance_owner unless localhost or admin
-    let normalized_payload_owner = payload.instance_owner.strip_prefix("0x").unwrap_or(&payload.instance_owner).to_lowercase();
-    let normalized_existing_owner = existing_instance.instance_owner.strip_prefix("0x").unwrap_or(&existing_instance.instance_owner).to_lowercase();
-
-    if normalized_payload_owner != normalized_existing_owner {
-        if !is_localhost && !is_caller_admin { // only admins or localhost can change owner via update
-            log::warn!(
-                "update_instance: Attempt to change instance_owner for {} from {} to {} by non-admin/non-localhost user {}. Denied.", 
-                payload.instance_id, existing_instance.instance_owner, payload.instance_owner, authenticated_address_hex
-            );
+        let op = datastore.instance_state.update_instance_local(instance_to_update.clone());
+        if let Err(e) = datastore.handle_instance_op(op).await {
+            log::error!("update_instance: Failed to update instance {}: {}", instance_to_update.instance_id, e);
             return (
-                StatusCode::FORBIDDEN,
+                StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
                     "success": false,
-                    "error": "Cannot change instance owner via this update. Use dedicated ownership transfer."
+                    "error": format!("Failed to update instance: {}", e),
+                    "access_level": "admin"
                 })),
             );
         }
-        log::info!("update_instance: Authorized change of instance_owner for {} to {} by {} (is_localhost: {}, is_admin: {}).", 
-            payload.instance_id, payload.instance_owner, authenticated_address_hex, is_localhost, is_caller_admin);
-    }
-    
-    // If localhost, the payload.instance_owner is trusted as the new owner if it's different.
-    // If not localhost, owner change is only allowed if current authenticated user is admin.
-    // The actual update of instance_owner happens when `payload` is used in `update_instance_local`.
-    let mut instance_to_update = payload; // payload is already the full Instance data
-    instance_to_update.updated_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64; // Ensure updated_at is fresh
-
-    let op = datastore.instance_state.update_instance_local(instance_to_update.clone());
-    if let Err(e) = datastore.handle_instance_op(op).await {
-        log::error!("update_instance: Failed to update instance {}: {}", instance_to_update.instance_id, e);
+        
+        log::info!("update_instance: Instance {} updated successfully by admin.", instance_to_update.instance_id);
         return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "success": false,
-                "error": format!("Failed to update instance: {}", e)
-            })),
+            StatusCode::OK, 
+            Json(json!({ 
+                "success": true, 
+                "message": format!("Instance updated successfully by admin {}", auth_context.description()),
+                "instance": instance_to_update,
+                "access_level": "admin",
+                "updated_by": auth_context.description()
+            }))
         );
     }
-    
-    log::info!("update_instance: Instance {} updated successfully.", instance_to_update.instance_id);
-    (StatusCode::OK, Json(json!({ "success": true, "instance": instance_to_update })))
+
+    // Normal user access: can only update instances they own
+    match auth_context {
+        AuthenticationContext::User { address, .. } => {
+            let authenticated_address = address.as_hex();
+            let normalized_auth_address = authenticated_address.to_lowercase();
+            let normalized_instance_owner = existing_instance.instance_owner.strip_prefix("0x").unwrap_or(&existing_instance.instance_owner).to_lowercase();
+            
+            if normalized_auth_address != normalized_instance_owner {
+                log::warn!("update_instance: User {} does not own instance {} and is not admin. Update denied.", authenticated_address, payload.instance_id);
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({
+                        "success": false,
+                        "error": "You don't have permission to update this instance",
+                        "authenticated_as": authenticated_address,
+                        "instance_owner": existing_instance.instance_owner,
+                        "access_level": "user"
+                    })),
+                );
+            }
+
+            // Prevent changing instance_owner for normal users
+            let normalized_payload_owner = payload.instance_owner.strip_prefix("0x").unwrap_or(&payload.instance_owner).to_lowercase();
+            if normalized_payload_owner != normalized_instance_owner {
+                log::warn!(
+                    "update_instance: Attempt to change instance_owner for {} from {} to {} by non-admin user {}. Denied.", 
+                    payload.instance_id, existing_instance.instance_owner, payload.instance_owner, authenticated_address
+                );
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({
+                        "success": false,
+                        "error": "Cannot change instance owner via this update. Use dedicated ownership transfer.",
+                        "access_level": "user"
+                    })),
+                );
+            }
+            
+            log::info!("update_instance: User {} owns instance {}. Access granted.", authenticated_address, payload.instance_id);
+            
+            let mut instance_to_update = payload;
+            instance_to_update.updated_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+
+            let op = datastore.instance_state.update_instance_local(instance_to_update.clone());
+            if let Err(e) = datastore.handle_instance_op(op).await {
+                log::error!("update_instance: Failed to update instance {}: {}", instance_to_update.instance_id, e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "success": false,
+                        "error": format!("Failed to update instance: {}", e),
+                        "access_level": "user"
+                    })),
+                );
+            }
+            
+            log::info!("update_instance: Instance {} updated successfully.", instance_to_update.instance_id);
+            return (
+                StatusCode::OK, 
+                Json(json!({ 
+                    "success": true, 
+                    "message": "Instance updated successfully",
+                    "instance": instance_to_update,
+                    "access_level": "user"
+                }))
+            );
+        }
+        _ => {
+            // This shouldn't happen since middleware should handle authentication
+            log::error!("update_instance: Unexpected authentication context: {:?}", auth_context);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "success": false,
+                    "error": "Internal authentication error"
+                })),
+            );
+        }
+    }
 }
 
+/// Get instance with admin bypass logic
+/// 
+/// Sub-sub-task 3.5.3.1: Add admin bypass logic to instance management handlers
+/// Sub-sub-task 3.5.3.2: Implement admin context extraction for instance operations
 pub async fn get_instance(
     State(state): State<Arc<Mutex<DataStore>>>,
-    recovered: RecoveredAddress,
+    auth_context: AuthenticationContext,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    log::info!("Attempting to get instance {id}");
-    
-    // Get the authenticated user's address
-    let authenticated_address = recovered.as_hex();
+    log::info!("get_instance: {} requesting instance {}", auth_context.description(), id);
     
     let datastore = state.lock().await;
     
     if let Some(instance) = datastore.instance_state.get_instance(id.clone()) {
-        // Check if user has access to this instance
-        let account = datastore.account_state.get_account(&authenticated_address);
-        
-        // For simplicity, we'll check if:
-        // 1. User is the owner
-        // 2. User has any authorization level for this instance
-        // 3. User is an admin (using the same helper we used for agents)
-        let is_authorized = match account {
-            Some(account) => {
-                account.owned_instances.contains(&id) || 
-                account.get_authorization_level(&id).is_some() ||
-                datastore.network_state.is_admin_address(&authenticated_address)
-            },
-            None => false
-        };
-        
-        if !is_authorized {
+        // Admin bypass: Admins can access any instance
+        if auth_context.is_admin() {
+            log::info!("get_instance: Admin access by {} for instance {}", auth_context.description(), id);
             return (
-                StatusCode::FORBIDDEN,
+                StatusCode::OK,
                 Json(json!({
-                    "success": false,
-                    "error": "You don't have permission to access this instance"
+                    "success": true,
+                    "instance": instance,
+                    "access_level": "admin",
+                    "accessed_by": auth_context.description()
                 }))
             );
         }
-        
-        return (
-            StatusCode::OK,
-            Json(json!({
-                "success": true,
-                "instance": instance
-            }))
-        );
+
+        // Normal user access: check ownership and authorization
+        match auth_context {
+            AuthenticationContext::User { address, .. } => {
+                let authenticated_address = address.as_hex();
+                
+                // Check if user has access to this instance
+                let account = datastore.account_state.get_account(&authenticated_address);
+                
+                let is_authorized = match account {
+                    Some(account) => {
+                        account.owned_instances.contains(&id) || 
+                        account.get_authorization_level(&id).is_some()
+                    },
+                    None => false
+                };
+                
+                if !is_authorized {
+                    log::warn!("get_instance: User {} does not have permission to access instance {}", authenticated_address, id);
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(json!({
+                            "success": false,
+                            "error": "You don't have permission to access this instance",
+                            "authenticated_as": authenticated_address,
+                            "instance_id": id,
+                            "access_level": "user"
+                        }))
+                    );
+                }
+                
+                log::info!("get_instance: User {} has access to instance {}", authenticated_address, id);
+                return (
+                    StatusCode::OK,
+                    Json(json!({
+                        "success": true,
+                        "instance": instance,
+                        "access_level": "user"
+                    }))
+                );
+            }
+            _ => {
+                // This shouldn't happen since middleware should handle authentication
+                log::error!("get_instance: Unexpected authentication context: {:?}", auth_context);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "success": false,
+                        "error": "Internal authentication error"
+                    }))
+                );
+            }
+        }
     }
 
     return (
@@ -410,88 +535,138 @@ pub async fn get_cluster_metrics(
     }
 }
 
+/// Delete instance with admin bypass logic
+/// 
+/// Sub-sub-task 3.5.3.1: Add admin bypass logic to instance management handlers
+/// Sub-sub-task 3.5.3.2: Implement admin context extraction for instance operations
 pub async fn delete_instance(
     State(state): State<Arc<Mutex<DataStore>>>,
-    recovered: RecoveredAddress,
+    auth_context: AuthenticationContext,
     Path(instance_id): Path<String>,
-    payload: Option<Json<serde_json::Value>>,
 ) -> impl IntoResponse {
+    log::info!("delete_instance: {} requesting deletion of instance {}", auth_context.description(), instance_id);
+    
     let mut datastore = state.lock().await;
-    
-    // Get the address of the authenticated user
-    let user_address = recovered.as_hex();
-    
-    // Check if this is a request from an admin node with an original user address
-    let effective_address = if datastore.network_state.is_admin_address(&user_address.clone()) {
-        // If it's an admin node, extract the original user address from the payload
-        if let Some(Json(p)) = &payload {
-            crate::auth::extract_original_user_address(p)
-                .unwrap_or_else(|| user_address.clone())
-        } else {
-            user_address.clone()
-        }
-    } else {
-        user_address.clone()
-    };
     
     // Check if the instance exists
     let existing_instance = datastore.instance_state.get_instance(instance_id.clone());
     if let Some(existing_instance) = existing_instance {
-        // Verify ownership unless the request is from an admin
-        if existing_instance.instance_owner.to_lowercase() != effective_address.to_lowercase() && 
-           !datastore.network_state.is_admin_address(&user_address) {
+        // Admin bypass: Admins can delete any instance
+        if auth_context.is_admin() {
+            log::info!("delete_instance: Admin {} deleting instance {}", 
+                       auth_context.description(), instance_id);
+            
+            // Create a copy for the response
+            let instance_copy = existing_instance.clone();
+            
+            // Delete the instance
+            let op = datastore.instance_state.remove_instance_local(instance_id.clone());
+            if let Err(e) = datastore.handle_instance_op(op).await {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "success": false,
+                        "error": format!("Failed to delete instance: {}", e),
+                        "access_level": "admin"
+                    })),
+                );
+            }
+            
             return (
-                StatusCode::FORBIDDEN,
+                StatusCode::OK,
                 Json(json!({
-                    "error": "You don't have permission to delete this instance"
+                    "success": true,
+                    "message": format!("Instance deleted successfully by admin {}", auth_context.description()),
+                    "instance": instance_copy,
+                    "access_level": "admin",
+                    "deleted_by": auth_context.description()
                 })),
             );
         }
-        
-        // Delete the instance
-        let op = datastore.instance_state.remove_instance_local(instance_id.clone());
-        if let Err(e) = datastore.handle_instance_op(op).await {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "error": format!("Failed to delete instance: {}", e)
-                })),
-            );
+
+        // Normal user access: can only delete instances they own
+        match auth_context {
+            AuthenticationContext::User { address, .. } => {
+                let authenticated_address = address.as_hex();
+                
+                // Verify ownership
+                if existing_instance.instance_owner.to_lowercase() != authenticated_address.to_lowercase() {
+                    log::warn!("delete_instance: User {} does not own instance {} and is not admin. Delete denied.", 
+                             authenticated_address, instance_id);
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(json!({
+                            "success": false,
+                            "error": "You don't have permission to delete this instance",
+                            "authenticated_as": authenticated_address,
+                            "instance_owner": existing_instance.instance_owner,
+                            "access_level": "user"
+                        })),
+                    );
+                }
+                
+                log::info!("delete_instance: User {} owns instance {}. Delete granted.", authenticated_address, instance_id);
+                
+                // Create a copy for the response
+                let instance_copy = existing_instance.clone();
+                
+                // Delete the instance
+                let op = datastore.instance_state.remove_instance_local(instance_id.clone());
+                if let Err(e) = datastore.handle_instance_op(op).await {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({
+                            "success": false,
+                            "error": format!("Failed to delete instance: {}", e),
+                            "access_level": "user"
+                        })),
+                    );
+                }
+                
+                return (
+                    StatusCode::OK,
+                    Json(json!({
+                        "success": true,
+                        "message": "Instance deleted successfully",
+                        "instance": instance_copy,
+                        "access_level": "user"
+                    })),
+                );
+            }
+            _ => {
+                // This shouldn't happen since middleware should handle authentication
+                log::error!("delete_instance: Unexpected authentication context: {:?}", auth_context);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "success": false,
+                        "error": "Internal authentication error"
+                    })),
+                );
+            }
         }
-        
-        (
-            StatusCode::OK,
-            Json(json!({
-                "status": "success",
-                "message": "Instance deleted successfully"
-            })),
-        )
     } else {
-        (
+        return (
             StatusCode::NOT_FOUND,
             Json(json!({
+                "success": false,
                 "error": "Instance not found"
             })),
-        )
+        );
     }
 }
 
+/// List instances with admin bypass logic
+/// 
+/// Sub-sub-task 3.5.3.1: Add admin bypass logic to instance management handlers
+/// Sub-sub-task 3.5.3.2: Implement admin context extraction for instance operations
 pub async fn list_instances(
     State(state): State<Arc<Mutex<DataStore>>>,
-    recovered: RecoveredAddress,
+    auth_context: AuthenticationContext,
 ) -> impl IntoResponse {
-    log::info!("Received list instances request");
-    
-    // Get the authenticated user's address
-    let authenticated_address = recovered.as_hex();
+    log::info!("list_instances: Request from {}", auth_context.description());
     
     let datastore = state.lock().await;
-    
-    // Check if the user is an admin
-    let is_admin = datastore.network_state.is_admin_address(&authenticated_address);
-    
-    // Get the account
-    let account = datastore.account_state.get_account(&authenticated_address);
     
     // Get all instances from the datastore
     let all_instances: Vec<Instance> = datastore.instance_state.map().iter().filter_map(|ctx| {
@@ -502,39 +677,73 @@ pub async fn list_instances(
         }
     }).collect();
     
-    // Filter the instances based on authorization
-    let filtered_instances: Vec<Instance> = all_instances
-        .into_iter()
-        .filter(|instance| {
-            // Admins can see all instances
-            if is_admin {
-                return true;
-            }
+    // Admin bypass: Admins can see all instances
+    if auth_context.is_admin() {
+        log::info!("list_instances: Admin access by {}. Listing all instances.", auth_context.description());
+        return (
+            StatusCode::OK,
+            Json(json!({
+                "success": true,
+                "message": format!("Retrieved all instances (admin access by {})", auth_context.description()),
+                "count": all_instances.len(),
+                "instances": all_instances,
+                "access_level": "admin"
+            }))
+        );
+    }
+
+    // Normal user access: filter instances based on authorization
+    match auth_context {
+        AuthenticationContext::User { address, .. } => {
+            let authenticated_address = address.as_hex();
             
-            // For regular users, check if they have access
-            if let Some(acc) = &account {
-                // Include instances the user owns
-                if acc.owned_instances.contains(&instance.instance_id) {
-                    return true;
-                }
-                
-                // Include instances the user has authorization for
-                if acc.get_authorization_level(&instance.instance_id).is_some() {
-                    return true;
-                }
-            }
+            // Get the account
+            let account = datastore.account_state.get_account(&authenticated_address);
             
-            // Otherwise, the user can't see this instance
-            false
-        })
-        .collect();
-    
-    return (
-        StatusCode::OK,
-        Json(json!({
-            "success": true,
-            "count": filtered_instances.len(),
-            "instances": filtered_instances
-        }))
-    );
+            // Filter the instances based on authorization
+            let filtered_instances: Vec<Instance> = all_instances
+                .into_iter()
+                .filter(|instance| {
+                    // For regular users, check if they have access
+                    if let Some(acc) = &account {
+                        // Include instances the user owns
+                        if acc.owned_instances.contains(&instance.instance_id) {
+                            return true;
+                        }
+                        
+                        // Include instances the user has authorization for
+                        if acc.get_authorization_level(&instance.instance_id).is_some() {
+                            return true;
+                        }
+                    }
+                    
+                    // Otherwise, the user can't see this instance
+                    false
+                })
+                .collect();
+            
+            log::info!("list_instances: User {} can access {} instances", authenticated_address, filtered_instances.len());
+            return (
+                StatusCode::OK,
+                Json(json!({
+                    "success": true,
+                    "message": "Retrieved your accessible instances",
+                    "count": filtered_instances.len(),
+                    "instances": filtered_instances,
+                    "access_level": "user"
+                }))
+            );
+        }
+        _ => {
+            // This shouldn't happen since middleware should handle authentication
+            log::error!("list_instances: Unexpected authentication context: {:?}", auth_context);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "success": false,
+                    "error": "Internal authentication error"
+                }))
+            );
+        }
+    }
 }

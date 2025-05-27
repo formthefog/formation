@@ -25,6 +25,12 @@ pub struct OperatorConfig {
     pub address: Option<String>,
     #[clap(long="initial-admin-public-key", help="Public key (hex) of the initial system administrator.")]
     pub initial_admin_public_key: Option<String>,
+    #[clap(long="admin-key", help="Single admin key (hex) for global administrative access")]
+    pub admin_key: Option<String>,
+    #[clap(long="admin-keys", help="Multiple admin keys (comma-separated hex) for global administrative access")]
+    pub admin_keys: Option<String>,
+    #[clap(long="admin-key-descriptions", help="Descriptions for admin keys (comma-separated, matching order of admin-keys)")]
+    pub admin_key_descriptions: Option<String>,
     #[clap(long="bootstrap-nodes", short='b', alias="to-dial")]
     pub bootstrap_nodes: Vec<String>,
     #[clap(long="bootstrap-domain", short='B', aliases=["domain"])]
@@ -526,6 +532,129 @@ mod prompts {
             Ok(Some(key))
         }
     }
+
+    pub fn admin_key_configuration(theme: &ColorfulTheme) -> Result<(Option<String>, Option<String>, Option<String>)> {
+        println!("\n{}", "Admin Key Configuration".bold().green());
+        println!("Configure admin keys for global administrative access to all Formation endpoints.");
+        println!("Admin keys bypass normal authentication and authorization checks.");
+        println!("{}", "⚠️  Admin keys provide FULL ACCESS to all system operations! ⚠️".bold().red());
+        
+        let configure_admin = Confirm::with_theme(theme)
+            .with_prompt("Would you like to configure admin keys?")
+            .default(false)
+            .interact()?;
+            
+        if !configure_admin {
+            return Ok((None, None, None));
+        }
+        
+        let options = vec![
+            "Single admin key",
+            "Multiple admin keys",
+            "Skip admin key configuration"
+        ];
+        
+        let selection = Select::with_theme(theme)
+            .with_prompt("How would you like to configure admin keys?")
+            .default(0)
+            .items(&options)
+            .interact()?;
+
+        match selection {
+            0 => {
+                // Single admin key
+                let admin_key: String = Input::with_theme(theme)
+                    .with_prompt("Enter admin key (hex format, with or without 0x prefix)")
+                    .interact_text()?;
+                
+                let description: String = Input::with_theme(theme)
+                    .with_prompt("Enter description for this admin key (optional)")
+                    .default("primary-admin".to_string())
+                    .allow_empty(true)
+                    .interact_text()?;
+                
+                // Normalize the key format (ensure 0x prefix)
+                let normalized_key = if admin_key.starts_with("0x") {
+                    admin_key
+                } else {
+                    format!("0x{}", admin_key)
+                };
+                
+                // Basic validation
+                if normalized_key.len() != 42 {
+                    println!("{}", "⚠️  Warning: Admin key should be 40 hex characters (42 with 0x prefix)".bold().yellow());
+                }
+                
+                let final_description = if description.is_empty() { None } else { Some(description) };
+                
+                println!("Admin key configured: {}", normalized_key.bright_green());
+                if let Some(desc) = &final_description {
+                    println!("Description: {}", desc.bright_blue());
+                }
+                
+                Ok((Some(normalized_key), None, final_description))
+            },
+            1 => {
+                // Multiple admin keys
+                let mut admin_keys = Vec::new();
+                let mut descriptions = Vec::new();
+                
+                println!("Enter multiple admin keys (press Enter with empty input to finish):");
+                
+                loop {
+                    let key: String = Input::with_theme(theme)
+                        .with_prompt(&format!("Enter admin key #{} (hex format, empty to finish)", admin_keys.len() + 1))
+                        .allow_empty(true)
+                        .interact_text()?;
+                    
+                    if key.is_empty() {
+                        break;
+                    }
+                    
+                    // Normalize the key format
+                    let normalized_key = if key.starts_with("0x") {
+                        key
+                    } else {
+                        format!("0x{}", key)
+                    };
+                    
+                    // Basic validation
+                    if normalized_key.len() != 42 {
+                        println!("{}", "⚠️  Warning: Admin key should be 40 hex characters (42 with 0x prefix)".bold().yellow());
+                    }
+                    
+                    let description: String = Input::with_theme(theme)
+                        .with_prompt(&format!("Enter description for admin key #{} (optional)", admin_keys.len() + 1))
+                        .default(format!("admin-{}", admin_keys.len() + 1))
+                        .allow_empty(true)
+                        .interact_text()?;
+                    
+                    admin_keys.push(normalized_key);
+                    descriptions.push(if description.is_empty() { 
+                        format!("admin-{}", admin_keys.len()) 
+                    } else { 
+                        description 
+                    });
+                }
+                
+                if admin_keys.is_empty() {
+                    println!("No admin keys configured.");
+                    return Ok((None, None, None));
+                }
+                
+                println!("\n{} admin keys configured:", admin_keys.len());
+                for (i, (key, desc)) in admin_keys.iter().zip(descriptions.iter()).enumerate() {
+                    println!("  {}: {} ({})", i + 1, key.bright_green(), desc.bright_blue());
+                }
+                
+                let keys_str = admin_keys.join(",");
+                let descriptions_str = descriptions.join(",");
+                
+                Ok((None, Some(keys_str), Some(descriptions_str)))
+            },
+            _ => Ok((None, None, None))
+        }
+    }
 }
 
 // Main wizard function
@@ -560,6 +689,9 @@ pub fn run_config_wizard() -> Result<OperatorConfig> {
     let formnet_cidr = prompts::formnet_cidr(&theme)?;
     let initial_admin_public_key = prompts::initial_admin_public_key(&theme)?;
 
+    // Admin key configuration
+    let (admin_key, admin_keys, admin_key_descriptions) = prompts::admin_key_configuration(&theme)?;
+
     // Create the config
     let config = OperatorConfig {
         network_id,
@@ -569,6 +701,9 @@ pub fn run_config_wizard() -> Result<OperatorConfig> {
         public_key,
         address,
         initial_admin_public_key,
+        admin_key,
+        admin_keys,
+        admin_key_descriptions,
         bootstrap_nodes,
         bootstrap_domain,
         is_bootstrap_node,
