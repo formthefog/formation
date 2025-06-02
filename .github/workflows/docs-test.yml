@@ -1,0 +1,167 @@
+name: Documentation Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'docs/**'
+      - 'scripts/test-documentation.py'
+      - 'scripts/requirements-test.txt'
+      - '.github/workflows/docs-test.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'docs/**'
+      - 'scripts/test-documentation.py'
+      - 'scripts/requirements-test.txt'
+      - '.github/workflows/docs-test.yml'
+
+jobs:
+  test-documentation:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Set up Node.js (for JavaScript syntax checking)
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r scripts/requirements-test.txt
+        
+    - name: Install Node.js dependencies (for examples)
+      run: |
+        npm install -g ethers axios node-fetch
+        
+    - name: Run documentation tests
+      run: |
+        python scripts/test-documentation.py --verbose
+        
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: documentation-test-results
+        path: |
+          docs-test-results.json
+          docs-test-report.html
+        retention-days: 30
+
+  validate-links:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests beautifulsoup4
+        
+    - name: Check external links
+      run: |
+        python -c "
+        import requests
+        import re
+        from pathlib import Path
+        
+        def check_external_links():
+            docs_dir = Path('docs')
+            broken_links = []
+            
+            for md_file in docs_dir.rglob('*.md'):
+                with open(md_file, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                # Find all HTTP links
+                links = re.findall(r'\[([^\]]+)\]\((https?://[^)]+)\)', content)
+                
+                for text, url in links:
+                    # Skip known domains that might rate limit
+                    if any(domain in url for domain in ['github.com', 'discord.gg', 'formation.ai']):
+                        continue
+                        
+                    try:
+                        response = requests.head(url, timeout=10, allow_redirects=True)
+                        if response.status_code >= 400:
+                            broken_links.append(f'{md_file}: {url} (status: {response.status_code})')
+                    except Exception as e:
+                        broken_links.append(f'{md_file}: {url} (error: {str(e)})')
+            
+            if broken_links:
+                print('❌ Broken external links found:')
+                for link in broken_links:
+                    print(f'  {link}')
+                exit(1)
+            else:
+                print('✅ All external links are accessible')
+        
+        check_external_links()
+        "
+
+  check-formatting:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Check markdown formatting
+      run: |
+        # Check for common formatting issues
+        echo "🔍 Checking markdown formatting..."
+        
+        # Check for trailing whitespace
+        if grep -r "[ \t]$" docs/ --include="*.md"; then
+          echo "❌ Found trailing whitespace in markdown files"
+          exit 1
+        fi
+        
+        # Check for inconsistent heading styles
+        if grep -r "^#[^ ]" docs/ --include="*.md"; then
+          echo "❌ Found headings without space after #"
+          exit 1
+        fi
+        
+        # Check for missing blank lines before headings
+        python -c "
+        import re
+        from pathlib import Path
+        
+        issues = []
+        for md_file in Path('docs').rglob('*.md'):
+            with open(md_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            for i, line in enumerate(lines[1:], 1):
+                if line.startswith('#') and lines[i-1].strip() and not lines[i-1].startswith('#'):
+                    issues.append(f'{md_file}:{i+1}: Missing blank line before heading')
+        
+        if issues:
+            print('❌ Formatting issues found:')
+            for issue in issues[:10]:  # Show first 10
+                print(f'  {issue}')
+            if len(issues) > 10:
+                print(f'  ... and {len(issues) - 10} more issues')
+            exit(1)
+        else:
+            print('✅ Markdown formatting looks good')
+        "
+        
+        echo "✅ Markdown formatting checks passed" 

@@ -10,6 +10,97 @@ use tokio::sync::Mutex;
 use form_state::api::run;
 use std::env;
 
+/// Configuration for admin keys
+#[derive(Debug, Clone)]
+pub struct AdminConfig {
+    /// Whether admin authentication is enabled
+    pub enabled: bool,
+    /// Set of admin addresses that have global access
+    pub admin_addresses: std::collections::HashSet<Address>,
+    /// Optional descriptions for audit logging
+    pub admin_descriptions: Option<Vec<String>>,
+}
+
+impl AdminConfig {
+    /// Load admin configuration from environment variables
+    pub fn from_environment() -> Result<Self, Box<dyn std::error::Error>> {
+        // Check if admin authentication should be enabled
+        let enabled = env::var("FORMATION_ADMIN_ENABLED")
+            .unwrap_or_else(|_| "true".to_string())
+            .parse::<bool>()
+            .unwrap_or(true);
+        
+        if !enabled {
+            log::info!("Admin authentication disabled via FORMATION_ADMIN_ENABLED");
+            return Ok(AdminConfig {
+                enabled: false,
+                admin_addresses: std::collections::HashSet::new(),
+                admin_descriptions: None,
+            });
+        }
+        
+        // Try single admin key first
+        let admin_addresses = if let Ok(single_key) = env::var("FORMATION_ADMIN_KEY") {
+            vec![single_key]
+        } else if let Ok(multiple_keys) = env::var("FORMATION_ADMIN_KEYS") {
+            multiple_keys.split(',').map(|s| s.trim().to_string()).collect()
+        } else {
+            log::info!("No admin keys configured (FORMATION_ADMIN_KEY or FORMATION_ADMIN_KEYS not set)");
+            return Ok(AdminConfig {
+                enabled: false,
+                admin_addresses: std::collections::HashSet::new(),
+                admin_descriptions: None,
+            });
+        };
+        
+        // Parse addresses
+        let mut parsed_addresses = std::collections::HashSet::new();
+        for addr_str in admin_addresses {
+            let cleaned = addr_str.trim();
+            
+            // Handle both with and without 0x prefix
+            let addr_str = if cleaned.starts_with("0x") {
+                cleaned
+            } else {
+                &format!("0x{}", cleaned)
+            };
+            
+            let address = addr_str.parse::<Address>()
+                .map_err(|_| format!("Invalid admin address format: {}", addr_str))?;
+                
+            if !parsed_addresses.insert(address) {
+                return Err(format!("Duplicate admin address: {}", addr_str).into());
+            }
+        }
+        
+        // Parse optional descriptions
+        let admin_descriptions = env::var("FORMATION_ADMIN_KEY_DESCRIPTIONS")
+            .ok()
+            .map(|desc_str| {
+                desc_str.split(',').map(|s| s.trim().to_string()).collect::<Vec<_>>()
+            });
+        
+        let config = AdminConfig {
+            admin_addresses: parsed_addresses,
+            admin_descriptions,
+            enabled: true,
+        };
+        
+        log::info!("Admin configuration loaded: {} admin keys configured", config.admin_addresses.len());
+        
+        Ok(config)
+    }
+    
+    /// Create default configuration (no admin keys)
+    pub fn default() -> Self {
+        AdminConfig {
+            admin_addresses: std::collections::HashSet::new(),
+            admin_descriptions: None,
+            enabled: false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Parser)]
 pub struct Cli {
     #[clap(long="config-path", short='C', alias="config", default_value_os_t=PathBuf::from("/etc/formation/operator-config.json"))]
@@ -55,6 +146,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(_) => log::info!("Loaded environment from .env file"),
             Err(_) => log::debug!("No .env file found or failed to load it"),
         }
+    }
+
+    // Initialize admin configuration from environment
+    log::info!("Initializing admin configuration...");
+    let admin_config = AdminConfig::from_environment().unwrap_or_else(|e| {
+        log::warn!("Failed to load admin config: {}. Using default (no admin keys)", e);
+        AdminConfig::default()
+    });
+    
+    if admin_config.enabled {
+        log::info!("Admin authentication enabled with {} admin keys", admin_config.admin_addresses.len());
+        for (i, addr) in admin_config.admin_addresses.iter().enumerate() {
+            let description = admin_config.admin_descriptions
+                .as_ref()
+                .and_then(|descs| descs.get(i))
+                .map(|s| s.as_str())
+                .unwrap_or("unnamed");
+                
+            log::info!("  Admin key {}: 0x{} ({})", i + 1, hex::encode(addr.as_slice()), description);
+        }
+    } else {
+        log::info!("Admin authentication disabled");
     }
 
     // Configure JWT authentication environment variables

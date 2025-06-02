@@ -7,7 +7,7 @@ use serde::{Serialize, Deserialize};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde_json::json;
-use crate::auth::RecoveredAddress;
+use crate::auth::{RecoveredAddress, AuthenticationContext};
 use crate::model::AIModel;
 
 // Helper function to determine if an address belongs to an admin
@@ -18,52 +18,94 @@ fn is_admin_address(address: &str) -> bool {
     address.to_lowercase() == "0xadmin" || address.starts_with("0x000admin")
 }
 
+/// Create model with admin bypass logic
+/// 
+/// Sub-sub-task 3.5.4.1: Add admin bypass logic to agent/model handlers
+/// Sub-sub-task 3.5.4.2: Implement admin context extraction for agent/model operations
 pub async fn create_model(
     State(state): State<Arc<Mutex<DataStore>>>,
-    recovered: RecoveredAddress,
+    auth_context: AuthenticationContext,
     Json(payload): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    log::info!("create_model: Request from {}", auth_context.description());
     let mut datastore = state.lock().await;
-    
-    // Get the address of the authenticated user
-    let user_address = recovered.as_hex();
-    
-    // Check if this is a request from an admin node with an original user address
-    let effective_address = if datastore.network_state.is_admin_address(&user_address) {
-        // If it's an admin node, extract the original user address from the payload
-        crate::auth::extract_original_user_address(&payload)
-            .unwrap_or_else(|| user_address.clone())
-    } else {
-        // If it's a regular user, use their address
-        user_address
-    };
     
     // Parse the model data from the payload
     let model_data: Result<AIModel, serde_json::Error> = serde_json::from_value(payload.clone());
     
     match model_data {
         Ok(mut model) => {
-            // Ensure the model has the correct owner set to the authenticated user
-            model.owner_id = effective_address.to_lowercase();
-            
-            // Create and apply the model update
-            let op = datastore.model_state.update_model_local(model.clone());
-            if let Err(e) = datastore.handle_model_op(op).await {
+            // Admin bypass: Admins can create models for any owner
+            if auth_context.is_admin() {
+                log::info!("create_model: Admin {} creating model for owner {}", 
+                           auth_context.description(), model.owner_id);
+                
+                // Use the owner_id from payload for admin requests
+                model.owner_id = model.owner_id.clone();
+                
+                let op = datastore.model_state.update_model_local(model.clone());
+                if let Err(e) = datastore.handle_model_op(op).await {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({
+                            "error": format!("Failed to create model: {}", e),
+                            "access_level": "admin"
+                        })),
+                    );
+                }
+                
                 return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
+                    StatusCode::CREATED,
                     Json(json!({
-                        "error": format!("Failed to create model: {}", e)
+                        "status": "success",
+                        "model": model,
+                        "access_level": "admin",
+                        "created_by": auth_context.description()
                     })),
                 );
             }
-            
-            (
-                StatusCode::CREATED,
-                Json(json!({
-                    "status": "success",
-                    "model": model
-                })),
-            )
+
+            // Normal user access: can only create models with their own address as owner
+            match auth_context {
+                AuthenticationContext::User { address, .. } => {
+                    let authenticated_address = address.as_hex();
+                    
+                    // Force owner to be the authenticated user
+                    model.owner_id = authenticated_address.to_lowercase();
+                    
+                    log::info!("create_model: Creating model with owner ID: {}", authenticated_address);
+                    
+                    let op = datastore.model_state.update_model_local(model.clone());
+                    if let Err(e) = datastore.handle_model_op(op).await {
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(json!({
+                                "error": format!("Failed to create model: {}", e),
+                                "access_level": "user"
+                            })),
+                        );
+                    }
+                    
+                    return (
+                        StatusCode::CREATED,
+                        Json(json!({
+                            "status": "success",
+                            "model": model,
+                            "access_level": "user"
+                        })),
+                    );
+                }
+                _ => {
+                    // This shouldn't happen since middleware should handle authentication
+                    log::error!("create_model: Unexpected authentication context: {:?}", auth_context);
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({
+                            "error": "Internal authentication error"
+                        })),
+                    );
+                }
+            }
         },
         Err(e) => (
             StatusCode::BAD_REQUEST,
@@ -74,25 +116,17 @@ pub async fn create_model(
     }
 }
 
+/// Update model with admin bypass logic
+/// 
+/// Sub-sub-task 3.5.4.1: Add admin bypass logic to agent/model handlers
+/// Sub-sub-task 3.5.4.2: Implement admin context extraction for agent/model operations
 pub async fn update_model(
     State(state): State<Arc<Mutex<DataStore>>>,
-    recovered: RecoveredAddress,
+    auth_context: AuthenticationContext,
     Json(payload): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    log::info!("update_model: Request from {}", auth_context.description());
     let mut datastore = state.lock().await;
-    
-    // Get the address of the authenticated user
-    let user_address = recovered.as_hex();
-    
-    // Check if this is a request from an admin node with an original user address
-    let effective_address = if datastore.network_state.is_admin_address(&user_address.clone()) {
-        // If it's an admin node, extract the original user address from the payload
-        crate::auth::extract_original_user_address(&payload)
-            .unwrap_or_else(|| user_address.clone())
-    } else {
-        // If it's a regular user, use their address
-        user_address.clone()
-    };
     
     // Parse the model data from the payload
     let model_data: Result<AIModel, serde_json::Error> = serde_json::from_value(payload.clone());
@@ -102,35 +136,86 @@ pub async fn update_model(
             // Check if the model exists
             let existing_model = datastore.model_state.get_model(&model.model_id);
             if let Some(existing_model) = existing_model {
-                // Verify ownership unless the request is from an admin
-                if existing_model.owner_id.to_lowercase() != effective_address.to_lowercase() && 
-                   !datastore.network_state.is_admin_address(&user_address) {
+                // Admin bypass: Admins can update any model
+                if auth_context.is_admin() {
+                    log::info!("update_model: Admin {} updating model {}", 
+                               auth_context.description(), model.model_id);
+                    
+                    let op = datastore.model_state.update_model_local(model.clone());
+                    if let Err(e) = datastore.handle_model_op(op).await {
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(json!({
+                                "error": format!("Failed to update model: {}", e),
+                                "access_level": "admin"
+                            })),
+                        );
+                    }
+                    
                     return (
-                        StatusCode::FORBIDDEN,
+                        StatusCode::OK,
                         Json(json!({
-                            "error": "You don't have permission to update this model"
+                            "status": "success",
+                            "model": model,
+                            "access_level": "admin",
+                            "updated_by": auth_context.description()
                         })),
                     );
                 }
-                
-                // Create and apply the model update
-                let op = datastore.model_state.update_model_local(model.clone());
-                if let Err(e) = datastore.handle_model_op(op).await {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({
-                            "error": format!("Failed to update model: {}", e)
-                        })),
-                    );
+
+                // Normal user access: can only update models they own
+                match auth_context {
+                    AuthenticationContext::User { address, .. } => {
+                        let authenticated_address = address.as_hex();
+                        
+                        // Verify ownership
+                        if existing_model.owner_id.to_lowercase() != authenticated_address.to_lowercase() {
+                            log::warn!("update_model: User {} does not own model {} and is not admin. Update denied.", 
+                                     authenticated_address, model.model_id);
+                            return (
+                                StatusCode::FORBIDDEN,
+                                Json(json!({
+                                    "error": "You don't have permission to update this model",
+                                    "authenticated_as": authenticated_address,
+                                    "model_owner": existing_model.owner_id,
+                                    "access_level": "user"
+                                })),
+                            );
+                        }
+                        
+                        log::info!("update_model: User {} owns model {}. Update granted.", authenticated_address, model.model_id);
+                        
+                        let op = datastore.model_state.update_model_local(model.clone());
+                        if let Err(e) = datastore.handle_model_op(op).await {
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(json!({
+                                    "error": format!("Failed to update model: {}", e),
+                                    "access_level": "user"
+                                })),
+                            );
+                        }
+                        
+                        return (
+                            StatusCode::OK,
+                            Json(json!({
+                                "status": "success",
+                                "model": model,
+                                "access_level": "user"
+                            })),
+                        );
+                    }
+                    _ => {
+                        // This shouldn't happen since middleware should handle authentication
+                        log::error!("update_model: Unexpected authentication context: {:?}", auth_context);
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(json!({
+                                "error": "Internal authentication error"
+                            })),
+                        );
+                    }
                 }
-                
-                (
-                    StatusCode::OK,
-                    Json(json!({
-                        "status": "success",
-                        "model": model
-                    })),
-                )
             } else {
                 (
                     StatusCode::NOT_FOUND,
@@ -149,9 +234,13 @@ pub async fn update_model(
     }
 }
 
+/// Delete model with admin bypass logic
+/// 
+/// Sub-sub-task 3.5.4.1: Add admin bypass logic to agent/model handlers
+/// Sub-sub-task 3.5.4.2: Implement admin context extraction for agent/model operations
 pub async fn delete_model(
     State(state): State<Arc<Mutex<DataStore>>>,
-    recovered: RecoveredAddress,
+    auth_context: AuthenticationContext,
     Json(payload): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     // Extract the model ID from the payload
@@ -177,60 +266,109 @@ pub async fn delete_model(
         }
     };
     
+    log::info!("delete_model: {} requesting deletion of model {}", auth_context.description(), model_id);
     let mut datastore = state.lock().await;
-    
-    // Get the address of the authenticated user
-    let user_address = recovered.as_hex();
-    
-    // Check if this is a request from an admin node with an original user address
-    let effective_address = if datastore.network_state.is_admin_address(&user_address.clone()) {
-        // If it's an admin node, extract the original user address from the payload
-        crate::auth::extract_original_user_address(&payload)
-            .unwrap_or_else(|| user_address.clone())
-    } else {
-        // If it's a regular user, use their address
-        user_address.clone()
-    };
     
     // Check if the model exists
     let existing_model = datastore.model_state.get_model(&model_id.clone());
     if let Some(existing_model) = existing_model {
-        // Verify ownership unless the request is from an admin
-        if existing_model.owner_id.to_lowercase() != effective_address.to_lowercase() && 
-           !datastore.network_state.is_admin_address(&user_address) {
+        // Admin bypass: Admins can delete any model
+        if auth_context.is_admin() {
+            log::info!("delete_model: Admin {} deleting model {}", 
+                       auth_context.description(), model_id);
+            
+            // Create a copy for the response
+            let model_copy = existing_model.clone();
+            
+            // Delete the model
+            let op = datastore.model_state.remove_model_local(model_id.clone());
+            if let Err(e) = datastore.handle_model_op(op).await {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "error": format!("Failed to delete model: {}", e),
+                        "access_level": "admin"
+                    })),
+                );
+            }
+            
             return (
-                StatusCode::FORBIDDEN,
+                StatusCode::OK,
                 Json(json!({
-                    "error": "You don't have permission to delete this model"
+                    "status": "success",
+                    "message": format!("Model deleted successfully by admin {}", auth_context.description()),
+                    "model": model_copy,
+                    "access_level": "admin",
+                    "deleted_by": auth_context.description()
                 })),
             );
         }
-        
-        // Delete the model
-        let op = datastore.model_state.remove_model_local(model_id.clone());
-        if let Err(e) = datastore.handle_model_op(op).await {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "error": format!("Failed to delete model: {}", e)
-                })),
-            );
+
+        // Normal user access: can only delete models they own
+        match auth_context {
+            AuthenticationContext::User { address, .. } => {
+                let authenticated_address = address.as_hex();
+                
+                // Verify ownership
+                if existing_model.owner_id.to_lowercase() != authenticated_address.to_lowercase() {
+                    log::warn!("delete_model: User {} does not own model {} and is not admin. Delete denied.", 
+                             authenticated_address, model_id);
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(json!({
+                            "error": "You don't have permission to delete this model",
+                            "authenticated_as": authenticated_address,
+                            "model_owner": existing_model.owner_id,
+                            "access_level": "user"
+                        })),
+                    );
+                }
+                
+                log::info!("delete_model: User {} owns model {}. Delete granted.", authenticated_address, model_id);
+                
+                // Create a copy for the response
+                let model_copy = existing_model.clone();
+                
+                // Delete the model
+                let op = datastore.model_state.remove_model_local(model_id.clone());
+                if let Err(e) = datastore.handle_model_op(op).await {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({
+                            "error": format!("Failed to delete model: {}", e),
+                            "access_level": "user"
+                        })),
+                    );
+                }
+                
+                return (
+                    StatusCode::OK,
+                    Json(json!({
+                        "status": "success",
+                        "message": "Model deleted successfully",
+                        "model": model_copy,
+                        "access_level": "user"
+                    })),
+                );
+            }
+            _ => {
+                // This shouldn't happen since middleware should handle authentication
+                log::error!("delete_model: Unexpected authentication context: {:?}", auth_context);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "error": "Internal authentication error"
+                    })),
+                );
+            }
         }
-        
-        (
-            StatusCode::OK,
-            Json(json!({
-                "status": "success",
-                "message": "Model deleted successfully"
-            })),
-        )
     } else {
-        (
+        return (
             StatusCode::NOT_FOUND,
             Json(json!({
                 "error": "Model not found"
             })),
-        )
+        );
     }
 }
 
