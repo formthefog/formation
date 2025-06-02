@@ -1,6 +1,6 @@
 use crate::datastore::DataStore;
 use crate::agent::*;
-use crate::auth::RecoveredAddress;
+use crate::auth::{RecoveredAddress, AuthenticationContext};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use axum::{extract::{State, Path, ConnectInfo}, Json};
@@ -9,91 +9,111 @@ use serde_json::json;
 use axum::response::IntoResponse;
 use std::net::SocketAddr;
 
+/// Create agent with admin bypass logic
+/// 
+/// Sub-sub-task 3.5.4.1: Add admin bypass logic to agent/model handlers
+/// Sub-sub-task 3.5.4.2: Implement admin context extraction for agent/model operations
 pub async fn create_agent(
     State(state): State<Arc<Mutex<DataStore>>>,
-    recovered: Option<RecoveredAddress>,
-    ConnectInfo(connection_info): ConnectInfo<SocketAddr>,
+    auth_context: AuthenticationContext,
     Json(payload): Json<AIAgent>,
 ) -> impl IntoResponse {
-    log::info!("Received create agent request from {}", connection_info.to_string());
+    log::info!("create_agent: Request from {}", auth_context.description());
     let mut datastore = state.lock().await;
     
-    let remote_addr = connection_info.to_string();
-    let is_localhost = remote_addr.starts_with("127.0.0.1") || remote_addr.starts_with("::1");
-    log::info!("Is localhost: {}", is_localhost);
-    
-    // Check if this is a request from an admin node with an original user address
-    let effective_address = if is_localhost {
-        // If it's an admin node, extract the original user address from the payload
-        log::info!("Extracting original user address from payload");
-        payload.owner_id.clone()
-    } else {
-        // If it's a regular user, use their address
-        match recovered {
-            Some(address) => {
-                log::info!("Using recovered address: {}", address.as_hex());
-                address.as_hex()
-            },
-            None => {
-                log::error!("No recovered address found in create agent request");
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    Json(
-                        json!({
-                            "error": format!("Failed to create agent: requests from remote address must included a valid recovered address")
-                        })
-                    )
-                )
-            }
+    // Admin bypass: Admins can create agents for any owner
+    if auth_context.is_admin() {
+        log::info!("create_agent: Admin {} creating agent for owner {}", 
+                   auth_context.description(), payload.owner_id);
+        
+        let mut agent = payload.clone();
+        agent.owner_id = payload.owner_id.clone(); // Use the owner_id from payload for admin requests
+        
+        let op = datastore.agent_state.update_agent_local(agent.clone());
+        if let Err(e) = datastore.handle_agent_op(op).await {
+            log::error!("create_agent: Failed to create agent: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": format!("Failed to create agent: {}", e),
+                    "access_level": "admin"
+                })),
+            );
         }
-    };
-
-    log::info!("Effective address: {}", effective_address);
-
-    let mut agent = payload.clone();
-    agent.owner_id = effective_address.clone();
-
-    log::info!("Creating agent with owner ID: {}", effective_address);
-    
-    // Create and apply the agent update
-    let op = datastore.agent_state.update_agent_local(agent.clone());
-    if let Err(e) = datastore.handle_agent_op(op).await {
-        log::error!("Failed to create agent: {}", e);
+        
+        log::info!("create_agent: Agent created successfully by admin");
         return (
-            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::CREATED,
             Json(json!({
-                "error": format!("Failed to create agent: {}", e)
+                "status": "success",
+                "agent": agent,
+                "access_level": "admin",
+                "created_by": auth_context.description()
             })),
         );
     }
 
-    log::info!("Agent created successfully");
-
-    (
-        StatusCode::CREATED,
-        Json(json!({
-            "status": "success",
-            "agent": payload 
-        })),
-    )
+    // Normal user access: can only create agents with their own address as owner
+    match auth_context {
+        AuthenticationContext::User { address, .. } => {
+            let authenticated_address = address.as_hex();
+            
+            let mut agent = payload.clone();
+            agent.owner_id = authenticated_address.clone(); // Force owner to be the authenticated user
+            
+            log::info!("create_agent: Creating agent with owner ID: {}", authenticated_address);
+            
+            let op = datastore.agent_state.update_agent_local(agent.clone());
+            if let Err(e) = datastore.handle_agent_op(op).await {
+                log::error!("create_agent: Failed to create agent: {}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "error": format!("Failed to create agent: {}", e),
+                        "access_level": "user"
+                    })),
+                );
+            }
+            
+            log::info!("create_agent: Agent created successfully");
+            return (
+                StatusCode::CREATED,
+                Json(json!({
+                    "status": "success",
+                    "agent": agent,
+                    "access_level": "user"
+                })),
+            );
+        }
+        _ => {
+            // This shouldn't happen since middleware should handle authentication
+            log::error!("create_agent: Unexpected authentication context: {:?}", auth_context);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": "Internal authentication error"
+                })),
+            );
+        }
+    }
 }
 
+/// Update agent with admin bypass logic
+/// 
+/// Sub-sub-task 3.5.4.1: Add admin bypass logic to agent/model handlers
+/// Sub-sub-task 3.5.4.2: Implement admin context extraction for agent/model operations
 pub async fn update_agent(
     State(state): State<Arc<Mutex<DataStore>>>,
-    recovered: Option<RecoveredAddress>,
-    ConnectInfo(connection_info): ConnectInfo<SocketAddr>,
+    auth_context: AuthenticationContext,
     Json(payload): Json<AIAgent>,
 ) -> impl IntoResponse {
-    log::info!("Received update agent request for agent_id: {}", payload.agent_id);
+    log::info!("update_agent: Request from {} for agent_id: {}", auth_context.description(), payload.agent_id);
     let mut datastore = state.lock().await;
-    
-    let remote_addr = connection_info.to_string();
-    let is_localhost = remote_addr.starts_with("127.0.0.1") || remote_addr.starts_with("::1");
 
     let existing_agent = match datastore.agent_state.get_agent(&payload.agent_id) {
         Some(agent) => agent,
         None => {
-            log::warn!("Update attempt for non-existent agent_id: {}", payload.agent_id);
+            log::warn!("update_agent: Agent_id {} not found for update.", payload.agent_id);
             return (
                 StatusCode::NOT_FOUND,
                 Json(json!({
@@ -104,95 +124,122 @@ pub async fn update_agent(
         }
     };
 
-    let can_update = if is_localhost {
-        log::info!("Agent update from localhost for agent_id: {} - access granted.", payload.agent_id);
-        true
-    } else {
-        match recovered.as_ref() {
-            Some(auth_data) => {
-                let authenticated_address_hex = auth_data.as_hex();
-                let normalized_authenticated_address = authenticated_address_hex.to_lowercase();
-                let owner_id_normalized = existing_agent.owner_id.strip_prefix("0x").unwrap_or(&existing_agent.owner_id).to_lowercase();
-
-                if normalized_authenticated_address == owner_id_normalized {
-                    true
-                } else if datastore.network_state.is_admin_address(&authenticated_address_hex) {
-                    log::info!("Admin {} updating agent {}", authenticated_address_hex, payload.agent_id);
-                    true
-                } else {
-                    log::warn!("Unauthorized agent update: Auth as {} for agent {} owned by {}.", authenticated_address_hex, payload.agent_id, existing_agent.owner_id);
-                    false
-                }
-            }
-            None => {
-                log::warn!("Unauthorized agent update: No authentication data provided for non-localhost request for agent_id: {}.", payload.agent_id);
-                false
-            }
-        }
-    };
-
-    if !can_update {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "success": false,
-                "error": "You don't have permission to update this agent"
-            })),
-        );
-    }
-    
-    // Check if trying to change owner_id without proper rights
-    let mut attempting_owner_change = false;
-    if payload.owner_id.strip_prefix("0x").unwrap_or(&payload.owner_id).to_lowercase() != existing_agent.owner_id.strip_prefix("0x").unwrap_or(&existing_agent.owner_id).to_lowercase() {
-        attempting_owner_change = true;
-    }
-
-    if attempting_owner_change {
-        let mut can_change_owner = is_localhost;
-        if !can_change_owner {
-            if let Some(auth_data) = recovered.as_ref() {
-                if datastore.network_state.is_admin_address(&auth_data.as_hex()) {
-                    can_change_owner = true;
-                }
-            }
-        }
-        if !can_change_owner {
-            log::warn!("Attempt to change owner_id during agent update denied for agent_id: {}. Original owner: {}, Attempted: {}", payload.agent_id, existing_agent.owner_id, payload.owner_id);
+    // Admin bypass: Admins can update any agent
+    if auth_context.is_admin() {
+        log::info!("update_agent: Admin {} updating agent {}", 
+                   auth_context.description(), payload.agent_id);
+        
+        let agent_to_update = payload;
+        let op = datastore.agent_state.update_agent_local(agent_to_update.clone());
+        if let Err(e) = datastore.handle_agent_op(op).await {
+            log::error!("update_agent: Failed to update agent {}: {}", agent_to_update.agent_id, e);
             return (
-                StatusCode::FORBIDDEN,
+                StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
                     "success": false,
-                    "error": "Cannot change agent owner_id via update. Use transfer operation."
+                    "error": format!("Failed to update agent: {}", e),
+                    "access_level": "admin"
                 })),
             );
         }
-        log::info!("Authorized change of owner_id for agent {} by {} (is_localhost: {}).", payload.agent_id, recovered.as_ref().map_or_else(|| "localhost".to_string(), |r|r.as_hex()), is_localhost);
-    }
-
-    // Create and apply the agent update
-    let mut agent_to_update = payload; // payload is already AIAgent
-    // Ensure updated_at is set if your AIAgent struct has it and it's not auto-managed by BFTReg or similar
-    // agent_to_update.updated_at = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?.as_secs() as i64; 
-
-    let op = datastore.agent_state.update_agent_local(agent_to_update.clone());
-    if let Err(e) = datastore.handle_agent_op(op).await {
-        log::error!("Failed to update agent {}: {}", agent_to_update.agent_id, e);
+        
+        log::info!("update_agent: Agent {} updated successfully by admin.", agent_to_update.agent_id);
         return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "success": false,
-                "error": format!("Failed to update agent: {}", e)
-            })),
+            StatusCode::OK, 
+            Json(json!({ 
+                "success": true, 
+                "agent": agent_to_update,
+                "access_level": "admin",
+                "updated_by": auth_context.description()
+            }))
         );
     }
+
+    // Normal user access: can only update agents they own
+    match auth_context {
+        AuthenticationContext::User { address, .. } => {
+            let authenticated_address = address.as_hex();
+            let normalized_auth_address = authenticated_address.to_lowercase();
+            let normalized_agent_owner = existing_agent.owner_id.strip_prefix("0x").unwrap_or(&existing_agent.owner_id).to_lowercase();
             
-    (StatusCode::OK, Json(json!({ "success": true, "agent": agent_to_update })))
+            if normalized_auth_address != normalized_agent_owner {
+                log::warn!("update_agent: User {} does not own agent {} and is not admin. Update denied.", authenticated_address, payload.agent_id);
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({
+                        "success": false,
+                        "error": "You don't have permission to update this agent",
+                        "authenticated_as": authenticated_address,
+                        "agent_owner": existing_agent.owner_id,
+                        "access_level": "user"
+                    })),
+                );
+            }
+
+            // Prevent changing agent owner for normal users
+            let normalized_payload_owner = payload.owner_id.strip_prefix("0x").unwrap_or(&payload.owner_id).to_lowercase();
+            if normalized_payload_owner != normalized_agent_owner {
+                log::warn!(
+                    "update_agent: Attempt to change agent owner for {} from {} to {} by non-admin user {}. Denied.", 
+                    payload.agent_id, existing_agent.owner_id, payload.owner_id, authenticated_address
+                );
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({
+                        "success": false,
+                        "error": "Cannot change agent owner via this update. Use dedicated ownership transfer.",
+                        "access_level": "user"
+                    })),
+                );
+            }
+            
+            log::info!("update_agent: User {} owns agent {}. Access granted.", authenticated_address, payload.agent_id);
+            
+            let agent_to_update = payload;
+            let op = datastore.agent_state.update_agent_local(agent_to_update.clone());
+            if let Err(e) = datastore.handle_agent_op(op).await {
+                log::error!("update_agent: Failed to update agent {}: {}", agent_to_update.agent_id, e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "success": false,
+                        "error": format!("Failed to update agent: {}", e),
+                        "access_level": "user"
+                    })),
+                );
+            }
+            
+            log::info!("update_agent: Agent {} updated successfully.", agent_to_update.agent_id);
+            return (
+                StatusCode::OK, 
+                Json(json!({ 
+                    "success": true, 
+                    "agent": agent_to_update,
+                    "access_level": "user"
+                }))
+            );
+        }
+        _ => {
+            // This shouldn't happen since middleware should handle authentication
+            log::error!("update_agent: Unexpected authentication context: {:?}", auth_context);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "success": false,
+                    "error": "Internal authentication error"
+                })),
+            );
+        }
+    }
 }
 
-/// Delete an agent
+/// Delete agent with admin bypass logic
+/// 
+/// Sub-sub-task 3.5.4.1: Add admin bypass logic to agent/model handlers
+/// Sub-sub-task 3.5.4.2: Implement admin context extraction for agent/model operations
 pub async fn delete_agent(
     State(state): State<Arc<Mutex<DataStore>>>,
-    recovered: RecoveredAddress,
+    auth_context: AuthenticationContext,
     Json(payload): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     // Extract the agent ID from the payload
@@ -218,60 +265,109 @@ pub async fn delete_agent(
         }
     };
     
+    log::info!("delete_agent: {} requesting deletion of agent {}", auth_context.description(), agent_id);
     let mut datastore = state.lock().await;
-    
-    // Get the address of the authenticated user
-    let user_address = recovered.as_hex();
-    
-    // Check if this is a request from an admin node with an original user address
-    let effective_address = if datastore.network_state.is_admin_address(&user_address.clone()) {
-        // If it's an admin node, extract the original user address from the payload
-        crate::auth::extract_original_user_address(&payload)
-            .unwrap_or_else(|| user_address.clone())
-    } else {
-        // If it's a regular user, use their address
-        user_address.clone()
-    };
     
     // Check if the agent exists
     let existing_agent = datastore.agent_state.get_agent(&agent_id);
     if let Some(existing_agent) = existing_agent {
-        // Verify ownership unless the request is from an admin
-        if existing_agent.owner_id.to_lowercase() != effective_address.to_lowercase() && 
-           !datastore.network_state.is_admin_address(&user_address) {
+        // Admin bypass: Admins can delete any agent
+        if auth_context.is_admin() {
+            log::info!("delete_agent: Admin {} deleting agent {}", 
+                       auth_context.description(), agent_id);
+            
+            // Create a copy for the response
+            let agent_copy = existing_agent.clone();
+            
+            // Delete the agent
+            let op = datastore.agent_state.remove_agent_local(agent_id.clone());
+            if let Err(e) = datastore.handle_agent_op(op).await {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "error": format!("Failed to delete agent: {}", e),
+                        "access_level": "admin"
+                    })),
+                );
+            }
+            
             return (
-                StatusCode::FORBIDDEN,
+                StatusCode::OK,
                 Json(json!({
-                    "error": "You don't have permission to delete this agent"
+                    "status": "success",
+                    "message": format!("Agent deleted successfully by admin {}", auth_context.description()),
+                    "agent": agent_copy,
+                    "access_level": "admin",
+                    "deleted_by": auth_context.description()
                 })),
             );
         }
-        
-        // Delete the agent
-        let op = datastore.agent_state.remove_agent_local(agent_id.clone());
-        if let Err(e) = datastore.handle_agent_op(op).await {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "error": format!("Failed to delete agent: {}", e)
-                })),
-            );
+
+        // Normal user access: can only delete agents they own
+        match auth_context {
+            AuthenticationContext::User { address, .. } => {
+                let authenticated_address = address.as_hex();
+                
+                // Verify ownership
+                if existing_agent.owner_id.to_lowercase() != authenticated_address.to_lowercase() {
+                    log::warn!("delete_agent: User {} does not own agent {} and is not admin. Delete denied.", 
+                             authenticated_address, agent_id);
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(json!({
+                            "error": "You don't have permission to delete this agent",
+                            "authenticated_as": authenticated_address,
+                            "agent_owner": existing_agent.owner_id,
+                            "access_level": "user"
+                        })),
+                    );
+                }
+                
+                log::info!("delete_agent: User {} owns agent {}. Delete granted.", authenticated_address, agent_id);
+                
+                // Create a copy for the response
+                let agent_copy = existing_agent.clone();
+                
+                // Delete the agent
+                let op = datastore.agent_state.remove_agent_local(agent_id.clone());
+                if let Err(e) = datastore.handle_agent_op(op).await {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({
+                            "error": format!("Failed to delete agent: {}", e),
+                            "access_level": "user"
+                        })),
+                    );
+                }
+                
+                return (
+                    StatusCode::OK,
+                    Json(json!({
+                        "status": "success",
+                        "message": "Agent deleted successfully",
+                        "agent": agent_copy,
+                        "access_level": "user"
+                    })),
+                );
+            }
+            _ => {
+                // This shouldn't happen since middleware should handle authentication
+                log::error!("delete_agent: Unexpected authentication context: {:?}", auth_context);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "error": "Internal authentication error"
+                    })),
+                );
+            }
         }
-        
-        (
-            StatusCode::OK,
-            Json(json!({
-                "status": "success",
-                "message": "Agent deleted successfully"
-            })),
-        )
     } else {
-        (
+        return (
             StatusCode::NOT_FOUND,
             Json(json!({
                 "error": "Agent not found"
             })),
-        )
+        );
     }
 }
 
