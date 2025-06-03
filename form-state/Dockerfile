@@ -23,7 +23,7 @@ COPY ./form-state/.env.example /etc/formation/auth/.env.example
 
 COPY ./scripts/run-form-state.sh /usr/local/bin/run-form-state.sh
 
-RUN chmod +x /usr/local/bin/run-form-state.sh 
+RUN chmod +x /usr/local/bin/run-form-state.sh
 
 # Expose API port
 EXPOSE 3004
@@ -33,4 +33,4 @@ ENV STATE_DB_PATH=/var/lib/formation/db/state.db \
     AUTH_MODE=production
 
 # Run the service
-CMD ["/usr/local/bin/run-form-state.sh"] 
+CMD ["/usr/local/bin/run-form-state.sh"]

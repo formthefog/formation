@@ -1,14 +1,14 @@
 use std::path::PathBuf;
 
 use alloy_primitives::Address;
-use form_state::datastore::{request_full_state, DataStore};
-use form_config::OperatorConfig;
 use clap::Parser;
+use form_config::OperatorConfig;
+use form_state::api::run;
+use form_state::datastore::{request_full_state, DataStore};
 use k256::ecdsa::SigningKey;
+use std::env;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use form_state::api::run;
-use std::env;
 
 /// Configuration for admin keys
 #[derive(Debug, Clone)]
@@ -105,12 +105,12 @@ impl AdminConfig {
 pub struct Cli {
     #[clap(long="config-path", short='C', alias="config", default_value_os_t=PathBuf::from("/etc/formation/operator-config.json"))]
     config_path: PathBuf,
-    #[clap(long, short, alias="bootstrap")]
+    #[clap(long, short, alias = "bootstrap")]
     to_dial: Vec<String>,
     #[clap(long, short)]
     secret_key: Option<String>,
-    #[clap(long, short, default_value="true")]
-    encrypted: bool, 
+    #[clap(long, short, default_value = "true")]
+    encrypted: bool,
     #[clap(long, short)]
     password: Option<String>,
     #[clap(long)]
@@ -119,7 +119,7 @@ pub struct Cli {
     jwt_issuer: Option<String>,
     #[clap(long)]
     jwks_url: Option<String>,
-    #[clap(long, default_value="60")]
+    #[clap(long, default_value = "60")]
     jwt_leeway: Option<String>,
     #[clap(long)]
     env_file: Option<PathBuf>,
@@ -176,17 +176,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         log::info!("Setting JWT audience to: {}", audience);
         env::set_var("DYNAMIC_JWT_AUDIENCE", audience);
     }
-    
+
     if let Some(issuer) = &parser.jwt_issuer {
         log::info!("Setting JWT issuer to: {}", issuer);
         env::set_var("DYNAMIC_JWT_ISSUER", issuer);
     }
-    
+
     if let Some(jwks_url) = &parser.jwks_url {
         log::info!("Setting JWKS URL to: {}", jwks_url);
         env::set_var("DYNAMIC_JWKS_URL", jwks_url);
     }
-    
+
     if let Some(leeway) = &parser.jwt_leeway {
         log::info!("Setting JWT leeway to: {}", leeway);
         env::set_var("DYNAMIC_JWT_LEEWAY", leeway);
@@ -202,20 +202,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Log compilation mode
     #[cfg(feature = "devnet")]
     log::info!("Running in DEVNET mode (queue operations disabled)");
-    
+
     #[cfg(not(feature = "devnet"))]
     log::info!("Running in PRODUCTION mode (queue operations enabled)");
-    
-    let config = OperatorConfig::from_file(parser.config_path, parser.encrypted, parser.password.as_deref()).ok(); 
+
+    let config = OperatorConfig::from_file(
+        parser.config_path,
+        parser.encrypted,
+        parser.password.as_deref(),
+    )
+    .ok();
     let private_key = if let Some(pk) = &parser.secret_key {
         pk.clone()
     } else {
-        config.clone().unwrap().secret_key.ok_or(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Secret Key required")))?
+        config
+            .clone()
+            .unwrap()
+            .secret_key
+            .ok_or(Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Secret Key required",
+            )))?
     };
 
     log::info!("Acquired private key...");
 
-    let address = hex::encode(Address::from_private_key(&SigningKey::from_slice(&hex::decode(&private_key)?)?)); 
+    let address = hex::encode(Address::from_private_key(&SigningKey::from_slice(
+        &hex::decode(&private_key)?,
+    )?));
     let mut datastore = if parser.to_dial.is_empty() {
         if config.is_none() {
             let datastore = DataStore::new(address.clone(), private_key.clone());
@@ -223,7 +237,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else if config.clone().unwrap().bootstrap_nodes.is_empty() {
             let datastore = DataStore::new(address.clone(), private_key.clone());
             Some(datastore)
-        } else { 
+        } else {
             None
         }
     } else {
@@ -240,14 +254,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Ok(s) => {
                         state = Some(s);
                         break;
-                    } 
+                    }
                     Err(_) => {}
                 }
-            };
+            }
             let state = state.expect("Unable to acquire state from bootstrap nodes");
-            let ds = DataStore::new_from_state(
-                address.clone(), private_key.clone(), state
-            );
+            let ds = DataStore::new_from_state(address.clone(), private_key.clone(), state);
             datastore = Some(ds)
         } else if !config.is_none() && !config.clone().unwrap().bootstrap_nodes.is_empty() {
             let unwrapped_config = config.clone().unwrap();
@@ -259,14 +271,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Ok(s) => {
                         state = Some(s);
                         break;
-                    } 
+                    }
                     Err(_) => {}
                 }
-            };
+            }
             let state = state.expect("Unable to acquire staate from bootstrap nodes");
-            let ds = DataStore::new_from_state(
-                address.clone(), private_key.clone(), state
-            );
+            let ds = DataStore::new_from_state(address.clone(), private_key.clone(), state);
             datastore = Some(ds)
         } else {
             panic!("Something went terribly wrong trying to instantiate the Datastore");
@@ -274,20 +284,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     log::info!("Built data store, running...");
-    
-    let (tx, _rx) = tokio::sync::broadcast::channel(1024);
-    
+
+    let (tx, rx) = tokio::sync::broadcast::channel(1024);
+
+    // Create a shutdown signal handler
+    let shutdown_signal = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to listen for ctrl+c");
+        log::info!("Received shutdown signal");
+    };
+
     // Always run in full mode, devnet feature controls queue behavior
+    let datastore = Arc::new(Mutex::new(datastore.unwrap()));
     let handle = tokio::spawn(async move {
-        if let Err(e) = form_state::api::run_api(Arc::new(Mutex::new(datastore.unwrap()))).await {
+        if let Err(e) = form_state::api::run_api(datastore, rx).await {
             eprintln!("Error running datastore: {e}");
         }
     });
 
-    tokio::signal::ctrl_c().await?;
-    tx.send(())?;
+    // Wait for shutdown signal
+    shutdown_signal.await;
 
+    // Send shutdown signal to all components
+    tx.send(()).expect("Failed to send shutdown signal");
+
+    // Wait for the server to shut down gracefully
     handle.await?;
 
+    log::info!("Shutdown complete");
     Ok(())
 }

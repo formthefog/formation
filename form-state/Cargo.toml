@@ -21,7 +21,8 @@ path = "examples/ecdsa-auth-client.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"]}
-tokio = { version = "1", features = ["full"] } 
+fxhash = "0.2"
+tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 shared = { path = "../form-net/shared/" }
 serde_json = "1"
@@ -34,7 +35,7 @@ k256 = { version = "0.13.4", features = ["serde", "ecdsa"] }
 hex = "0.4"
 log = "0.4"
 simple_logger = "4.3"
-alloy-primitives = { version = "0.8", features = ["k256"] } 
+alloy-primitives = { version = "0.8", features = ["k256"] }
 rand = "0.8"
 form-config = { path = "../form-config" }
 trust-dns-proto = { version = "0.23", features = ["dnssec", "openssl", "ring", "serde-config"]}

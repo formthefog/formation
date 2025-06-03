@@ -1,16 +1,19 @@
-use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, CmRDT, Map, bft_reg::Update};
-use form_node_metrics::{capabilities::NodeCapabilities, capacity::NodeCapacity, metrics::NodeMetrics};
+use crate::Actor;
+use crdts::{bft_reg::Update, map::Op, merkle_reg::Sha3Hash, BFTReg, CmRDT, Map};
+use form_node_metrics::{
+    capabilities::NodeCapabilities, capacity::NodeCapacity, metrics::NodeMetrics,
+};
 use k256::ecdsa::SigningKey;
+use serde::{Deserialize, Serialize};
 use tiny_keccak::Hasher;
 use url::Host;
-use crate::Actor;
-use serde::{Serialize, Deserialize};
 
 pub type NodeOp = Op<String, BFTReg<Node, Actor>, Actor>;
+pub type NodeId = String;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Node {
-    pub node_id: String,
+    pub node_id: NodeId,
     pub node_owner: String,
     pub created_at: i64,
     pub updated_at: i64,
@@ -21,7 +24,7 @@ pub struct Node {
     pub metrics: NodeMetrics,
     pub metadata: NodeMetadata,
     pub host: Host,
-    pub operator_keys: Vec<String> // Array of operator keys that can authenticate this node
+    pub operator_keys: Vec<String>, // Array of operator keys that can authenticate this node
 }
 
 impl Default for Node {
@@ -39,7 +42,7 @@ impl Default for Node {
             metrics: Default::default(),
             metadata: Default::default(),
             host: Host::Domain(Default::default()),
-            operator_keys: Vec::new()
+            operator_keys: Vec::new(),
         }
     }
 }
@@ -92,17 +95,17 @@ impl Node {
     pub fn operator_keys(&self) -> &[String] {
         &self.operator_keys
     }
-    
+
     pub fn has_operator_key(&self, key: &str) -> bool {
         self.operator_keys.contains(&key.to_string())
     }
-    
+
     pub fn add_operator_key(&mut self, key: String) {
         if !self.operator_keys.contains(&key) {
             self.operator_keys.push(key);
         }
     }
-    
+
     pub fn remove_operator_key(&mut self, key: &str) {
         self.operator_keys.retain(|k| k != key);
     }
@@ -113,14 +116,14 @@ impl Node {
         if self.node_owner.to_lowercase() == address.to_lowercase() {
             return true;
         }
-        
+
         // Then check if the address is in operator_keys
         // This is a temporary solution that assumes operator keys might contain addresses
         // In a production environment, you might want a separate field for admin addresses
         if self.has_operator_key(address) {
             return true;
         }
-        
+
         false
     }
 }
@@ -155,10 +158,10 @@ impl NodeMetadata {
 /// Additional annotations, such as roles and datacenter info.
 #[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeAnnotations {
-    pub(crate) roles: Vec<String>,     // e.g. ["compute", "storage", "builder"]
-    pub(crate) datacenter: String,     // Which datacenter the node belongs to.
+    pub(crate) roles: Vec<String>, // e.g. ["compute", "storage", "builder"]
+    pub(crate) datacenter: String, // Which datacenter the node belongs to.
     pub(crate) vmm_service_api_endpoint: Option<String>, // e.g., "http://1.2.3.4:3002"
-    pub(crate) pack_service_api_endpoint: Option<String>,  // e.g., "http://1.2.3.4:3003"
+    pub(crate) pack_service_api_endpoint: Option<String>, // e.g., "http://1.2.3.4:3003"
 }
 
 impl NodeAnnotations {
@@ -225,15 +228,18 @@ impl NodeState {
         let add_ctx = self.map.read_ctx().derive_add_ctx(self.node_id.clone());
         log::info!("Decoding our private key...");
         let signing_key = SigningKey::from_slice(
-            &hex::decode(self.pk.clone())
-                .expect("Invalid SigningKey: Cannot decode from hex")
-        ).expect("Invalid SigningKey: Cannot recover from bytes");
+            &hex::decode(self.pk.clone()).expect("Invalid SigningKey: Cannot decode from hex"),
+        )
+        .expect("Invalid SigningKey: Cannot recover from bytes");
         log::info!("Creating node op...");
-        let op = self.map.update(node.node_id().to_string(), add_ctx, |reg, _ctx| {
-            let op = reg.update(node.into(), self.node_id.clone(), signing_key)
-                .expect("Unable to sign node update");
-            op
-        });
+        let op = self
+            .map
+            .update(node.node_id().to_string(), add_ctx, |reg, _ctx| {
+                let op = reg
+                    .update(node.into(), self.node_id.clone(), signing_key)
+                    .expect("Unable to sign node update");
+                op
+            });
         log::info!("Node op created, returning...");
         op
     }
@@ -243,33 +249,43 @@ impl NodeState {
             if let Some(node_val) = node_reg.val() {
                 let mut node = node_val.value();
                 node.last_heartbeat = timestamp;
-                return Some(self.update_node_local(node))
+                return Some(self.update_node_local(node));
             }
         }
 
         None
     }
 
-    pub fn update_node_metrics(&mut self, node_id: String, node_capacity: NodeCapacity, node_metrics: NodeMetrics) -> Option<NodeOp> {
+    pub fn update_node_metrics(
+        &mut self,
+        node_id: String,
+        node_capacity: NodeCapacity,
+        node_metrics: NodeMetrics,
+    ) -> Option<NodeOp> {
         if let Some(node_reg) = self.map.get(&node_id).val {
             if let Some(node_val) = node_reg.val() {
                 let mut node = node_val.value();
                 node.capacity = node_capacity;
                 node.metrics = node_metrics;
-                return Some(self.update_node_local(node))
+                return Some(self.update_node_local(node));
             }
         }
 
         None
     }
 
-    pub fn set_initial_node_capabilities(&mut self, node_id: String, node_capacity: NodeCapacity, node_capabilities: NodeCapabilities) -> Option<NodeOp> {
+    pub fn set_initial_node_capabilities(
+        &mut self,
+        node_id: String,
+        node_capacity: NodeCapacity,
+        node_capabilities: NodeCapabilities,
+    ) -> Option<NodeOp> {
         if let Some(node_reg) = self.map.get(&node_id).val {
             if let Some(node_val) = node_reg.val() {
                 let mut node = node_val.value();
                 node.capacity = node_capacity;
                 node.capabilities = node_capabilities;
-                return Some(self.update_node_local(node))
+                return Some(self.update_node_local(node));
             }
         }
         None
@@ -299,22 +315,22 @@ impl NodeState {
                 // If the in the updated register equals the value in the Op it
                 // succeeded
                 if v.value() == update.op().value {
-                    return (true, v.value()) 
+                    return (true, v.value());
                 // Otherwise, it could be that it's a concurrent update and was added
                 // to the DAG as a head
                 } else if reg.dag_contains(&update.hash()) && reg.is_head(&update.hash()) {
-                    return (true, v.value()) 
+                    return (true, v.value());
                 // Otherwise, we could be missing a child, and this particular update
                 // is orphaned, if so we should requst the child we are missing from
                 // the actor who shared this update
                 } else if reg.is_orphaned(&update.hash()) {
-                    return (true, v.value())
+                    return (true, v.value());
                 // Otherwise it was a no-op for some reason
                 } else {
-                    return (false, v.value()) 
+                    return (false, v.value());
                 }
             } else {
-                return (false, update.op().value) 
+                return (false, update.op().value);
             }
         } else {
             return (false, update.op().value);
@@ -333,10 +349,13 @@ impl NodeState {
 
     /// List all nodes.
     pub fn list_nodes(&self) -> Vec<Node> {
-        self.map.iter().filter_map(|entry| {
-            let (_key, val_reg) = entry.val; // Destructure the tuple from IterEntry.val
-            val_reg.val().map(|v_ctx| v_ctx.value()) 
-        }).collect()
+        self.map
+            .iter()
+            .filter_map(|entry| {
+                let (_key, val_reg) = entry.val; // Destructure the tuple from IterEntry.val
+                val_reg.val().map(|v_ctx| v_ctx.value())
+            })
+            .collect()
     }
 
     /// Add an operator key to a node
@@ -350,7 +369,7 @@ impl NodeState {
         }
         None
     }
-    
+
     /// Remove an operator key from a node
     pub fn remove_operator_key(&mut self, node_id: String, key: &str) -> Option<NodeOp> {
         if let Some(node_reg) = self.map.get(&node_id).val {
