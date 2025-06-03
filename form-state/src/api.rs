@@ -1,4 +1,3 @@
-use crate::auth::{active_node_auth_middleware, ecdsa_auth_middleware, RecoveredAddress};
 use crate::datastore::{full_state, pong, process_message, DataStore};
 use crate::helpers::{
     account::*, agent::*, agent_gateway::run_agent_task_handler, instances::*, model::*,
@@ -18,17 +17,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
-use axum::{
-    Router, 
-    routing::{post, get}, 
-    middleware, 
-    Json,
-    extract::{Path, State},
-    response::{Response, IntoResponse},
-    http::{Request, StatusCode},
-    body::Body,
-};
-use serde::{Serialize, Deserialize};
 use crate::helpers::{
     network::*, 
     nodes::*, 
@@ -36,7 +24,6 @@ use crate::helpers::{
     account::*, 
     agent::*, 
     model::*,
-    agent_gateway::run_agent_task_handler,
 };
 use crate::auth::{
     RecoveredAddress, ecdsa_auth_middleware, active_node_auth_middleware, global_admin_auth_middleware

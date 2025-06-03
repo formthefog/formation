@@ -1,4 +1,3 @@
-use crate::auth::RecoveredAddress;
 use crate::billing::UsageTracker;
 use crate::datastore::DataStore;
 use crate::model::{AIModel, ModelId};
@@ -15,13 +14,7 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use axum::{extract::{State, Path}, Json};
-use serde::{Serialize, Deserialize};
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
-use serde_json::json;
 use crate::auth::{RecoveredAddress, AuthenticationContext};
-use crate::model::AIModel;
 
 // Helper function to determine if an address belongs to an admin
 // This would ideally be replaced with a proper role-based system
@@ -46,26 +39,6 @@ pub async fn create_model(
 ) -> impl IntoResponse {
     log::info!("create_model: Request from {}", auth_context.description());
     let mut datastore = state.lock().await;
-    
-
-    // Get the address of the authenticated user
-    let user_address = match recovered {
-        Some(recovered) => recovered.as_hex(),
-        None => payload
-            .get("owner_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("0x0000000000000000000000000000000000000000")
-            .to_string(),
-    };
-
-    // Check if this is a request from an admin node with an original user address
-    let effective_address = if datastore.network_state.is_admin_address(&user_address) {
-        // If it's an admin node, extract the original user address from the payload
-        crate::auth::extract_original_user_address(&payload).unwrap_or_else(|| user_address.clone())
-    } else {
-        // If it's a regular user, use their address
-        user_address
-    };
 
     // Parse the model data from the payload
     let model_data: Result<AIModel, serde_json::Error> = serde_json::from_value(payload.clone());
@@ -164,25 +137,6 @@ pub async fn update_model(
 ) -> impl IntoResponse {
     log::info!("update_model: Request from {}", auth_context.description());
     let mut datastore = state.lock().await;
-
-    // Get the address of the authenticated user
-    let user_address = match recovered {
-        Some(recovered) => recovered.as_hex(),
-        None => payload
-            .get("owner_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("0x0000000000000000000000000000000000000000")
-            .to_string(),
-    };
-
-    // Check if this is a request from an admin node with an original user address
-    let effective_address = if datastore.network_state.is_admin_address(&user_address) {
-        // If it's an admin node, extract the original user address from the payload
-        crate::auth::extract_original_user_address(&payload).unwrap_or_else(|| user_address.clone())
-    } else {
-        // If it's a regular user, use their address
-        user_address
-    };
 
     // Parse the model data from the payload
     let model_data: Result<AIModel, serde_json::Error> = serde_json::from_value(payload.clone());
