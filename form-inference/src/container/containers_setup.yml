@@ -1,0 +1,56 @@
+- name: Deploy torch container cluster
+  hosts: distributed
+  become: true
+  vars:
+    primary_port: "29500"
+    num_nodes: 2
+    num_trainers: 8
+    docker_network_name: torch-net
+  tasks:
+    - name: Debug - Check the distributed group
+      debug:
+        var: groups['distributed']
+
+    - name: Debug - Check node index for this host
+      debug:
+        var: hostvars[inventory_hostname]['node_index']
+
+    - name: Set node-specific vars
+      set_fact:
+        node_rank: "{{ hostvars[inventory_hostname]['node_index'] }}"
+        node_addr: "{{ hostvars[inventory_hostname]['ansible_host'] }}"
+        # Use the first host in the distributed group (node_index=0)
+        primary_addr: "{{ hostvars[groups['distributed'][0]]['ansible_host'] }}"
+
+    - name: Set GLOO and NCCL socket interface dynamically
+      set_fact:
+        gloo_socket_ifname: "{{ ansible_default_ipv4.interface }}"
+        nccl_socket_ifname: "{{ ansible_default_ipv4.interface }}"
+
+    - name: Ensure workspace dir exists under user home
+      file:
+        path: "/home/{{ ansible_user }}/workspace"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+
+    - name: Create custom Docker network (if not exists)
+      shell: |
+        docker network inspect {{ docker_network_name }} >/dev/null 2>&1 || \
+        docker network create --driver bridge {{ docker_network_name }}
+      args:
+        executable: /bin/bash
+
+    - name: Copy docker-compose template
+      template:
+        src: docker-compose.yml.j2
+        dest: /home/{{ ansible_user }}/docker-compose.yml
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+
+    - name: Launch container
+      shell: sudo docker compose -f /home/{{ ansible_user }}/docker-compose.yml up -d
+      async: 60
+      poll: 0
+

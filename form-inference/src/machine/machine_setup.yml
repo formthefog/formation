@@ -1,0 +1,106 @@
+- name: Install Docker and NVIDIA Container Toolkit
+  hosts: distributed
+  become: true
+  tasks:
+    - name: Install dependencies
+      apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+        state: present
+        update_cache: true
+
+    - name: Add Docker GPG key
+      shell: |
+        sudo install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+        chmod a+r /etc/apt/keyrings/docker.asc
+
+    - name: Add Docker apt repository
+      shell: |
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+        $(. /etc/os-release && echo \"${UBUNTU_CODENAME:-$VERSION_CODENAME}\") stable" | \
+        sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+      become: true
+
+    - name: Update apt and install Docker
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: latest
+        update_cache: true
+
+    - name: Add NVIDIA GPG key
+      shell: |
+        curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+
+    - name: Add NVIDIA container toolkit repository
+      shell: |
+        curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+        sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+        tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+
+    - name: Install NVIDIA container toolkit
+      apt:
+        name: nvidia-container-toolkit
+        state: present
+        update_cache: true
+
+    - name: Configure NVIDIA runtime with nvidia-ctk
+      shell: |
+        nvidia-ctk runtime configure --runtime=docker
+
+    - name: Restart Docker
+      systemd:
+        name: docker
+        state: restarted
+        enabled: true
+
+    - name: Install NVIDIA driver
+      apt:
+        name: nvidia-driver-550
+        state: present
+        update_cache: true
+
+    - name: Download CUDA repository pin
+      get_url:
+        url: https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-ubuntu2204.pin
+        dest: /etc/apt/preferences.d/cuda-repository-pin-600
+        mode: '0644'
+
+    - name: Add NVIDIA CUDA GPG key
+      shell: |
+        curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/3bf863cc.pub | gpg --dearmor | sudo tee /etc/apt/keyrings/nvidia.gpg > /dev/null
+
+    - name: Add CUDA repository
+      shell: |
+        echo "deb [signed-by=/etc/apt/keyrings/nvidia.gpg] https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/ /" | sudo tee /etc/apt/sources.list.d/cuda.list
+
+    - name: Install CUDA toolkit
+      apt:
+        name: cuda-toolkit-12-4
+        state: present
+        update_cache: true
+
+    - name: Install NVIDIA Fabric Manager
+      apt:
+        name: nvidia-fabricmanager-550=550.144.03-1
+        state: present
+        update_cache: true
+
+    - name: Enable and start NVIDIA Fabric Manager
+      systemd:
+        name: nvidia-fabricmanager
+        state: started
+        enabled: true
+
+    - name: Reboot the system
+      reboot:
+        msg: "Reboot initiated by Ansible after NVIDIA driver and CUDA installation"
+        reboot_timeout: 3600
