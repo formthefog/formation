@@ -29,7 +29,7 @@ impl AdminConfig {
             .unwrap_or_else(|_| "true".to_string())
             .parse::<bool>()
             .unwrap_or(true);
-        
+
         if !enabled {
             log::info!("Admin authentication disabled via FORMATION_ADMIN_ENABLED");
             return Ok(AdminConfig {
@@ -38,59 +38,72 @@ impl AdminConfig {
                 admin_descriptions: None,
             });
         }
-        
+
         // Try single admin key first
         let admin_addresses = if let Ok(single_key) = env::var("FORMATION_ADMIN_KEY") {
             vec![single_key]
         } else if let Ok(multiple_keys) = env::var("FORMATION_ADMIN_KEYS") {
-            multiple_keys.split(',').map(|s| s.trim().to_string()).collect()
+            multiple_keys
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect()
         } else {
-            log::info!("No admin keys configured (FORMATION_ADMIN_KEY or FORMATION_ADMIN_KEYS not set)");
+            log::info!(
+                "No admin keys configured (FORMATION_ADMIN_KEY or FORMATION_ADMIN_KEYS not set)"
+            );
             return Ok(AdminConfig {
                 enabled: false,
                 admin_addresses: std::collections::HashSet::new(),
                 admin_descriptions: None,
             });
         };
-        
+
         // Parse addresses
         let mut parsed_addresses = std::collections::HashSet::new();
         for addr_str in admin_addresses {
             let cleaned = addr_str.trim();
-            
+
             // Handle both with and without 0x prefix
             let addr_str = if cleaned.starts_with("0x") {
                 cleaned
             } else {
                 &format!("0x{}", cleaned)
             };
-            
-            let address = addr_str.parse::<Address>()
+
+            let address = addr_str
+                .parse::<Address>()
                 .map_err(|_| format!("Invalid admin address format: {}", addr_str))?;
-                
+
             if !parsed_addresses.insert(address) {
                 return Err(format!("Duplicate admin address: {}", addr_str).into());
             }
         }
-        
+
         // Parse optional descriptions
-        let admin_descriptions = env::var("FORMATION_ADMIN_KEY_DESCRIPTIONS")
-            .ok()
-            .map(|desc_str| {
-                desc_str.split(',').map(|s| s.trim().to_string()).collect::<Vec<_>>()
-            });
-        
+        let admin_descriptions =
+            env::var("FORMATION_ADMIN_KEY_DESCRIPTIONS")
+                .ok()
+                .map(|desc_str| {
+                    desc_str
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .collect::<Vec<_>>()
+                });
+
         let config = AdminConfig {
             admin_addresses: parsed_addresses,
             admin_descriptions,
             enabled: true,
         };
-        
-        log::info!("Admin configuration loaded: {} admin keys configured", config.admin_addresses.len());
-        
+
+        log::info!(
+            "Admin configuration loaded: {} admin keys configured",
+            config.admin_addresses.len()
+        );
+
         Ok(config)
     }
-    
+
     /// Create default configuration (no admin keys)
     pub fn default() -> Self {
         AdminConfig {
@@ -151,20 +164,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize admin configuration from environment
     log::info!("Initializing admin configuration...");
     let admin_config = AdminConfig::from_environment().unwrap_or_else(|e| {
-        log::warn!("Failed to load admin config: {}. Using default (no admin keys)", e);
+        log::warn!(
+            "Failed to load admin config: {}. Using default (no admin keys)",
+            e
+        );
         AdminConfig::default()
     });
-    
+
     if admin_config.enabled {
-        log::info!("Admin authentication enabled with {} admin keys", admin_config.admin_addresses.len());
+        log::info!(
+            "Admin authentication enabled with {} admin keys",
+            admin_config.admin_addresses.len()
+        );
         for (i, addr) in admin_config.admin_addresses.iter().enumerate() {
-            let description = admin_config.admin_descriptions
+            let description = admin_config
+                .admin_descriptions
                 .as_ref()
                 .and_then(|descs| descs.get(i))
                 .map(|s| s.as_str())
                 .unwrap_or("unnamed");
-                
-            log::info!("  Admin key {}: 0x{} ({})", i + 1, hex::encode(addr.as_slice()), description);
+
+            log::info!(
+                "  Admin key {}: 0x{} ({})",
+                i + 1,
+                hex::encode(addr.as_slice()),
+                description
+            );
         }
     } else {
         log::info!("Admin authentication disabled");
@@ -206,12 +231,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(not(feature = "devnet"))]
     log::info!("Running in PRODUCTION mode (queue operations enabled)");
 
-    let config = OperatorConfig::from_file(
+    let config = match OperatorConfig::from_file(
         parser.config_path,
         parser.encrypted,
         parser.password.as_deref(),
-    )
-    .ok();
+    ) {
+        Ok(config) => Some(config),
+        Err(e) => {
+            if let None = parser.secret_key {
+                log::warn!(
+                    "No secret key provided and failed to load operator configuration: {}",
+                    e
+                );
+            }
+            None
+        }
+    };
     let private_key = if let Some(pk) = &parser.secret_key {
         pk.clone()
     } else {

@@ -382,10 +382,10 @@ impl ModelState {
 
     pub fn remove_node_from_model(
         &mut self,
-        model_id: ModelId,
+        model_id: &ModelId,
         node_id_to_remove: &NodeId,
     ) -> Option<ModelOp> {
-        if let Some(reg) = self.map.get(&model_id).val {
+        if let Some(reg) = self.map.get(model_id).val {
             if let Some(v) = reg.val() {
                 let mut model = v.value();
                 model

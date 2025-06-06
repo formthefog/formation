@@ -1,3 +1,4 @@
+use crate::auth::{global_admin_auth_middleware, RecoveredAddress};
 use crate::datastore::{full_state, pong, process_message, DataStore};
 use crate::helpers::{
     account::*, agent::*, agent_gateway::run_agent_task_handler, instances::*, model::*,
@@ -17,23 +18,10 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
-use crate::helpers::{
-    network::*, 
-    nodes::*, 
-    instances::*, 
-    account::*, 
-    agent::*, 
-    model::*,
-};
-use crate::auth::{
-    RecoveredAddress, ecdsa_auth_middleware, active_node_auth_middleware, global_admin_auth_middleware
-};
 
 use crate::billing::middleware::EligibilityError;
 use crate::tasks::{TaskId as FormStateTaskId, TaskStatus as FormStateTaskStatus};
-use form_node_metrics::{
-    capabilities::NodeCapabilities, capacity::NodeCapacity, metrics::NodeMetrics,
-};
+use form_node_metrics::{capacity::NodeCapacity, metrics::NodeMetrics};
 use hex;
 use serde_json::json;
 
@@ -94,8 +82,8 @@ async fn node_auth_middleware(
     let headers = req.headers().clone();
 
     // Extract signature parts and verify
-    use crate::auth::{extract_signature_parts, recover_address, SignatureError, is_admin_key};
-    
+    use crate::auth::{extract_signature_parts, is_admin_key, recover_address, SignatureError};
+
     // Extract and verify the signature
     let (signature_bytes, recovery_id, message) = match extract_signature_parts(&headers) {
         Ok(parts) => parts,
@@ -113,21 +101,29 @@ async fn node_auth_middleware(
     let address = match recover_address(&signature_bytes, recovery_id, &message) {
         Ok(addr) => addr,
         Err(_) => {
-            log::warn!("Node auth: Authentication failed - Could not recover address from signature");
+            log::warn!(
+                "Node auth: Authentication failed - Could not recover address from signature"
+            );
             return Err(StatusCode::UNAUTHORIZED);
         }
     };
 
     // Convert address to hex string
     let address_hex = hex::encode(address.as_slice());
-    log::debug!("Node auth: Recovered address from signature: 0x{}", address_hex);
-    
+    log::debug!(
+        "Node auth: Recovered address from signature: 0x{}",
+        address_hex
+    );
+
     // PRECEDENCE LEVEL 2: Admin key check (second precedence)
     if is_admin_key(&address) {
-        log::warn!("Node auth: ADMIN KEY ACCESS - Address 0x{} is a configured admin key", address_hex);
+        log::warn!(
+            "Node auth: ADMIN KEY ACCESS - Address 0x{} is a configured admin key",
+            address_hex
+        );
         return Ok(next.run(req).await);
     }
-        
+
     // PRECEDENCE LEVEL 3: Account-based admin check (third precedence)
     // Lock the datastore to check admin status
     let datastore = state.lock().await;
@@ -139,7 +135,10 @@ async fn node_auth_middleware(
         .map_or(false, |acc| acc.is_global_admin);
 
     if is_system_admin {
-        log::info!("Node auth: Account admin access - Address 0x{} is a global system admin", address_hex);
+        log::info!(
+            "Node auth: Account admin access - Address 0x{} is a global system admin",
+            address_hex
+        );
         Ok(next.run(req).await)
     } else {
         log::warn!("Node auth: Authentication failed - Address 0x{} is not a global system admin or admin key", address_hex);
@@ -275,9 +274,9 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/instance/list/metrics", get(list_instance_metrics))
         .route("/cluster/:build_id/metrics", get(get_cluster_metrics))
         .layer(middleware::from_fn(
-            crate::auth::global_admin_auth_middleware
+            crate::auth::global_admin_auth_middleware,
         ));
-    
+
     let network_writers_api = Router::new()
         .route("/user/create", post(create_user))
         .route("/user/update", post(update_user))
@@ -347,18 +346,24 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/account/create", post(create_account))
         .route("/account/update", post(update_account))
         .route("/account/delete", post(delete_account))
-        .route("/account/:address/is_global_admin", get(is_global_admin_handler))
-        .route("/account/transfer-ownership", post(transfer_instance_ownership))
+        .route(
+            "/account/:address/is_global_admin",
+            get(is_global_admin_handler),
+        )
+        .route(
+            "/account/transfer-ownership",
+            post(transfer_instance_ownership),
+        )
         .layer(middleware::from_fn(
-            crate::auth::global_admin_auth_middleware
+            crate::auth::global_admin_auth_middleware,
         ));
-    
+
     let admin_api = Router::new()
         .route("/admin/keys/list", get(list_admin_keys))
         .route("/admin/keys/add", post(add_admin_key))
         .route("/admin/keys/revoke", post(revoke_admin_key))
         .layer(middleware::from_fn(
-            crate::auth::global_admin_auth_middleware
+            crate::auth::global_admin_auth_middleware,
         ));
 
     let instance_api = Router::new()
@@ -367,10 +372,16 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/instance/:instance_id/delete", post(delete_instance))
         .route("/instance/list", get(list_instances))
         .route("/instance/:instance_id/get", get(get_instance))
-        .route("/instance/:build_id/get_by_build_id", get(get_instance_by_build_id))
-        .route("/instance/:build_id/get_instance_ips", get(get_instance_ips))
+        .route(
+            "/instance/:build_id/get_by_build_id",
+            get(get_instance_by_build_id),
+        )
+        .route(
+            "/instance/:build_id/get_instance_ips",
+            get(get_instance_ips),
+        )
         .layer(middleware::from_fn(
-            crate::auth::global_admin_auth_middleware
+            crate::auth::global_admin_auth_middleware,
         ));
 
     let api_routes = Router::new()
@@ -386,7 +397,7 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/models/:id/add_node", post(add_node_to_model))
         .route("/models/:id/remove_node", post(remove_node_from_model))
         .layer(middleware::from_fn(
-            crate::auth::global_admin_auth_middleware
+            crate::auth::global_admin_auth_middleware,
         ));
 
     let devnet_gossip_api = Router::new()
@@ -403,7 +414,7 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .merge(network_readers_api)
         .merge(account_api)
         .merge(admin_api)
-        .merge(instance_api)  
+        .merge(instance_api)
         .merge(api_routes)
         .nest("/devnet_gossip", devnet_gossip_api); // Devnet gossip is also under /v1
 
@@ -813,41 +824,53 @@ struct RevokeAdminKeyPayload {
 /// Sub-sub-task 3.4.2.1: Create endpoint to list current admin keys
 async fn list_admin_keys() -> impl IntoResponse {
     log::info!("Admin keys list requested");
-    
+
     // Check if admin authentication is enabled
     let admin_enabled = std::env::var("FORMATION_ADMIN_ENABLED")
         .unwrap_or_else(|_| "true".to_string())
         .parse::<bool>()
         .unwrap_or(true);
-    
+
     if !admin_enabled {
-        return (StatusCode::OK, Json(ListAdminKeysResponse {
-            admin_keys: vec![],
-            total_count: 0,
-            enabled: false,
-        }));
+        return (
+            StatusCode::OK,
+            Json(ListAdminKeysResponse {
+                admin_keys: vec![],
+                total_count: 0,
+                enabled: false,
+            }),
+        );
     }
-    
+
     // Get admin addresses from environment variables
     let admin_addresses = if let Ok(single_key) = std::env::var("FORMATION_ADMIN_KEY") {
         vec![single_key]
     } else if let Ok(multiple_keys) = std::env::var("FORMATION_ADMIN_KEYS") {
-        multiple_keys.split(',').map(|s| s.trim().to_string()).collect()
+        multiple_keys
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .collect()
     } else {
-        return (StatusCode::OK, Json(ListAdminKeysResponse {
-            admin_keys: vec![],
-            total_count: 0,
-            enabled: true,
-        }));
+        return (
+            StatusCode::OK,
+            Json(ListAdminKeysResponse {
+                admin_keys: vec![],
+                total_count: 0,
+                enabled: true,
+            }),
+        );
     };
-    
+
     // Get descriptions if available
     let descriptions = std::env::var("FORMATION_ADMIN_KEY_DESCRIPTIONS")
         .ok()
         .map(|desc_str| {
-            desc_str.split(',').map(|s| s.trim().to_string()).collect::<Vec<_>>()
+            desc_str
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect::<Vec<_>>()
         });
-    
+
     // Build response
     let mut admin_keys = Vec::new();
     for (i, addr_str) in admin_addresses.iter().enumerate() {
@@ -857,126 +880,150 @@ async fn list_admin_keys() -> impl IntoResponse {
         } else {
             format!("0x{}", cleaned)
         };
-        
-        let description = descriptions.as_ref()
+
+        let description = descriptions
+            .as_ref()
             .and_then(|descs| descs.get(i))
             .cloned();
-        
+
         admin_keys.push(AdminKeyInfo {
             address: normalized_addr,
             description,
             source: "environment".to_string(),
         });
     }
-    
+
     let response = ListAdminKeysResponse {
         total_count: admin_keys.len(),
         admin_keys,
         enabled: admin_enabled,
     };
-    
+
     log::info!("Listed {} admin keys", response.total_count);
     (StatusCode::OK, Json(response))
 }
 
 /// Add a new admin key (admin-only operation)
 /// Sub-sub-task 3.4.2.2: Create endpoint to add new admin keys (admin-only)
-async fn add_admin_key(
-    Json(payload): Json<AddAdminKeyPayload>,
-) -> impl IntoResponse {
+async fn add_admin_key(Json(payload): Json<AddAdminKeyPayload>) -> impl IntoResponse {
     log::info!("Admin key add requested for address: {}", payload.address);
-    
+
     // Validate the address format
     let normalized_addr = if payload.address.starts_with("0x") {
         payload.address.clone()
     } else {
         format!("0x{}", payload.address)
     };
-    
+
     // Basic validation
     if normalized_addr.len() != 42 {
         log::warn!("Invalid admin address format: {}", normalized_addr);
-        return (StatusCode::BAD_REQUEST, Json(json!({
-            "error": "Invalid address format",
-            "message": "Address must be 40 hex characters (42 with 0x prefix)"
-        })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "Invalid address format",
+                "message": "Address must be 40 hex characters (42 with 0x prefix)"
+            })),
+        );
     }
-    
+
     // Check if address is already an admin
     if let Ok(addr) = normalized_addr.parse::<alloy_primitives::Address>() {
         if crate::auth::is_admin_key(&addr) {
             log::warn!("Address {} is already an admin key", normalized_addr);
-            return (StatusCode::CONFLICT, Json(json!({
-                "error": "Address already admin",
-                "message": format!("Address {} is already configured as an admin key", normalized_addr)
-            })));
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": "Address already admin",
+                    "message": format!("Address {} is already configured as an admin key", normalized_addr)
+                })),
+            );
         }
     } else {
         log::warn!("Failed to parse admin address: {}", normalized_addr);
-        return (StatusCode::BAD_REQUEST, Json(json!({
-            "error": "Invalid address format",
-            "message": "Could not parse address"
-        })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "Invalid address format",
+                "message": "Could not parse address"
+            })),
+        );
     }
-    
+
     // Note: This endpoint currently only validates the request since admin keys are environment-based
     // In a future implementation, this would add the key to persistent storage
     log::warn!("Admin key addition requested but not implemented for runtime changes");
     log::warn!("Current implementation uses environment variables for admin key configuration");
-    log::warn!("To add admin key {}, update FORMATION_ADMIN_KEYS environment variable and restart service", normalized_addr);
-    
-    (StatusCode::NOT_IMPLEMENTED, Json(json!({
-        "error": "Runtime admin key management not implemented",
-        "message": "Admin keys are currently configured via environment variables. To add this key, update FORMATION_ADMIN_KEYS and restart the service.",
-        "requested_address": normalized_addr,
-        "requested_description": payload.description,
-        "instructions": "Set FORMATION_ADMIN_KEYS environment variable with comma-separated admin addresses"
-    })))
+    log::warn!(
+        "To add admin key {}, update FORMATION_ADMIN_KEYS environment variable and restart service",
+        normalized_addr
+    );
+
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(json!({
+            "error": "Runtime admin key management not implemented",
+            "message": "Admin keys are currently configured via environment variables. To add this key, update FORMATION_ADMIN_KEYS and restart the service.",
+            "requested_address": normalized_addr,
+            "requested_description": payload.description,
+            "instructions": "Set FORMATION_ADMIN_KEYS environment variable with comma-separated admin addresses"
+        })),
+    )
 }
 
 /// Revoke an admin key (admin-only operation)
 /// Sub-sub-task 3.4.2.3: Create endpoint to revoke admin keys (admin-only)
-async fn revoke_admin_key(
-    Json(payload): Json<RevokeAdminKeyPayload>,
-) -> impl IntoResponse {
-    log::info!("Admin key revocation requested for address: {}", payload.address);
-    
+async fn revoke_admin_key(Json(payload): Json<RevokeAdminKeyPayload>) -> impl IntoResponse {
+    log::info!(
+        "Admin key revocation requested for address: {}",
+        payload.address
+    );
+
     // Validate the address format
     let normalized_addr = if payload.address.starts_with("0x") {
         payload.address.clone()
     } else {
         format!("0x{}", payload.address)
     };
-    
+
     // Check if address is currently an admin
     if let Ok(addr) = normalized_addr.parse::<alloy_primitives::Address>() {
         if !crate::auth::is_admin_key(&addr) {
             log::warn!("Address {} is not currently an admin key", normalized_addr);
-            return (StatusCode::NOT_FOUND, Json(json!({
-                "error": "Address not admin",
-                "message": format!("Address {} is not currently configured as an admin key", normalized_addr)
-            })));
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "error": "Address not admin",
+                    "message": format!("Address {} is not currently configured as an admin key", normalized_addr)
+                })),
+            );
         }
     } else {
         log::warn!("Failed to parse admin address: {}", normalized_addr);
-        return (StatusCode::BAD_REQUEST, Json(json!({
-            "error": "Invalid address format",
-            "message": "Could not parse address"
-        })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "Invalid address format",
+                "message": "Could not parse address"
+            })),
+        );
     }
-    
+
     // Note: This endpoint currently only validates the request since admin keys are environment-based
     // In a future implementation, this would remove the key from persistent storage
     log::warn!("Admin key revocation requested but not implemented for runtime changes");
     log::warn!("Current implementation uses environment variables for admin key configuration");
     log::warn!("To revoke admin key {}, update FORMATION_ADMIN_KEYS environment variable and restart service", normalized_addr);
-    
-    (StatusCode::NOT_IMPLEMENTED, Json(json!({
-        "error": "Runtime admin key management not implemented",
-        "message": "Admin keys are currently configured via environment variables. To revoke this key, update FORMATION_ADMIN_KEYS and restart the service.",
-        "requested_address": normalized_addr,
-        "instructions": "Remove address from FORMATION_ADMIN_KEYS environment variable and restart service"
-    })))
+
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(json!({
+            "error": "Runtime admin key management not implemented",
+            "message": "Admin keys are currently configured via environment variables. To revoke this key, update FORMATION_ADMIN_KEYS and restart the service.",
+            "requested_address": normalized_addr,
+            "instructions": "Remove address from FORMATION_ADMIN_KEYS environment variable and restart service"
+        })),
+    )
 }
 
 async fn ensure_admin_account(
