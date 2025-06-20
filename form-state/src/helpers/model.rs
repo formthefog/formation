@@ -807,17 +807,14 @@ pub async fn delete_model(
 /// Get information about a specific AI model
 pub async fn get_model(
     State(state): State<Arc<Mutex<DataStore>>>,
-    recovered: RecoveredAddress,
+    auth_context: AuthenticationContext,
     Path(model_id): Path<String>,
 ) -> impl IntoResponse {
     log::info!(
         "User {} is requesting model {}",
-        recovered.as_hex(),
+        auth_context.description(),
         model_id
     );
-
-    // Get the authenticated user's address
-    let authenticated_address = recovered.as_hex();
 
     // Get the model from datastore
     let datastore = state.lock().await;
@@ -826,25 +823,21 @@ pub async fn get_model(
         Some(model) => {
             // Check authorization if the model is private
             if model.is_private {
-                // Check if user is the owner, has authorization, or is an admin
-                let account = datastore.account_state.get_account(&authenticated_address);
+                let is_authorized = match &auth_context {
+                    AuthenticationContext::Admin { .. } => { true },
+                    AuthenticationContext::Localhost { .. } => { true },
+                    AuthenticationContext::User { address, .. } => {
+                                    model.owner_id == address.as_hex()
 
-                // Determine if the user has access to this model
-                let is_authorized = match account {
-                    Some(account) => {
-                        // User is authorized if they own the model or are an admin
-                        account.owned_models.contains(&model_id)
-                            || is_admin_address(&authenticated_address)
-                            || model.owner_id == authenticated_address
                     }
-                    None => false,
+                    _ => { false },
                 };
 
                 if !is_authorized {
                     log::warn!(
                         "Unauthorized attempt to access private model: {} by {}",
                         model_id,
-                        authenticated_address
+                        auth_context.description()
                     );
                     return (
                         StatusCode::FORBIDDEN,
@@ -860,7 +853,7 @@ pub async fn get_model(
             log::info!(
                 "Model access: {} by account {}",
                 model_id,
-                recovered.as_hex()
+                auth_context.description()
             );
 
             // Return the model with 200 OK
@@ -888,27 +881,29 @@ pub async fn get_model(
 /// List all available models
 pub async fn list_model(
     State(state): State<Arc<Mutex<DataStore>>>,
-    recovered: Option<RecoveredAddress>,
+    auth_context: AuthenticationContext,
 ) -> impl IntoResponse {
     // Get the address of the authenticated user
-    let authenticated_address = match recovered {
-        Some(recovered) => recovered.as_hex(),
-        None => "127.0.0.1".to_string(),
-    };
     log::info!(
         "Account {} is requesting list of all models",
-        authenticated_address
+        auth_context.description()
     );
+
+    let is_allowed_all = match auth_context {
+        AuthenticationContext::Admin { .. } => true,
+        AuthenticationContext::Localhost { .. } => true,
+        _ => false,
+    };
 
     // Get all models from datastore
     let datastore = state.lock().await;
 
-    // Check if the user is an admin
-    let is_admin =
-        is_localhost_address(&authenticated_address) || is_admin_address(&authenticated_address);
-
     // Get the account
-    let account = datastore.account_state.get_account(&authenticated_address);
+    let account = if let AuthenticationContext::User { address, .. } = &auth_context {
+        datastore.account_state.get_account(&address.as_hex())
+    } else {
+        None
+    };
 
     // Get all models
     let all_models = datastore.model_state.list_models();
@@ -922,14 +917,16 @@ pub async fn list_model(
                 return true;
             }
 
-            // Admins can see all models
-            if is_admin {
+            // Admins and localhost can see all models
+            if is_allowed_all {
                 return true;
             }
 
             // Owner can see their own models
-            if model.owner_id == authenticated_address {
-                return true;
+            if let AuthenticationContext::User { address, .. } = &auth_context {
+                if model.owner_id == address.as_hex() {
+                    return true;
+                }
             }
 
             // Check if user has ownership in their account records
