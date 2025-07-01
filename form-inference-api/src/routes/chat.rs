@@ -9,7 +9,6 @@ use reqwest::Client;
 use uuid::Uuid;
 use serde_json;
 use tokio_stream::wrappers::ReceiverStream;
-use futures::stream::TryStreamExt;
 
 // Dummy types
 #[derive(Debug, Serialize, Deserialize)]
@@ -37,7 +36,7 @@ struct DeleteResponse {
     deleted: bool,
 }
 
-// Request types for chat completions
+// Request types for chat completions (streaming only)
 #[derive(Debug, Serialize, Deserialize)]
 struct ChatCompletionRequest {
     model: String,
@@ -46,8 +45,19 @@ struct ChatCompletionRequest {
     max_tokens: Option<u32>,
     #[serde(default)]
     temperature: Option<f32>,
+}
+
+// Forwarded request type (same as ChatCompletionRequest but with additional metadata)
+#[derive(Debug, Serialize, Deserialize)]
+struct ForwardedChatCompletionRequest {
+    model: String,
+    messages: Vec<ChatMessage>,
     #[serde(default)]
-    stream: Option<bool>,
+    max_tokens: Option<u32>,
+    #[serde(default)]
+    temperature: Option<f32>,
+    #[serde(default)]
+    forwarded_from: Option<String>, // Track forwarding chain
 }
 
 // Response types from form-state
@@ -65,6 +75,8 @@ struct FormStateNodeResponse {
 struct ModelInferenceRequest {
     text: String,
     sampling_params: SamplingParams,
+    stream: bool,
+    stop_at_limit: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -112,6 +124,7 @@ pub fn router() -> Router {
     Router::new()
         .route("/chat/completions", get(list_chat_completions))
         .route("/chat/completions", post(create_chat_completion))
+        .route("/forwarded/chat/completions", post(handle_forwarded_chat_completion))
         .route("/chat/completions/:completion_id", get(get_chat_completion))
         .route("/chat/completions/:completion_id", post(update_chat_completion))
         .route("/chat/completions/:completion_id", delete(delete_chat_completion))
@@ -137,6 +150,13 @@ fn extract_node_address(address: &serde_json::Value) -> Option<String> {
     }
 }
 
+// Helper function to get current node's IP address
+async fn get_current_node_ip() -> String {
+    // This is a simplified implementation - in production you'd want to get the actual IP
+    // For now, we'll use a placeholder that should be replaced with actual IP detection
+    "127.0.0.1".to_string()
+}
+
 // Handler functions with minimal implementations
 async fn list_chat_completions() -> Json<Vec<ChatCompletion>> {
     Json(vec![
@@ -157,19 +177,21 @@ async fn list_chat_completions() -> Json<Vec<ChatCompletion>> {
 }
 
 async fn create_chat_completion(Json(request): Json<ChatCompletionRequest>) -> Response {
-    // Check if streaming is requested
-    let should_stream = request.stream.unwrap_or(false);
-
-    if should_stream {
-        // Handle streaming response
-        handle_streaming_chat_completion(request).await
-    } else {
-        // Handle non-streaming response
-        handle_non_streaming_chat_completion(request).await
-    }
+    handle_streaming_chat_completion(request, None).await
 }
 
-async fn handle_non_streaming_chat_completion(request: ChatCompletionRequest) -> Response {
+async fn handle_forwarded_chat_completion(Json(request): Json<ForwardedChatCompletionRequest>) -> Response {
+    // Convert to regular ChatCompletionRequest
+    let chat_request = ChatCompletionRequest {
+        model: request.model,
+        messages: request.messages,
+        max_tokens: request.max_tokens,
+        temperature: request.temperature,
+    };
+    handle_streaming_chat_completion(chat_request, request.forwarded_from).await
+}
+
+async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwarded_from: Option<String>) -> Response {
     // Extract the model ID from the request
     let model_id = request.model.clone();
 
@@ -228,170 +250,26 @@ async fn handle_non_streaming_chat_completion(request: ChatCompletionRequest) ->
                         }
                     };
 
-                    // Build the inference URL based on the address type
-                    let inference_url = if node_address == "localhost" {
-                        format!("http://127.0.0.1:{}/generate", node_response.port)
-                    } else {
-                        // For remote nodes, use port 3006 as specified
-                        format!("http://{}:3006/generate", node_address)
-                    };
-
-                    let inference_request = ModelInferenceRequest {
-                        text: text.clone(),
-                        sampling_params: SamplingParams {
-                            max_new_tokens,
-                            temperature,
-                        },
-                    };
-
-                    match CLIENT
-                        .post(&inference_url)
-                        .header("Content-Type", "application/json")
-                        .json(&inference_request)
-                        .send()
-                        .await
-                    {
-                        Ok(inference_response) => {
-                            if !inference_response.status().is_success() {
-                                return (
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    Json(serde_json::json!({
-                                        "success": false,
-                                        "error": format!("Model inference failed with status: {} (URL: {})", inference_response.status(), inference_url)
-                                    }))
-                                ).into_response();
-                            }
-
-                            match inference_response.json::<ModelInferenceResponse>().await {
-                                Ok(inference_result) => {
-                                    // Create a chat completion response
-                                    let chat_completion = ChatCompletion {
-                                        id: format!("chatcmpl_{}", Uuid::new_v4().simple()),
-                                        model: model_id,
-                                        choices: vec![
-                                            ChatChoice {
-                                                index: 0,
-                                                message: ChatMessage {
-                                                    role: "assistant".to_string(),
-                                                    content: inference_result.text,
-                                                },
-                                            }
-                                        ],
-                                    };
-
-                                    (StatusCode::OK, Json(serde_json::json!(chat_completion))).into_response()
-                                }
-                                Err(e) => {
-                                    (
-                                        StatusCode::INTERNAL_SERVER_ERROR,
-                                        Json(serde_json::json!({
-                                            "success": false,
-                                            "error": format!("Failed to parse model inference response: {}", e)
-                                        }))
-                                    ).into_response()
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(serde_json::json!({
-                                    "success": false,
-                                    "error": format!("Failed to make inference request to {}: {}", inference_url, e)
-                                }))
-                            ).into_response()
-                        }
-                    }
-                }
-                Err(e) => {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({
-                            "success": false,
-                            "error": format!("Failed to parse form-state response: {}", e)
-                        }))
-                    ).into_response()
-                }
-            }
-        }
-        Err(e) => {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "success": false,
-                    "error": format!("Failed to fetch model node from form-state: {}", e)
-                }))
-            ).into_response()
-        }
-    }
-}
-
-async fn handle_streaming_chat_completion(request: ChatCompletionRequest) -> Response {
-    // Extract the model ID from the request
-    let model_id = request.model.clone();
-
-    // Get the last user message as the text for inference
-    let text = request.messages
-        .iter()
-        .filter(|msg| msg.role == "user")
-        .last()
-        .map(|msg| msg.content.clone())
-        .unwrap_or_else(|| "Hello".to_string());
-
-    // Get sampling parameters
-    let max_new_tokens = request.max_tokens.unwrap_or(100);
-    let temperature = request.temperature.unwrap_or(0.7);
-
-    // Call form-state to get the node for this model
-    match CLIENT
-        .get(&format!("http://localhost:3004/v1/models/{}/get_node", model_id))
-        .send()
-        .await
-    {
-        Ok(response) => {
-            if !response.status().is_success() {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({
-                        "success": false,
-                        "error": format!("Form-state API returned status: {}", response.status())
-                    }))
-                ).into_response();
-            }
-
-            match response.json::<FormStateNodeResponse>().await {
-                Ok(node_response) => {
-                    if !node_response.success {
-                        return (
-                            StatusCode::SERVICE_UNAVAILABLE,
-                            Json(serde_json::json!({
-                                "success": false,
-                                "error": "No nodes available for this model"
-                            }))
-                        ).into_response();
-                    }
-
-                    // Extract the node address
-                    let node_address = match extract_node_address(&node_response.address) {
-                        Some(addr) => addr,
-                        None => {
+                    // Check if this is a forwarded request and we're still not on localhost
+                    if let Some(from) = forwarded_from {
+                        if node_address != "localhost" {
                             return (
-                                StatusCode::INTERNAL_SERVER_ERROR,
+                                StatusCode::SERVICE_UNAVAILABLE,
                                 Json(serde_json::json!({
                                     "success": false,
-                                    "error": "Invalid node address format"
+                                    "error": format!("Model not available on this node (forwarded from {})", from)
                                 }))
                             ).into_response();
                         }
-                    };
+                    }
 
-                    // Build the inference URL based on the address type
-                    let inference_url = if node_address == "localhost" {
-                        format!("http://127.0.0.1:{}/generate", node_response.port)
-                    } else {
-                        // For remote nodes, use port 3006 as specified
-                        format!("http://{}:3006/generate", node_address)
-                    };
+                    // If the address is not localhost, forward to that node
+                    if node_address != "localhost" {
+                        return forward_streaming_request_to_node(request, &node_address).await;
+                    }
+
+                    // Build the inference URL for localhost
+                    let inference_url = format!("http://127.0.0.1:{}/generate", node_response.port);
 
                     let inference_request = ModelInferenceRequest {
                         text: text.clone(),
@@ -399,6 +277,8 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest) -> Res
                             max_new_tokens,
                             temperature,
                         },
+                        stream: true,
+                        stop_at_limit: false,
                     };
 
                     // For streaming, we'll make a regular request and simulate streaming
@@ -438,7 +318,7 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest) -> Res
                                         .map(|chunk| chunk.iter().collect())
                                         .collect();
 
-                                                                        let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, std::io::Error>>(100);
+                                    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, std::io::Error>>(100);
 
                                     // Spawn task to send streaming events
                                     tokio::spawn(async move {
@@ -550,6 +430,51 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest) -> Res
                 Json(serde_json::json!({
                     "success": false,
                     "error": format!("Failed to fetch model node from form-state: {}", e)
+                }))
+            ).into_response()
+        }
+    }
+}
+
+async fn forward_streaming_request_to_node(request: ChatCompletionRequest, target_node: &str) -> Response {
+    let current_node_ip = get_current_node_ip().await;
+
+    // Create forwarded request
+    let forwarded_request = ForwardedChatCompletionRequest {
+        model: request.model,
+        messages: request.messages,
+        max_tokens: request.max_tokens,
+        temperature: request.temperature,
+        forwarded_from: Some(current_node_ip),
+    };
+
+    // Forward to the target node's form-inference-api
+    let forward_url = format!("http://{}:3000/forwarded/chat/completions", target_node);
+
+    match CLIENT
+        .post(&forward_url)
+        .header("Content-Type", "application/json")
+        .json(&forwarded_request)
+        .send()
+        .await
+    {
+        Ok(response) => {
+            // For streaming responses, we need to handle them differently
+            // For now, we'll return an error indicating streaming forwarding is not fully implemented
+            (
+                StatusCode::NOT_IMPLEMENTED,
+                Json(serde_json::json!({
+                    "success": false,
+                    "error": "Streaming forwarding between nodes is not yet implemented"
+                }))
+            ).into_response()
+        }
+        Err(e) => {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "success": false,
+                    "error": format!("Failed to forward streaming request to {}: {}", target_node, e)
                 }))
             ).into_response()
         }
