@@ -49,6 +49,8 @@ pub struct OperatorConfig {
     pub formnet_cidr: Option<String>,
     #[clap(long="vmm-service-port", short='v', default_value="3002")]
     pub vmm_service_port: u16,
+    #[clap(long="form-inference-api-port", short='i', default_value="3006")]
+    pub form_inference_api_port: u16,
     #[clap(long="pack-manager-port", short='p', default_value="3003")]
     pub pack_manager_port: u16,
     #[clap(long="event-queue-port", short='e', aliases=["mempool-port", "event-pool-port", "mempool", "events"])]
@@ -71,7 +73,7 @@ impl OperatorConfig {
                         "If config file is encrypted, password is required"
                     )
                 )?
-            )?; 
+            )?;
         }
 
         return Ok(plain_config)
@@ -104,7 +106,7 @@ impl OperatorConfig {
             } else {
                 hex::encode(
                     derive_signing_key(
-                        &Mnemonic::<English>::new_from_phrase(&mnemonic.join(" "))?, 
+                        &Mnemonic::<English>::new_from_phrase(&mnemonic.join(" "))?,
                         Some(password)
                     )?.to_bytes()
                 )
@@ -120,7 +122,7 @@ impl OperatorConfig {
                 ).map_err(|e| anyhow!("{e}"))?
             );
             (None, Some(plain_sk))
-        };         
+        };
 
         Ok(self)
     }
@@ -179,7 +181,7 @@ mod keys {
             let mnemonic = generate_mnemonic(count);
             Self::from_mnemonic(mnemonic, password)
         }
-        
+
         pub fn from_private_key(key: SigningKey) -> Self {
             let public_key = derive_public_key(&key);
             let address = derive_address(&public_key);
@@ -230,19 +232,19 @@ mod prompts {
         println!("  2 = Jericho");
         println!("  3 = Uruk");
         println!("  >50000 = Local");
-        
+
         let network_id: u16 = Input::with_theme(theme)
             .with_prompt("Enter network ID")
             .default(5)
             .interact_text()?;
-        
+
         Ok(network_id)
     }
 
     pub fn keyfile(theme: &ColorfulTheme) -> Result<PathBuf> {
         println!("\n{}", "Keyfile Configuration".bold().green());
         println!("The keyfile stores your encrypted credentials.");
-        
+
         let default_path = default_keyfile_path();
         let use_default = Confirm::with_theme(theme)
             .with_prompt(format!("Use default keyfile path? ({})", default_path.display()))
@@ -262,14 +264,14 @@ mod prompts {
     pub fn key_setup(theme: &ColorfulTheme) -> Result<(Option<String>, Option<Vec<String>>, Option<String>, Option<String>)> {
         println!("\n{}", "Key Configuration".bold().green());
         println!("Your keys are used to sign transactions and prove your identity.");
-        
+
         let options = vec![
             "Generate new keys from mnemonic",
             "Import from existing mnemonic",
             "Import from private key",
             "Skip for now"
         ];
-        
+
         let selection = Select::with_theme(theme)
             .with_prompt("How would you like to configure your keys?")
             .default(0)
@@ -304,7 +306,7 @@ mod prompts {
                     };
                 // Generate new keys from mnemonic
                 let keyset = KeySet::random(password.as_deref(), count);
-                
+
                 println!("\n{}", "Generated New Keys:".bold().yellow());
                 print!("Mnemonic Phrase: ");
                 keyset.mnemonic.iter().for_each(|s| print!("{}, ", s.blue().bold()));
@@ -312,11 +314,11 @@ mod prompts {
                 println!("Address: {}{}", "0x".bright_green(), keyset.address.bright_green());
                 println!("\n{}", "⚠️  IMPORTANT ⚠️ ".bold().red());
                 println!("Please store your mnemonic phrase safely. It cannot be recovered if lost!");
-                
+
                 Confirm::with_theme(theme)
                     .with_prompt("I have safely stored my mnemonic phrase")
                     .interact()?;
-                
+
                 Ok((
                     Some(keyset.secret_key),
                     Some(keyset.mnemonic),
@@ -329,7 +331,7 @@ mod prompts {
                 let phrase: String = Input::with_theme(theme)
                     .with_prompt("Enter your mnemonic phrase")
                     .interact_text()?;
-                
+
                 let password = {
                     match Confirm::with_theme(theme)
                         .with_prompt("Did you provide a password for your mnemonic phrase?")
@@ -346,7 +348,7 @@ mod prompts {
                     };
                 let keyset = KeySet::from_mnemonic(Mnemonic::new_from_phrase(&phrase)?, password.as_deref());
                 println!("Derived address: 0x{}", keyset.address.bright_green());
-                
+
                 Ok((
                     Some(keyset.secret_key),
                     Some(keyset.mnemonic),
@@ -359,11 +361,11 @@ mod prompts {
                 let key: String = Input::with_theme(theme)
                     .with_prompt("Enter your private key (hex)")
                     .interact_text()?;
-                
+
                 let signing_key = SigningKey::from_slice(&hex::decode(key)?)?;
                 let keyset = KeySet::from_private_key(signing_key);
                 println!("Derived address: 0x{}", keyset.address.bright_green());
-                
+
                 Ok((
                     Some(keyset.secret_key),
                     None,
@@ -378,7 +380,7 @@ mod prompts {
     pub fn bootstrap_nodes(theme: &ColorfulTheme) -> Result<Vec<String>> {
         println!("\n{}", "Bootstrap Nodes Configuration".bold().green());
         println!("Bootstrap nodes help you connect to the network initially.");
-        
+
         let mut nodes = Vec::new();
         loop {
             let node: String = Input::with_theme(theme)
@@ -398,18 +400,18 @@ mod prompts {
     pub fn bootstrap_domain(theme: &ColorfulTheme) -> Result<Option<String>> {
         println!("\n{}", "Bootstrap Domain Configuration".bold().green());
         println!("A bootstrap domain allows you to connect to the nearest healthy bootstrap node automatically.");
-        
+
         let use_domain = Confirm::with_theme(theme)
             .with_prompt("Would you like to use a bootstrap domain for network discovery?")
             .default(true)
             .interact()?;
-            
+
         if use_domain {
             let domain: String = Input::with_theme(theme)
                 .with_prompt("Enter bootstrap domain")
                 .default("bootstrap.formation.cloud".to_string())
                 .interact_text()?;
-                
+
             if domain.is_empty() {
                 Ok(None)
             } else {
@@ -424,42 +426,42 @@ mod prompts {
         println!("\n{}", "Bootstrap Node Role".bold().green());
         println!("Bootstrap nodes help other nodes discover and join the network.");
         println!("They need to be reliable and have good connectivity.");
-        
+
         let is_bootstrap = Confirm::with_theme(theme)
             .with_prompt("Should this node serve as a bootstrap node?")
             .default(false)
             .interact()?;
-            
+
         if is_bootstrap {
             println!("{}", "This node will be registered as a bootstrap node in the network.".bold().yellow());
             println!("It will be added to the bootstrap domain and used by new nodes joining the network.");
         }
-        
+
         Ok(is_bootstrap)
     }
 
     pub fn region(theme: &ColorfulTheme) -> Result<Option<String>> {
         println!("\n{}", "Node Region Configuration".bold().green());
         println!("The geographic region helps optimize network connectivity.");
-        
+
         let regions = vec![
             "none",
-            "us-east", 
-            "us-west", 
+            "us-east",
+            "us-west",
             "us-central",
-            "eu-west", 
-            "eu-central", 
-            "asia-east", 
+            "eu-west",
+            "eu-central",
+            "asia-east",
             "asia-southeast",
             "custom"
         ];
-        
+
         let selection = Select::with_theme(theme)
             .with_prompt("Select the geographic region of this node")
             .default(0)
             .items(&regions)
             .interact()?;
-            
+
         match selection {
             0 => Ok(None),
             n if n == regions.len() - 1 => {
@@ -474,19 +476,19 @@ mod prompts {
 
     pub fn service_port(theme: &ColorfulTheme, service_name: &str, default_port: u16) -> Result<u16> {
         println!("\n{}", format!("{} Port Configuration", service_name).bold().green());
-        
+
         let port: u16 = Input::with_theme(theme)
             .with_prompt(format!("Enter {} port", service_name))
             .default(default_port)
             .interact_text()?;
-        
+
         Ok(port)
     }
 
     pub fn contract_address(theme: &ColorfulTheme) -> Result<Option<String>> {
         println!("\n{}", "Contract Configuration".bold().green());
         println!("Enter the staking contract address for your AVS.");
-        
+
         let address: String = Input::with_theme(theme)
             .with_prompt("Enter contract address (leave empty to skip)")
             .allow_empty(true)
@@ -499,7 +501,7 @@ mod prompts {
         println!("\n{}", "Formnet CIDR Configuration".bold().green());
         println!("Configure the IP address range for the internal Formnet VPN (e.g., 10.42.0.0/16).");
         println!("Ensure this does not conflict with existing networks in your environment.");
-        
+
         let cidr: String = Input::with_theme(theme)
             .with_prompt("Enter Formnet CIDR (e.g., 10.42.0.0/16, leave empty for none/default behavior elsewhere)")
             .default("10.42.0.0/16".to_string())
@@ -514,12 +516,12 @@ mod prompts {
             Ok(Some(cidr))
         }
     }
- 
+
     pub fn initial_admin_public_key(theme: &ColorfulTheme) -> Result<Option<String>> {
         println!("\n{}", "Initial Admin Public Key Configuration".bold().green());
         println!("Configure the public key (hex format) of the account that will be the initial system administrator.");
         println!("If left empty, the first node's own operator key might be designated as admin by default (behavior defined elsewhere).");
-        
+
         let key: String = Input::with_theme(theme)
             .with_prompt("Enter initial admin public key (hex, leave empty to skip/use default)")
             .allow_empty(true)
@@ -538,22 +540,22 @@ mod prompts {
         println!("Configure admin keys for global administrative access to all Formation endpoints.");
         println!("Admin keys bypass normal authentication and authorization checks.");
         println!("{}", "⚠️  Admin keys provide FULL ACCESS to all system operations! ⚠️".bold().red());
-        
+
         let configure_admin = Confirm::with_theme(theme)
             .with_prompt("Would you like to configure admin keys?")
             .default(false)
             .interact()?;
-            
+
         if !configure_admin {
             return Ok((None, None, None));
         }
-        
+
         let options = vec![
             "Single admin key",
             "Multiple admin keys",
             "Skip admin key configuration"
         ];
-        
+
         let selection = Select::with_theme(theme)
             .with_prompt("How would you like to configure admin keys?")
             .default(0)
@@ -566,90 +568,90 @@ mod prompts {
                 let admin_key: String = Input::with_theme(theme)
                     .with_prompt("Enter admin key (hex format, with or without 0x prefix)")
                     .interact_text()?;
-                
+
                 let description: String = Input::with_theme(theme)
                     .with_prompt("Enter description for this admin key (optional)")
                     .default("primary-admin".to_string())
                     .allow_empty(true)
                     .interact_text()?;
-                
+
                 // Normalize the key format (ensure 0x prefix)
                 let normalized_key = if admin_key.starts_with("0x") {
                     admin_key
                 } else {
                     format!("0x{}", admin_key)
                 };
-                
+
                 // Basic validation
                 if normalized_key.len() != 42 {
                     println!("{}", "⚠️  Warning: Admin key should be 40 hex characters (42 with 0x prefix)".bold().yellow());
                 }
-                
+
                 let final_description = if description.is_empty() { None } else { Some(description) };
-                
+
                 println!("Admin key configured: {}", normalized_key.bright_green());
                 if let Some(desc) = &final_description {
                     println!("Description: {}", desc.bright_blue());
                 }
-                
+
                 Ok((Some(normalized_key), None, final_description))
             },
             1 => {
                 // Multiple admin keys
                 let mut admin_keys = Vec::new();
                 let mut descriptions = Vec::new();
-                
+
                 println!("Enter multiple admin keys (press Enter with empty input to finish):");
-                
+
                 loop {
                     let key: String = Input::with_theme(theme)
                         .with_prompt(&format!("Enter admin key #{} (hex format, empty to finish)", admin_keys.len() + 1))
                         .allow_empty(true)
                         .interact_text()?;
-                    
+
                     if key.is_empty() {
                         break;
                     }
-                    
+
                     // Normalize the key format
                     let normalized_key = if key.starts_with("0x") {
                         key
                     } else {
                         format!("0x{}", key)
                     };
-                    
+
                     // Basic validation
                     if normalized_key.len() != 42 {
                         println!("{}", "⚠️  Warning: Admin key should be 40 hex characters (42 with 0x prefix)".bold().yellow());
                     }
-                    
+
                     let description: String = Input::with_theme(theme)
                         .with_prompt(&format!("Enter description for admin key #{} (optional)", admin_keys.len() + 1))
                         .default(format!("admin-{}", admin_keys.len() + 1))
                         .allow_empty(true)
                         .interact_text()?;
-                    
+
                     admin_keys.push(normalized_key);
-                    descriptions.push(if description.is_empty() { 
-                        format!("admin-{}", admin_keys.len()) 
-                    } else { 
-                        description 
+                    descriptions.push(if description.is_empty() {
+                        format!("admin-{}", admin_keys.len())
+                    } else {
+                        description
                     });
                 }
-                
+
                 if admin_keys.is_empty() {
                     println!("No admin keys configured.");
                     return Ok((None, None, None));
                 }
-                
+
                 println!("\n{} admin keys configured:", admin_keys.len());
                 for (i, (key, desc)) in admin_keys.iter().zip(descriptions.iter()).enumerate() {
                     println!("  {}: {} ({})", i + 1, key.bright_green(), desc.bright_blue());
                 }
-                
+
                 let keys_str = admin_keys.join(",");
                 let descriptions_str = descriptions.join(",");
-                
+
                 Ok((None, Some(keys_str), Some(descriptions_str)))
             },
             _ => Ok((None, None, None))
@@ -660,14 +662,14 @@ mod prompts {
 // Main wizard function
 pub fn run_config_wizard() -> Result<OperatorConfig> {
     let theme = ColorfulTheme::default();
-    
+
     println!("{}", "\nWelcome to the Operator Configuration Wizard".bold().blue());
     println!("This wizard will help you set up your operator configuration.\n");
 
     // Collect all configuration values
     let network_id = prompts::network_id(&theme)?;
     let keyfile = prompts::keyfile(&theme)?;
-    
+
     // Handle key generation/import
     let (secret_key, mnemonic, public_key, address) = prompts::key_setup(&theme)?;
 
@@ -676,15 +678,16 @@ pub fn run_config_wizard() -> Result<OperatorConfig> {
     let bootstrap_domain = prompts::bootstrap_domain(&theme)?;
     let is_bootstrap_node = prompts::bootstrap_role(&theme)?;
     let region = prompts::region(&theme)?;
-    
+
     // Service ports
     let datastore_port = prompts::service_port(&theme, "Datastore", 3004)?;
     let formnet_join_server_port = prompts::service_port(&theme, "Formnet Join Server", 3001)?;
     let formnet_service_port = prompts::service_port(&theme, "Formnet Service", 51820)?;
     let vmm_service_port = prompts::service_port(&theme, "VMM Service", 3002)?;
+    let form_inference_api_port = prompts::service_port(&theme, "Form Inference API", 3006)?;
     let pack_manager_port = prompts::service_port(&theme, "Pack Manager", 3003)?;
     let event_queue_port = prompts::service_port(&theme, "Event Queue", 3005)?;
-    
+
     let contract_address = prompts::contract_address(&theme)?;
     let formnet_cidr = prompts::formnet_cidr(&theme)?;
     let initial_admin_public_key = prompts::initial_admin_public_key(&theme)?;
@@ -712,6 +715,7 @@ pub fn run_config_wizard() -> Result<OperatorConfig> {
         formnet_join_server_port,
         formnet_service_port,
         vmm_service_port,
+        form_inference_api_port,
         pack_manager_port,
         event_queue_port,
         contract_address,
@@ -729,33 +733,33 @@ pub fn save_config_and_keystore(
 ) -> Result<()> {
     // Create a copy of the config that we'll save
     let mut safe_config = config.clone();
-    
+
     if encrypt_keys {
-        if let (Some(secret_key), Some(mnemonic), Some(address)) = 
+        if let (Some(secret_key), Some(mnemonic), Some(address)) =
             (&safe_config.secret_key, &safe_config.mnemonic, &safe_config.address) {
-            
+
             println!("\n{}", "Encrypting Keystore".bold().green());
             println!("Please choose a strong password to encrypt your keys.");
             println!("This password will be required to decrypt your keys later.");
             println!("{}", "⚠️  Encrypting the Keystore may take up to 2 minutes⚠️  ".bold().yellow());
-            
+
             let theme = ColorfulTheme::default();
             let password: String = Password::with_theme(&theme)
                 .with_prompt("Enter encryption password")
                 .with_confirmation("Confirm your password", "Entered password does not match")
                 .interact()?;
-            
+
             // Create and save the encrypted keystore
             let keystore = KeySet::from_mnemonic(
                 Mnemonic::<English>::new_from_phrase(&mnemonic.join(" "))?,
                 Some(&password),
             );
-            
+
             let keystore_path = safe_config.keyfile.clone();
             if let Some(parent) = keystore_path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            
+
             let keystore_json = serde_json::to_vec(&keystore)?;
             let encrypted_hex_mnemonic = keystore.mnemonic.iter().filter_map(|s| {
                 match encrypt_file(s.as_bytes(), &password) {
@@ -781,41 +785,41 @@ pub fn save_config_and_keystore(
             safe_config.address = Some(hex::encode(address));
             let encrypted = encrypt_file(&keystore_json, &password).map_err(|e| anyhow!(format!("Unable to encrypt file {e}")))?;
             std::fs::write(&keystore_path, encrypted)?;
-            
+
             println!("\n{}", "Keystore encrypted and saved successfully!".bold().green());
             println!("Location: {}", keystore_path.display());
         }
     }
-    
+
     // Remove sensitive data from config
-    
+
     // Save the redacted configuration
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    
+
     let config_str = serde_json::to_string_pretty(&safe_config)?;
     std::fs::write(config_path, config_str)?;
-    
+
     println!("\n{}", "Configuration saved successfully!".bold().green());
     println!("Location: {}", config_path.display());
-    
+
     Ok(())
 }
 
 pub fn load_keystore(keyfile: &PathBuf) -> Result<Vec<u8>> {
     let theme = ColorfulTheme::default();
-    
+
     // Read the keystore file
     let encrypted = std::fs::read(keyfile)?;
-    
+
     println!("\n{}", "Decrypting Keystore".bold().green());
     println!("Please enter your password to decrypt the keystore.");
-    
+
     let password: String = Input::with_theme(&theme)
         .with_prompt("Enter password")
         .interact_text()?;
-    
+
     let decrypted = decrypt_file(&encrypted, &password).map_err(|e| anyhow!(format!("Unable to decrypt file: {e}")))?;
     Ok(decrypted)
 }

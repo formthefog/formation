@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  form-inference-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3006:3006"  # Port will be overridden by config
+    volumes:
+      # Mount the operator config file
+      - ../form-config/secrets/.operator-config.json:/etc/formation/config/.operator-config.json:ro
+    environment:
+      # Override config path if needed
+      - CONFIG_PATH=/etc/formation/config/.operator-config.json
+    restart: unless-stopped
