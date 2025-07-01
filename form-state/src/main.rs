@@ -265,6 +265,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let address = hex::encode(Address::from_private_key(&SigningKey::from_slice(
         &hex::decode(&private_key)?,
     )?));
+
+    log::info!("Address: {address}");
     let mut datastore = if parser.to_dial.is_empty() {
         if config.is_none() {
             let datastore = DataStore::new(address.clone(), private_key.clone());
