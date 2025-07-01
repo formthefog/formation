@@ -9,6 +9,7 @@ use reqwest::Client;
 use uuid::Uuid;
 use serde_json;
 use tokio_stream::wrappers::ReceiverStream;
+use futures::stream::StreamExt;
 
 // Dummy types
 #[derive(Debug, Serialize, Deserialize)]
@@ -281,8 +282,7 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwar
                         stop_at_limit: false,
                     };
 
-                    // For streaming, we'll make a regular request and simulate streaming
-                    // In a real implementation, you'd want to check if the model service supports streaming
+                                        // Make streaming request to the model
                     match CLIENT
                         .post(&inference_url)
                         .header("Content-Type", "application/json")
@@ -301,106 +301,114 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwar
                                 ).into_response();
                             }
 
-                            match inference_response.json::<ModelInferenceResponse>().await {
-                                Ok(inference_result) => {
-                                    // Create streaming response
-                                    let completion_id = format!("chatcmpl_{}", Uuid::new_v4().simple());
-                                    let created = std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap()
-                                        .as_secs();
+                            // Handle streaming response from the model
+                            let completion_id = format!("chatcmpl_{}", Uuid::new_v4().simple());
+                            let created = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_secs();
 
-                                    // Split the response text into chunks for streaming
-                                    let text_chunks: Vec<String> = inference_result.text
-                                        .chars()
-                                        .collect::<Vec<char>>()
-                                        .chunks(10) // Stream in chunks of 10 characters
-                                        .map(|chunk| chunk.iter().collect())
-                                        .collect();
+                            let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, std::io::Error>>(100);
 
-                                    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, std::io::Error>>(100);
+                            // Spawn task to handle streaming from model
+                            tokio::spawn(async move {
+                                // Send initial event with role
+                                let initial_event = StreamingChatCompletion {
+                                    id: completion_id.clone(),
+                                    model: model_id.clone(),
+                                    choices: vec![
+                                        StreamingChatChoice {
+                                            index: 0,
+                                            delta: StreamingDelta {
+                                                role: Some("assistant".to_string()),
+                                                content: None,
+                                            },
+                                            finish_reason: None,
+                                        }
+                                    ],
+                                    created,
+                                    object: "chat.completion.chunk".to_string(),
+                                };
 
-                                    // Spawn task to send streaming events
-                                    tokio::spawn(async move {
-                                        // Send initial event with role
-                                        let initial_event = StreamingChatCompletion {
-                                            id: completion_id.clone(),
-                                            model: model_id.clone(),
-                                            choices: vec![
-                                                StreamingChatChoice {
-                                                    index: 0,
-                                                    delta: StreamingDelta {
-                                                        role: Some("assistant".to_string()),
-                                                        content: None,
-                                                    },
-                                                    finish_reason: None,
-                                                }
-                                            ],
-                                            created,
-                                            object: "chat.completion.chunk".to_string(),
-                                        };
+                                if let Ok(()) = tx.send(Ok(Event::default().json_data(initial_event).unwrap())).await {
+                                    // Stream the response from the model
+                                    let mut stream = inference_response.bytes_stream();
 
-                                        if let Ok(()) = tx.send(Ok(Event::default().json_data(initial_event).unwrap())).await {
-                                            // Send content chunks
-                                            for chunk in text_chunks {
-                                                let content_event = StreamingChatCompletion {
-                                                    id: completion_id.clone(),
-                                                    model: model_id.clone(),
-                                                    choices: vec![
-                                                        StreamingChatChoice {
-                                                            index: 0,
-                                                            delta: StreamingDelta {
-                                                                role: None,
-                                                                content: Some(chunk),
-                                                            },
-                                                            finish_reason: None,
+                                    while let Some(chunk_result) = stream.next().await {
+                                        match chunk_result {
+                                            Ok(chunk) => {
+                                                // Parse the chunk as SSE data
+                                                if let Ok(chunk_str) = String::from_utf8(chunk.to_vec()) {
+                                                    // Handle SSE format: "data: {...}\n\n"
+                                                    for line in chunk_str.lines() {
+                                                        if line.starts_with("data: ") {
+                                                            let data = &line[6..]; // Remove "data: " prefix
+                                                            if data != "[DONE]" {
+                                                                // Parse the JSON data from the model
+                                                                if let Ok(model_data) = serde_json::from_str::<serde_json::Value>(data) {
+                                                                    // Extract text from model response
+                                                                    if let Some(text) = model_data.get("text").and_then(|t| t.as_str()) {
+                                                                        let content_event = StreamingChatCompletion {
+                                                                            id: completion_id.clone(),
+                                                                            model: model_id.clone(),
+                                                                            choices: vec![
+                                                                                StreamingChatChoice {
+                                                                                    index: 0,
+                                                                                    delta: StreamingDelta {
+                                                                                        role: None,
+                                                                                        content: Some(text.to_string()),
+                                                                                    },
+                                                                                    finish_reason: None,
+                                                                                }
+                                                                            ],
+                                                                            created,
+                                                                            object: "chat.completion.chunk".to_string(),
+                                                                        };
+
+                                                                        if let Ok(()) = tx.send(Ok(Event::default().json_data(content_event).unwrap())).await {
+                                                                            // Small delay to simulate streaming
+                                                                            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                                                                        } else {
+                                                                            break;
+                                                                        }
+                                                                    }
+                                                                }
+                                                            } else {
+                                                                // Model finished
+                                                                let final_event = StreamingChatCompletion {
+                                                                    id: completion_id.clone(),
+                                                                    model: model_id.clone(),
+                                                                    choices: vec![
+                                                                        StreamingChatChoice {
+                                                                            index: 0,
+                                                                            delta: StreamingDelta {
+                                                                                role: None,
+                                                                                content: None,
+                                                                            },
+                                                                            finish_reason: Some("stop".to_string()),
+                                                                        }
+                                                                    ],
+                                                                    created,
+                                                                    object: "chat.completion.chunk".to_string(),
+                                                                };
+
+                                                                let _ = tx.send(Ok(Event::default().json_data(final_event).unwrap())).await;
+                                                                break;
+                                                            }
                                                         }
-                                                    ],
-                                                    created,
-                                                    object: "chat.completion.chunk".to_string(),
-                                                };
-
-                                                if let Ok(()) = tx.send(Ok(Event::default().json_data(content_event).unwrap())).await {
-                                                    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-                                                } else {
-                                                    break;
+                                                    }
                                                 }
                                             }
-
-                                            // Send final event
-                                            let final_event = StreamingChatCompletion {
-                                                id: completion_id,
-                                                model: model_id,
-                                                choices: vec![
-                                                    StreamingChatChoice {
-                                                        index: 0,
-                                                        delta: StreamingDelta {
-                                                            role: None,
-                                                            content: None,
-                                                        },
-                                                        finish_reason: Some("stop".to_string()),
-                                                    }
-                                                ],
-                                                created,
-                                                object: "chat.completion.chunk".to_string(),
-                                            };
-
-                                            let _ = tx.send(Ok(Event::default().json_data(final_event).unwrap())).await;
+                                            Err(e) => {
+                                                eprintln!("Error reading stream chunk: {}", e);
+                                                break;
+                                            }
                                         }
-                                    });
+                                    }
+                                }
+                            });
 
-                                    Sse::new(ReceiverStream::new(rx)).into_response()
-                                }
-                                Err(e) => {
-                                    (
-                                        StatusCode::INTERNAL_SERVER_ERROR,
-                                        Json(serde_json::json!({
-                                            "success": false,
-                                            "error": format!("Failed to parse model inference response: {}", e)
-                                        }))
-                                    ).into_response()
-                                }
-                            }
+                            Sse::new(ReceiverStream::new(rx)).into_response()
                         }
                         Err(e) => {
                             (
