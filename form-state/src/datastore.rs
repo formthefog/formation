@@ -18,7 +18,7 @@ use hex;
 use sha2::Sha256;
 
 lazy_static! {
-    pub static ref DB_HANDLE: DbHandle = open_db(PathBuf::from("/var/lib/formation/db/form.db"));
+    pub static ref DB_HANDLE: DbHandle = open_db(PathBuf::from("db/form.db"));
 }
 
 pub type PeerMap = Map<String, BFTReg<CrdtPeer<String>, String>, String>;
@@ -107,7 +107,7 @@ pub enum CidrRequest {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum AssocRequest {
-    Op(AssocOp<String>), 
+    Op(AssocOp<String>),
     Create(AssociationContents<String>),
     Delete((String, String)),
 }
@@ -132,7 +132,7 @@ pub enum InstanceRequest {
     },
     RemoveClusterMember {
         build_id: String,
-        cluster_member_id: String, 
+        cluster_member_id: String,
     }
 }
 
@@ -235,7 +235,7 @@ impl DataStore {
         let task_state = TaskState::new(node_id.clone(), pk.clone());
 
 
-        Self { 
+        Self {
             network_state,
             instance_state,
             node_state,
@@ -243,7 +243,7 @@ impl DataStore {
             agent_state,
             model_state,
             task_state,
-        } 
+        }
     }
 
     pub fn new_from_state(
@@ -252,7 +252,7 @@ impl DataStore {
         other: MergeableState,
     ) -> Self {
         log::info!("Building new datastore from state...");
-        let mut local = Self::new(node_id, pk); 
+        let mut local = Self::new(node_id, pk);
         local.network_state.peers.merge(other.peers);
         local.network_state.cidrs.merge(other.cidrs);
         local.network_state.associations.merge(other.assocs);
@@ -360,7 +360,7 @@ impl DataStore {
         match &op_to_propagate { // Match on reference to the original op
             Op::Up { dot: _, key, op } => {
                 // Apply a clone locally, original op_to_propagate can still be used for gossip
-                self.network_state.peer_op(op_to_propagate.clone()); 
+                self.network_state.peer_op(op_to_propagate.clone());
                 if let (true, _) = self.network_state.peer_op_success(key.clone(), op.clone()) {
                     log::info!("Peer Op::Up successfully applied locally.");
                     op_applied_successfully = true;
@@ -371,9 +371,9 @@ impl DataStore {
             }
             Op::Rm { .. } => {
                 // Apply a clone locally
-                self.network_state.peer_op(op_to_propagate.clone()); 
+                self.network_state.peer_op(op_to_propagate.clone());
                 log::info!("Peer Op::Rm applied locally.");
-                op_applied_successfully = true; 
+                op_applied_successfully = true;
             }
         }
 
@@ -551,7 +551,7 @@ impl DataStore {
             DnsRequest::Op(op) => self.handle_dns_op(op).await?,
             DnsRequest::Create(create) => self.handle_dns_create(create).await?,
             DnsRequest::Update(update) => self.handle_dns_update(update).await?,
-            DnsRequest::Delete(domain) => self.handle_dns_delete(domain).await? 
+            DnsRequest::Delete(domain) => self.handle_dns_delete(domain).await?
         }
 
         Ok(())
@@ -598,7 +598,7 @@ impl DataStore {
     pub async fn handle_dns_create(&mut self, create: FormDnsRecord) -> Result<(), Box<dyn std::error::Error>> {
         let op = self.network_state.update_dns_local(create.clone());
         self.handle_dns_op(op).await?;
-        let instance_ips = create.formnet_ip.clone(); 
+        let instance_ips = create.formnet_ip.clone();
         let mut ip_iter = instance_ips.iter();
         while let Some(ip) = ip_iter.next() {
             let mut instance = self.instance_state.get_instance_by_ip(ip.ip())?;
@@ -608,12 +608,12 @@ impl DataStore {
         }
         let mut ip_addr = create.formnet_ip.clone();
         ip_addr.extend(create.public_ip.clone());
-        let request = DomainRequest::Create { 
-            domain: create.domain.clone(), 
-            record_type: create.record_type, 
-            ip_addr, 
-            cname_target: create.cname_target.clone(), 
-            ssl_cert: create.ssl_cert, 
+        let request = DomainRequest::Create {
+            domain: create.domain.clone(),
+            record_type: create.record_type,
+            ip_addr,
+            cname_target: create.cname_target.clone(),
+            ssl_cert: create.ssl_cert,
         };
 
         Client::new()
@@ -629,13 +629,13 @@ impl DataStore {
         let op = self.network_state.update_dns_local(update.clone());
         self.handle_dns_op(op).await?;
 
-        let instance_ips = update.formnet_ip.clone(); 
+        let instance_ips = update.formnet_ip.clone();
         let mut ip_iter = instance_ips.iter();
         let mut replace = false;
         while let Some(ip) = ip_iter.next() {
             let mut instance = self.instance_state.get_instance_by_ip(ip.ip())?;
             if let Some(ref mut record) = &mut instance.dns_record {
-                record.formnet_ip.extend(update.formnet_ip.clone()); 
+                record.formnet_ip.extend(update.formnet_ip.clone());
                 record.public_ip.extend(update.public_ip.clone());
                 record.cname_target = update.cname_target.clone();
                 if record.record_type != update.record_type {
@@ -650,19 +650,19 @@ impl DataStore {
 
                 record.ssl_cert = update.ssl_cert;
                 record.ttl = update.ttl;
-                
+
             }
             self.handle_instance_update(instance).await?;
 
         }
         let mut ip_addr = update.formnet_ip.clone();
         ip_addr.extend(update.public_ip.clone());
-        let request = DomainRequest::Update { 
+        let request = DomainRequest::Update {
             replace,
-            record_type: update.record_type, 
-            ip_addr, 
-            cname_target: update.cname_target.clone(), 
-            ssl_cert: update.ssl_cert, 
+            record_type: update.record_type,
+            ip_addr,
+            cname_target: update.cname_target.clone(),
+            ssl_cert: update.ssl_cert,
         };
 
         Client::new()
@@ -991,17 +991,17 @@ impl DataStore {
             ))),
             _ => {}
         };
-        
+
         // Delete the account (remove it from the map)
         let op = self.account_state.remove_account_local(delete);
         // Apply the operation directly
         self.account_state.map.apply(op.clone());
-        
+
         // Write to queue
         if let Err(e) = DataStore::write_to_queue(AccountRequest::Op(op), 7, "global_crdt_ops".to_string()).await {
             log::error!("Error writing to queue: {}", e);
         }
-        
+
         Ok(())
     }
 
@@ -1053,14 +1053,14 @@ impl DataStore {
             let op = self.account_state.update_account_local(account);
             self.handle_account_op(op).await?;
         }
-        
+
         // Update the instance owner field
         if let Some(mut instance) = self.instance_state.get_instance(instance_id.clone()) {
             instance.instance_owner = to_address;
             let op = self.instance_state.update_instance_local(instance);
             self.handle_instance_op(op).await?;
         }
-        
+
         Ok(())
     }
 
@@ -1090,7 +1090,7 @@ impl DataStore {
         }
         Ok(())
     }
-    
+
     pub async fn handle_remove_owned_model(&mut self, address: String, model_id: String) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(mut account) = self.account_state.get_account(&address) {
             account.remove_owned_model(&model_id);
@@ -1138,12 +1138,12 @@ impl DataStore {
             ))),
             _ => {}
         };
-        
+
         // Delete the account (remove it from the map)
         let op = self.agent_state.remove_agent_local(delete);
         // Apply the operation directly
         self.agent_state.map.apply(op.clone());
-        
+
         // Write to queue
         if let Err(e) = DataStore::write_to_queue(AgentRequest::Op(op), 8, "global_crdt_ops".to_string()).await {
             log::error!("Error writing to queue: {}", e);
@@ -1195,12 +1195,12 @@ impl DataStore {
             ))),
             _ => {}
         };
-        
+
         // Delete the account (remove it from the map)
         let op = self.model_state.remove_model_local(delete);
         // Apply the operation directly
         self.model_state.map.apply(op.clone());
-        
+
         // Write to queue
         if let Err(e) = DataStore::write_to_queue(ModelRequest::Op(op), 9, "global_crdt_ops".to_string()).await {
             log::error!("Error writing to queue: {}", e);
@@ -1237,12 +1237,12 @@ impl DataStore {
                     // It might be cleaner if update_task_local returned the created task state or if handle_task_op did.
                     // For now, let's re-fetch or use task_to_create if we trust its state is what was persisted before gossip.
                     // For simplicity, we use task_to_create, but a fetch would be safer if there were concurrent writes (unlikely for a new task ID).
-                    
+
                     // We need all nodes from the datastore.
                     let all_nodes = self.node_state.list_nodes(); // Assuming list_nodes() exists and returns Vec<Node>
-                    
+
                     let responsible_nodes = crate::tasks::determine_responsible_nodes(&task_to_create, &all_nodes, self);
-                    
+
                     log::info!("PoC determined responsible nodes for task {}: {:?}", task_to_create.task_id, responsible_nodes);
 
                     // Now, update the task with responsible_nodes and new status
@@ -1328,11 +1328,11 @@ impl DataStore {
     }
     #[cfg(not(feature = "devnet"))]
     pub async fn write_to_queue(
-        message: impl Serialize + Clone + std::fmt::Debug, 
+        message: impl Serialize + Clone + std::fmt::Debug,
         sub_topic: u8,
         topic_string: String, // New parameter
     ) -> Result<(), Box<dyn std::error::Error>> {
-        use reqwest::Client; 
+        use reqwest::Client;
         use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
         use tiny_keccak::{Hasher, Sha3};
         use hex;
@@ -1341,13 +1341,13 @@ impl DataStore {
         let mut topic_hash_bytes = [0u8; 32];
         hasher.update(topic_string.as_bytes()); // Use dynamic topic_string for hashing
         hasher.finalize(&mut topic_hash_bytes);
-        
+
         let mut message_code = vec![sub_topic];
         message_code.extend(serde_json::to_vec(&message)?);
-        
-        let request_payload = QueueRequest::Write { 
-            content: message_code, 
-            topic: hex::encode(topic_hash_bytes) 
+
+        let request_payload = QueueRequest::Write {
+            content: message_code,
+            topic: hex::encode(topic_hash_bytes)
         };
 
         log::debug!("Writing to queue (topic: '{}', sub_topic: {}): {:?}", topic_string, sub_topic, request_payload);
@@ -1417,7 +1417,7 @@ impl DataStore {
                 QueueResponse::Failure { reason } => {
                     Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("{reason:?}"))))
                 },
-                _ => Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Invalid response variant for {endpoint}")))) 
+                _ => Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Invalid response variant for {endpoint}"))))
         }
     }
 
@@ -1477,8 +1477,8 @@ impl DataStore {
 
     #[cfg(feature = "devnet")]
     async fn gossip_op_directly<O: Serialize + Clone + std::fmt::Debug>(
-        &self, 
-        operation: &O, 
+        &self,
+        operation: &O,
         op_type_description: &str
     ) -> Result<(), Box<dyn std::error::Error>> {
         use k256::ecdsa::SigningKey;
@@ -1487,12 +1487,12 @@ impl DataStore {
         use crate::api::DevnetGossipOpContainer; // Make sure this path is correct
 
         log::info!("DEVNET: Gossiping {} directly.", op_type_description);
-        
+
         let mut active_peer_api_endpoints: Vec<String> = Vec::new();
         for peer_entry in self.network_state.peers.iter() {
             if let Some(peer_val_reg) = peer_entry.val.1.val() { // Corrected iteration
                 let peer = peer_val_reg.value();
-                if !peer.is_disabled && peer.id != self.node_state.node_id { 
+                if !peer.is_disabled && peer.id != self.node_state.node_id {
                     if let Some(endpoint) = &peer.endpoint {
                         match endpoint.resolve() {
                             Ok(socket_addr) => {
@@ -1522,7 +1522,7 @@ impl DataStore {
             op_type: op_type_description.to_string(),
             op_payload_json: op_payload_json_string,
         };
-        
+
         let message_to_sign_for_http = serde_json::to_string(&gossip_payload_container)?;
         let message_bytes_for_http = message_to_sign_for_http.as_bytes();
 
@@ -1542,7 +1542,7 @@ impl DataStore {
         for target_peer_base_url in active_peer_api_endpoints {
             let target_url = format!("{}/devnet_gossip/apply_op", target_peer_base_url);
             log::debug!("DEVNET: Sending {} to {} with auth header", op_type_description, target_url);
-            
+
             match client.post(&target_url)
                 .header(reqwest::header::AUTHORIZATION, &auth_header_value)
                 .json(&gossip_payload_container)
@@ -1551,7 +1551,7 @@ impl DataStore {
                     if response.status().is_success() {
                         log::info!("DEVNET: Successfully gossiped {} to {}", op_type_description, target_url);
                     } else {
-                        log::error!("DEVNET: Failed to gossip {} to {}: Status: {}, Body: {:?}", 
+                        log::error!("DEVNET: Failed to gossip {} to {}: Status: {}, Body: {:?}",
                             op_type_description, target_url, response.status(), response.text().await.unwrap_or_default());
                     }
                 }
@@ -1584,7 +1584,7 @@ impl DataStore {
                     {
                         let target_url = format!("{}/internal/dispatch_launch_task", target_service_base_url); // Assuming this endpoint on vmm-service
                         log::info!("DEVNET: Dispatching LaunchInstance task {} to {} at {}", task.task_id, node.node_id, target_url);
-                        
+
                         // Prepare payload & sign request (similar to gossip_op_directly)
                         let signing_key = k256::ecdsa::SigningKey::from_slice(&hex::decode(&self.pk)?)?;
                         let message_to_sign = serde_json::to_string(&launch_info)?;
@@ -1593,10 +1593,10 @@ impl DataStore {
                         let message_hash = hasher.finalize();
                         let (signature, recovery_id) = signing_key.sign_recoverable(&message_hash)
                             .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to sign dispatch message: {}", e))))?;
-                        
-                        let auth_header_value = format!("Signature {}.{}.{}", 
-                            hex::encode(signature.to_bytes()), 
-                            recovery_id.to_byte(), 
+
+                        let auth_header_value = format!("Signature {}.{}.{}",
+                            hex::encode(signature.to_bytes()),
+                            recovery_id.to_byte(),
                             hex::encode(message_to_sign.as_bytes())
                         );
 
@@ -1608,7 +1608,7 @@ impl DataStore {
                                 if response.status().is_success() {
                                     log::info!("DEVNET: Successfully dispatched LaunchInstance task {} to {}", task.task_id, target_url);
                                 } else {
-                                    log::error!("DEVNET: Failed to dispatch LaunchInstance task {} to {}: Status: {}, Body: {:?}", 
+                                    log::error!("DEVNET: Failed to dispatch LaunchInstance task {} to {}: Status: {}, Body: {:?}",
                                         task.task_id, target_url, response.status(), response.text().await.unwrap_or_default());
                                 }
                             }
@@ -1621,7 +1621,7 @@ impl DataStore {
                     {
                         log::info!("PRODUCTION: Dispatching LaunchInstance task {} to node {} via queue", task.task_id, node.node_id);
                         let vmm_event = form_types::VmmEvent::ProcessLaunchTask(launch_info); // launch_info was constructed above
-                        
+
                         // Define a node-specific topic for VMM tasks
                         let target_topic_string = format!("vmm_tasks_for_node_{}", node.node_id);
                         let vmm_task_sub_topic = 20; // Define a sub-topic for these events, e.g., 20
@@ -1641,7 +1641,7 @@ impl DataStore {
             }
             crate::tasks::TaskVariant::BuildImage(_params) => {
                 log::info!("Dispatching BuildImage task {} to node {}", task.task_id, node.node_id);
-                if let Some(_endpoint_url) = node.metadata.annotations().pack_service_api_endpoint() { 
+                if let Some(_endpoint_url) = node.metadata.annotations().pack_service_api_endpoint() {
                     // TODO: Implement actual dispatch logic for BuildImage (incl. pre-processing, PackBuildRequest)
                     log::warn!("DEVNET/PROD: Dispatch for BuildImage task {} TBD.", task.task_id);
                 } else {
@@ -1692,7 +1692,7 @@ pub async fn complete_bootstrap(State(state): State<Arc<Mutex<DataStore>>>) {
             ).send().await {
                 Ok(r) => match r.json::<MergeableState>().await {
                     Ok(mergeable_state) => {
-                        let mut guard = state.lock().await; 
+                        let mut guard = state.lock().await;
                         guard.network_state.peers.merge(mergeable_state.peers);
                         guard.network_state.cidrs.merge(mergeable_state.cidrs);
                         guard.network_state.associations.merge(mergeable_state.assocs);
@@ -1829,7 +1829,7 @@ mod tests {
         // We need a hex-encoded private key string (this is just for signing our CRDT updates)
         let pk_str = hex::encode(sk.to_bytes());
         let signing_key = SigningKey::from_slice(&hex::decode(pk_str.clone())?)?;
-        
+
         // Create empty maps for each of the types
         let mut peers: PeerMap = Map::new();
         let mut cidrs: CidrMap = Map::new();
@@ -1970,7 +1970,7 @@ mod tests {
             last_heartbeat: 0,
             host_region: "us-west".to_string(),
             capabilities: NodeCapabilities::default(),
-            capacity: NodeCapacity::default(), 
+            capacity: NodeCapacity::default(),
             metrics: NodeMetrics::default(),
             metadata: NodeMetadata {
                 tags: vec!["node_tag".to_string()],

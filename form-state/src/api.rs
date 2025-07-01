@@ -1,4 +1,4 @@
-use crate::auth::{global_admin_auth_middleware, RecoveredAddress};
+use crate::auth::{global_admin_auth_middleware, AuthenticationContext, RecoveredAddress};
 use crate::datastore::{full_state, pong, process_message, DataStore};
 use crate::helpers::{
     account::*, agent::*, agent_gateway::run_agent_task_handler, instances::*, model::*,
@@ -393,7 +393,8 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/models/create", post(create_model))
         .route("/models/update", post(update_model))
         .route("/models/delete", post(delete_model))
-        .route("/models/:id/inference", post(checked_model_inference))
+        .route("/models/:id/get_node", get(find_node_for_model))
+        // .route("/models/:id/inference", post(checked_model_inference))
         .route("/models/:id/add_node", post(add_node_to_model))
         .route("/models/:id/remove_node", post(remove_node_from_model))
         .layer(middleware::from_fn(
@@ -596,80 +597,79 @@ async fn checked_agent_hire(
     Ok(response.into_response())
 }
 
-// Wrapper function that performs eligibility check before calling model_inference
-async fn checked_model_inference(
-    State(state): State<Arc<Mutex<DataStore>>>,
-    recovered: RecoveredAddress,
-    Path(model_id): Path<String>,
-    Json(json_payload): Json<serde_json::Value>,
-) -> Result<Response, EligibilityError> {
-    // Run eligibility check first
-    let mut datastore = state.lock().await;
+// // Wrapper function that performs eligibility check before calling model_inference
+// async fn checked_model_inference(
+//     State(state): State<Arc<Mutex<DataStore>>>,
+//     auth_context: AuthenticationContext,
+//     Path(model_id): Path<String>,
+//     Json(json_payload): Json<serde_json::Value>,
+// ) -> Result<Response, EligibilityError> {
+//     // Run eligibility check first
+//     let mut datastore = state.lock().await;
 
-    // Get the account address
-    let account_address = recovered.as_hex();
+//     // Extract token count from payload
+//     let input_tokens = json_payload
+//         .get("input_tokens")
+//         .and_then(|v| v.as_u64())
+//         .unwrap_or(0);
 
-    // Get or create the account
-    let account = match datastore.account_state.get_account(&account_address) {
-        Some(acc) => acc,
-        None => {
-            // Create a new account if it doesn't exist
-            let new_account = crate::accounts::Account::new(account_address.clone());
-            let op = datastore
-                .account_state
-                .update_account_local(new_account.clone());
-            if let Err(e) = datastore.handle_account_op(op).await {
-                return Err(EligibilityError::OperationNotAllowed(format!(
-                    "Failed to create account: {}",
-                    e
-                )));
-            }
-            new_account
-        }
-    };
+//     let output_tokens = json_payload
+//         .get("output_tokens")
+//         .and_then(|v| v.as_u64())
+//         .unwrap_or(0);
 
-    // Extract token count from payload
-    let input_tokens = json_payload
-        .get("input_tokens")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+//     // Get or create the account
+//     if let AuthenticationContext::User { address, .. } = &auth_context {
+//         let account = match datastore.account_state.get_account(&address.as_hex()) {
+//             Some(acc) => acc,
+//             None => {
+//                 // Create a new account if it doesn't exist
+//                 let new_account = crate::accounts::Account::new(address.as_hex().clone());
+//                 let op = datastore
+//                     .account_state
+//                     .update_account_local(new_account.clone());
+//                 if let Err(e) = datastore.handle_account_op(op).await {
+//                     return Err(EligibilityError::OperationNotAllowed(format!(
+//                         "Failed to create account: {}",
+//                         e
+//                     )));
+//                 }
+//                 new_account
+//             }
+//         };
 
-    let output_tokens = json_payload
-        .get("output_tokens")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+//         // Use the new centralized credit checking function
+//         use crate::billing::middleware::{check_operation_credits, OperationType};
+//         check_operation_credits(
+//             &account,
+//             OperationType::TokenConsumption {
+//                 model_id: model_id.clone(),
+//                 input_tokens,
+//                 output_tokens,
+//             },
+//         )?;
+//     }
 
-    // Use the new centralized credit checking function
-    use crate::billing::middleware::{check_operation_credits, OperationType};
-    check_operation_credits(
-        &account,
-        OperationType::TokenConsumption {
-            model_id: model_id.clone(),
-            input_tokens,
-            output_tokens,
-        },
-    )?;
+//     // If we got here, eligibility check passed, so call the actual handler
+//     drop(datastore); // Release the lock before calling handler
 
-    // If we got here, eligibility check passed, so call the actual handler
-    drop(datastore); // Release the lock before calling handler
+//     // Convert the generic JSON to the expected type
+//     let typed_payload = match serde_json::from_value::<ModelInferenceRequest>(json_payload) {
+//         Ok(request) => request,
+//         Err(err) => {
+//             return Ok(Json(json!({
+//                 "error": "Invalid request format",
+//                 "details": err.to_string()
+//             }))
+//             .into_response());
+//         }
+//     };
 
-    // Convert the generic JSON to the expected type
-    let typed_payload = match serde_json::from_value::<ModelInferenceRequest>(json_payload) {
-        Ok(request) => request,
-        Err(err) => {
-            return Ok(Json(json!({
-                "error": "Invalid request format",
-                "details": err.to_string()
-            }))
-            .into_response());
-        }
-    };
-
-    // Call the actual handler with the properly typed payload
-    let response =
-        model_inference(State(state), recovered, Path(model_id), Json(typed_payload)).await;
-    Ok(response.into_response())
-}
+//     // Call the actual handler with the properly typed payload
+//     let response =
+//         model_inference(State(state), auth_context, Path(model_id), Json(typed_payload)).await;
+//     Ok(response.into_response())
+// }
 
 /// Add an operator key to a node
 async fn add_node_operator_key(

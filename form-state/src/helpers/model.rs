@@ -15,6 +15,7 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use rand::prelude::IteratorRandom;
 
 // Helper function to determine if an address belongs to an admin
 // This would ideally be replaced with a proper role-based system
@@ -861,7 +862,7 @@ pub async fn get_model(
                 StatusCode::OK,
                 Json(json!({
                     "success": true,
-                    "model": model
+                "model": model
                 })),
             )
         }
@@ -954,162 +955,310 @@ pub async fn list_model(
 }
 
 /// Handler for model inference
-pub async fn model_inference(
+pub async fn find_node_for_model(
     State(state): State<Arc<Mutex<DataStore>>>,
-    recovered: RecoveredAddress,
+    auth_context: AuthenticationContext,
     Path(model_id): Path<String>,
-    Json(payload): Json<ModelInferenceRequest>,
 ) -> impl IntoResponse {
-    let account_address = recovered.as_hex();
     log::info!(
         "Account {} is requesting inference from model {}",
-        account_address,
+        auth_context.description(),
         model_id
     );
 
-    let mut datastore = state.lock().await;
+    let datastore = state.lock().await;
 
-    // Check if the model exists
-    if let Some(model) = datastore.model_state.get_model(&model_id) {
-        // Check authorization if the model is private
-        if model.is_private {
-            // Check if user is the owner, has authorization, or is an admin
-            let account = datastore.account_state.get_account(&account_address);
-
-            // Determine if the user has access to this model
-            let is_authorized = match &account {
-                Some(account) => {
-                    // User is authorized if they own the model or are an admin
-                    account.owned_models.contains(&model_id)
-                        || is_admin_address(&account_address)
-                        || model.owner_id == account_address
-                }
-                None => false,
-            };
-
-            if !is_authorized {
-                log::warn!(
-                    "Unauthorized attempt to use private model for inference: {} by {}",
-                    model_id,
-                    account_address
-                );
-                return (
-                    StatusCode::FORBIDDEN,
-                    Json(json!({
-                        "success": false,
-                        "error": "You don't have permission to use this private model for inference"
-                    })),
-                );
-            }
+    let model = match datastore.model_state.get_model(&model_id) {
+        Some(model) => model,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "success": false,
+                    "error": format!("Model {} not found", model_id)
+                })),
+            );
         }
+    };
 
-        // Get or create the user's account
-        let mut account = match datastore.account_state.get_account(&account_address) {
-            Some(acc) => acc,
-            None => {
-                // Create a new account if it doesn't exist
-                let new_account = crate::accounts::Account::new(account_address.clone());
-                let op = datastore
-                    .account_state
-                    .update_account_local(new_account.clone());
-                if let Err(_) = datastore.handle_account_op(op).await {
+    if model.is_private {
+        match &auth_context {
+            AuthenticationContext::Admin { .. } => {
+                log::info!(
+                    "model_inference: Admin {} using private model {} for inference",
+                    auth_context.description(),
+                    model_id
+                );
+            },
+            AuthenticationContext::Localhost { .. } => {
+                log::info!(
+                    "model_inference: Localhost using private model {} for inference",
+                    model_id
+                );
+            },
+            AuthenticationContext::User { address, .. } => {
+                // Check if user is the owner, has authorization, or is an admin
+                let account = datastore.account_state.get_account(&address.as_hex());
+
+                // Determine if the user has access to this model
+                let is_authorized = match &account {
+                    Some(account) => {
+                        // User is authorized if they own the model or are an admin
+                        account.owned_models.contains(&model_id)
+                            || model.owner_id == account.address
+                    }
+                    None => false,
+                };
+
+                if !is_authorized {
+                    log::warn!(
+                        "Unauthorized attempt to use private model for inference: {} by {}",
+                        model_id,
+                        auth_context.description()
+                    );
                     return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
+                        StatusCode::FORBIDDEN,
                         Json(json!({
                             "success": false,
-                            "error": "Failed to create new account"
+                            "error": "You don't have permission to use this private model for inference"
                         })),
                     );
                 }
-                new_account
             }
-        };
-
-        // Calculate token usage
-        let input_tokens = payload.input_tokens.unwrap_or(0);
-        let output_tokens = payload.output_tokens.unwrap_or(0);
-        let total_tokens = input_tokens + output_tokens;
-
-        // Check if the account has enough credits for this operation
-        use crate::billing::middleware::{check_operation_credits, OperationType};
-        let operation = OperationType::TokenConsumption {
-            model_id: model_id.clone(),
-            input_tokens,
-            output_tokens,
-        };
-
-        // Validate eligibility
-        if let Err(err) = check_operation_credits(&account, operation) {
-            let error_message = format!("{}", err);
-            log::warn!("Inference rejected: {}", error_message);
-
-            return (
-                StatusCode::PAYMENT_REQUIRED,
-                Json(json!({
-                    "success": false,
-                    "error": error_message,
-                    "available_credits": account.available_credits()
-                })),
-            );
         }
+    }
 
-        // Initialize usage tracker if needed
-        if account.usage.is_none() {
-            account.usage = Some(UsageTracker::new());
-        }
+    let node_id = &datastore.node_state.node_id;
 
-        // Now we know usage exists, we can use expect safely
-        let cost = account
-            .usage
-            .as_mut()
-            .expect("Usage tracker exists")
-            .record_token_usage(&model_id, input_tokens, output_tokens);
-
-        log::info!(
-            "Recorded {} tokens ({}+{}) for model {}, cost: {} credits",
-            total_tokens,
-            input_tokens,
-            output_tokens,
-            model_id,
-            cost
-        );
-
-        // Update the account
-        let op = datastore
-            .account_state
-            .update_account_local(account.clone());
-        if let Err(err) = datastore.handle_account_op(op).await {
-            log::error!("Failed to update account usage tracking: {}", err);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "success": false,
-                    "error": "Failed to update usage tracking"
-                })),
-            );
-        }
-
-        // Return successful response
+    if let Some((_node, port)) = model.nodes.iter().find(|(node, _port)| node == node_id) {
         return (
             StatusCode::OK,
             Json(json!({
                 "success": true,
                 "model": model_id,
-                "tokens_used": total_tokens,
-                "result": payload.prompt.unwrap_or_else(|| "No prompt provided".to_string()),
-                "remaining_credits": account.available_credits()
+                "node_id": node_id,
+                "port": port,
+                "address": "localhost"
             })),
         );
     } else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({
-                "success": false,
-                "error": format!("Model {} not found", model_id)
-            })),
-        );
+        // Current node isn't running the model, select a random node from the list
+        if let Some((random_node_id, random_port)) = model.nodes.iter().choose(&mut rand::thread_rng()) {
+            if let Some(random_node) = datastore.node_state.get_node(random_node_id.clone()) {
+                return (
+                    StatusCode::OK,
+                    Json(json!({
+                        "success": true,
+                        "model": model_id,
+                        "node_id": random_node_id,
+                        "port": random_port,
+                        "address": random_node.host
+                    })),
+                );
+            }
+        }
+            // No nodes available for this model
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({
+                    "success": false,
+                    "error": "No nodes available for this model"
+                })),
+            );
+
     }
 }
+
+// pub async fn model_inference_accounting(
+//     State(state): State<Arc<Mutex<DataStore>>>,
+//     auth_context: AuthenticationContext,
+//     Path(model_id): Path<String>,
+//     Json(payload): Json<ModelInferenceRequest>,
+// ) -> impl IntoResponse {
+//     log::info!(
+//         "Account {} is requesting inference from model {}",
+//         auth_context.description(),
+//         model_id
+//     );
+
+//     let mut datastore = state.lock().await;
+
+//     let model = match datastore.model_state.get_model(&model_id) {
+//         Some(model) => model,
+//         None => {
+//             return (
+//                 StatusCode::NOT_FOUND,
+//                 Json(json!({
+//                     "success": false,
+//                     "error": format!("Model {} not found", model_id)
+//                 })),
+//             );
+//         }
+//     };
+
+//     // Calculate token usage
+//     let input_tokens = payload.input_tokens.unwrap_or(0);
+//     let output_tokens = payload.output_tokens.unwrap_or(0);
+//     let total_tokens = input_tokens + output_tokens;
+
+//     if model.is_private {
+//         match &auth_context {
+//             AuthenticationContext::Admin { .. } => {
+//                 log::info!(
+//                     "model_inference: Admin {} using private model {} for inference",
+//                     auth_context.description(),
+//                     model_id
+//                 );
+//             },
+//             AuthenticationContext::Localhost { .. } => {
+//                 log::info!(
+//                     "model_inference: Localhost using private model {} for inference",
+//                     model_id
+//                 );
+//             },
+//             AuthenticationContext::User { address, .. } => {
+//                 // Check if user is the owner, has authorization, or is an admin
+//                 let account = datastore.account_state.get_account(&address.as_hex());
+
+//                 // Determine if the user has access to this model
+//                 let is_authorized = match &account {
+//                     Some(account) => {
+//                         // User is authorized if they own the model or are an admin
+//                         account.owned_models.contains(&model_id)
+//                             || model.owner_id == account.address
+//                     }
+//                     None => false,
+//                 };
+
+//                 if !is_authorized {
+//                     log::warn!(
+//                         "Unauthorized attempt to use private model for inference: {} by {}",
+//                         model_id,
+//                         auth_context.description()
+//                     );
+//                     return (
+//                         StatusCode::FORBIDDEN,
+//                         Json(json!({
+//                             "success": false,
+//                             "error": "You don't have permission to use this private model for inference"
+//                         })),
+//                     );
+//                 }
+//             }
+//         }
+//     }
+
+//     let node_id = &datastore.node_state.node_id;
+
+//     match auth_context {
+//         AuthenticationContext::Admin {..} | AuthenticationContext::Localhost {..} => {
+//             // Return successful response
+//             return (
+//                 StatusCode::OK,
+//                 Json(json!({
+//                     "success": true,
+//                     "model": model_id,
+//                     "node_id": model.node_id,
+//                     "address": model.address,
+
+//                 })),
+//             );
+//         },
+//         AuthenticationContext::User { address, .. } => {
+//             // Get or create the user's account
+//             let mut account = match datastore.account_state.get_account(&account_address) {
+//                 Some(acc) => acc,
+//                 None => {
+//                     // Create a new account if it doesn't exist
+//                     let new_account = crate::accounts::Account::new(account_address.clone());
+//                     let op = datastore
+//                         .account_state
+//                         .update_account_local(new_account.clone());
+//                     if let Err(_) = datastore.handle_account_op(op).await {
+//                         return (
+//                             StatusCode::INTERNAL_SERVER_ERROR,
+//                             Json(json!({
+//                                 "success": false,
+//                                 "error": "Failed to create new account"
+//                             })),
+//                         );
+//                     }
+//                     new_account
+//                 }
+//             };
+
+//             // Validate eligibility
+//             if let Err(err) = check_operation_credits(&account, operation) {
+//                 let error_message = format!("{}", err);
+//                 log::warn!("Inference rejected: {}", error_message);
+
+//                 return (
+//                     StatusCode::PAYMENT_REQUIRED,
+//                     Json(json!({
+//                         "success": false,
+//                         "error": error_message,
+//                         "available_credits": account.available_credits()
+//                     })),
+//                 );
+//             }
+
+//             // Initialize usage tracker if needed
+//             if account.usage.is_none() {
+//                 account.usage = Some(UsageTracker::new());
+//             }
+
+//             // Now we know usage exists, we can use expect safely
+//             let cost = account
+//                 .usage
+//                 .as_mut()
+//                 .expect("Usage tracker exists")
+//                 .record_token_usage(&model_id, input_tokens, output_tokens);
+//             // Check if the account has enough credits for this operation
+//             use crate::billing::middleware::{check_operation_credits, OperationType};
+//             let operation = OperationType::TokenConsumption {
+//                 model_id: model_id.clone(),
+//                 input_tokens,
+//                 output_tokens,
+//             };
+
+//             log::info!(
+//                 "Recorded {} tokens ({}+{}) for model {}, cost: {} credits",
+//                 total_tokens,
+//                 input_tokens,
+//                 output_tokens,
+//                 model_id,
+//                 cost
+//             );
+
+//             // Update the account
+//             let op = datastore
+//                 .account_state
+//                 .update_account_local(account.clone());
+//             if let Err(err) = datastore.handle_account_op(op).await {
+//                 log::error!("Failed to update account usage tracking: {}", err);
+//                 return (
+//                     StatusCode::INTERNAL_SERVER_ERROR,
+//                     Json(json!({
+//                         "success": false,
+//                         "error": "Failed to update usage tracking"
+//                     })),
+//                 );
+//             }
+
+//             // Return successful response
+//             return (
+//                 StatusCode::OK,
+//                 Json(json!({
+//                     "success": true,
+//                     "model": model_id,
+//                     "tokens_used": total_tokens,
+//                     "result": payload.prompt.unwrap_or_else(|| "No prompt provided".to_string()),
+//                     "remaining_credits": account.available_credits()
+//                 })),
+//             );
+//         }
+//     }
+// }
 
 /// Request for model inference
 #[derive(Debug, Clone, Serialize, Deserialize)]
