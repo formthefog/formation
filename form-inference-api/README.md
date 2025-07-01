@@ -347,9 +347,19 @@ Client Request → form-inference-api → form-state → Model Service → Respo
 1. Client sends chat completion request to form-inference-api
 2. form-inference-api queries form-state for model node information
 3. form-state returns node address and port
-4. form-inference-api makes inference request to model service
-5. Model service returns generated text
-6. form-inference-api formats and returns chat completion response
+4. form-inference-api determines if node is local or remote:
+   - **Local nodes**: Uses the port from form-state response (e.g., `http://127.0.0.1:30000/generate`)
+   - **Remote nodes**: Forwards to port 3006 on the remote IP (e.g., `http://67.77.107.55:3006/generate`)
+5. form-inference-api makes inference request to model service
+6. Model service returns generated text
+7. form-inference-api formats and returns chat completion response
+
+### Node Address Support
+
+The form-inference-api supports both local and remote node addresses:
+
+- **Local nodes**: `"localhost"` - Uses the port from form-state response
+- **Remote nodes**: `{"Ipv4": "67.77.107.55"}` - Forwards to port 3006 on the remote IP
 
 ### Model Inference Integration
 

@@ -41,8 +41,8 @@ async fn main() {
         .merge(routes::api_router());
 
     // Run the app on the configured port
-    let addr = SocketAddr::from(([127, 0, 0, 1], config.form_inference_api_port));
-    println!("Form Inference API listening on {}", addr);
+    let addr = SocketAddr::from(([0, 0, 0, 0], config.form_inference_api_port));
+    println!("Form Inference API listening on 0.0.0.0:{}", config.form_inference_api_port);
 
     Server::bind(&addr)
         .serve(app.into_make_service())
