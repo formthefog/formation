@@ -182,7 +182,6 @@ async fn create_chat_completion(Json(request): Json<ChatCompletionRequest>) -> R
 }
 
 async fn handle_forwarded_chat_completion(Json(request): Json<ForwardedChatCompletionRequest>) -> Response {
-    println!("Forwarded chat completion request: {:?}", request);
     // Convert to regular ChatCompletionRequest
     let chat_request = ChatCompletionRequest {
         model: request.model,
@@ -194,10 +193,6 @@ async fn handle_forwarded_chat_completion(Json(request): Json<ForwardedChatCompl
 }
 
 async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwarded_from: Option<String>) -> Response {
-    println!("Handling streaming chat completion for model: {}", request.model);
-    if let Some(from) = &forwarded_from {
-        println!("Forwarded from: {}", from);
-    }
 
     // Extract the model ID from the request
     let model_id = request.model.clone();
@@ -272,13 +267,11 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwar
 
                                         // If the address is not localhost, forward to that node
                     if node_address != "localhost" {
-                        println!("Forwarding to remote node: {}", node_address);
                         return forward_streaming_request_to_node(request, &node_address).await;
                     }
 
                     // Build the inference URL for localhost
                     let inference_url = format!("http://127.0.0.1:{}/generate", node_response.port);
-                    println!("Making local inference request to: {}", inference_url);
 
                     let inference_request = ModelInferenceRequest {
                         text: text.clone(),
@@ -316,7 +309,6 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwar
                                 .unwrap()
                                 .as_secs();
 
-                            println!("Starting streaming response with completion_id: {}", completion_id);
                             let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, std::io::Error>>(100);
 
                             // Spawn task to handle streaming from model
@@ -342,26 +334,21 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwar
                                 if let Ok(()) = tx.send(Ok(Event::default().json_data(initial_event).unwrap())).await {
                                                                         // Stream the response from the model
                                     let mut stream = inference_response.bytes_stream();
-                                    println!("Starting to read streaming response from model");
 
                                     while let Some(chunk_result) = stream.next().await {
                                         match chunk_result {
                                             Ok(chunk) => {
-                                                println!("Received chunk of {} bytes", chunk.len());
                                                 // Parse the chunk as SSE data
                                                 if let Ok(chunk_str) = String::from_utf8(chunk.to_vec()) {
-                                                    println!("Chunk content: {}", chunk_str);
                                                     // Handle SSE format: "data: {...}\n\n"
                                                     for line in chunk_str.lines() {
                                                         if line.starts_with("data: ") {
                                                             let data = &line[6..]; // Remove "data: " prefix
-                                                            println!("Processing SSE data: {}", data);
                                                             if data != "[DONE]" {
                                                                 // Parse the JSON data from the model
                                                                 if let Ok(model_data) = serde_json::from_str::<serde_json::Value>(data) {
                                                                     // Extract text from model response
                                                                     if let Some(text) = model_data.get("text").and_then(|t| t.as_str()) {
-                                                                        println!("Extracted text: {}", text);
                                                                         let content_event = StreamingChatCompletion {
                                                                             id: completion_id.clone(),
                                                                             model: model_id.clone(),
@@ -380,17 +367,14 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwar
                                                                         };
 
                                                                         if let Ok(()) = tx.send(Ok(Event::default().json_data(content_event).unwrap())).await {
-                                                                            println!("Sent content event");
                                                                             // Small delay to simulate streaming
                                                                             tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
                                                                         } else {
-                                                                            println!("Failed to send content event");
                                                                             break;
                                                                         }
                                                                     }
                                                                 }
                                                             } else {
-                                                                println!("Received [DONE] signal");
                                                                 // Model finished
                                                                 let final_event = StreamingChatCompletion {
                                                                     id: completion_id.clone(),
@@ -410,7 +394,6 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwar
                                                                 };
 
                                                                 let _ = tx.send(Ok(Event::default().json_data(final_event).unwrap())).await;
-                                                                println!("Sent final event");
                                                                 break;
                                                             }
                                                         }
@@ -423,7 +406,6 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwar
                                             }
                                         }
                                     }
-                                    println!("Finished reading stream");
                                 }
                             });
 
@@ -478,8 +460,6 @@ async fn forward_streaming_request_to_node(request: ChatCompletionRequest, targe
     // Forward to the target node's form-inference-api
     let forward_url = format!("http://{}:3006/forwarded/chat/completions", target_node);
 
-    println!("Forwarding streaming request to: {}", forward_url);
-
     match CLIENT
         .post(&forward_url)
         .header("Content-Type", "application/json")
@@ -488,10 +468,8 @@ async fn forward_streaming_request_to_node(request: ChatCompletionRequest, targe
         .await
     {
         Ok(response) => {
-            if response.status().is_success() {
-                                // Forward the streaming response directly
-                println!("Forwarding streaming response from remote node");
-
+                        if response.status().is_success() {
+                // Forward the streaming response directly
                 // Get the response as a stream and forward it directly
                 let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, std::io::Error>>(100);
 
@@ -501,17 +479,13 @@ async fn forward_streaming_request_to_node(request: ChatCompletionRequest, targe
                     while let Some(chunk_result) = stream.next().await {
                         match chunk_result {
                             Ok(chunk) => {
-                                println!("Forwarding chunk of {} bytes", chunk.len());
                                 if let Ok(chunk_str) = String::from_utf8(chunk.to_vec()) {
-                                    println!("Chunk content: {}", chunk_str);
-
                                     // Forward the chunk directly as SSE data
                                     // The remote node is already sending properly formatted SSE events
                                     // We just need to forward them as-is
                                     if !chunk_str.trim().is_empty() {
                                         // Create a simple SSE event with the raw data
                                         let event = Event::default().data(chunk_str);
-                                        println!("Forwarding SSE event directly");
                                         let _ = tx.send(Ok(event)).await;
                                     }
                                 }
@@ -522,7 +496,6 @@ async fn forward_streaming_request_to_node(request: ChatCompletionRequest, targe
                             }
                         }
                     }
-                    println!("Finished forwarding stream");
                 });
 
                 Sse::new(ReceiverStream::new(rx)).into_response()
