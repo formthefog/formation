@@ -194,6 +194,11 @@ async fn handle_forwarded_chat_completion(Json(request): Json<ForwardedChatCompl
 }
 
 async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwarded_from: Option<String>) -> Response {
+    println!("Handling streaming chat completion for model: {}", request.model);
+    if let Some(from) = &forwarded_from {
+        println!("Forwarded from: {}", from);
+    }
+
     // Extract the model ID from the request
     let model_id = request.model.clone();
 
@@ -265,13 +270,15 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwar
                         }
                     }
 
-                    // If the address is not localhost, forward to that node
+                                        // If the address is not localhost, forward to that node
                     if node_address != "localhost" {
+                        println!("Forwarding to remote node: {}", node_address);
                         return forward_streaming_request_to_node(request, &node_address).await;
                     }
 
                     // Build the inference URL for localhost
                     let inference_url = format!("http://127.0.0.1:{}/generate", node_response.port);
+                    println!("Making local inference request to: {}", inference_url);
 
                     let inference_request = ModelInferenceRequest {
                         text: text.clone(),
@@ -309,6 +316,7 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwar
                                 .unwrap()
                                 .as_secs();
 
+                            println!("Starting streaming response with completion_id: {}", completion_id);
                             let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, std::io::Error>>(100);
 
                             // Spawn task to handle streaming from model
@@ -332,23 +340,28 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwar
                                 };
 
                                 if let Ok(()) = tx.send(Ok(Event::default().json_data(initial_event).unwrap())).await {
-                                    // Stream the response from the model
+                                                                        // Stream the response from the model
                                     let mut stream = inference_response.bytes_stream();
+                                    println!("Starting to read streaming response from model");
 
                                     while let Some(chunk_result) = stream.next().await {
                                         match chunk_result {
                                             Ok(chunk) => {
+                                                println!("Received chunk of {} bytes", chunk.len());
                                                 // Parse the chunk as SSE data
                                                 if let Ok(chunk_str) = String::from_utf8(chunk.to_vec()) {
+                                                    println!("Chunk content: {}", chunk_str);
                                                     // Handle SSE format: "data: {...}\n\n"
                                                     for line in chunk_str.lines() {
                                                         if line.starts_with("data: ") {
                                                             let data = &line[6..]; // Remove "data: " prefix
+                                                            println!("Processing SSE data: {}", data);
                                                             if data != "[DONE]" {
                                                                 // Parse the JSON data from the model
                                                                 if let Ok(model_data) = serde_json::from_str::<serde_json::Value>(data) {
                                                                     // Extract text from model response
                                                                     if let Some(text) = model_data.get("text").and_then(|t| t.as_str()) {
+                                                                        println!("Extracted text: {}", text);
                                                                         let content_event = StreamingChatCompletion {
                                                                             id: completion_id.clone(),
                                                                             model: model_id.clone(),
@@ -367,14 +380,17 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwar
                                                                         };
 
                                                                         if let Ok(()) = tx.send(Ok(Event::default().json_data(content_event).unwrap())).await {
+                                                                            println!("Sent content event");
                                                                             // Small delay to simulate streaming
                                                                             tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
                                                                         } else {
+                                                                            println!("Failed to send content event");
                                                                             break;
                                                                         }
                                                                     }
                                                                 }
                                                             } else {
+                                                                println!("Received [DONE] signal");
                                                                 // Model finished
                                                                 let final_event = StreamingChatCompletion {
                                                                     id: completion_id.clone(),
@@ -394,6 +410,7 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwar
                                                                 };
 
                                                                 let _ = tx.send(Ok(Event::default().json_data(final_event).unwrap())).await;
+                                                                println!("Sent final event");
                                                                 break;
                                                             }
                                                         }
@@ -406,6 +423,7 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwar
                                             }
                                         }
                                     }
+                                    println!("Finished reading stream");
                                 }
                             });
 
