@@ -503,18 +503,28 @@ async fn forward_streaming_request_to_node(request: ChatCompletionRequest, targe
                             Ok(chunk) => {
                                 println!("Forwarding chunk of {} bytes", chunk.len());
                                 if let Ok(chunk_str) = String::from_utf8(chunk.to_vec()) {
+                                    println!("Chunk content: {}", chunk_str);
                                     // Process each line of the SSE response
+                                    let mut found_sse_data = false;
                                     for line in chunk_str.lines() {
+                                        println!("Processing line: {}", line);
                                         if line.starts_with("data: ") {
+                                            found_sse_data = true;
                                             let data = &line[6..]; // Remove "data: " prefix
                                             println!("Forwarding SSE data: {}", data);
 
                                             if data != "[DONE]" {
                                                 // Try to parse as JSON and create a proper SSE event
                                                 if let Ok(json_data) = serde_json::from_str::<serde_json::Value>(data) {
+                                                    println!("Parsed JSON data: {:?}", json_data);
                                                     if let Ok(event) = Event::default().json_data(json_data) {
+                                                        println!("Created SSE event successfully");
                                                         let _ = tx.send(Ok(event)).await;
+                                                    } else {
+                                                        println!("Failed to create SSE event from JSON data");
                                                     }
+                                                } else {
+                                                    println!("Failed to parse data as JSON: {}", data);
                                                 }
                                             } else {
                                                 // Send final event
@@ -543,6 +553,18 @@ async fn forward_streaming_request_to_node(request: ChatCompletionRequest, targe
                                                 }
                                                 println!("Forwarded final event");
                                                 break;
+                                            }
+                                        }
+                                    }
+
+                                    // If no SSE data was found, try to parse the entire chunk as JSON
+                                    if !found_sse_data && !chunk_str.trim().is_empty() {
+                                        println!("No SSE data found, trying to parse as JSON: {}", chunk_str);
+                                        if let Ok(json_data) = serde_json::from_str::<serde_json::Value>(&chunk_str) {
+                                            println!("Parsed chunk as JSON: {:?}", json_data);
+                                            if let Ok(event) = Event::default().json_data(json_data) {
+                                                println!("Created SSE event from JSON chunk");
+                                                let _ = tx.send(Ok(event)).await;
                                             }
                                         }
                                     }
