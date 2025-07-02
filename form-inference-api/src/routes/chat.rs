@@ -182,6 +182,7 @@ async fn create_chat_completion(Json(request): Json<ChatCompletionRequest>) -> R
 }
 
 async fn handle_forwarded_chat_completion(Json(request): Json<ForwardedChatCompletionRequest>) -> Response {
+    println!("Forwarded chat completion request: {:?}", request);
     // Convert to regular ChatCompletionRequest
     let chat_request = ChatCompletionRequest {
         model: request.model,
@@ -457,7 +458,9 @@ async fn forward_streaming_request_to_node(request: ChatCompletionRequest, targe
     };
 
     // Forward to the target node's form-inference-api
-    let forward_url = format!("http://{}:3000/forwarded/chat/completions", target_node);
+    let forward_url = format!("http://{}:3006/forwarded/chat/completions", target_node);
+
+    println!("Forwarding streaming request to: {}", forward_url);
 
     match CLIENT
         .post(&forward_url)
@@ -467,15 +470,74 @@ async fn forward_streaming_request_to_node(request: ChatCompletionRequest, targe
         .await
     {
         Ok(response) => {
-            // For streaming responses, we need to handle them differently
-            // For now, we'll return an error indicating streaming forwarding is not fully implemented
-            (
-                StatusCode::NOT_IMPLEMENTED,
-                Json(serde_json::json!({
-                    "success": false,
-                    "error": "Streaming forwarding between nodes is not yet implemented"
-                }))
-            ).into_response()
+            if response.status().is_success() {
+                // Forward the streaming response directly
+                match response.bytes().await {
+                    Ok(bytes) => {
+                        // Convert the streaming response to SSE format
+                        let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, std::io::Error>>(100);
+
+                        tokio::spawn(async move {
+                            // Parse the forwarded response and convert to SSE events
+                            if let Ok(response_text) = String::from_utf8(bytes.to_vec()) {
+                                // Split by lines and process each SSE event
+                                for line in response_text.lines() {
+                                    if line.starts_with("data: ") {
+                                        let data = &line[6..]; // Remove "data: " prefix
+                                        if data != "[DONE]" {
+                                            // Forward the SSE event as-is
+                                            if let Ok(event) = Event::default().json_data(data) {
+                                                let _ = tx.send(Ok(event)).await;
+                                            }
+                                        } else {
+                                            // Send final event
+                                            let final_event = Event::default().json_data("[DONE]").unwrap_or_else(|_| Event::default());
+                                            let _ = tx.send(Ok(final_event)).await;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        });
+
+                        Sse::new(ReceiverStream::new(rx)).into_response()
+                    }
+                    Err(e) => {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({
+                                "success": false,
+                                "error": format!("Failed to read forwarded streaming response: {}", e)
+                            }))
+                        ).into_response()
+                    }
+                }
+            } else {
+                // Forward the error response
+                match response.text().await {
+                    Ok(error_text) => {
+                        match serde_json::from_str::<serde_json::Value>(&error_text) {
+                            Ok(json) => Json(json).into_response(),
+                            Err(_) => (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(serde_json::json!({
+                                    "success": false,
+                                    "error": format!("Forwarded error: {}", error_text)
+                                }))
+                            ).into_response()
+                        }
+                    }
+                    Err(e) => {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({
+                                "success": false,
+                                "error": format!("Failed to read forwarded error response: {}", e)
+                            }))
+                        ).into_response()
+                    }
+                }
+            }
         }
         Err(e) => {
             (
