@@ -489,47 +489,75 @@ async fn forward_streaming_request_to_node(request: ChatCompletionRequest, targe
     {
         Ok(response) => {
             if response.status().is_success() {
-                // Forward the streaming response directly
-                match response.bytes().await {
-                    Ok(bytes) => {
-                        // Convert the streaming response to SSE format
-                        let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, std::io::Error>>(100);
+                                // Forward the streaming response directly
+                println!("Forwarding streaming response from remote node");
 
-                        tokio::spawn(async move {
-                            // Parse the forwarded response and convert to SSE events
-                            if let Ok(response_text) = String::from_utf8(bytes.to_vec()) {
-                                // Split by lines and process each SSE event
-                                for line in response_text.lines() {
-                                    if line.starts_with("data: ") {
-                                        let data = &line[6..]; // Remove "data: " prefix
-                                        if data != "[DONE]" {
-                                            // Forward the SSE event as-is
-                                            if let Ok(event) = Event::default().json_data(data) {
-                                                let _ = tx.send(Ok(event)).await;
+                // Get the response as a stream and forward it directly
+                let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, std::io::Error>>(100);
+
+                tokio::spawn(async move {
+                    let mut stream = response.bytes_stream();
+
+                    while let Some(chunk_result) = stream.next().await {
+                        match chunk_result {
+                            Ok(chunk) => {
+                                println!("Forwarding chunk of {} bytes", chunk.len());
+                                if let Ok(chunk_str) = String::from_utf8(chunk.to_vec()) {
+                                    // Process each line of the SSE response
+                                    for line in chunk_str.lines() {
+                                        if line.starts_with("data: ") {
+                                            let data = &line[6..]; // Remove "data: " prefix
+                                            println!("Forwarding SSE data: {}", data);
+
+                                            if data != "[DONE]" {
+                                                // Try to parse as JSON and create a proper SSE event
+                                                if let Ok(json_data) = serde_json::from_str::<serde_json::Value>(data) {
+                                                    if let Ok(event) = Event::default().json_data(json_data) {
+                                                        let _ = tx.send(Ok(event)).await;
+                                                    }
+                                                }
+                                            } else {
+                                                // Send final event
+                                                let final_event = StreamingChatCompletion {
+                                                    id: format!("chatcmpl_{}", Uuid::new_v4().simple()),
+                                                    model: "deepseek-r1".to_string(),
+                                                    choices: vec![
+                                                        StreamingChatChoice {
+                                                            index: 0,
+                                                            delta: StreamingDelta {
+                                                                role: None,
+                                                                content: None,
+                                                            },
+                                                            finish_reason: Some("stop".to_string()),
+                                                        }
+                                                    ],
+                                                    created: std::time::SystemTime::now()
+                                                        .duration_since(std::time::UNIX_EPOCH)
+                                                        .unwrap()
+                                                        .as_secs(),
+                                                    object: "chat.completion.chunk".to_string(),
+                                                };
+
+                                                if let Ok(event) = Event::default().json_data(final_event) {
+                                                    let _ = tx.send(Ok(event)).await;
+                                                }
+                                                println!("Forwarded final event");
+                                                break;
                                             }
-                                        } else {
-                                            // Send final event
-                                            let final_event = Event::default().json_data("[DONE]").unwrap_or_else(|_| Event::default());
-                                            let _ = tx.send(Ok(final_event)).await;
-                                            break;
                                         }
                                     }
                                 }
                             }
-                        });
+                            Err(e) => {
+                                eprintln!("Error reading forwarded stream chunk: {}", e);
+                                break;
+                            }
+                        }
+                    }
+                    println!("Finished forwarding stream");
+                });
 
-                        Sse::new(ReceiverStream::new(rx)).into_response()
-                    }
-                    Err(e) => {
-                        (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(serde_json::json!({
-                                "success": false,
-                                "error": format!("Failed to read forwarded streaming response: {}", e)
-                            }))
-                        ).into_response()
-                    }
-                }
+                Sse::new(ReceiverStream::new(rx)).into_response()
             } else {
                 // Forward the error response
                 match response.text().await {
