@@ -640,6 +640,7 @@ pub async fn get_nodes_for_model(
 
     // get nodes from model
     let nodes = datastore.model_state.get_model_nodes(model_id);
+
     if let Some(nodes) = nodes {
         (
             StatusCode::OK,
@@ -1032,73 +1033,70 @@ pub async fn find_node_for_model(
         }
     }
 
-    let node_id = &datastore.node_state.node_id;
+    // Use round robin to select the next node from all available nodes
+    if !model.nodes.is_empty() {
+        // Get the current counter value and increment it atomically
+        let current_index = ROUND_ROBIN_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let node_index = current_index % model.nodes.len();
 
-    if let Some((_node, port)) = model.nodes.iter().find(|(node, _port)| node == node_id) {
-        return (
-            StatusCode::OK,
-            Json(json!({
-                "success": true,
-                "model": model_id,
-                "node_id": node_id,
-                "port": port,
-                "address": "localhost"
-            })),
-        );
-    } else {
-        // Current node isn't running the model, use round robin to select the next node
-        if !model.nodes.is_empty() {
-            // Get the current counter value and increment it atomically
-            let current_index = ROUND_ROBIN_COUNTER.fetch_add(1, Ordering::Relaxed);
-            let node_index = current_index % model.nodes.len();
+        // Get the node at the calculated index
+        if let Some((round_robin_node_id, round_robin_port)) = model.nodes.iter().nth(node_index) {
+            let node_id = &datastore.node_state.node_id;
 
-            // Get the node at the calculated index
-            if let Some((round_robin_node_id, round_robin_port)) = model.nodes.iter().nth(node_index) {
-                if node_id == round_robin_node_id {
-                    return (
-                        StatusCode::OK,
-                        Json(json!({
-                            "success": true,
-                            "model": model_id,
-                            "node_id": node_id,
-                            "port": round_robin_port,
-                            "address": "localhost"
-                        })),
-                    );
-                }
+            // If the selected node is the current node, return localhost
+            if node_id == round_robin_node_id {
+                log::info!(
+                    "Round robin load balancing: Selected current node {} (index {}/{}) for model {}",
+                    round_robin_node_id,
+                    node_index,
+                    model.nodes.len(),
+                    model_id
+                );
 
-                if let Some(round_robin_node) = datastore.node_state.get_node(round_robin_node_id.clone()) {
-                    log::info!(
-                        "Round robin load balancing: Selected node {} (index {}/{}) for model {}",
-                        round_robin_node_id,
-                        node_index,
-                        model.nodes.len(),
-                        model_id
-                    );
+                return (
+                    StatusCode::OK,
+                    Json(json!({
+                        "success": true,
+                        "model": model_id,
+                        "node_id": round_robin_node_id,
+                        "port": round_robin_port,
+                        "address": "localhost"
+                    })),
+                );
+            }
 
-                    return (
-                        StatusCode::OK,
-                        Json(json!({
-                            "success": true,
-                            "model": model_id,
-                            "node_id": round_robin_node_id,
-                            "port": round_robin_port,
-                            "address": round_robin_node.host
-                        })),
-                    );
-                }
+            // Otherwise, return the selected remote node
+            if let Some(round_robin_node) = datastore.node_state.get_node(round_robin_node_id.clone()) {
+                log::info!(
+                    "Round robin load balancing: Selected remote node {} (index {}/{}) for model {}",
+                    round_robin_node_id,
+                    node_index,
+                    model.nodes.len(),
+                    model_id
+                );
+
+                return (
+                    StatusCode::OK,
+                    Json(json!({
+                        "success": true,
+                        "model": model_id,
+                        "node_id": round_robin_node_id,
+                        "port": round_robin_port,
+                        "address": round_robin_node.host
+                    })),
+                );
             }
         }
-
-        // No nodes available for this model
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({
-                "success": false,
-                "error": "No nodes available for this model"
-            })),
-        );
     }
+
+    // No nodes available for this model
+    return (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({
+            "success": false,
+            "error": "No nodes available for this model"
+        })),
+    );
 }
 
 // pub async fn model_inference_accounting(

@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use tokio::sync::Mutex;
 use thiserror;
 use lazy_static::lazy_static;
+use tiny_keccak::Hasher;
 
 /// Error type for signature verification failures
 #[derive(Debug, Serialize)]
@@ -92,17 +93,17 @@ impl AdminRecoveredAddress {
             service_name,
         }
     }
-    
+
     /// Get the address as a hex string
     pub fn as_hex(&self) -> String {
         format!("0x{}", hex::encode(self.address.as_slice()))
     }
-    
+
     /// Get description or fallback
     pub fn display_description(&self) -> &str {
         self.description.as_deref().unwrap_or("unknown admin")
     }
-    
+
     /// Convert to a standard RecoveredAddress for backward compatibility
     pub fn to_recovered_address(&self) -> RecoveredAddress {
         RecoveredAddress {
@@ -113,12 +114,12 @@ impl AdminRecoveredAddress {
 }
 
 /// Unified authentication context for request extensions
-/// 
+///
 /// This enum represents the result of the authentication precedence hierarchy:
 /// 1. Localhost access (highest precedence)
 /// 2. Admin key authentication (second precedence)
 /// 3. Normal user authentication (lowest precedence)
-/// 
+///
 /// Sub-sub-task 3.5.1.1: Implement unified `AuthenticationContext` enum
 #[derive(Debug, Clone)]
 pub enum AuthenticationContext {
@@ -126,13 +127,13 @@ pub enum AuthenticationContext {
     Localhost {
         timestamp: std::time::SystemTime,
     },
-    
+
     /// Admin request with full context
     Admin {
         context: AdminRecoveredAddress,
         precedence_level: u8, // Always 2
     },
-    
+
     /// Normal user request
     User {
         address: RecoveredAddress,
@@ -149,12 +150,12 @@ impl AuthenticationContext {
             Self::User { .. } => 3,
         }
     }
-    
+
     /// Check if this context has admin privileges
     pub fn is_admin(&self) -> bool {
         matches!(self, Self::Localhost { .. } | Self::Admin { .. })
     }
-    
+
     /// Get address if available
     pub fn address(&self) -> Option<Address> {
         match self {
@@ -163,23 +164,23 @@ impl AuthenticationContext {
             Self::Localhost { .. } => None,
         }
     }
-    
+
     /// Get address as hex string if available
     pub fn address_hex(&self) -> Option<String> {
         self.address().map(|addr| format!("0x{}", hex::encode(addr.as_slice())))
     }
-    
+
     /// Get a description of the authenticated entity for logging
     pub fn description(&self) -> String {
         match self {
             Self::Localhost { .. } => "localhost".to_string(),
-            Self::Admin { context, .. } => 
+            Self::Admin { context, .. } =>
                 format!("admin:{}", context.display_description()),
-            Self::User { address, .. } => 
+            Self::User { address, .. } =>
                 format!("user:0x{}", hex::encode(address.address.as_slice())),
         }
     }
-    
+
     /// Convert to RecoveredAddress for backward compatibility
     /// Returns None for localhost requests
     pub fn as_recovered_address(&self) -> Option<&RecoveredAddress> {
@@ -195,14 +196,14 @@ impl AuthenticationContext {
             Self::Localhost { .. } => None,
         }
     }
-    
+
     /// Create localhost authentication context
     pub fn localhost() -> Self {
         Self::Localhost {
             timestamp: std::time::SystemTime::now(),
         }
     }
-    
+
     /// Create admin authentication context
     pub fn admin(admin_context: AdminRecoveredAddress) -> Self {
         Self::Admin {
@@ -210,7 +211,7 @@ impl AuthenticationContext {
             precedence_level: 2,
         }
     }
-    
+
     /// Create user authentication context
     pub fn user(recovered_address: RecoveredAddress) -> Self {
         Self::User {
@@ -302,7 +303,7 @@ pub fn recover_address(
 }
 
 /// Check if an address is configured as an admin key
-/// 
+///
 /// This function verifies if the given address matches any of the configured admin addresses.
 /// It uses environment variables to determine admin addresses, making it suitable for
 /// deployment-time configuration without requiring persistent storage.
@@ -324,19 +325,19 @@ pub fn is_admin_key(address: &Address) -> bool {
         .unwrap_or_else(|_| "true".to_string())
         .parse::<bool>()
         .unwrap_or(true);
-    
+
     if !admin_enabled {
         log::debug!("Admin authentication disabled via FORMATION_ADMIN_ENABLED");
         return false;
     }
-    
+
     // PRECEDENCE 1: Check runtime admin keys first (highest precedence)
     // Sub-sub-task 3.4.1.3: Add runtime admin key rotation capability
     if is_runtime_admin_key(address) {
         log::info!("Admin key verified: {} matches runtime admin key", format!("0x{}", hex::encode(address.as_slice())));
         return true;
     }
-    
+
     // PRECEDENCE 2: Check environment variable admin keys (lower precedence)
     // Get admin addresses from environment variables
     let admin_addresses = if let Ok(single_key) = std::env::var("FORMATION_ADMIN_KEY") {
@@ -347,29 +348,29 @@ pub fn is_admin_key(address: &Address) -> bool {
         log::debug!("No environment admin keys configured (FORMATION_ADMIN_KEY or FORMATION_ADMIN_KEYS not set)");
         return false;
     };
-    
+
     // Convert input address to hex string for comparison
     let address_hex = format!("0x{}", hex::encode(address.as_slice()));
     let address_hex_no_prefix = hex::encode(address.as_slice());
-    
+
     // Check if any configured admin address matches
     for admin_addr_str in admin_addresses {
         let admin_addr_cleaned = admin_addr_str.trim();
-        
+
         // Handle both with and without 0x prefix
         let normalized_admin = if admin_addr_cleaned.starts_with("0x") {
             admin_addr_cleaned.to_lowercase()
         } else {
             format!("0x{}", admin_addr_cleaned.to_lowercase())
         };
-        
-        if normalized_admin == address_hex.to_lowercase() || 
+
+        if normalized_admin == address_hex.to_lowercase() ||
            admin_addr_cleaned.to_lowercase() == address_hex_no_prefix.to_lowercase() {
             log::info!("Admin key verified: {} matches environment admin address", address_hex);
             return true;
         }
     }
-    
+
     log::debug!("Address {} is not configured as an admin key", address_hex);
     false
 }
@@ -390,23 +391,23 @@ pub fn is_admin_key(address: &Address) -> bool {
 pub fn verify_admin_signature(headers: &HeaderMap, service_name: &str) -> Result<AdminRecoveredAddress, SignatureError> {
     // Extract signature parts from headers
     let (signature_bytes, recovery_id, message) = extract_signature_parts(headers)?;
-    
+
     // Recover address from signature
     let recovered_address = recover_address(&signature_bytes, recovery_id, &message)?;
-    
+
     // Check if recovered address is an admin key
     if !is_admin_key(&recovered_address) {
         log::debug!("Valid signature but not from admin key: 0x{}", hex::encode(recovered_address.as_slice()));
         return Err(SignatureError::RecoveryFailed); // Reuse existing error type for now
     }
-    
+
     // Get admin description from environment if available
     let description = get_admin_description(&recovered_address);
-    
-    log::info!("Admin signature verified: 0x{} ({})", 
+
+    log::info!("Admin signature verified: 0x{} ({})",
                hex::encode(recovered_address.as_slice()),
                description.as_deref().unwrap_or("unknown admin"));
-    
+
     Ok(AdminRecoveredAddress::new(
         recovered_address,
         message,
@@ -416,21 +417,21 @@ pub fn verify_admin_signature(headers: &HeaderMap, service_name: &str) -> Result
 }
 
 /// Get description for an admin address from runtime or environment configuration
-/// 
+///
 /// Sub-sub-task 3.4.1.3: Add runtime admin key rotation capability
-/// 
+///
 /// This function checks runtime admin keys first, then falls back to environment variables.
 fn get_admin_description(address: &Address) -> Option<String> {
     // PRECEDENCE 1: Check runtime admin keys first (highest precedence)
     if let Some(description) = get_runtime_admin_description(address) {
         return Some(description);
     }
-    
+
     // PRECEDENCE 2: Check environment variable descriptions (lower precedence)
     // Get admin descriptions from environment variable
     let descriptions = std::env::var("FORMATION_ADMIN_KEY_DESCRIPTIONS").ok()?;
     let description_list: Vec<&str> = descriptions.split(',').map(|s| s.trim()).collect();
-    
+
     // Get admin addresses to match with descriptions
     let admin_addresses = if let Ok(single_key) = std::env::var("FORMATION_ADMIN_KEY") {
         vec![single_key]
@@ -439,9 +440,9 @@ fn get_admin_description(address: &Address) -> Option<String> {
     } else {
         return None;
     };
-    
+
     let address_hex = format!("0x{}", hex::encode(address.as_slice()));
-    
+
     // Find matching admin address and return corresponding description
     for (i, admin_addr_str) in admin_addresses.iter().enumerate() {
         let admin_addr_cleaned = admin_addr_str.trim();
@@ -450,12 +451,12 @@ fn get_admin_description(address: &Address) -> Option<String> {
         } else {
             format!("0x{}", admin_addr_cleaned.to_lowercase())
         };
-        
+
         if normalized_admin == address_hex.to_lowercase() {
             return description_list.get(i).map(|s| s.to_string());
         }
     }
-    
+
     None
 }
 
@@ -482,10 +483,10 @@ where
 }
 
 /// Backward compatibility extractor for RecoveredAddress
-/// 
+///
 /// This extractor maintains backward compatibility with existing handlers that expect
 /// RecoveredAddress by extracting it from the unified AuthenticationContext.
-/// 
+///
 /// Sub-sub-task 3.5.1.3: Create backward compatibility extractors for existing handlers
 #[async_trait]
 impl<S> FromRequestParts<S> for RecoveredAddress
@@ -512,18 +513,18 @@ where
                 }
             }
         }
-        
+
         // Fallback to legacy extraction for compatibility with old middleware
         if let Some(recovered) = parts.extensions.get::<RecoveredAddress>() {
             log::debug!("BACKWARD_COMPAT: Found legacy RecoveredAddress in extensions");
             return Ok(recovered.clone());
         }
-        
+
         // If no context found, try direct signature extraction (legacy behavior)
         log::debug!("BACKWARD_COMPAT: No AuthenticationContext found, attempting direct signature extraction");
         let (signature_bytes, recovery_id, message) = extract_signature_parts(&parts.headers)?;
         let address = recover_address(&signature_bytes, recovery_id, &message)?;
-        
+
         Ok(RecoveredAddress {
             address,
             message,
@@ -532,7 +533,7 @@ where
 }
 
 /// Extractor for unified AuthenticationContext
-/// 
+///
 /// This extractor allows handlers to access the full authentication context
 /// including precedence level and admin status information.
 #[async_trait]
@@ -548,18 +549,18 @@ where
             log::debug!("AUTH_CONTEXT: Found unified AuthenticationContext in extensions");
             return Ok(auth_context.clone());
         }
-        
+
         // Fallback: try to construct from legacy extensions
         if let Some(admin_context) = parts.extensions.get::<AdminRecoveredAddress>() {
             log::debug!("AUTH_CONTEXT: Constructing from legacy AdminRecoveredAddress");
             return Ok(AuthenticationContext::admin(admin_context.clone()));
         }
-        
+
         if let Some(recovered) = parts.extensions.get::<RecoveredAddress>() {
             log::debug!("AUTH_CONTEXT: Constructing from legacy RecoveredAddress");
             return Ok(AuthenticationContext::user(recovered.clone()));
         }
-        
+
         // No authentication context found
         log::debug!("AUTH_CONTEXT: No authentication context found");
         Err(SignatureError::MissingSignature)
@@ -696,10 +697,10 @@ pub async fn active_node_auth_middleware(
 }
 
 /// Global admin authentication middleware with precedence rules
-/// 
+///
 /// This middleware implements the authentication precedence hierarchy:
 /// 1. Localhost access (highest precedence)
-/// 2. Admin key authentication (second precedence) 
+/// 2. Admin key authentication (second precedence)
 /// 3. Normal user authentication (lowest precedence)
 ///
 /// Sub-sub-task 3.5.1.2: Update `global_admin_auth_middleware` to use unified context
@@ -712,45 +713,45 @@ pub async fn global_admin_auth_middleware(
     mut request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Result<axum::response::Response, axum::http::StatusCode> {
-    
+
     let endpoint = request.uri().path();
     let method = request.method();
-    
+
     // PRECEDENCE LEVEL 1: Localhost Check (Highest Priority)
     // Based on design documents: localhost has highest precedence
     if crate::api::is_localhost_request(&request) {
         log::info!("GLOBAL_ADMIN_AUTH: Localhost access granted for {} {}", method, endpoint);
-        
+
         // Store unified localhost context in request extensions for handlers
         let auth_context = AuthenticationContext::localhost();
         request.extensions_mut().insert(auth_context);
-        
+
         log::debug!("GLOBAL_ADMIN_AUTH: Stored localhost AuthenticationContext");
         return Ok(next.run(request).await);
     }
-    
+
     log::debug!("GLOBAL_ADMIN_AUTH: Not localhost, checking for ECDSA signature");
-    
+
     // PRECEDENCE LEVEL 2: Admin Key Authentication (sub-sub-tasks 3.2.2.1.2, 3.2.2.1.3 & 3.2.2.1.4)
     let headers = request.headers().clone();
-    
+
     match extract_signature_parts(&headers) {
         Ok((signature_bytes, recovery_id, message)) => {
             log::debug!("GLOBAL_ADMIN_AUTH: ECDSA signature found, attempting to recover address");
-            
+
             match recover_address(&signature_bytes, recovery_id, &message) {
                 Ok(recovered_address) => {
-                    log::debug!("GLOBAL_ADMIN_AUTH: Successfully recovered address: 0x{}", 
+                    log::debug!("GLOBAL_ADMIN_AUTH: Successfully recovered address: 0x{}",
                                hex::encode(recovered_address.as_slice()));
-                    
+
                     // PRECEDENCE LEVEL 2: Check if recovered address is admin key (sub-sub-task 3.2.2.1.3)
                     if is_admin_key(&recovered_address) {
-                        log::info!("GLOBAL_ADMIN_AUTH: Admin key verified: 0x{}", 
+                        log::info!("GLOBAL_ADMIN_AUTH: Admin key verified: 0x{}",
                                   hex::encode(recovered_address.as_slice()));
-                        
+
                         // Get admin description for audit logging
                         let description = get_admin_description(&recovered_address);
-                        
+
                         // Create admin context for audit and authorization
                         let admin_context = AdminRecoveredAddress::new(
                             recovered_address,
@@ -758,34 +759,34 @@ pub async fn global_admin_auth_middleware(
                             description,
                             "form-state".to_string(),
                         );
-                        
-                        log::warn!("ADMIN ACCESS: {} accessing {} {} on form-state", 
+
+                        log::warn!("ADMIN ACCESS: {} accessing {} {} on form-state",
                                   admin_context.display_description(), method, endpoint);
-                        
+
                         // Store unified admin context in request extensions for handlers
                         let auth_context = AuthenticationContext::admin(admin_context);
                         request.extensions_mut().insert(auth_context);
-                        
+
                         // PRECEDENCE LEVEL 2: Allow all requests if admin key verified (sub-sub-task 3.2.2.1.4)
                         log::info!("GLOBAL_ADMIN_AUTH: Admin request allowed, proceeding to handler");
                         return Ok(next.run(request).await);
                     } else {
-                        log::debug!("GLOBAL_ADMIN_AUTH: Valid signature but not from admin key: 0x{}", 
+                        log::debug!("GLOBAL_ADMIN_AUTH: Valid signature but not from admin key: 0x{}",
                                    hex::encode(recovered_address.as_slice()));
-                        
+
                         // Not an admin key - create user context for normal authentication
                         // This will be used in PRECEDENCE LEVEL 3 (sub-sub-task 3.2.2.1.5)
                         let recovered_context = RecoveredAddress {
                             address: recovered_address,
                             message,
                         };
-                        
+
                         // Store unified user context in request extensions
                         let auth_context = AuthenticationContext::user(recovered_context);
                         request.extensions_mut().insert(auth_context);
-                        
+
                         log::debug!("GLOBAL_ADMIN_AUTH: Non-admin signature stored as user context");
-                        
+
                         // Valid non-admin signature - allow request to proceed with normal authorization
                         log::info!("GLOBAL_ADMIN_AUTH: Normal user request allowed, proceeding to handler");
                         return Ok(next.run(request).await);
@@ -806,7 +807,7 @@ pub async fn global_admin_auth_middleware(
             // Invalid signature format - authentication failed
         }
     }
-    
+
     // PRECEDENCE LEVEL 3: Authentication Failed
     // No valid signature found - authentication failed
     log::info!("GLOBAL_ADMIN_AUTH: Authentication failed - no valid signature found for {} {}", method, endpoint);
@@ -814,7 +815,7 @@ pub async fn global_admin_auth_middleware(
 }
 
 /// Authorization helper functions
-/// 
+///
 /// Sub-sub-task 3.5.5.1: Create `check_authorization()` function with admin bypass
 /// Sub-sub-task 3.5.5.2: Create admin context utilities for payload extraction
 /// Sub-sub-task 3.5.5.3: Implement comprehensive authorization logging
@@ -824,16 +825,16 @@ pub async fn global_admin_auth_middleware(
 pub enum AuthorizationError {
     #[error("Access denied: insufficient permissions")]
     InsufficientPermissions,
-    
+
     #[error("Access denied: resource not found")]
     ResourceNotFound,
-    
+
     #[error("Access denied: not resource owner")]
     NotResourceOwner,
-    
+
     #[error("Access denied: authentication required")]
     AuthenticationRequired,
-    
+
     #[error("Authorization check failed: {0}")]
     CheckFailed(String),
 }
@@ -896,7 +897,7 @@ impl AuthorizationContext {
 }
 
 /// Sub-sub-task 3.5.5.1: Create `check_authorization()` function with admin bypass
-/// 
+///
 /// Comprehensive authorization checker that respects authentication precedence
 /// and implements admin bypass logic for all resource types.
 pub fn check_authorization(
@@ -906,25 +907,25 @@ pub fn check_authorization(
     operation: OperationType,
     resource_owner: Option<&str>,
 ) -> Result<AuthorizationContext, AuthorizationError> {
-    
+
     let auth_ctx = AuthorizationContext::new(
         resource_type.clone(),
         resource_id.map(|s| s.to_string()),
         operation.clone(),
         auth_context,
     );
-    
+
     // Admin bypass: Localhost and Admin contexts have full access
     if auth_context.is_admin() {
         log_authorization_decision(&auth_ctx, true, "Admin bypass granted");
         return Ok(auth_ctx);
     }
-    
+
     // Normal user authorization checks
     match auth_context {
         AuthenticationContext::User { address, .. } => {
             let user_address = address.as_hex();
-            
+
             // Check resource-specific authorization
             let authorized = match resource_type {
                 ResourceType::Account => {
@@ -948,7 +949,7 @@ pub fn check_authorization(
                     false
                 }
             };
-            
+
             if authorized {
                 log_authorization_decision(&auth_ctx, true, "Resource ownership verified");
                 Ok(auth_ctx)
@@ -966,7 +967,7 @@ pub fn check_authorization(
 }
 
 /// Sub-sub-task 3.5.5.2: Create admin context utilities for payload extraction
-/// 
+///
 /// Utility functions for extracting and validating data from request payloads
 /// with admin context awareness.
 
@@ -976,22 +977,22 @@ pub fn extract_owner_from_payload(
     auth_context: &AuthenticationContext,
     default_field: &str,
 ) -> Result<String, AuthorizationError> {
-    
+
     // Admin bypass: Admins can specify any owner
     if auth_context.is_admin() {
         if let Some(owner) = payload.get(default_field).and_then(|v| v.as_str()) {
-            log::info!("PAYLOAD_EXTRACT: Admin {} specified owner: {}", 
+            log::info!("PAYLOAD_EXTRACT: Admin {} specified owner: {}",
                       auth_context.description(), owner);
             return Ok(owner.to_string());
         } else {
-            log::warn!("PAYLOAD_EXTRACT: Admin {} did not specify owner in field '{}'", 
+            log::warn!("PAYLOAD_EXTRACT: Admin {} did not specify owner in field '{}'",
                       auth_context.description(), default_field);
             return Err(AuthorizationError::CheckFailed(
                 format!("Admin must specify owner in field '{}'", default_field)
             ));
         }
     }
-    
+
     // Normal users: force owner to be their own address
     match auth_context {
         AuthenticationContext::User { address, .. } => {
@@ -1014,44 +1015,44 @@ pub fn validate_resource_ownership(
     current_owner: &str,
     new_owner: Option<&str>,
 ) -> Result<(), AuthorizationError> {
-    
+
     // Admin bypass: Admins can change ownership
     if auth_context.is_admin() {
         if let Some(new_owner) = new_owner {
-            log::info!("OWNERSHIP_VALIDATE: Admin {} changing {} {} ownership from {} to {}", 
-                      auth_context.description(), 
+            log::info!("OWNERSHIP_VALIDATE: Admin {} changing {} {} ownership from {} to {}",
+                      auth_context.description(),
                       format!("{:?}", resource_type).to_lowercase(),
                       resource_id, current_owner, new_owner);
         }
         return Ok(());
     }
-    
+
     // Normal users: verify current ownership and prevent ownership changes
     match auth_context {
         AuthenticationContext::User { address, .. } => {
             let user_address = address.as_hex();
             let normalized_user = user_address.strip_prefix("0x").unwrap_or(&user_address).to_lowercase();
             let normalized_current = current_owner.strip_prefix("0x").unwrap_or(current_owner).to_lowercase();
-            
+
             // Check current ownership
             if normalized_user != normalized_current {
-                log::warn!("OWNERSHIP_VALIDATE: User {} does not own {} {}", 
+                log::warn!("OWNERSHIP_VALIDATE: User {} does not own {} {}",
                           user_address, format!("{:?}", resource_type).to_lowercase(), resource_id);
                 return Err(AuthorizationError::NotResourceOwner);
             }
-            
+
             // Check for ownership change attempts
             if let Some(new_owner) = new_owner {
                 let normalized_new = new_owner.strip_prefix("0x").unwrap_or(new_owner).to_lowercase();
                 if normalized_new != normalized_current {
-                    log::warn!("OWNERSHIP_VALIDATE: User {} attempted to change {} {} ownership to {}", 
-                              user_address, format!("{:?}", resource_type).to_lowercase(), 
+                    log::warn!("OWNERSHIP_VALIDATE: User {} attempted to change {} {} ownership to {}",
+                              user_address, format!("{:?}", resource_type).to_lowercase(),
                               resource_id, new_owner);
                     return Err(AuthorizationError::InsufficientPermissions);
                 }
             }
-            
-            log::debug!("OWNERSHIP_VALIDATE: User {} ownership verified for {} {}", 
+
+            log::debug!("OWNERSHIP_VALIDATE: User {} ownership verified for {} {}",
                        user_address, format!("{:?}", resource_type).to_lowercase(), resource_id);
             Ok(())
         }
@@ -1068,28 +1069,28 @@ pub fn extract_resource_id(
     payload: &serde_json::Value,
     id_field: &str,
 ) -> Result<String, AuthorizationError> {
-    
+
     // Prefer path parameter over payload
     if let Some(id) = path_id {
         if !id.is_empty() {
             return Ok(id.to_string());
         }
     }
-    
+
     // Fall back to payload field
     if let Some(id) = payload.get(id_field).and_then(|v| v.as_str()) {
         if !id.is_empty() {
             return Ok(id.to_string());
         }
     }
-    
+
     Err(AuthorizationError::CheckFailed(
         format!("Resource ID not found in path or payload field '{}'", id_field)
     ))
 }
 
 /// Sub-sub-task 3.5.5.3: Implement comprehensive authorization logging
-/// 
+///
 /// Comprehensive logging system for authorization decisions with structured
 /// output for security auditing and monitoring.
 
@@ -1105,19 +1106,19 @@ pub fn log_authorization_decision(
     } else {
         format!("{:?}", auth_ctx.resource_type)
     };
-    
+
     if granted {
         log::info!(
             target: "authorization",
             "AUTHORIZATION_{} resource={} operation={:?} requested_by={} access_level={} reason=\"{}\"",
-            decision, resource_desc, auth_ctx.operation, 
+            decision, resource_desc, auth_ctx.operation,
             auth_ctx.requested_by, auth_ctx.access_level, reason
         );
     } else {
         log::warn!(
             target: "authorization",
             "AUTHORIZATION_{} resource={} operation={:?} requested_by={} access_level={} reason=\"{}\"",
-            decision, resource_desc, auth_ctx.operation, 
+            decision, resource_desc, auth_ctx.operation,
             auth_ctx.requested_by, auth_ctx.access_level, reason
         );
     }
@@ -1158,10 +1159,10 @@ pub fn log_security_event(
     log::warn!(
         target: "security_events",
         "SECURITY_EVENT type=\"{}\" severity=\"{}\" requested_by=\"{}\" access_level=\"{}\" resource=\"{}\" details=\"{}\"",
-        event_type, severity, auth_context.description(), 
+        event_type, severity, auth_context.description(),
         match auth_context {
             AuthenticationContext::Localhost { .. } => "localhost",
-            AuthenticationContext::Admin { .. } => "admin", 
+            AuthenticationContext::Admin { .. } => "admin",
             AuthenticationContext::User { .. } => "user",
         },
         resource, details
@@ -1181,7 +1182,7 @@ pub fn log_authorization_failure(
     } else {
         format!("{:?}", resource_type)
     };
-    
+
     log_security_event(
         "authorization_failure",
         auth_context,
@@ -1207,9 +1208,9 @@ pub fn create_auth_context_for_operation(
 }
 
 /// Runtime admin key storage for dynamic key rotation
-/// 
+///
 /// Sub-sub-task 3.4.1.3: Add runtime admin key rotation capability
-/// 
+///
 /// This provides thread-safe storage for admin keys that can be modified at runtime
 /// without requiring service restart. Keys are stored in memory and take precedence
 /// over environment variable configuration.
@@ -1228,7 +1229,7 @@ impl RuntimeAdminKeys {
             last_modified: std::time::SystemTime::now(),
         }
     }
-    
+
     /// Add an admin key with optional description
     pub fn add_key(&mut self, address: &str, description: Option<String>) -> Result<(), String> {
         // Normalize address format
@@ -1237,17 +1238,17 @@ impl RuntimeAdminKeys {
         } else {
             format!("0x{}", address.to_lowercase())
         };
-        
+
         // Validate address format (basic hex check)
         if normalized_address.len() != 42 || !normalized_address[2..].chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(format!("Invalid address format: {}", address));
         }
-        
+
         self.keys.insert(normalized_address, description);
         self.last_modified = std::time::SystemTime::now();
         Ok(())
     }
-    
+
     /// Remove an admin key
     pub fn remove_key(&mut self, address: &str) -> bool {
         let normalized_address = if address.starts_with("0x") {
@@ -1255,14 +1256,14 @@ impl RuntimeAdminKeys {
         } else {
             format!("0x{}", address.to_lowercase())
         };
-        
+
         let removed = self.keys.remove(&normalized_address).is_some();
         if removed {
             self.last_modified = std::time::SystemTime::now();
         }
         removed
     }
-    
+
     /// Check if an address is an admin key
     pub fn is_admin_key(&self, address: &str) -> bool {
         let normalized_address = if address.starts_with("0x") {
@@ -1270,10 +1271,10 @@ impl RuntimeAdminKeys {
         } else {
             format!("0x{}", address.to_lowercase())
         };
-        
+
         self.keys.contains_key(&normalized_address)
     }
-    
+
     /// Get description for an admin key
     pub fn get_description(&self, address: &str) -> Option<String> {
         let normalized_address = if address.starts_with("0x") {
@@ -1281,21 +1282,21 @@ impl RuntimeAdminKeys {
         } else {
             format!("0x{}", address.to_lowercase())
         };
-        
+
         self.keys.get(&normalized_address).and_then(|desc| desc.clone())
     }
-    
+
     /// List all admin keys with their descriptions
     pub fn list_keys(&self) -> Vec<(String, Option<String>)> {
         self.keys.iter().map(|(addr, desc)| (addr.clone(), desc.clone())).collect()
     }
-    
+
     /// Clear all runtime admin keys
     pub fn clear(&mut self) {
         self.keys.clear();
         self.last_modified = std::time::SystemTime::now();
     }
-    
+
     /// Get count of runtime admin keys
     pub fn count(&self) -> usize {
         self.keys.len()
@@ -1303,7 +1304,7 @@ impl RuntimeAdminKeys {
 }
 
 /// Global runtime admin key storage
-/// 
+///
 /// This provides thread-safe access to runtime admin keys across the application.
 /// Keys stored here take precedence over environment variable configuration.
 lazy_static! {
@@ -1311,82 +1312,82 @@ lazy_static! {
 }
 
 /// Runtime admin key management functions
-/// 
+///
 /// Sub-sub-task 3.4.1.3: Add runtime admin key rotation capability
 
 /// Add an admin key at runtime
-/// 
+///
 /// This function allows adding admin keys without restarting the service.
 /// Runtime keys take precedence over environment variable configuration.
 pub fn add_runtime_admin_key(address: &str, description: Option<String>) -> Result<(), String> {
     let mut runtime_keys = RUNTIME_ADMIN_KEYS.write()
         .map_err(|e| format!("Failed to acquire write lock: {}", e))?;
-    
+
     let description_for_log = description.as_deref().unwrap_or("no description").to_string();
     runtime_keys.add_key(address, description)?;
-    
-    log::info!("ADMIN_KEY_ROTATION: Added runtime admin key: {} ({})", 
+
+    log::info!("ADMIN_KEY_ROTATION: Added runtime admin key: {} ({})",
                address, description_for_log);
-    
+
     Ok(())
 }
 
 /// Remove an admin key at runtime
-/// 
+///
 /// This function allows removing admin keys without restarting the service.
 /// Note: This only removes runtime keys, not environment variable keys.
 pub fn remove_runtime_admin_key(address: &str) -> Result<bool, String> {
     let mut runtime_keys = RUNTIME_ADMIN_KEYS.write()
         .map_err(|e| format!("Failed to acquire write lock: {}", e))?;
-    
+
     let removed = runtime_keys.remove_key(address);
-    
+
     if removed {
         log::info!("ADMIN_KEY_ROTATION: Removed runtime admin key: {}", address);
     } else {
         log::warn!("ADMIN_KEY_ROTATION: Attempted to remove non-existent runtime admin key: {}", address);
     }
-    
+
     Ok(removed)
 }
 
 /// List all runtime admin keys
-/// 
+///
 /// Returns a list of all runtime admin keys with their descriptions.
 pub fn list_runtime_admin_keys() -> Result<Vec<(String, Option<String>)>, String> {
     let runtime_keys = RUNTIME_ADMIN_KEYS.read()
         .map_err(|e| format!("Failed to acquire read lock: {}", e))?;
-    
+
     Ok(runtime_keys.list_keys())
 }
 
 /// Clear all runtime admin keys
-/// 
+///
 /// This removes all runtime admin keys but does not affect environment variable keys.
 pub fn clear_runtime_admin_keys() -> Result<(), String> {
     let mut runtime_keys = RUNTIME_ADMIN_KEYS.write()
         .map_err(|e| format!("Failed to acquire write lock: {}", e))?;
-    
+
     let count = runtime_keys.count();
     runtime_keys.clear();
-    
+
     log::info!("ADMIN_KEY_ROTATION: Cleared {} runtime admin keys", count);
-    
+
     Ok(())
 }
 
 /// Get runtime admin key statistics
-/// 
+///
 /// Returns information about runtime admin key storage.
 pub fn get_runtime_admin_key_stats() -> Result<(usize, std::time::SystemTime), String> {
     let runtime_keys = RUNTIME_ADMIN_KEYS.read()
         .map_err(|e| format!("Failed to acquire read lock: {}", e))?;
-    
+
     Ok((runtime_keys.count(), runtime_keys.last_modified))
 }
 
 /// Check if an address is a runtime admin key
-/// 
+///
 /// Internal function used by the main is_admin_key function.
 fn is_runtime_admin_key(address: &Address) -> bool {
     let runtime_keys = match RUNTIME_ADMIN_KEYS.read() {
@@ -1396,13 +1397,13 @@ fn is_runtime_admin_key(address: &Address) -> bool {
             return false;
         }
     };
-    
+
     let address_hex = format!("0x{}", hex::encode(address.as_slice()));
     runtime_keys.is_admin_key(&address_hex)
 }
 
 /// Get description for a runtime admin key
-/// 
+///
 /// Internal function used by the main get_admin_description function.
 fn get_runtime_admin_description(address: &Address) -> Option<String> {
     let runtime_keys = match RUNTIME_ADMIN_KEYS.read() {
@@ -1412,7 +1413,7 @@ fn get_runtime_admin_description(address: &Address) -> Option<String> {
             return None;
         }
     };
-    
+
     let address_hex = format!("0x{}", hex::encode(address.as_slice()));
     runtime_keys.get_description(&address_hex)
 }
@@ -1422,6 +1423,7 @@ mod tests {
     use super::*;
     use k256::ecdsa::{signature::Signer, SigningKey};
     use rand::rngs::OsRng;
+    use tiny_keccak::Hasher;
 
     #[test]
     fn test_signature_recovery() {
@@ -1457,5 +1459,5 @@ mod tests {
 
         assert_eq!(result, expected_address);
     }
-} 
+}
 
