@@ -16,6 +16,10 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use rand::prelude::IteratorRandom;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+// Round robin counter for load balancing
+static ROUND_ROBIN_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 // Helper function to determine if an address belongs to an admin
 // This would ideally be replaced with a proper role-based system
@@ -1042,30 +1046,58 @@ pub async fn find_node_for_model(
             })),
         );
     } else {
-        // Current node isn't running the model, select a random node from the list
-        if let Some((random_node_id, random_port)) = model.nodes.iter().choose(&mut rand::thread_rng()) {
-            if let Some(random_node) = datastore.node_state.get_node(random_node_id.clone()) {
-                return (
-                    StatusCode::OK,
-                    Json(json!({
-                        "success": true,
-                        "model": model_id,
-                        "node_id": random_node_id,
-                        "port": random_port,
-                        "address": random_node.host
-                    })),
-                );
+        // Current node isn't running the model, use round robin to select the next node
+        if !model.nodes.is_empty() {
+            // Get the current counter value and increment it atomically
+            let current_index = ROUND_ROBIN_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let node_index = current_index % model.nodes.len();
+
+            // Get the node at the calculated index
+            if let Some((round_robin_node_id, round_robin_port)) = model.nodes.iter().nth(node_index) {
+                if node_id == round_robin_node_id {
+                    return (
+                        StatusCode::OK,
+                        Json(json!({
+                            "success": true,
+                            "model": model_id,
+                            "node_id": node_id,
+                            "port": round_robin_port,
+                            "address": "localhost"
+                        })),
+                    );
+                }
+
+                if let Some(round_robin_node) = datastore.node_state.get_node(round_robin_node_id.clone()) {
+                    log::info!(
+                        "Round robin load balancing: Selected node {} (index {}/{}) for model {}",
+                        round_robin_node_id,
+                        node_index,
+                        model.nodes.len(),
+                        model_id
+                    );
+
+                    return (
+                        StatusCode::OK,
+                        Json(json!({
+                            "success": true,
+                            "model": model_id,
+                            "node_id": round_robin_node_id,
+                            "port": round_robin_port,
+                            "address": round_robin_node.host
+                        })),
+                    );
+                }
             }
         }
-            // No nodes available for this model
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({
-                    "success": false,
-                    "error": "No nodes available for this model"
-                })),
-            );
 
+        // No nodes available for this model
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "success": false,
+                "error": "No nodes available for this model"
+            })),
+        );
     }
 }
 
@@ -1274,4 +1306,31 @@ pub struct ModelInferenceRequest {
 
     /// Additional model parameters
     pub parameters: Option<serde_json::Value>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn test_round_robin_counter() {
+        // Reset the counter for testing
+        ROUND_ROBIN_COUNTER.store(0, Ordering::Relaxed);
+
+        // Test with 3 nodes
+        let node_count = 3;
+
+        // Simulate multiple requests
+        for i in 0..10 {
+            let current_index = ROUND_ROBIN_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let node_index = current_index % node_count;
+
+            // Verify round robin pattern: 0, 1, 2, 0, 1, 2, ...
+            let expected_index = i % node_count;
+            assert_eq!(node_index, expected_index,
+                "Round robin failed at iteration {}: expected {}, got {}",
+                i, expected_index, node_index);
+        }
+    }
 }

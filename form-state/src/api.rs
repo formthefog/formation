@@ -394,7 +394,6 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/models/update", post(update_model))
         .route("/models/delete", post(delete_model))
         .route("/models/:id/get_node", get(find_node_for_model))
-        // .route("/models/:id/inference", post(checked_model_inference))
         .route("/models/:id/add_node", post(add_node_to_model))
         .route("/models/:id/remove_node", post(remove_node_from_model))
         .layer(middleware::from_fn(
