@@ -268,7 +268,7 @@ pub fn app(state: Arc<Mutex<DataStore>>) -> Router {
         .route("/agents/:id", get(get_agent))
         .route("/models", get(list_model))
         .route("/models/:id", get(get_model))
-        .route("/models/:id/nodes", post(get_nodes_for_model))
+        .route("/models/:id/nodes", get(get_nodes_for_model))
         .route("/node/list", get(list_nodes))
         .route("/instance/:instance_id/metrics", get(get_instance_metrics))
         .route("/instance/list/metrics", get(list_instance_metrics))
