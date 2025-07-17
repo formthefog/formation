@@ -11,7 +11,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 pub async fn request_full_state(to_dial: &str) -> Result<MergeableState, Box<dyn std::error::Error>> {
     let resp = Client::new()
-        .get(format!("http://{to_dial}:3004/bootstrap/full_state"))
+        .get(format!("http://{to_dial}:3004/v1/bootstrap/full_state"))
         .send().await?.json().await?;
 
 

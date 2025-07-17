@@ -1688,7 +1688,7 @@ pub async fn complete_bootstrap(State(state): State<Arc<Mutex<DataStore>>>) {
         let mut sample_iter = sample.iter();
         while let Some((id, peer)) = sample_iter.next() {
             match client.get(
-                format!("http://{}:3004/bootstrap/full_state", peer.ip())
+                format!("http://{}:3004/v1/bootstrap/full_state", peer.ip())
             ).send().await {
                 Ok(r) => match r.json::<MergeableState>().await {
                     Ok(mergeable_state) => {
@@ -1798,7 +1798,7 @@ pub async fn full_state(
 
 pub async fn request_full_state(to_dial: &str) -> Result<MergeableState, Box<dyn std::error::Error>> {
     let resp = Client::new()
-        .get(format!("http://{to_dial}:3004/bootstrap/full_state"))
+        .get(format!("http://{to_dial}:3004/v1/bootstrap/full_state"))
         .send().await?.json().await?;
 
     println!("{:?}", resp);
