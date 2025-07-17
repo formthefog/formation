@@ -1796,9 +1796,47 @@ pub async fn full_state(
     Json(datastore.into())
 }
 
-pub async fn request_full_state(to_dial: &str) -> Result<MergeableState, Box<dyn std::error::Error>> {
+pub async fn request_full_state(to_dial: &str, private_key: &str) -> Result<MergeableState, Box<dyn std::error::Error>> {
+    use k256::ecdsa::{SigningKey, signature::Signer};
+    use sha2::{Sha256, Digest};
+    use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+
+    // Create signing key from private key
+    let signing_key = SigningKey::from_slice(&hex::decode(private_key)?)?;
+
+    // Create message to sign
+    let message = b"Bootstrap state request";
+
+    // Hash the message
+    let mut hasher = Sha256::new();
+    hasher.update(message);
+    let message_hash = hasher.finalize();
+
+    // Sign the message hash
+    let (signature, recovery_id) = signing_key
+        .sign_recoverable(message_hash.as_slice())
+        .map_err(|e| format!("Failed to sign bootstrap request: {}", e))?;
+
+    // Create authorization header
+    let auth_header_value = format!(
+        "Signature {}.{}.{}",
+        hex::encode(signature.to_bytes()),
+        recovery_id.to_byte(),
+        hex::encode(message)
+    );
+
+    // Create headers
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&auth_header_value)
+            .map_err(|e| format!("Invalid header value: {}", e))?
+    );
+
+    // Make authenticated request
     let resp = Client::new()
         .get(format!("http://{to_dial}:3004/v1/bootstrap/full_state"))
+        .headers(headers)
         .send().await?.json().await?;
 
     println!("{:?}", resp);

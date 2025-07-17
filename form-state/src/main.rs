@@ -287,7 +287,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut state = None;
             while let Some(dial) = iter.next() {
                 log::info!("Attempting to dial {dial}");
-                match request_full_state(dial).await {
+                match request_full_state(dial, &private_key).await {
                     Ok(s) => {
                         state = Some(s);
                         break;
@@ -304,7 +304,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut state = None;
             while let Some(dial) = iter.next() {
                 log::info!("Attempting to dial {dial}");
-                match request_full_state(dial).await {
+                match request_full_state(dial, &private_key).await {
                     Ok(s) => {
                         state = Some(s);
                         break;
