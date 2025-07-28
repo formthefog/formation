@@ -143,7 +143,7 @@ pub async fn create_user(
                     if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
                         log::info!("Map Op was successful, broadcasting...");
                         let request = PeerRequest::Op(map_op);
-                        match datastore.broadcast::<Response<Peer<String>>>(request, "/v1/user/create").await {
+                        match datastore.broadcast::<Response<Peer<String>>>(request, "v1/user/create").await {
                             Ok(()) => {
                                 let _ = write_datastore(&DB_HANDLE, &datastore.clone());
                                 return Json(Response::Success(Success::Some(v.into())))
@@ -211,7 +211,7 @@ pub async fn update_user(
                     if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
                         log::info!("Map Op was successful, broadcasting...");
                         let request = PeerRequest::Op(map_op);
-                        match datastore.broadcast::<Response<Peer<String>>>(request, "/v1/user/update").await {
+                        match datastore.broadcast::<Response<Peer<String>>>(request, "v1/user/update").await {
                             Ok(()) => {
                                 let _ = write_datastore(&DB_HANDLE, &datastore.clone());
                                 return Json(Response::Success(Success::Some(v.into())));
@@ -285,7 +285,7 @@ pub async fn disable_user(
                     if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
                         log::info!("Map Op was successful, broadcasting...");
                         let request = PeerRequest::Op(map_op);
-                        match datastore.broadcast::<Response<Peer<String>>>(request, "/v1/user/disable").await {
+                        match datastore.broadcast::<Response<Peer<String>>>(request, "v1/user/disable").await {
                             Ok(()) => {
                                 let _ = write_datastore(&DB_HANDLE, &datastore.clone());
                                 return Json(Response::Success(Success::Some(v.into())))
@@ -342,7 +342,7 @@ pub async fn redeem_invite(
                     if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
                         log::info!("Map Op was successful, broadcasting...");
                         let request = PeerRequest::Op(map_op);
-                        match datastore.broadcast::<Response<Peer<String>>>(request, "/v1/user/redeem").await {
+                        match datastore.broadcast::<Response<Peer<String>>>(request, "v1/user/redeem").await {
                             Ok(()) => {
                                 let _ = write_datastore(&DB_HANDLE, &datastore.clone());
                                 return Json(Response::Success(Success::Some(v.into())))
@@ -389,7 +389,7 @@ pub async fn delete_user(
                 crdts::map::Op::Rm { .. } => {
                     let request = PeerRequest::Op(map_op);
                     log::info!("Map Op was successful, broadcasting...");
-                    match datastore.broadcast::<Response<Peer<String>>>(request, "/v1/user/delete").await {
+                    match datastore.broadcast::<Response<Peer<String>>>(request, "v1/user/delete").await {
                         Ok(()) => return Json(Response::Success(Success::None)),
                         Err(e) => eprintln!("Error broadcasting DeletePeerRequest: {e}")
                     }
@@ -512,7 +512,7 @@ pub async fn delete_expired(
         let op = datastore.network_state.remove_peer_local(id.clone());
         datastore.network_state.peer_op(op);
         let request = PeerRequest::Delete(id.clone());
-        match datastore.broadcast::<Response<Peer<String>>>(request, "/v1/user/delete").await {
+        match datastore.broadcast::<Response<Peer<String>>>(request, "v1/user/delete").await {
             Ok(()) => return Json(Response::Success(Success::List(removed_peers.iter().map(|(_, v)| v.clone().into()).collect()))),
             Err(e) => eprintln!("Error broadcasting DeletePeerRequest: {e}")
         }
@@ -554,7 +554,7 @@ pub async fn create_cidr(
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     if let (true, v) = datastore.network_state.cidr_op_success(key.clone(), op.clone()) {
                         let request = CidrRequest::Op(map_op);
-                        match datastore.broadcast::<Response<Cidr<String>>>(request, "/v1/cidr/create").await {
+                        match datastore.broadcast::<Response<Cidr<String>>>(request, "v1/cidr/create").await {
                             Ok(()) => {
                                 let _ = write_datastore(&DB_HANDLE, &datastore.clone());
                                 return Json(Response::Success(Success::Some(v.into())))
@@ -606,7 +606,7 @@ pub async fn update_cidr(
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     if let (true, v) = datastore.network_state.cidr_op_success(key.clone(), op.clone()) {
                         let request = CidrRequest::Op(map_op);
-                        match datastore.broadcast::<Response<Cidr<String>>>(request, "/v1/cidr/update").await {
+                        match datastore.broadcast::<Response<Cidr<String>>>(request, "v1/cidr/update").await {
                             Ok(()) => {
                                 let _ = write_datastore(&DB_HANDLE, &datastore.clone());
                                 return Json(Response::Success(Success::Some(v.into())))
@@ -649,7 +649,7 @@ pub async fn delete_cidr(
             match &map_op {
                 crdts::map::Op::Rm { .. } => {
                     let request = CidrRequest::Op(map_op);
-                    match datastore.broadcast::<Response<Cidr<String>>>(request, "/v1/cidr/delete").await {
+                    match datastore.broadcast::<Response<Cidr<String>>>(request, "v1/cidr/delete").await {
                         Ok(()) => return Json(Response::Success(Success::None)),
                         Err(e) => eprintln!("Error broadcasting DeleteCidrRequest: {e}")
                     }
@@ -724,7 +724,7 @@ pub async fn create_assoc(
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     if let (true, v) = datastore.network_state.associations_op_success(key.clone(), op.clone()) {
                         let request = AssocRequest::Op(map_op);
-                        match datastore.broadcast::<Response<Association<String, (String, String)>>>(request, "/v1/assoc/create").await {
+                        match datastore.broadcast::<Response<Association<String, (String, String)>>>(request, "v1/assoc/create").await {
                             Ok(()) => {
                                 let _ = write_datastore(&DB_HANDLE, &datastore.clone());
                                 return Json(Response::Success(Success::Some(v.into())))
@@ -767,7 +767,7 @@ pub async fn delete_assoc(
             match &map_op {
                 crdts::map::Op::Rm { .. } => {
                     let request = AssocRequest::Op(map_op);
-                    match datastore.broadcast::<Response<Association<String, (String, String)>>>(request, "/v1/assoc/delete").await {
+                    match datastore.broadcast::<Response<Association<String, (String, String)>>>(request, "v1/assoc/delete").await {
                         Ok(()) => return Json(Response::Success(Success::None)),
                         Err(e) => eprintln!("Error broadcasting DeleteAssocRequest: {e}")
                     }
@@ -1185,7 +1185,7 @@ pub async fn delete_dns(
             match &map_op {
                 crdts::map::Op::Rm { .. } => {
                     let request = DnsRequest::Op(map_op);
-                    match datastore.broadcast::<Response<FormDnsRecord>>(request, &format!("/v1/dns/{}/delete", domain.clone())).await {
+                    match datastore.broadcast::<Response<FormDnsRecord>>(request, &format!("v1/dns/{}/delete", domain.clone())).await {
                         Ok(()) => return Json(Response::Success(Success::None)),
                         Err(e) => eprintln!("Error broadcasting Delete DNS request: {e}")
                     }
