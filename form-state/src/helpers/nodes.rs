@@ -90,7 +90,7 @@ pub async fn create_node(
                         log::info!("Map Op was successful, broadcasting...");
                         let request = NodeRequest::Op(map_op);
                         match datastore
-                            .broadcast::<Response<Node>>(request, "/node/create")
+                            .broadcast::<Response<Node>>(request, "/v1/node/create")
                             .await
                         {
                             Ok(()) => {
@@ -175,7 +175,7 @@ pub async fn update_node(
                         log::info!("Map Op was successful, broadcasting...");
                         let request = NodeRequest::Op(map_op);
                         match datastore
-                            .broadcast::<Response<Node>>(request, "/node/update")
+                            .broadcast::<Response<Node>>(request, "/v1/node/update")
                             .await
                         {
                             Ok(()) => {
