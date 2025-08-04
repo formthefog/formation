@@ -90,7 +90,7 @@ pub async fn create_node(
                         log::info!("Map Op was successful, broadcasting...");
                         let request = NodeRequest::Op(map_op);
                         match datastore
-                            .broadcast::<Response<Node>>(request, "/v1/node/create")
+                            .broadcast::<Response<Node>>(request, "v1/node/create")
                             .await
                         {
                             Ok(()) => {
