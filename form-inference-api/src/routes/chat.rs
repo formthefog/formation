@@ -201,7 +201,7 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwar
     let text = request.messages
         .iter()
         .filter(|msg| msg.role == "user")
-        .last()
+        .next_back()
         .map(|msg| msg.content.clone())
         .unwrap_or_else(|| "Hello".to_string());
 
@@ -211,7 +211,7 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwar
 
     // Call form-state to get the node for this model
     match CLIENT
-        .get(&format!("http://localhost:3004/v1/models/{}/get_node", model_id))
+        .get(format!("http://localhost:3004/v1/models/{model_id}/get_node"))
         .send()
         .await
     {
@@ -342,8 +342,8 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwar
                                                 if let Ok(chunk_str) = String::from_utf8(chunk.to_vec()) {
                                                     // Handle SSE format: "data: {...}\n\n"
                                                     for line in chunk_str.lines() {
-                                                        if line.starts_with("data: ") {
-                                                            let data = &line[6..]; // Remove "data: " prefix
+                                                        if let Some(data) = line.strip_prefix("data: ") {
+                                                            // Remove "data: " prefix
                                                             if data != "[DONE]" {
                                                                 // Parse the JSON data from the model
                                                                 if let Ok(model_data) = serde_json::from_str::<serde_json::Value>(data) {
@@ -401,7 +401,7 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwar
                                                 }
                                             }
                                             Err(e) => {
-                                                eprintln!("Error reading stream chunk: {}", e);
+                                                eprintln!("Error reading stream chunk: {e}");
                                                 break;
                                             }
                                         }
@@ -458,7 +458,7 @@ async fn forward_streaming_request_to_node(request: ChatCompletionRequest, targe
     };
 
     // Forward to the target node's form-inference-api
-    let forward_url = format!("http://{}:3006/forwarded/chat/completions", target_node);
+    let forward_url = format!("http://{target_node}:3006/forwarded/chat/completions");
 
     match CLIENT
         .post(&forward_url)
@@ -491,7 +491,7 @@ async fn forward_streaming_request_to_node(request: ChatCompletionRequest, targe
                                 }
                             }
                             Err(e) => {
-                                eprintln!("Error reading forwarded stream chunk: {}", e);
+                                eprintln!("Error reading forwarded stream chunk: {e}");
                                 break;
                             }
                         }

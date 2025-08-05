@@ -31,7 +31,7 @@ async fn main() {
     let config = match load_operator_config(args.config) {
         Ok(config) => config,
         Err(e) => {
-            eprintln!("Failed to load operator configuration: {}", e);
+            eprintln!("Failed to load operator configuration: {e}");
             std::process::exit(1);
         }
     };

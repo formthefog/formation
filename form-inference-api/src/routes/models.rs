@@ -305,7 +305,7 @@ async fn list_models() -> impl IntoResponse {
 async fn retrieve_model(axum::extract::Path(model_id): axum::extract::Path<String>) -> impl IntoResponse {
     // Fetch specific model from form-state API
     match CLIENT
-        .get(&format!("http://localhost:3004/v1/models/{}", model_id))
+        .get(format!("http://localhost:3004/v1/models/{model_id}"))
         .send()
         .await
     {
