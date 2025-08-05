@@ -186,7 +186,7 @@ impl AuthenticationContext {
     pub fn as_recovered_address(&self) -> Option<&RecoveredAddress> {
         match self {
             Self::User { address, .. } => Some(address),
-            Self::Admin { context, .. } => {
+            Self::Admin {  .. } => {
                 // For admin context, we need to return a reference to a RecoveredAddress
                 // This is a bit tricky since AdminRecoveredAddress contains the data
                 // but doesn't have a RecoveredAddress field. We'll handle this in the
@@ -599,10 +599,10 @@ pub async fn ecdsa_auth_middleware(
             .extensions_mut()
             .insert(Some(RecoveredAddress { address, message }));
         // Authentication successful - let the handler handle authorization
-        return Ok(next.run(request).await);
+        Ok(next.run(request).await)
     } else {
         log::warn!("ECDSA_AUTH: Invalid signature format.");
-        return Err(SignatureError::MissingSignature);
+        Err(SignatureError::MissingSignature)
     }
 }
 
@@ -930,11 +930,11 @@ pub fn check_authorization(
             let authorized = match resource_type {
                 ResourceType::Account => {
                     // Users can only access their own accounts
-                    resource_id.map_or(false, |id| id.to_lowercase() == user_address.to_lowercase())
+                    resource_id.is_some_and(|id| id.to_lowercase() == user_address.to_lowercase())
                 }
                 ResourceType::Instance | ResourceType::Agent | ResourceType::Model => {
                     // Users can only access resources they own
-                    resource_owner.map_or(false, |owner| {
+                    resource_owner.is_some_and(|owner| {
                         let normalized_owner = owner.strip_prefix("0x").unwrap_or(owner).to_lowercase();
                         let normalized_user = user_address.strip_prefix("0x").unwrap_or(&user_address).to_lowercase();
                         normalized_owner == normalized_user
@@ -988,7 +988,7 @@ pub fn extract_owner_from_payload(
             log::warn!("PAYLOAD_EXTRACT: Admin {} did not specify owner in field '{}'",
                       auth_context.description(), default_field);
             return Err(AuthorizationError::CheckFailed(
-                format!("Admin must specify owner in field '{}'", default_field)
+                format!("Admin must specify owner in field '{default_field}'")
             ));
         }
     }
@@ -1021,7 +1021,7 @@ pub fn validate_resource_ownership(
         if let Some(new_owner) = new_owner {
             log::info!("OWNERSHIP_VALIDATE: Admin {} changing {} {} ownership from {} to {}",
                       auth_context.description(),
-                      format!("{:?}", resource_type).to_lowercase(),
+                      format!("{resource_type:?}").to_lowercase(),
                       resource_id, current_owner, new_owner);
         }
         return Ok(());
@@ -1037,7 +1037,7 @@ pub fn validate_resource_ownership(
             // Check current ownership
             if normalized_user != normalized_current {
                 log::warn!("OWNERSHIP_VALIDATE: User {} does not own {} {}",
-                          user_address, format!("{:?}", resource_type).to_lowercase(), resource_id);
+                          user_address, format!("{resource_type:?}").to_lowercase(), resource_id);
                 return Err(AuthorizationError::NotResourceOwner);
             }
 
@@ -1046,14 +1046,14 @@ pub fn validate_resource_ownership(
                 let normalized_new = new_owner.strip_prefix("0x").unwrap_or(new_owner).to_lowercase();
                 if normalized_new != normalized_current {
                     log::warn!("OWNERSHIP_VALIDATE: User {} attempted to change {} {} ownership to {}",
-                              user_address, format!("{:?}", resource_type).to_lowercase(),
+                              user_address, format!("{resource_type:?}").to_lowercase(),
                               resource_id, new_owner);
                     return Err(AuthorizationError::InsufficientPermissions);
                 }
             }
 
             log::debug!("OWNERSHIP_VALIDATE: User {} ownership verified for {} {}",
-                       user_address, format!("{:?}", resource_type).to_lowercase(), resource_id);
+                       user_address, format!("{resource_type:?}").to_lowercase(), resource_id);
             Ok(())
         }
         _ => {
@@ -1085,7 +1085,7 @@ pub fn extract_resource_id(
     }
 
     Err(AuthorizationError::CheckFailed(
-        format!("Resource ID not found in path or payload field '{}'", id_field)
+        format!("Resource ID not found in path or payload field '{id_field}'")
     ))
 }
 
@@ -1178,9 +1178,9 @@ pub fn log_authorization_failure(
     failure_reason: &str,
 ) {
     let resource_desc = if let Some(id) = resource_id {
-        format!("{:?}:{}", resource_type, id)
+        format!("{resource_type:?}:{id}")
     } else {
-        format!("{:?}", resource_type)
+        format!("{resource_type:?}")
     };
 
     log_security_event(
@@ -1188,7 +1188,7 @@ pub fn log_authorization_failure(
         auth_context,
         &resource_desc,
         "medium",
-        &format!("Operation {:?} failed: {}", operation, failure_reason)
+        &format!("Operation {operation:?} failed: {failure_reason}")
     );
 }
 
@@ -1222,6 +1222,12 @@ pub struct RuntimeAdminKeys {
     pub last_modified: std::time::SystemTime,
 }
 
+impl Default for RuntimeAdminKeys {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RuntimeAdminKeys {
     pub fn new() -> Self {
         Self {
@@ -1241,7 +1247,7 @@ impl RuntimeAdminKeys {
 
         // Validate address format (basic hex check)
         if normalized_address.len() != 42 || !normalized_address[2..].chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err(format!("Invalid address format: {}", address));
+            return Err(format!("Invalid address format: {address}"));
         }
 
         self.keys.insert(normalized_address, description);
@@ -1321,7 +1327,7 @@ lazy_static! {
 /// Runtime keys take precedence over environment variable configuration.
 pub fn add_runtime_admin_key(address: &str, description: Option<String>) -> Result<(), String> {
     let mut runtime_keys = RUNTIME_ADMIN_KEYS.write()
-        .map_err(|e| format!("Failed to acquire write lock: {}", e))?;
+        .map_err(|e| format!("Failed to acquire write lock: {e}"))?;
 
     let description_for_log = description.as_deref().unwrap_or("no description").to_string();
     runtime_keys.add_key(address, description)?;
@@ -1338,7 +1344,7 @@ pub fn add_runtime_admin_key(address: &str, description: Option<String>) -> Resu
 /// Note: This only removes runtime keys, not environment variable keys.
 pub fn remove_runtime_admin_key(address: &str) -> Result<bool, String> {
     let mut runtime_keys = RUNTIME_ADMIN_KEYS.write()
-        .map_err(|e| format!("Failed to acquire write lock: {}", e))?;
+        .map_err(|e| format!("Failed to acquire write lock: {e}"))?;
 
     let removed = runtime_keys.remove_key(address);
 
@@ -1356,7 +1362,7 @@ pub fn remove_runtime_admin_key(address: &str) -> Result<bool, String> {
 /// Returns a list of all runtime admin keys with their descriptions.
 pub fn list_runtime_admin_keys() -> Result<Vec<(String, Option<String>)>, String> {
     let runtime_keys = RUNTIME_ADMIN_KEYS.read()
-        .map_err(|e| format!("Failed to acquire read lock: {}", e))?;
+        .map_err(|e| format!("Failed to acquire read lock: {e}"))?;
 
     Ok(runtime_keys.list_keys())
 }
@@ -1366,7 +1372,7 @@ pub fn list_runtime_admin_keys() -> Result<Vec<(String, Option<String>)>, String
 /// This removes all runtime admin keys but does not affect environment variable keys.
 pub fn clear_runtime_admin_keys() -> Result<(), String> {
     let mut runtime_keys = RUNTIME_ADMIN_KEYS.write()
-        .map_err(|e| format!("Failed to acquire write lock: {}", e))?;
+        .map_err(|e| format!("Failed to acquire write lock: {e}"))?;
 
     let count = runtime_keys.count();
     runtime_keys.clear();
@@ -1381,7 +1387,7 @@ pub fn clear_runtime_admin_keys() -> Result<(), String> {
 /// Returns information about runtime admin key storage.
 pub fn get_runtime_admin_key_stats() -> Result<(usize, std::time::SystemTime), String> {
     let runtime_keys = RUNTIME_ADMIN_KEYS.read()
-        .map_err(|e| format!("Failed to acquire read lock: {}", e))?;
+        .map_err(|e| format!("Failed to acquire read lock: {e}"))?;
 
     Ok((runtime_keys.count(), runtime_keys.last_modified))
 }

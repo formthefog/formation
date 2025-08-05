@@ -509,11 +509,7 @@ impl UsageTracker {
     
     /// Get remaining credits for the current billing period
     pub fn remaining_credits(&self, total_credits_per_period: u64) -> u64 {
-        if self.current_period_credits_used >= total_credits_per_period {
-            0
-        } else {
-            total_credits_per_period - self.current_period_credits_used
-        }
+        total_credits_per_period.saturating_sub(self.current_period_credits_used)
     }
     
     /// Check if the account has sufficient credits for a token operation

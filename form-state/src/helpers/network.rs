@@ -118,14 +118,14 @@ pub async fn create_user(
                     if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
                         log::info!("Peer Op succesffully applied...");
                         let _ = write_datastore(&DB_HANDLE, &datastore.clone());
-                        return Json(Response::Success(Success::Some(v.into())))
+                        Json(Response::Success(Success::Some(v.into())))
                     } else {
                         log::info!("Peer Op rejected...");
-                        return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
+                        Json(Response::Failure { reason: Some("update was rejected".to_string()) })
                     }
                 }
                 crdts::map::Op::Rm { .. } => {
-                    return Json(Response::Failure { reason: Some("Invalid Op type for Create User".into()) });
+                    Json(Response::Failure { reason: Some("Invalid Op type for Create User".into()) })
                 }
             }
         }
@@ -137,7 +137,7 @@ pub async fn create_user(
             datastore.network_state.peer_op(map_op.clone());
             match &map_op {
                 crdts::map::Op::Rm { .. } => {
-                    return Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Join request".to_string()) });
+                    Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Join request".to_string()) })
                 }
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
@@ -150,15 +150,15 @@ pub async fn create_user(
                             }
                             Err(e) => eprintln!("Error broadcasting DeletePeerRequest: {e}")
                         }
-                        return Json(Response::Success(Success::Some(v.into())))
+                        Json(Response::Success(Success::Some(v.into())))
                     } else {
-                        return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
+                        Json(Response::Failure { reason: Some("update was rejected".to_string()) })
                     }
                 }
             }
         }
         _ => {
-            return Json(Response::Failure { reason: Some("Invalid request for create user".into()) });
+            Json(Response::Failure { reason: Some("Invalid request for create user".into()) })
         }
     }
 }
@@ -177,13 +177,13 @@ pub async fn update_user(
                     datastore.network_state.peer_op(map_op.clone());
                     if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
                         let _ = write_datastore(&DB_HANDLE, &datastore.clone());
-                        return Json(Response::Success(Success::Some(v.into())))
+                        Json(Response::Success(Success::Some(v.into())))
                     } else {
-                        return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
+                        Json(Response::Failure { reason: Some("update was rejected".to_string()) })
                     }
                 }
                 crdts::map::Op::Rm { .. } => {
-                    return Json(Response::Failure { reason: Some("Invalid Op type for Create User".into()) });
+                    Json(Response::Failure { reason: Some("Invalid Op type for Create User".into()) })
                 }
             }
         }
@@ -205,7 +205,7 @@ pub async fn update_user(
             datastore.network_state.peer_op(map_op.clone());
             match &map_op {
                 crdts::map::Op::Rm { .. } => {
-                    return Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Join request".to_string()) });
+                    Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Join request".to_string()) })
                 }
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
@@ -234,15 +234,15 @@ pub async fn update_user(
                                 }
                             }
                         }
-                        return Json(Response::Success(Success::Some(v.into())))
+                        Json(Response::Success(Success::Some(v.into())))
                     } else {
-                        return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
+                        Json(Response::Failure { reason: Some("update was rejected".to_string()) })
                     }
                 }
             }
         }
         _ => {
-            return Json(Response::Failure { reason: Some("Invalid request for update user".into()) });
+            Json(Response::Failure { reason: Some("Invalid request for update user".into()) })
         }
     }
 }
@@ -262,13 +262,13 @@ pub async fn disable_user(
                     if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
                         log::info!("Map Op was successful, broadcasting...");
                         let _ = write_datastore(&DB_HANDLE, &datastore.clone());
-                        return Json(Response::Success(Success::Some(v.into())))
+                        Json(Response::Success(Success::Some(v.into())))
                     } else {
-                        return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
+                        Json(Response::Failure { reason: Some("update was rejected".to_string()) })
                     }
                 }
                 crdts::map::Op::Rm { .. } => {
-                    return Json(Response::Failure { reason: Some("Invalid Op type for Create User".into()) });
+                    Json(Response::Failure { reason: Some("Invalid Op type for Create User".into()) })
                 }
             }
         }
@@ -279,7 +279,7 @@ pub async fn disable_user(
             datastore.network_state.peer_op(map_op.clone());
             match &map_op {
                 crdts::map::Op::Rm { .. } => {
-                    return Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Join request".to_string()) });
+                    Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Join request".to_string()) })
                 }
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
@@ -292,15 +292,15 @@ pub async fn disable_user(
                             }
                             Err(e) => eprintln!("Error broadcasting DeletePeerRequest: {e}")
                         }
-                        return Json(Response::Success(Success::Some(v.into())))
+                        Json(Response::Success(Success::Some(v.into())))
                     } else {
-                        return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
+                        Json(Response::Failure { reason: Some("update was rejected".to_string()) })
                     }
                 }
             }
         }
         _ => {
-            return Json(Response::Failure { reason: Some("Invalid request for update user".into()) });
+            Json(Response::Failure { reason: Some("Invalid request for update user".into()) })
         }
     }
 }
@@ -319,13 +319,13 @@ pub async fn redeem_invite(
                     datastore.network_state.peer_op(map_op.clone());
                     if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
                         let _ = write_datastore(&DB_HANDLE, &datastore.clone());
-                        return Json(Response::Success(Success::Some(v.into())))
+                        Json(Response::Success(Success::Some(v.into())))
                     } else {
-                        return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
+                        Json(Response::Failure { reason: Some("update was rejected".to_string()) })
                     }
                 }
                 crdts::map::Op::Rm { .. } => {
-                    return Json(Response::Failure { reason: Some("Invalid Op type for Create User".into()) });
+                    Json(Response::Failure { reason: Some("Invalid Op type for Create User".into()) })
                 }
             }
         }
@@ -336,7 +336,7 @@ pub async fn redeem_invite(
             datastore.network_state.peer_op(map_op.clone());
             match &map_op {
                 crdts::map::Op::Rm { .. } => {
-                    return Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Join request".to_string()) });
+                    Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Join request".to_string()) })
                 }
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     if let (true, v) = datastore.network_state.peer_op_success(key.clone(), op.clone()) {
@@ -349,15 +349,15 @@ pub async fn redeem_invite(
                             }
                             Err(e) => eprintln!("Error broadcasting DeletePeerRequest: {e}")
                         }
-                        return Json(Response::Success(Success::Some(v.into())))
+                        Json(Response::Success(Success::Some(v.into())))
                     } else {
-                        return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
+                        Json(Response::Failure { reason: Some("update was rejected".to_string()) })
                     }
                 }
             }
         }
         _ => {
-            return Json(Response::Failure { reason: Some("Invalid request for update user".into()) });
+            Json(Response::Failure { reason: Some("Invalid request for update user".into()) })
         }
     }
 }
@@ -372,11 +372,11 @@ pub async fn delete_user(
             log::info!("delete user request is an Op from another peer");
             match &map_op {
                 crdts::map::Op::Up { .. } => {
-                    return Json(Response::Failure { reason: Some("Invalid Op type for delete User".into()) });
+                    Json(Response::Failure { reason: Some("Invalid Op type for delete User".into()) })
                 }
                 crdts::map::Op::Rm { .. } => {
                     datastore.network_state.peer_op(map_op);
-                    return Json(Response::Success(Success::None));
+                    Json(Response::Success(Success::None))
                 }
             }
         }
@@ -393,15 +393,15 @@ pub async fn delete_user(
                         Ok(()) => return Json(Response::Success(Success::None)),
                         Err(e) => eprintln!("Error broadcasting DeletePeerRequest: {e}")
                     }
-                    return Json(Response::Success(Success::None));
+                    Json(Response::Success(Success::None))
                 }
                 crdts::map::Op::Up { .. } => {
-                    return Json(Response::Failure { reason: Some("Map generated Add context instead of Rm context on Delete request".to_string()) });
+                    Json(Response::Failure { reason: Some("Map generated Add context instead of Rm context on Delete request".to_string()) })
                 }
             }
         }
         _ => {
-            return Json(Response::Failure { reason: Some("Invalid request for update user".into()) });
+            Json(Response::Failure { reason: Some("Invalid request for update user".into()) })
         }
     }
 }
@@ -434,7 +434,7 @@ pub async fn get_user_from_ip(
         return Json(Response::Success(Success::Some(peer.into())))
     }
 
-    return Json(Response::Failure { reason: Some(format!("Peer with IP {ip} does not exist")) })
+    Json(Response::Failure { reason: Some(format!("Peer with IP {ip} does not exist")) })
 }
 
 pub async fn get_all_allowed(
@@ -448,20 +448,20 @@ pub async fn get_all_allowed(
             let peer = node.value();
             let cidr = peer.cidr();
             peers.retain(|_, v| v.cidr() == cidr);
-            let all_allowed: Vec<Peer<String>> = peers.iter().map(|(_, v)| v.clone().into()).collect();
+            let all_allowed: Vec<Peer<String>> = peers.values().map(|v| v.clone().into()).collect();
             log::info!("Retrieved all allowed peers for peer {id}. Total {}", all_allowed.len());
             return Json(Response::Success(Success::List(all_allowed)))
         }
     }
 
-    return Json(Response::Failure { reason: Some("Peer for which allowed peers was requested does not exist".into()) })
+    Json(Response::Failure { reason: Some("Peer for which allowed peers was requested does not exist".into()) })
 }
 
 pub async fn list_users(
     State(state): State<Arc<Mutex<DataStore>>>,
 ) -> Json<Response<Peer<String>>> {
     log::info!("Requesting a list of all users in the network...");
-    let peers = state.lock().await.get_all_users().iter().map(|(_, v)| v.clone().into()).collect();
+    let peers = state.lock().await.get_all_users().values().map(|v| v.clone().into()).collect();
     log::info!("Retrieved a list of all users in the network... Returning...");
     Json(Response::Success(Success::List(peers)))
 }
@@ -470,7 +470,7 @@ pub async fn list_admin(
     State(state): State<Arc<Mutex<DataStore>>>,
 ) -> Json<Response<Peer<String>>> {
     log::info!("Requesting a list of all users in the network...");
-    let peers = state.lock().await.get_all_active_admin().iter().map(|(_, v)| v.clone().into()).collect();
+    let peers = state.lock().await.get_all_active_admin().values().map(|v| v.clone().into()).collect();
     log::info!("Retrieved a list of all users in the network... Returning...");
     Json(Response::Success(Success::List(peers)))
 }
@@ -483,7 +483,7 @@ pub async fn list_by_cidr(
     let mut peers = state.lock().await.get_all_users();
     peers.retain(|_, v| v.cidr() == cidr);
     log::info!("Retrieved a list of all users in the cidr {cidr}... Returning");
-    Json(Response::Success(Success::List(peers.iter().map(|(_, v)| v.clone().into()).collect())))
+    Json(Response::Success(Success::List(peers.values().map(|v| v.clone().into()).collect())))
 }
 
 pub async fn delete_expired(
@@ -508,18 +508,18 @@ pub async fn delete_expired(
     });
 
     let mut datastore = state.lock().await;
-    for (id, _) in &removed_peers {
+    for id in removed_peers.keys() {
         let op = datastore.network_state.remove_peer_local(id.clone());
         datastore.network_state.peer_op(op);
         let request = PeerRequest::Delete(id.clone());
         match datastore.broadcast::<Response<Peer<String>>>(request, "v1/user/delete").await {
-            Ok(()) => return Json(Response::Success(Success::List(removed_peers.iter().map(|(_, v)| v.clone().into()).collect()))),
+            Ok(()) => return Json(Response::Success(Success::List(removed_peers.values().map(|v| v.clone().into()).collect()))),
             Err(e) => eprintln!("Error broadcasting DeletePeerRequest: {e}")
         }
     }
 
     log::info!("Deleted all users that are expired and not redeemed...");
-    Json(Response::Success(Success::List(removed_peers.iter().map(|(_, v)| v.clone().into()).collect())))
+    Json(Response::Success(Success::List(removed_peers.values().map(|v| v.clone().into()).collect())))
 }
 
 pub async fn create_cidr(
@@ -534,13 +534,13 @@ pub async fn create_cidr(
                     datastore.network_state.cidr_op(map_op.clone());
                     if let (true, v) = datastore.network_state.cidr_op_success(key.clone(), op.clone()) {
                         let _ = write_datastore(&DB_HANDLE, &datastore.clone());
-                        return Json(Response::Success(Success::Some(v.into())))
+                        Json(Response::Success(Success::Some(v.into())))
                     } else {
-                        return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
+                        Json(Response::Failure { reason: Some("update was rejected".to_string()) })
                     }
                 }
                 crdts::map::Op::Rm { .. } => {
-                    return Json(Response::Failure { reason: Some("Invalid Op type for Create CIDR".into()) });
+                    Json(Response::Failure { reason: Some("Invalid Op type for Create CIDR".into()) })
                 }
             }
         }
@@ -549,7 +549,7 @@ pub async fn create_cidr(
             datastore.network_state.cidr_op(map_op.clone());
             match &map_op {
                 crdts::map::Op::Rm { .. } => {
-                    return Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Create request".to_string()) });
+                    Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Create request".to_string()) })
                 }
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     if let (true, v) = datastore.network_state.cidr_op_success(key.clone(), op.clone()) {
@@ -561,15 +561,15 @@ pub async fn create_cidr(
                             }
                             Err(e) => eprintln!("Error broadcasting CreateCidrRequest: {e}")
                         }
-                        return Json(Response::Success(Success::Some(v.into())))
+                        Json(Response::Success(Success::Some(v.into())))
                     } else {
-                        return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
+                        Json(Response::Failure { reason: Some("update was rejected".to_string()) })
                     }
                 }
             }
         }
         _ => {
-            return Json(Response::Failure { reason: Some("Invalid request for create cidr".into()) });
+            Json(Response::Failure { reason: Some("Invalid request for create cidr".into()) })
         }
     }
 }
@@ -586,13 +586,13 @@ pub async fn update_cidr(
                     datastore.network_state.cidr_op(map_op.clone());
                     if let (true, v) = datastore.network_state.cidr_op_success(key.clone(), op.clone()) {
                         let _ = write_datastore(&DB_HANDLE, &datastore.clone());
-                        return Json(Response::Success(Success::Some(v.into())))
+                        Json(Response::Success(Success::Some(v.into())))
                     } else {
-                        return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
+                        Json(Response::Failure { reason: Some("update was rejected".to_string()) })
                     }
                 }
                 crdts::map::Op::Rm { .. } => {
-                    return Json(Response::Failure { reason: Some("Invalid Op type for Update CIDR".into()) });
+                    Json(Response::Failure { reason: Some("Invalid Op type for Update CIDR".into()) })
                 }
             }
         }
@@ -601,7 +601,7 @@ pub async fn update_cidr(
             datastore.network_state.cidr_op(map_op.clone());
             match &map_op {
                 crdts::map::Op::Rm { .. } => {
-                    return Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Update request".to_string()) });
+                    Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Update request".to_string()) })
                 }
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     if let (true, v) = datastore.network_state.cidr_op_success(key.clone(), op.clone()) {
@@ -613,15 +613,15 @@ pub async fn update_cidr(
                             }
                             Err(e) => eprintln!("Error broadcasting UpdateCidrRequest: {e}")
                         }
-                        return Json(Response::Success(Success::Some(v.into())))
+                        Json(Response::Success(Success::Some(v.into())))
                     } else {
-                        return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
+                        Json(Response::Failure { reason: Some("update was rejected".to_string()) })
                     }
                 }
             }
         }
         _ => {
-            return Json(Response::Failure { reason: Some("Invalid request for update cidr".into()) });
+            Json(Response::Failure { reason: Some("Invalid request for update cidr".into()) })
         }
     }
 }
@@ -635,11 +635,11 @@ pub async fn delete_cidr(
         CidrRequest::Op(map_op) => {
             match &map_op {
                 crdts::map::Op::Up { .. } => {
-                    return Json(Response::Failure { reason: Some("Invalid Op type for delete cidr".into()) });
+                    Json(Response::Failure { reason: Some("Invalid Op type for delete cidr".into()) })
                 }
                 crdts::map::Op::Rm { .. } => {
                     datastore.network_state.cidr_op(map_op);
-                    return Json(Response::Success(Success::None));
+                    Json(Response::Success(Success::None))
                 }
             }
         }
@@ -653,15 +653,15 @@ pub async fn delete_cidr(
                         Ok(()) => return Json(Response::Success(Success::None)),
                         Err(e) => eprintln!("Error broadcasting DeleteCidrRequest: {e}")
                     }
-                    return Json(Response::Success(Success::None));
+                    Json(Response::Success(Success::None))
                 }
                 crdts::map::Op::Up { .. } => {
-                    return Json(Response::Failure { reason: Some("Map generated Add context instead of Rm context on Delete request".to_string()) });
+                    Json(Response::Failure { reason: Some("Map generated Add context instead of Rm context on Delete request".to_string()) })
                 }
             }
         }
         _ => {
-            return Json(Response::Failure { reason: Some("Invalid request for remove cidr".into()) });
+            Json(Response::Failure { reason: Some("Invalid request for remove cidr".into()) })
         }
     }
 }
@@ -688,7 +688,7 @@ pub async fn list_cidr(
     State(state): State<Arc<Mutex<DataStore>>>,
 ) -> Json<Response<Cidr<String>>> {
     log::info!("Received list cidr request");
-    let cidrs = state.lock().await.get_all_cidrs().iter().map(|(_, v)| v.clone().into()).collect();
+    let cidrs = state.lock().await.get_all_cidrs().values().map(|v| v.clone().into()).collect();
     Json(Response::Success(Success::List(cidrs)))
 }
 
@@ -704,13 +704,13 @@ pub async fn create_assoc(
                     datastore.network_state.associations_op(map_op.clone());
                     if let (true, v) = datastore.network_state.associations_op_success(key.clone(), op.clone()) {
                         let _ = write_datastore(&DB_HANDLE, &datastore.clone());
-                        return Json(Response::Success(Success::Some(v.into())))
+                        Json(Response::Success(Success::Some(v.into())))
                     } else {
-                        return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
+                        Json(Response::Failure { reason: Some("update was rejected".to_string()) })
                     }
                 }
                 crdts::map::Op::Rm { .. } => {
-                    return Json(Response::Failure { reason: Some("Invalid Op type for Create Association".into()) });
+                    Json(Response::Failure { reason: Some("Invalid Op type for Create Association".into()) })
                 }
             }
         }
@@ -719,7 +719,7 @@ pub async fn create_assoc(
             datastore.network_state.associations_op(map_op.clone());
             match &map_op {
                 crdts::map::Op::Rm { .. } => {
-                    return Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Create Association request".to_string()) });
+                    Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Create Association request".to_string()) })
                 }
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     if let (true, v) = datastore.network_state.associations_op_success(key.clone(), op.clone()) {
@@ -731,15 +731,15 @@ pub async fn create_assoc(
                             }
                             Err(e) => eprintln!("Error broadcasting CreateAssoc Request: {e}")
                         }
-                        return Json(Response::Success(Success::Some(v.into())))
+                        Json(Response::Success(Success::Some(v.into())))
                     } else {
-                        return Json(Response::Failure { reason: Some("update was rejected".to_string()) })
+                        Json(Response::Failure { reason: Some("update was rejected".to_string()) })
                     }
                 }
             }
         }
         _ => {
-            return Json(Response::Failure { reason: Some("Invalid request for create Association".into()) });
+            Json(Response::Failure { reason: Some("Invalid request for create Association".into()) })
         }
     }
 }
@@ -753,11 +753,11 @@ pub async fn delete_assoc(
         AssocRequest::Op(map_op) => {
             match &map_op {
                 crdts::map::Op::Up { .. } => {
-                    return Json(Response::Failure { reason: Some("Invalid Op type for delete association".into()) });
+                    Json(Response::Failure { reason: Some("Invalid Op type for delete association".into()) })
                 }
                 crdts::map::Op::Rm { .. } => {
                     datastore.network_state.associations_op(map_op);
-                    return Json(Response::Success(Success::None));
+                    Json(Response::Success(Success::None))
                 }
             }
         }
@@ -771,15 +771,15 @@ pub async fn delete_assoc(
                         Ok(()) => return Json(Response::Success(Success::None)),
                         Err(e) => eprintln!("Error broadcasting DeleteAssocRequest: {e}")
                     }
-                    return Json(Response::Success(Success::None));
+                    Json(Response::Success(Success::None))
                 }
                 crdts::map::Op::Up { .. } => {
-                    return Json(Response::Failure { reason: Some("Map generated Add context instead of Rm context on Delete request".to_string()) });
+                    Json(Response::Failure { reason: Some("Map generated Add context instead of Rm context on Delete request".to_string()) })
                 }
             }
         }
         _ => {
-            return Json(Response::Failure { reason: Some("Invalid request for remove association".into()) });
+            Json(Response::Failure { reason: Some("Invalid request for remove association".into()) })
         }
     }
 }
@@ -787,7 +787,7 @@ pub async fn delete_assoc(
 pub async fn list_assoc(
     State(state): State<Arc<Mutex<DataStore>>>,
 ) -> Json<Response<Association<String, (String, String)>>> {
-    let assocs = state.lock().await.get_all_assocs().iter().map(|(_, v)| v.clone().into()).collect();
+    let assocs = state.lock().await.get_all_assocs().values().map(|v| v.clone().into()).collect();
     Json(Response::Success(Success::List(assocs)))
 }
 
@@ -806,18 +806,14 @@ pub async fn request_vanity(
     let datastore = state.lock().await;
     let assigned = datastore.network_state.dns_state.zones.iter().any(|ctx| {
         let (d, _) = ctx.val;
-        if *d == domain {
-            true
-        } else {
-            false
-        }
+        *d == domain
     });
 
     if assigned {
         return Json(
             Response::Failure {
                 reason: Some(
-                    format!("Domain name requested is already assigned, if it is assigned to one of your instances run `form [OPTIONS] dns remove` first")
+                    "Domain name requested is already assigned, if it is assigned to one of your instances run `form [OPTIONS] dns remove` first".to_string()
                 )
             }
         )
@@ -841,11 +837,7 @@ pub async fn request_vanity(
         let (i, v) = ctx.val;
         let is_host = instances.iter().any(|inst| inst.node_id == *i);
         if is_host {
-            if let Some(reg_node) = v.val() {
-                Some(reg_node.value().host.clone())
-            } else {
-                None
-            }
+            v.val().map(|reg_node| reg_node.value().host.clone())
         } else {
             None
         }
@@ -877,11 +869,8 @@ pub async fn request_vanity(
             Ok(resp) => {
                 match resp.json::<Response<FormDnsRecord>>().await {
                     Ok(r) => {
-                        match r {
-                            Response::Failure { reason } => {
-                                return Json(Response::Failure { reason })
-                            }
-                            _ => {}
+                        if let Response::Failure { reason } = r {
+                            return Json(Response::Failure { reason })
                         }
                     }
                     Err(e) => {
@@ -906,11 +895,8 @@ pub async fn request_vanity(
                 Ok(resp) => {
                     match resp.json::<Response<FormDnsRecord>>().await {
                         Ok(r) => {
-                            match r {
-                                Response::Failure { reason } => {
-                                    return Json(Response::Failure { reason })
-                                }
-                                _ => {}
+                            if let Response::Failure { reason } = r {
+                                return Json(Response::Failure { reason })
                             }
                         }
                         Err(e) => {
@@ -937,18 +923,14 @@ pub async fn request_public(
     let datastore = state.lock().await;
     let assigned = datastore.network_state.dns_state.zones.iter().any(|ctx| {
         let (d, _) = ctx.val;
-        if *d == domain {
-            true
-        } else {
-            false
-        }
+        *d == domain
     });
 
     if assigned {
         return Json(
             Response::Failure {
                 reason: Some(
-                    format!("Domain name requested is already assigned, if it is assigned to one of your instances run `form [OPTIONS] dns remove` first")
+                    "Domain name requested is already assigned, if it is assigned to one of your instances run `form [OPTIONS] dns remove` first".to_string()
                 )
             }
         )
@@ -972,11 +954,7 @@ pub async fn request_public(
         let (i, v) = ctx.val;
         let is_host = instances.iter().any(|inst| inst.node_id == *i);
         if is_host {
-            if let Some(reg_node) = v.val() {
-                Some(reg_node.value().host.clone())
-            } else {
-                None
-            }
+            v.val().map(|reg_node| reg_node.value().host.clone())
         } else {
             None
         }
@@ -995,7 +973,7 @@ pub async fn request_public(
 
     let a_record_target = node_hosts.iter().filter_map(|h| {
         match h {
-            Host::Ipv4(ipv4) => Some(IpAddr::V4(ipv4.clone())),
+            Host::Ipv4(ipv4) => Some(IpAddr::V4(*ipv4)),
             _ => None,
         }
     }).collect::<Vec<IpAddr>>();
@@ -1024,11 +1002,8 @@ pub async fn request_public(
             Ok(resp) => {
                 match resp.json::<Response<FormDnsRecord>>().await {
                     Ok(r) => {
-                        match r {
-                            Response::Failure { reason } => {
-                                return Json(Response::Failure { reason })
-                            }
-                            _ => {}
+                        if let Response::Failure { reason } = r {
+                            return Json(Response::Failure { reason })
                         }
                     }
                     Err(e) => {
@@ -1053,11 +1028,8 @@ pub async fn request_public(
                 Ok(resp) => {
                     match resp.json::<Response<FormDnsRecord>>().await {
                         Ok(r) => {
-                            match r {
-                                Response::Failure { reason } => {
-                                    return Json(Response::Failure { reason })
-                                }
-                                _ => {}
+                            if let Response::Failure { reason } = r {
+                                return Json(Response::Failure { reason })
                             }
                         }
                         Err(e) => {
@@ -1092,7 +1064,7 @@ pub async fn create_dns(
                     return Json(handle_create_dns_op(&datastore.network_state, key, op.clone()).await)
                 }
                 crdts::map::Op::Rm { .. } => {
-                    return Json(Response::Failure { reason: Some("Invalid Op type for Create DNS Record".into()) });
+                    Json(Response::Failure { reason: Some("Invalid Op type for Create DNS Record".into()) })
                 }
             }
         }
@@ -1104,7 +1076,7 @@ pub async fn create_dns(
             datastore.network_state.dns_op(map_op.clone());
             match &map_op {
                 crdts::map::Op::Rm { .. } => {
-                    return Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Create DNS Record request".to_string()) });
+                    Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Create DNS Record request".to_string()) })
                 }
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     return Json(handle_create_dns_op(&datastore.network_state, key, op.clone()).await);
@@ -1112,7 +1084,7 @@ pub async fn create_dns(
             }
         }
         _ => {
-            return Json(Response::Failure { reason: Some("Invalid request for create DNS".into()) });
+            Json(Response::Failure { reason: Some("Invalid request for create DNS".into()) })
         }
     }
 }
@@ -1132,7 +1104,7 @@ pub async fn update_dns(
                     return Json(handle_update_dns_op(&datastore.network_state, key, op.clone()).await);
                 }
                 crdts::map::Op::Rm { .. } => {
-                    return Json(Response::Failure { reason: Some("Invalid Op type for Update DNS".into()) });
+                    Json(Response::Failure { reason: Some("Invalid Op type for Update DNS".into()) })
                 }
             }
         }
@@ -1144,7 +1116,7 @@ pub async fn update_dns(
             datastore.network_state.dns_op(map_op.clone());
             match &map_op {
                 crdts::map::Op::Rm { .. } => {
-                    return Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Update request".to_string()) });
+                    Json(Response::Failure { reason: Some("Map generated RM context instead of Add context on Update request".to_string()) })
                 }
                 crdts::map::Op::Up { ref key, ref op, .. } => {
                     return Json(handle_update_dns_op(&datastore.network_state, key, op.clone()).await)
@@ -1152,7 +1124,7 @@ pub async fn update_dns(
             }
         }
         _ => {
-            return Json(Response::Failure { reason: Some("Invalid request for update dns".into()) });
+            Json(Response::Failure { reason: Some("Invalid request for update dns".into()) })
         }
     }
 }
@@ -1168,7 +1140,7 @@ pub async fn delete_dns(
             log::info!("Delete DNS request is an Op from another peer");
             match &map_op {
                 crdts::map::Op::Up { .. } => {
-                    return Json(Response::Failure { reason: Some("Invalid Op type for delete dns".into()) });
+                    Json(Response::Failure { reason: Some("Invalid Op type for delete dns".into()) })
                 }
                 crdts::map::Op::Rm { .. } => {
                     datastore.network_state.dns_op(map_op);
@@ -1192,12 +1164,12 @@ pub async fn delete_dns(
                     return Json(send_dns_delete_request(&domain).await);
                 }
                 crdts::map::Op::Up { .. } => {
-                    return Json(Response::Failure { reason: Some("Map generated Add context instead of Rm context on Delete request".to_string()) });
+                    Json(Response::Failure { reason: Some("Map generated Add context instead of Rm context on Delete request".to_string()) })
                 }
             }
         }
         _ => {
-            return Json(Response::Failure { reason: Some("Invalid request for create user".into()) });
+            Json(Response::Failure { reason: Some("Invalid request for create user".into()) })
         }
     }
 }
@@ -1214,7 +1186,7 @@ pub async fn get_dns_record(
         }
     };
 
-    return Json(Response::Failure { reason: Some(format!("Record does not exist for domain {domain}")) })
+    Json(Response::Failure { reason: Some(format!("Record does not exist for domain {domain}")) })
 }
 
 pub async fn update_dns_ip_addr(
@@ -1234,8 +1206,7 @@ pub async fn update_dns_ip_addr(
     if records.is_empty() {
         return Err(
             Box::new(
-                std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                std::io::Error::other(
                     format!("0 Dns Records found with public ip of {node_ip}")
                 )
             )
@@ -1277,16 +1248,13 @@ pub async fn list_dns_records(
     let datastore = state.lock().await;
     let dns_record_list = datastore.network_state.dns_state.zones.iter().filter_map(|ctx|{
         let (_domain, reg) = ctx.val;
-        match reg.val() {
-            Some(node) => Some(node.value().into()),
-            None => None,
-        }
+        reg.val().map(|node| node.value().into())
     }).collect::<Vec<FormDnsRecord>>();
 
     if !dns_record_list.is_empty() {
-        return Json(Response::Success(Success::List(dns_record_list)))
+        Json(Response::Success(Success::List(dns_record_list)))
     } else {
-        return Json(Response::Failure { reason: Some("Unable to find any valid DNS records".to_string()) })
+        Json(Response::Failure { reason: Some("Unable to find any valid DNS records".to_string()) })
     }
 
 }
@@ -1326,12 +1294,12 @@ pub async fn build_dns_request(v: Option<CrdtDnsRecord>, op_type: &str) -> (Doma
         cname_target: None,
         ssl_cert: false,
     };
-    return (request, Some(Response::Failure { reason: Some("Update request requires a record".into()) }))
+    (request, Some(Response::Failure { reason: Some("Update request requires a record".into()) }))
 }
 
 pub async fn build_create_request(v: CrdtDnsRecord) -> (DomainRequest, Option<Response<FormDnsRecord>>) {
     if let RecordType::A = v.record_type() {
-        return build_create_a_record_request(v).await
+        build_create_a_record_request(v).await
     } else if let RecordType::AAAA = v.record_type() {
         return build_create_aaaa_record_request(v).await
     } else if let RecordType::CNAME = v.record_type() {
@@ -1345,12 +1313,12 @@ pub async fn build_create_request(v: CrdtDnsRecord) -> (DomainRequest, Option<Re
             ssl_cert: v.ssl_cert()
         };
         return (request, Some(Response::Failure { reason: Some("Only A, AAAA and CNAME records are supported".to_string()) }));
-    };
+    }
 }
 
 pub async fn build_update_request(v: CrdtDnsRecord) -> (DomainRequest, Option<Response<FormDnsRecord>>) {
     if let RecordType::A = v.record_type() {
-        return build_update_a_record_request(v).await
+        build_update_a_record_request(v).await
     } else if let RecordType::AAAA = v.record_type() {
         return build_update_aaaa_record_request(v).await
     } else if let RecordType::CNAME = v.record_type() {
@@ -1380,7 +1348,7 @@ pub async fn build_create_a_record_request(v: CrdtDnsRecord) -> (DomainRequest, 
             cname_target: None,
             ssl_cert: v.ssl_cert()
         };
-        return (request, None)
+        (request, None)
     } else {
         let request = DomainRequest::Create {
             domain: v.domain().clone(),
@@ -1389,7 +1357,7 @@ pub async fn build_create_a_record_request(v: CrdtDnsRecord) -> (DomainRequest, 
             cname_target: None,
             ssl_cert: v.ssl_cert()
         };
-        return (request, None)
+        (request, None)
     }
 }
 
@@ -1406,7 +1374,7 @@ pub async fn build_update_a_record_request(v: CrdtDnsRecord) -> (DomainRequest, 
             cname_target: None,
             ssl_cert: v.ssl_cert()
         };
-        return(request, None);
+        (request, None)
     } else {
         let request = DomainRequest::Create {
             domain: v.domain().clone(),
@@ -1428,7 +1396,7 @@ pub async fn build_create_aaaa_record_request(v: CrdtDnsRecord) -> (DomainReques
             cname_target: None,
             ssl_cert: v.ssl_cert()
         };
-        return (request, None)
+        (request, None)
     } else {
         let request = DomainRequest::Create {
             domain: v.domain().clone(),
@@ -1437,7 +1405,7 @@ pub async fn build_create_aaaa_record_request(v: CrdtDnsRecord) -> (DomainReques
             cname_target: None,
             ssl_cert: v.ssl_cert()
         };
-        return (request, Some(Response::Failure { reason: Some("AAAA Record Updates require a public IP V6 address".to_string()) }))
+        (request, Some(Response::Failure { reason: Some("AAAA Record Updates require a public IP V6 address".to_string()) }))
     }
 }
 
@@ -1507,7 +1475,7 @@ pub async fn send_dns_create_request(r: DomainRequest) -> Option<Response<FormDn
 
 pub async fn send_dns_update_request(r: DomainRequest, domain: &str) -> Option<Response<FormDnsRecord>> {
     match reqwest::Client::new()
-        .post(format!("http://127.0.0.1:3005/record/{}/update", domain))
+        .post(format!("http://127.0.0.1:3005/record/{domain}/update"))
         .json(&r)
         .send().await {
 
@@ -1530,20 +1498,20 @@ pub async fn send_dns_update_request(r: DomainRequest, domain: &str) -> Option<R
 
 pub async fn send_dns_delete_request(domain: &str) -> Response<FormDnsRecord> {
     match reqwest::Client::new()
-        .post(format!("http://127.0.0.1:3005/record/{}/delete", domain))
+        .post(format!("http://127.0.0.1:3005/record/{domain}/delete"))
         .send().await {
         Ok(resp) => match resp.json::<DomainResponse>().await {
             Ok(r) => match r {
-                DomainResponse::Success(_) => return Response::Success(Success::None),
+                DomainResponse::Success(_) => Response::Success(Success::None),
                 DomainResponse::Failure(reason) => {
-                    return Response::Failure { reason }
+                    Response::Failure { reason }
                 }
                 _ => unreachable!()
             }
-            Err(e) => return Response::Failure { reason: Some(e.to_string()) }
+            Err(e) => Response::Failure { reason: Some(e.to_string()) }
         }
         Err(e) => {
-            return Response::Failure { reason: Some(e.to_string())}
+            Response::Failure { reason: Some(e.to_string())}
         }
     }
 }
@@ -1562,10 +1530,10 @@ pub async fn handle_create_dns_op(network_state: &NetworkState, key: &str, op: U
             return failure;
         }
         let _ = store_map(&DB_HANDLE, "network_state/dns", &network_state.dns_state.zones.clone());
-        return Response::Success(Success::Some(v.into()))
+        Response::Success(Success::Some(v.into()))
     } else {
         log::info!("DNS Op rejected...");
-        return Response::Failure { reason: Some("update was rejected".to_string()) }
+        Response::Failure { reason: Some("update was rejected".to_string()) }
     }
 }
 
@@ -1581,9 +1549,9 @@ pub async fn handle_update_dns_op(network_state: &NetworkState, key: &str, op: U
             return failure;
         }
         let _ = store_map(&DB_HANDLE, "network_state/dns", &network_state.dns_state.zones.clone());
-        return Response::Success(Success::Some(v.into()))
+        Response::Success(Success::Some(v.into()))
     } else {
         log::info!("Peer Op rejected...");
-        return Response::Failure { reason: Some("update was rejected".to_string()) }
+        Response::Failure { reason: Some("update was rejected".to_string()) }
     }
 }

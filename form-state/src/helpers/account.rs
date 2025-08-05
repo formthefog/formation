@@ -1,11 +1,10 @@
 use crate::datastore::{DataStore, DB_HANDLE, AccountRequest};
 use crate::db::write_datastore;
 use crate::accounts::*;
-use crate::auth::{RecoveredAddress, AuthenticationContext};
-use std::net::SocketAddr;
+use crate::auth::AuthenticationContext;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use axum::{extract::{State, Path, ConnectInfo}, Json, http::StatusCode, response::IntoResponse};
+use axum::{extract::{State, Path}, Json, http::StatusCode, response::IntoResponse};
 use serde_json::json;
 
 /// List accounts with admin bypass logic
@@ -47,7 +46,7 @@ pub async fn list_accounts(
             log::info!("list_accounts: Regular user {}. Listing own account.", authenticated_address);
             
             if let Some(account) = datastore.account_state.get_account(&authenticated_address) {
-                return (
+                (
                     StatusCode::OK,
                     Json(json!({
                         "success": true,
@@ -56,27 +55,27 @@ pub async fn list_accounts(
                         "total": 1,
                         "access_level": "user"
                     }))
-                );
+                )
             } else {
-                return (
+                (
                     StatusCode::NOT_FOUND,
                     Json(json!({
                         "success": false,
                         "error": "Your account was not found"
                     }))
-                );
+                )
             }
         }
         _ => {
             // This shouldn't happen since middleware should handle authentication
             log::error!("list_accounts: Unexpected authentication context: {:?}", auth_context);
-            return (
+            (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
                     "success": false,
                     "error": "Internal authentication error"
                 }))
-            );
+            )
         }
     }
 }
@@ -147,34 +146,34 @@ pub async fn get_account(
             // User is accessing their own account
             if let Some(account) = state.lock().await.account_state.get_account(&address) {
                 log::info!("Found account with address {} (user access)", address);
-                return (
+                (
                     StatusCode::OK,
                     Json(json!({
                         "success": true,
                         "account": account,
                         "access_level": "user"
                     }))
-                );
+                )
             } else {
-                return (
+                (
                     StatusCode::NOT_FOUND,
                     Json(json!({
                         "success": false,
                         "error": format!("Account with address {} not found", address)
                     }))
-                );
+                )
             }
         }
         _ => {
             // This shouldn't happen since middleware should handle authentication
             log::error!("get_account: Unexpected authentication context: {:?}", auth_context);
-            return (
+            (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
                     "success": false,
                     "error": "Internal authentication error"
                 }))
-            );
+            )
         }
     }
 }
@@ -350,7 +349,7 @@ pub async fn create_account(
                             log::error!("Error writing to queue: {}", e);
                         }
                         
-                        return (
+                        (
                             StatusCode::CREATED,
                             Json(json!({
                                 "success": true,
@@ -358,40 +357,40 @@ pub async fn create_account(
                                 "account": account,
                                 "access_level": "user"
                             }))
-                        );
+                        )
                     } else {
-                        return (
+                        (
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(json!({
                                 "success": false,
                                 "error": "Failed to retrieve created account",
                                 "access_level": "user"
                             }))
-                        );
+                        )
                     }
                 },
                 _ => {
-                    return (
+                    (
                         StatusCode::BAD_REQUEST,
                         Json(json!({
                             "success": false,
                             "error": "Invalid operation type for account creation",
                             "access_level": "user"
                         }))
-                    );
+                    )
                 }
             }
         }
         _ => {
             // This shouldn't happen since middleware should handle authentication
             log::error!("create_account: Unexpected authentication context: {:?}", auth_context);
-            return (
+            (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
                     "success": false,
                     "error": "Internal authentication error"
                 }))
-            );
+            )
         }
     }
 }
@@ -578,7 +577,7 @@ pub async fn update_account(
                                     log::error!("Error writing to queue: {}", e);
                                 }
                                 
-                                return (
+                                (
                                     StatusCode::OK,
                                     Json(json!({
                                         "success": true,
@@ -586,52 +585,52 @@ pub async fn update_account(
                                         "account": account,
                                         "access_level": "user"
                                     }))
-                                );
+                                )
                             } else {
-                                return (
+                                (
                                     StatusCode::INTERNAL_SERVER_ERROR,
                                     Json(json!({
                                         "success": false,
                                         "error": "Failed to retrieve updated account",
                                         "access_level": "user"
                                     }))
-                                );
+                                )
                             }
                         },
                         _ => {
-                            return (
+                            (
                                 StatusCode::BAD_REQUEST,
                                 Json(json!({
                                     "success": false,
                                     "error": "Invalid operation type for account update",
                                     "access_level": "user"
                                 }))
-                            );
+                            )
                         }
                     }
                 },
                 _ => {
-                    return (
+                    (
                         StatusCode::BAD_REQUEST,
                         Json(json!({
                             "success": false,
                             "error": "Invalid request type for account update",
                             "access_level": "user"
                         }))
-                    );
+                    )
                 }
             }
         }
         _ => {
             // This shouldn't happen since middleware should handle authentication
             log::error!("update_account: Unexpected authentication context: {:?}", auth_context);
-            return (
+            (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
                     "success": false,
                     "error": "Internal authentication error"
                 }))
-            );
+            )
         }
     }
 }
@@ -785,7 +784,7 @@ pub async fn delete_account(
                     // Write to persistent storage
                     let _ = write_datastore(&DB_HANDLE, &datastore.clone());
                     
-                    return (
+                    (
                         StatusCode::OK,
                         Json(json!({
                             "success": true,
@@ -793,30 +792,30 @@ pub async fn delete_account(
                             "account": account_copy,
                             "access_level": "user"
                         }))
-                    );
+                    )
                 },
                 _ => {
-                    return (
+                    (
                         StatusCode::BAD_REQUEST,
                         Json(json!({
                             "success": false,
                             "error": "Invalid request type for account deletion",
                             "access_level": "user"
                         }))
-                    );
+                    )
                 }
             }
         }
         _ => {
             // This shouldn't happen since middleware should handle authentication
             log::error!("delete_account: Unexpected authentication context: {:?}", auth_context);
-            return (
+            (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
                     "success": false,
                     "error": "Internal authentication error"
                 }))
-            );
+            )
         }
     }
 }
@@ -1062,7 +1061,7 @@ pub async fn transfer_instance_ownership(
                         log::error!("Error writing transfer operation to queue: {}", e);
                     }
                     
-                    return (
+                    (
                         StatusCode::OK,
                         Json(json!({
                             "success": true,
@@ -1073,38 +1072,38 @@ pub async fn transfer_instance_ownership(
                             "updated_account": account,
                             "access_level": "user"
                         }))
-                    );
+                    )
                 } else {
-                    return (
+                    (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(json!({
                             "success": false,
                             "error": "Failed to retrieve updated account after transfer",
                             "access_level": "user"
                         }))
-                    );
+                    )
                 }
             } else {
-                return (
+                (
                     StatusCode::NOT_FOUND,
                     Json(json!({
                         "success": false,
                         "error": format!("Instance with ID {} does not exist", instance_id),
                         "access_level": "user"
                     }))
-                );
+                )
             }
         }
         _ => {
             // This shouldn't happen since middleware should handle authentication
             log::error!("transfer_instance_ownership: Unexpected authentication context: {:?}", auth_context);
-            return (
+            (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
                     "success": false,
                     "error": "Internal authentication error"
                 }))
-            );
+            )
         }
     }
 }

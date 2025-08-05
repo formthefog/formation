@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use alloy_primitives::Address;
 use clap::Parser;
 use form_config::OperatorConfig;
-use form_state::api::run;
 use form_state::datastore::{request_full_state, DataStore};
 use k256::ecdsa::SigningKey;
 use std::env;
@@ -67,15 +66,15 @@ impl AdminConfig {
             let addr_str = if cleaned.starts_with("0x") {
                 cleaned
             } else {
-                &format!("0x{}", cleaned)
+                &format!("0x{cleaned}")
             };
 
             let address = addr_str
                 .parse::<Address>()
-                .map_err(|_| format!("Invalid admin address format: {}", addr_str))?;
+                .map_err(|_| format!("Invalid admin address format: {addr_str}"))?;
 
             if !parsed_addresses.insert(address) {
-                return Err(format!("Duplicate admin address: {}", addr_str).into());
+                return Err(format!("Duplicate admin address: {addr_str}").into());
             }
         }
 
@@ -141,7 +140,7 @@ pub struct Cli {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     simple_logger::init_with_level(log::Level::Info)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
 
     log::info!("Parsing CLI...");
     let parser = Cli::parse();
@@ -238,7 +237,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ) {
         Ok(config) => Some(config),
         Err(e) => {
-            if let None = parser.secret_key {
+            if parser.secret_key.is_none() {
                 log::warn!(
                     "No secret key provided and failed to load operator configuration: {}",
                     e
@@ -254,8 +253,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .clone()
             .unwrap()
             .secret_key
-            .ok_or(Box::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            .ok_or(Box::new(std::io::Error::other(
                 "Secret Key required",
             )))?
     };
@@ -285,31 +283,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if !&parser.to_dial.is_empty() {
             let mut iter = parser.to_dial.iter();
             let mut state = None;
-            while let Some(dial) = iter.next() {
+            for dial in iter {
                 log::info!("Attempting to dial {dial}");
-                match request_full_state(dial, &private_key).await {
-                    Ok(s) => {
-                        state = Some(s);
-                        break;
-                    }
-                    Err(_) => {}
+                if let Ok(s) = request_full_state(dial, &private_key).await {
+                    state = Some(s);
+                    break;
                 }
             }
             let state = state.expect("Unable to acquire state from bootstrap nodes");
             let ds = DataStore::new_from_state(address.clone(), private_key.clone(), state);
             datastore = Some(ds)
-        } else if !config.is_none() && !config.clone().unwrap().bootstrap_nodes.is_empty() {
+        } else if config.is_some() && !config.clone().unwrap().bootstrap_nodes.is_empty() {
             let unwrapped_config = config.clone().unwrap();
             let mut iter = unwrapped_config.bootstrap_nodes.iter();
             let mut state = None;
-            while let Some(dial) = iter.next() {
+            for dial in iter {
                 log::info!("Attempting to dial {dial}");
-                match request_full_state(dial, &private_key).await {
-                    Ok(s) => {
-                        state = Some(s);
-                        break;
-                    }
-                    Err(_) => {}
+                if let Ok(s) = request_full_state(dial, &private_key).await {
+                    state = Some(s);
+                    break;
                 }
             }
             let state = state.expect("Unable to acquire staate from bootstrap nodes");

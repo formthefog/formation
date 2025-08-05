@@ -76,24 +76,24 @@ pub async fn create_agent(
             }
             
             log::info!("create_agent: Agent created successfully");
-            return (
+            (
                 StatusCode::CREATED,
                 Json(json!({
                     "status": "success",
                     "agent": agent,
                     "access_level": "user"
                 })),
-            );
+            )
         }
         _ => {
             // This shouldn't happen since middleware should handle authentication
             log::error!("create_agent: Unexpected authentication context: {:?}", auth_context);
-            return (
+            (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
                     "error": "Internal authentication error"
                 })),
-            );
+            )
         }
     }
 }
@@ -210,25 +210,25 @@ pub async fn update_agent(
             }
             
             log::info!("update_agent: Agent {} updated successfully.", agent_to_update.agent_id);
-            return (
+            (
                 StatusCode::OK, 
                 Json(json!({ 
                     "success": true, 
                     "agent": agent_to_update,
                     "access_level": "user"
                 }))
-            );
+            )
         }
         _ => {
             // This shouldn't happen since middleware should handle authentication
             log::error!("update_agent: Unexpected authentication context: {:?}", auth_context);
-            return (
+            (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
                     "success": false,
                     "error": "Internal authentication error"
                 })),
-            );
+            )
         }
     }
 }
@@ -340,7 +340,7 @@ pub async fn delete_agent(
                     );
                 }
                 
-                return (
+                (
                     StatusCode::OK,
                     Json(json!({
                         "status": "success",
@@ -348,26 +348,26 @@ pub async fn delete_agent(
                         "agent": agent_copy,
                         "access_level": "user"
                     })),
-                );
+                )
             }
             _ => {
                 // This shouldn't happen since middleware should handle authentication
                 log::error!("delete_agent: Unexpected authentication context: {:?}", auth_context);
-                return (
+                (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({
                         "error": "Internal authentication error"
                     })),
-                );
+                )
             }
         }
     } else {
-        return (
+        (
             StatusCode::NOT_FOUND,
             Json(json!({
                 "error": "Agent not found"
             })),
-        );
+        )
     }
 }
 
@@ -430,22 +430,22 @@ pub async fn get_agent(
 
     if authorized {
         log::info!("get_agent: Access to agent {} authorized.", agent_id);
-        return (
+        (
             StatusCode::OK,
             Json(json!({
                 "success": true,
                 "agent": agent
             }))
-        );
+        )
     } else {
         log::warn!("get_agent: Access to agent {} denied.", agent_id);
-        return (
+        (
             StatusCode::FORBIDDEN,
             Json(json!({
                 "success": false,
                 "error": "You don't have permission to access this agent"
             }))
-        );
+        )
     }
 }
 
@@ -498,14 +498,14 @@ pub async fn list_agents(
         .collect();
     
     log::info!("list_agents: Returning {} agents after filtering.", filtered_agents.len());
-    return (
+    (
         StatusCode::OK,
         Json(json!({
             "success": true,
             "count": filtered_agents.len(),
             "agents": filtered_agents
         }))
-    );
+    )
 }
 
 /// Handler for hiring an agent
@@ -559,7 +559,7 @@ pub async fn agent_hire(
         }
         
         // Return success
-        return (
+        (
             StatusCode::OK,
             Json(json!({
                 "success": true,
@@ -572,15 +572,15 @@ pub async fn agent_hire(
                 "credits_remaining": account.available_credits(),
                 "hired_agent_count": account.hired_agent_count()
             }))
-        );
+        )
     } else {
-        return (
+        (
             StatusCode::NOT_FOUND,
             Json(json!({
                 "success": false,
                 "error": format!("Agent {} not found", agent_id)
             }))
-        );
+        )
     }
 }
 

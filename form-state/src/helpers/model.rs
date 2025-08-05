@@ -1,21 +1,18 @@
-use crate::auth::{AuthenticationContext, RecoveredAddress};
-use crate::billing::UsageTracker;
+use crate::auth::AuthenticationContext;
 use crate::datastore::DataStore;
 use crate::model::{AIModel, ModelId};
 use crate::nodes::NodeId;
 use axum::{
-    extract::{ConnectInfo, Path, State},
+    extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use rand::prelude::IteratorRandom;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 // Round robin counter for load balancing
@@ -107,14 +104,14 @@ pub async fn create_model(
                         );
                     }
 
-                    return (
+                    (
                         StatusCode::CREATED,
                         Json(json!({
                             "status": "success",
                             "model": model,
                             "access_level": "user"
                         })),
-                    );
+                    )
                 }
                 _ => {
                     // This shouldn't happen since middleware should handle authentication
@@ -122,12 +119,12 @@ pub async fn create_model(
                         "create_model: Unexpected authentication context: {:?}",
                         auth_context
                     );
-                    return (
+                    (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(json!({
                             "error": "Internal authentication error"
                         })),
-                    );
+                    )
                 }
             }
         }
@@ -229,14 +226,14 @@ pub async fn update_model(
                             );
                         }
 
-                        return (
+                        (
                             StatusCode::OK,
                             Json(json!({
                                 "status": "success",
                                 "model": model,
                                 "access_level": "user"
                             })),
-                        );
+                        )
                     }
                     _ => {
                         // This shouldn't happen since middleware should handle authentication
@@ -244,12 +241,12 @@ pub async fn update_model(
                             "update_model: Unexpected authentication context: {:?}",
                             auth_context
                         );
-                        return (
+                        (
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(json!({
                                 "error": "Internal authentication error"
                             })),
-                        );
+                        )
                     }
                 }
             } else {
@@ -407,21 +404,21 @@ pub async fn add_node_to_model(
                                 );
                             }
 
-                            return (
+                            (
                                 StatusCode::OK,
                                 Json(json!({
                                     "status": "success",
                                     "message": "Node added to model successfully"
                                 })),
-                            );
+                            )
                         }
                         None => {
-                            return (
+                            (
                                 StatusCode::BAD_REQUEST,
                                 Json(json!({
                                     "error": "Failed to add node to model"
                                 })),
-                            );
+                            )
                         }
                     }
                 }
@@ -431,21 +428,21 @@ pub async fn add_node_to_model(
                         "add_node_to_model: Unexpected authentication context: {:?}",
                         auth_context
                     );
-                    return (
+                    (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(json!({
                             "error": "Internal authentication error"
                         })),
-                    );
+                    )
                 }
             }
         } else {
-            return (
+            (
                 StatusCode::NOT_FOUND,
                 Json(json!({
                     "error": "Node not found"
                 })),
-            );
+            )
         }
     } else {
         // Model not found
@@ -776,7 +773,7 @@ pub async fn delete_model(
                     );
                 }
 
-                return (
+                (
                     StatusCode::OK,
                     Json(json!({
                         "status": "success",
@@ -784,7 +781,7 @@ pub async fn delete_model(
                         "model": model_copy,
                         "access_level": "user"
                     })),
-                );
+                )
             }
             _ => {
                 // This shouldn't happen since middleware should handle authentication
@@ -792,21 +789,21 @@ pub async fn delete_model(
                     "delete_model: Unexpected authentication context: {:?}",
                     auth_context
                 );
-                return (
+                (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({
                         "error": "Internal authentication error"
                     })),
-                );
+                )
             }
         }
     } else {
-        return (
+        (
             StatusCode::NOT_FOUND,
             Json(json!({
                 "error": "Model not found"
             })),
-        );
+        )
     }
 }
 
@@ -1040,7 +1037,7 @@ pub async fn find_node_for_model(
         let node_index = current_index % model.nodes.len();
 
         // Get the node at the calculated index
-        if let Some((round_robin_node_id, round_robin_port)) = model.nodes.iter().nth(node_index) {
+        if let Some((round_robin_node_id, round_robin_port)) = model.nodes.get(node_index) {
             let node_id = &datastore.node_state.node_id;
 
             // If the selected node is the current node, return localhost
@@ -1090,13 +1087,13 @@ pub async fn find_node_for_model(
     }
 
     // No nodes available for this model
-    return (
+    (
         StatusCode::SERVICE_UNAVAILABLE,
         Json(json!({
             "success": false,
             "error": "No nodes available for this model"
         })),
-    );
+    )
 }
 
 // pub async fn model_inference_accounting(

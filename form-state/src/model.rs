@@ -454,7 +454,7 @@ impl ModelState {
                 // If the in the updated register equals the value in the Op it
                 // succeeded
                 if v.value() == update.op().value {
-                    return (true, v.value());
+                    (true, v.value())
                 // Otherwise, it could be that it's a concurrent update and was added
                 // to the DAG as a head
                 } else if reg.dag_contains(&update.hash()) && reg.is_head(&update.hash()) {
@@ -469,10 +469,10 @@ impl ModelState {
                     return (false, v.value());
                 }
             } else {
-                return (false, update.op().value);
+                (false, update.op().value)
             }
         } else {
-            return (false, update.op().value);
+            (false, update.op().value)
         }
     }
 
@@ -499,10 +499,7 @@ impl ModelState {
             .iter()
             .filter_map(|ctx| {
                 let (id, reg) = ctx.val;
-                match reg.val() {
-                    Some(node) => Some((id.clone(), node.value())),
-                    None => None,
-                }
+                reg.val().map(|node| (id.clone(), node.value()))
             })
             .collect()
     }

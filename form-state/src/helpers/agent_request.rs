@@ -179,7 +179,7 @@ impl fmt::Display for MemoryType {
             MemoryType::ChromaDB => write!(f, "chroma"),
             MemoryType::LanceDB => write!(f, "lancedb"),
             MemoryType::Qdrant => write!(f, "qdrant"),
-            MemoryType::Custom(s) => write!(f, "custom:{}", s),
+            MemoryType::Custom(s) => write!(f, "custom:{s}"),
         }
     }
 }
@@ -197,7 +197,7 @@ impl FromStr for MemoryType {
             "lancedb" => Ok(MemoryType::LanceDB),
             "qdrant" => Ok(MemoryType::Qdrant),
             s if s.starts_with("custom:") => Ok(MemoryType::Custom(s[7..].to_string())),
-            _ => Err(format!("Unknown memory type: {}", s)),
+            _ => Err(format!("Unknown memory type: {s}")),
         }
     }
 }

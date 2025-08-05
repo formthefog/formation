@@ -1,21 +1,19 @@
-use std::{collections::{HashMap, HashSet, BTreeSet}, path::PathBuf, sync::Arc};
+use std::{collections::{HashMap, HashSet}, path::PathBuf, sync::Arc};
 use axum::{extract::State, Json};
 use form_dns::{api::{DomainRequest, DomainResponse}, store::FormDnsRecord};
-use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
+use form_p2p::queue::{QueueResponse, QUEUE_PORT};
 use rand::{seq::SliceRandom, thread_rng};
 use reqwest::Client;
 use form_node_metrics::{capabilities::NodeCapabilities, capacity::NodeCapacity, metrics::NodeMetrics, NodeMetricsRequest};
 use serde_json::Value;
 use shared::{AssociationContents, Cidr, CidrContents, PeerContents};
-use tiny_keccak::{Hasher, Sha3};
+use tiny_keccak::Hasher;
 use tokio::sync::Mutex;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use crdts::{map::Op, BFTReg, CvRDT, Map, CmRDT};
 use crate::{accounts::{Account, AccountOp, AccountState, AuthorizationLevel}, agent::{AIAgent, AgentMap, AgentOp, AgentState}, db::{open_db, write_datastore, DbHandle}, instances::{ClusterMember, Instance, InstanceOp, InstanceState}, model::{AIModel, ModelMap, ModelOp, ModelState}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}, tasks::{TaskState, Task, TaskOp, TaskStatus, TaskId}};
 use lazy_static::lazy_static;
-use url::Host;
 use hex;
-use sha2::Sha256;
 
 lazy_static! {
     pub static ref DB_HANDLE: DbHandle = open_db(PathBuf::from("db/form.db"));
@@ -303,7 +301,7 @@ impl DataStore {
         log::info!("Getting relationships for {cidr_id} from datastore network state...");
         let mut assoc_ids = self.get_all_assocs();
         assoc_ids.retain(|k, _| *k == cidr_id);
-        let ids: HashSet<String> = assoc_ids.iter().map(|(k, _)| k.clone()).collect();
+        let ids: HashSet<String> = assoc_ids.keys().cloned().collect();
         ids.iter().filter_map(|id| {
             let split: Vec<&str> = id.split("-").collect();
             let cidr_id_1 = split[0];
@@ -316,7 +314,7 @@ impl DataStore {
                     let val2 = reg_2.val();
                     match (val1, val2) {
                         (Some(node1), Some(node2)) => {
-                            return Some((node1.value().into(), node2.value().into()))
+                            Some((node1.value().into(), node2.value().into()))
                         }
                         _ => None,
                     }
@@ -366,7 +364,7 @@ impl DataStore {
                     op_applied_successfully = true;
                 } else {
                     log::error!("Peer Op::Up failed to apply locally or was a no-op.");
-                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Peer Op::Up failed local application")));
+                    return Err(Box::new(std::io::Error::other("Peer Op::Up failed local application")));
                 }
             }
             Op::Rm { .. } => {
@@ -438,7 +436,7 @@ impl DataStore {
                     op_applied_successfully = true;
                 } else {
                     log::error!("CIDR Op::Up failed to apply locally or was a no-op.");
-                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "CIDR Op::Up failed local application")));
+                    return Err(Box::new(std::io::Error::other("CIDR Op::Up failed local application")));
                 }
             }
             Op::Rm { .. } => {
@@ -506,7 +504,7 @@ impl DataStore {
                     op_applied_successfully = true;
                 } else {
                     log::error!("Assoc Op::Up failed to apply locally or was a no-op.");
-                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Assoc Op::Up failed local application")));
+                    return Err(Box::new(std::io::Error::other("Assoc Op::Up failed local application")));
                 }
             }
             Op::Rm { .. } => {
@@ -569,7 +567,7 @@ impl DataStore {
                     op_applied_successfully = true;
                 } else {
                     log::error!("DNS Op::Up failed to apply locally or was a no-op.");
-                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "DNS Op::Up failed local application")));
+                    return Err(Box::new(std::io::Error::other("DNS Op::Up failed local application")));
                 }
             }
             Op::Rm { .. } => {
@@ -599,8 +597,8 @@ impl DataStore {
         let op = self.network_state.update_dns_local(create.clone());
         self.handle_dns_op(op).await?;
         let instance_ips = create.formnet_ip.clone();
-        let mut ip_iter = instance_ips.iter();
-        while let Some(ip) = ip_iter.next() {
+        let ip_iter = instance_ips.iter();
+        for ip in ip_iter {
             let mut instance = self.instance_state.get_instance_by_ip(ip.ip())?;
             instance.dns_record = Some(create.clone());
             self.handle_instance_update(instance).await?;
@@ -630,9 +628,9 @@ impl DataStore {
         self.handle_dns_op(op).await?;
 
         let instance_ips = update.formnet_ip.clone();
-        let mut ip_iter = instance_ips.iter();
+        let ip_iter = instance_ips.iter();
         let mut replace = false;
-        while let Some(ip) = ip_iter.next() {
+        for ip in ip_iter {
             let mut instance = self.instance_state.get_instance_by_ip(ip.ip())?;
             if let Some(ref mut record) = &mut instance.dns_record {
                 record.formnet_ip.extend(update.formnet_ip.clone());
@@ -679,7 +677,7 @@ impl DataStore {
         self.handle_dns_op(op).await?;
 
         Client::new()
-            .post(format!("http://127.0.0.1:3005/record/{}/delete", delete))
+            .post(format!("http://127.0.0.1:3005/record/{delete}/delete"))
             .send().await?
             .json::<DomainResponse>().await?;
 
@@ -705,8 +703,8 @@ impl DataStore {
         cluster_member: ClusterMember
     ) -> Result<(), Box<dyn std::error::Error>> {
         let mut instances = self.instance_state.get_instances_by_build_id(build_id);
-        let mut iter_mut = instances.iter_mut();
-        while let Some(instance) = iter_mut.next() {
+        let iter_mut = instances.iter_mut();
+        for instance in iter_mut {
             instance.cluster.insert(cluster_member.clone());
             let instance_op = self.instance_state.update_instance_local(instance.clone());
             self.handle_instance_op(instance_op).await?;
@@ -720,8 +718,8 @@ impl DataStore {
         cluster_member_id: String
     ) -> Result<(), Box<dyn std::error::Error>> {
         let mut instances = self.instance_state.get_instances_by_build_id(build_id);
-        let mut iter_mut = instances.iter_mut();
-        while let Some(instance) = iter_mut.next() {
+        let iter_mut = instances.iter_mut();
+        for instance in iter_mut {
             instance.cluster.remove(&cluster_member_id);
             let instance_op = self.instance_state.update_instance_local(instance.clone());
             self.handle_instance_op(instance_op).await?;
@@ -741,7 +739,7 @@ impl DataStore {
                     op_applied_successfully = true;
                 } else {
                     log::error!("Instance Op::Up failed to apply locally or was a no-op.");
-                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Instance Op::Up failed local application")));
+                    return Err(Box::new(std::io::Error::other("Instance Op::Up failed local application")));
                 }
             }
             Op::Rm { .. } => {
@@ -840,7 +838,7 @@ impl DataStore {
                     op_applied_successfully = true;
                 } else {
                     log::error!("Node Op::Up failed to apply locally or was a no-op.");
-                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Node Op::Up failed local application")));
+                    return Err(Box::new(std::io::Error::other("Node Op::Up failed local application")));
                 }
             }
             Op::Rm { .. } => {
@@ -946,7 +944,7 @@ impl DataStore {
                     op_applied_successfully = true;
                 } else {
                     log::error!("Account Op::Up failed to apply locally or was a no-op.");
-                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Account Op::Up failed local application")));
+                    return Err(Box::new(std::io::Error::other("Account Op::Up failed local application")));
                 }
             }
             Op::Rm { .. } => {
@@ -984,13 +982,10 @@ impl DataStore {
 
     pub async fn handle_account_delete(&mut self, delete: String) -> Result<(), Box<dyn std::error::Error>> {
         // Check if account exists
-        match self.account_state.get_account(&delete) {
-            None => return Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("Account with address {} does not exist", delete)
-            ))),
-            _ => {}
-        };
+        if self.account_state.get_account(&delete) == None { return Err(Box::new(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("Account with address {delete} does not exist")
+        ))) };
 
         // Delete the account (remove it from the map)
         let op = self.account_state.remove_account_local(delete);
@@ -1131,13 +1126,10 @@ impl DataStore {
 
     pub async fn handle_agent_delete(&mut self, delete: String) -> Result<(), Box<dyn std::error::Error>> {
         // Check if account exists
-        match self.agent_state.get_agent(&delete) {
-            None => return Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("Account with address {} does not exist", delete)
-            ))),
-            _ => {}
-        };
+        if self.agent_state.get_agent(&delete) == None { return Err(Box::new(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("Account with address {delete} does not exist")
+        ))) };
 
         // Delete the account (remove it from the map)
         let op = self.agent_state.remove_agent_local(delete);
@@ -1188,13 +1180,10 @@ impl DataStore {
 
     pub async fn handle_model_delete(&mut self, delete: String) -> Result<(), Box<dyn std::error::Error>> {
         // Check if account exists
-        match self.model_state.get_model(&delete) {
-            None => return Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("Account with address {} does not exist", delete)
-            ))),
-            _ => {}
-        };
+        if self.model_state.get_model(&delete) == None { return Err(Box::new(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("Account with address {delete} does not exist")
+        ))) };
 
         // Delete the account (remove it from the map)
         let op = self.model_state.remove_model_local(delete);
@@ -1267,7 +1256,7 @@ impl DataStore {
                     let op = self.task_state.update_task_local(task);
                     self.handle_task_op(op).await?;
                 } else {
-                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::NotFound, format!("Task not found: {}", task_id))));
+                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::NotFound, format!("Task not found: {task_id}"))));
                 }
             }
             TaskRequest::AssignNode{ task_id, node_id, status_after_assign } => {
@@ -1280,7 +1269,7 @@ impl DataStore {
                     let op = self.task_state.update_task_local(task);
                     self.handle_task_op(op).await?;
                 } else {
-                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::NotFound, format!("Task not found: {}", task_id))));
+                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::NotFound, format!("Task not found: {task_id}"))));
                 }
             }
         }
@@ -1300,7 +1289,7 @@ impl DataStore {
                     op_applied_successfully = true;
                 } else {
                     log::error!("Task Op::Up failed to apply locally or was a no-op for task_id: {}.", key);
-                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Task Op::Up failed local application for task_id: {}", key))));
+                    return Err(Box::new(std::io::Error::other(format!("Task Op::Up failed local application for task_id: {key}"))));
                 }
             }
             Op::Rm { .. } => {
@@ -1353,21 +1342,21 @@ impl DataStore {
         log::debug!("Writing to queue (topic: '{}', sub_topic: {}): {:?}", topic_string, sub_topic, request_payload);
 
         match Client::new()
-            .post(format!("http://127.0.0.1:{}/queue/write_local", QUEUE_PORT))
+            .post(format!("http://127.0.0.1:{QUEUE_PORT}/queue/write_local"))
             .json(&request_payload)
             .send().await {
             Ok(response) => {
                 if response.status().is_success() {
                     match response.json::<QueueResponse>().await {
                         Ok(QueueResponse::OpSuccess) => Ok(()),
-                        Ok(QueueResponse::Failure { reason }) => Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Queue write failed for topic '{}': {:?}", topic_string, reason)))),
-                        Ok(other_resp) => Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Queue write for topic '{}': Unexpected response variant: {:?}", topic_string, other_resp)))),
-                        Err(e) => Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Queue write for topic '{}': Failed to parse response JSON: {}", topic_string, e))))
+                        Ok(QueueResponse::Failure { reason }) => Err(Box::new(std::io::Error::other(format!("Queue write failed for topic '{topic_string}': {reason:?}")))),
+                        Ok(other_resp) => Err(Box::new(std::io::Error::other(format!("Queue write for topic '{topic_string}': Unexpected response variant: {other_resp:?}")))),
+                        Err(e) => Err(Box::new(std::io::Error::other(format!("Queue write for topic '{topic_string}': Failed to parse response JSON: {e}"))))
                     }
                 } else {
                     let status = response.status(); // Store status before consuming response for text
                     let err_text = response.text().await.unwrap_or_default();
-                    Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Queue write for topic '{}' failed with status: {}, body: {}", topic_string, status, err_text))))
+                    Err(Box::new(std::io::Error::other(format!("Queue write for topic '{topic_string}' failed with status: {status}, body: {err_text}"))))
                 }
             }
             Err(e) => Err(Box::new(e)), // This error already implies context of the call
@@ -1389,7 +1378,7 @@ impl DataStore {
         last: Option<usize>,
         n: Option<usize>,
     ) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error>> {
-        let mut endpoint = format!("http://127.0.0.1:{}/queue/state", QUEUE_PORT);
+        let mut endpoint = format!("http://127.0.0.1:{QUEUE_PORT}/queue/state");
         if let Some(idx) = last {
             let idx = idx;
             endpoint.push_str(&format!("/{idx}"));
@@ -1398,12 +1387,10 @@ impl DataStore {
             } else {
                 endpoint.push_str("/get_after");
             }
+        } else if let Some(n) = n {
+            endpoint.push_str(&format!("/{n}/get_n"))
         } else {
-            if let Some(n) = n {
-                endpoint.push_str(&format!("/{n}/get_n"))
-            } else {
-                endpoint.push_str("/get")
-            }
+            endpoint.push_str("/get")
         }
 
         match Client::new()
@@ -1415,9 +1402,9 @@ impl DataStore {
                     Ok(list)
                 },
                 QueueResponse::Failure { reason } => {
-                    Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("{reason:?}"))))
+                    Err(Box::new(std::io::Error::other(format!("{reason:?}"))))
                 },
-                _ => Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Invalid response variant for {endpoint}"))))
+                _ => Err(Box::new(std::io::Error::other(format!("Invalid response variant for {endpoint}"))))
         }
     }
 
@@ -1447,7 +1434,7 @@ impl DataStore {
             log::info!("Sending Op to all {id} at {}...", peer.ip().to_string());
 
             if let Err(e) = self.send::<R>(&peer.ip().to_string(), endpoint, request.clone()).await {
-                eprintln!("Error sending {endpoint} request to {id}: {}: {e}", peer.ip().to_string());
+                eprintln!("Error sending {endpoint} request to {id}: {}: {e}", peer.ip());
             };
 
             log::info!("Successfully sent Op {id} at {}...", peer.ip().to_string());
@@ -1685,8 +1672,8 @@ pub async fn complete_bootstrap(State(state): State<Arc<Mutex<DataStore>>>) {
     let client = Client::new();
 
     tokio::spawn(async move {
-        let mut sample_iter = sample.iter();
-        while let Some((id, peer)) = sample_iter.next() {
+        let sample_iter = sample.iter();
+        for (id, peer) in sample_iter {
             match client.get(
                 format!("http://{}:3004/v1/bootstrap/full_state", peer.ip())
             ).send().await {
@@ -1716,7 +1703,7 @@ pub async fn complete_bootstrap(State(state): State<Arc<Mutex<DataStore>>>) {
 
 pub async fn process_message(message: Vec<u8>, state: Arc<Mutex<DataStore>>) -> Result<(), Box<dyn std::error::Error>> {
     if message.is_empty() {
-        return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Message was empty")));
+        return Err(Box::new(std::io::Error::other("Message was empty")));
     }
 
     let subtopic = message[0];
@@ -1797,7 +1784,7 @@ pub async fn full_state(
 }
 
 pub async fn request_full_state(to_dial: &str, private_key: &str) -> Result<MergeableState, Box<dyn std::error::Error>> {
-    use k256::ecdsa::{SigningKey, signature::Signer};
+    use k256::ecdsa::SigningKey;
     use sha2::{Sha256, Digest};
     use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 
@@ -1815,7 +1802,7 @@ pub async fn request_full_state(to_dial: &str, private_key: &str) -> Result<Merg
     // Sign the message hash
     let (signature, recovery_id) = signing_key
         .sign_recoverable(message_hash.as_slice())
-        .map_err(|e| format!("Failed to sign bootstrap request: {}", e))?;
+        .map_err(|e| format!("Failed to sign bootstrap request: {e}"))?;
 
     // Create authorization header
     let auth_header_value = format!(
@@ -1830,7 +1817,7 @@ pub async fn request_full_state(to_dial: &str, private_key: &str) -> Result<Merg
     headers.insert(
         AUTHORIZATION,
         HeaderValue::from_str(&auth_header_value)
-            .map_err(|e| format!("Invalid header value: {}", e))?
+            .map_err(|e| format!("Invalid header value: {e}"))?
     );
 
     // Make authenticated request
@@ -1839,7 +1826,7 @@ pub async fn request_full_state(to_dial: &str, private_key: &str) -> Result<Merg
         .headers(headers)
         .send().await?.json().await?;
 
-    println!("{:?}", resp);
+    println!("{resp:?}");
     Ok(resp)
 }
 

@@ -3498,12 +3498,16 @@ name = "form-inference-api"
 version = "0.1.0"
 dependencies = [
  "axum 0.6.20",
+ "clap",
+ "form-config",
  "futures",
  "lazy_static",
  "reqwest 0.11.27",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-stream",
+ "uuid 1.14.0",
 ]
 
 [[package]]
@@ -7432,10 +7436,12 @@ dependencies = [
  "system-configuration 0.5.1",
  "tokio",
  "tokio-native-tls",
+ "tokio-util",
  "tower-service",
  "url 2.5.4",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-streams",
  "web-sys",
  "winreg",
 ]

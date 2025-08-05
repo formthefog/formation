@@ -51,8 +51,7 @@ impl From<PeerContents<String>> for CrdtPeer<String> {
             is_disabled: value.is_disabled,
             is_redeemed: value.is_redeemed,
             invite_expires: value.invite_expires
-            .map(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
-            .flatten()
+            .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
             .map(|t| t.as_secs()),
             candidates: value.candidates,
         }
@@ -87,7 +86,7 @@ impl From<CrdtCidr<String>> for Cidr<String> {
             id: value.id,
             contents: CidrContents {
                 name: value.name.clone(),
-                cidr: value.cidr.clone(),
+                cidr: value.cidr,
                 parent: value.parent.clone(),
             }
         }
@@ -161,7 +160,7 @@ impl<T: Clone> CrdtCidr<T> {
     }
 
     pub fn cidr(&self) -> IpNet {
-        self.cidr.clone()
+        self.cidr
     }
 
     pub fn parent(&self) -> Option<T> {
@@ -318,6 +317,12 @@ pub struct DnsState {
     pub zones: Map<String, BFTReg<CrdtDnsRecord, Actor>, Actor>
 }
 
+impl Default for DnsState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DnsState {
     pub fn new() -> Self {
         Self {
@@ -368,8 +373,8 @@ impl NetworkState {
                 .expect("PANIC: Invalid SigningKey cannot recover ffrom Bytes");
         log::info!("Creating op...");
         let op = self.peers.update(peer.name.to_string(), add_ctx, |reg, ctx| {
-            let op = reg.update(peer.into(), self.node_id.clone(), signing_key).expect("PANIC: Unable to sign updates");
-            op
+            
+            reg.update(peer.into(), self.node_id.clone(), signing_key).expect("PANIC: Unable to sign updates")
         });
         log::info!("Op created, returning...");
         op
@@ -392,8 +397,8 @@ impl NetworkState {
                 .expect("PANIC: Invalid SigningKey cannot recover ffrom Bytes");
         log::info!("Creating op...");
         let op = self.cidrs.update(cidr.name.to_string(), add_ctx, |reg, ctx| {
-            let op = reg.update(cidr.into(), self.node_id.clone(), signing_key).expect("PANIC: Unable to sign updates");
-            op
+            
+            reg.update(cidr.into(), self.node_id.clone(), signing_key).expect("PANIC: Unable to sign updates")
         });
         log::info!("Op created, returning...");
         op
@@ -413,9 +418,9 @@ impl NetworkState {
                 .expect("PANIC: Invalid SigningKey Cannot Decode from Hex"))
                 .expect("PANIC: Invalid SigningKey cannot recover ffrom Bytes");
         log::info!("Creating op...");
-        let op = self.associations.update(format!("{}-{}",association.cidr_id_1.to_string(), association.cidr_id_2.to_string()), add_ctx, |reg, ctx| {
-            let op = reg.update(association.into(), self.node_id.clone(), signing_key).expect("PANIC: Unable to sign updates");
-            op
+        let op = self.associations.update(format!("{}-{}",association.cidr_id_1, association.cidr_id_2), add_ctx, |reg, ctx| {
+            
+            reg.update(association.into(), self.node_id.clone(), signing_key).expect("PANIC: Unable to sign updates")
         });
         log::info!("Op created, returning...");
         op
@@ -443,7 +448,7 @@ impl NetworkState {
                 // If the in the updated register equals the value in the Op it
                 // succeeded
                 if v.value() == update.op().value {
-                    return (true, v.value()) 
+                    (true, v.value()) 
                 // Otherwise, it could be that it's a concurrent update and was added
                 // to the DAG as a head
                 } else if reg.dag_contains(&update.hash()) && reg.is_head(&update.hash()) {
@@ -458,10 +463,10 @@ impl NetworkState {
                     return (false, v.value()) 
                 }
             } else {
-                return (false, update.op().value) 
+                (false, update.op().value) 
             }
         } else {
-            return (false, update.op().value);
+            (false, update.op().value)
         }
     }
 
@@ -492,7 +497,7 @@ impl NetworkState {
                 // If the in the updated register equals the value in the Op it
                 // succeeded
                 if v.value() == update.op().value {
-                    return (true, v.value()) 
+                    (true, v.value()) 
                 // Otherwise, it could be that it's a concurrent update and was added
                 // to the DAG as a head
                 } else if reg.dag_contains(&update.hash()) && reg.is_head(&update.hash()) {
@@ -507,10 +512,10 @@ impl NetworkState {
                     return (false, v.value()) 
                 }
             } else {
-                return (false, update.op().value) 
+                (false, update.op().value) 
             }
         } else {
-            return (false, update.op().value);
+            (false, update.op().value)
         }
     }
 
@@ -524,7 +529,7 @@ impl NetworkState {
                 // If the in the updated register equals the value in the Op it
                 // succeeded
                 if v.value() == update.op().value {
-                    return (true, v.value()) 
+                    (true, v.value()) 
                 // Otherwise, it could be that it's a concurrent update and was added
                 // to the DAG as a head
                 } else if reg.dag_contains(&update.hash()) && reg.is_head(&update.hash()) {
@@ -539,10 +544,10 @@ impl NetworkState {
                     return (false, v.value()) 
                 }
             } else {
-                return (false, update.op().value) 
+                (false, update.op().value) 
             }
         } else {
-            return (false, update.op().value);
+            (false, update.op().value)
         }
     }
 
@@ -556,8 +561,8 @@ impl NetworkState {
                 .expect("PANIC: Invalid SigningKey cannot recover ffrom Bytes");
         log::info!("Creating op...");
         let op = self.dns_state.zones.update(dns.domain.clone(), add_ctx, |reg, ctx| {
-            let op = reg.update(dns.into(), self.node_id.clone(), signing_key).expect("PANIC: Unable to sign updates");
-            op
+            
+            reg.update(dns.into(), self.node_id.clone(), signing_key).expect("PANIC: Unable to sign updates")
         });
         log::info!("Op created, returning...");
         op
@@ -580,7 +585,7 @@ impl NetworkState {
                 // If the in the updated register equals the value in the Op it
                 // succeeded
                 if v.value() == update.op().value {
-                    return (true, v.value()) 
+                    (true, v.value()) 
                 // Otherwise, it could be that it's a concurrent update and was added
                 // to the DAG as a head
                 } else if reg.dag_contains(&update.hash()) && reg.is_head(&update.hash()) {
@@ -595,10 +600,10 @@ impl NetworkState {
                     return (false, v.value()) 
                 }
             } else {
-                return (false, update.op().value) 
+                (false, update.op().value) 
             }
         } else {
-            return (false, update.op().value);
+            (false, update.op().value)
         }
     }
 

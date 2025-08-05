@@ -431,31 +431,31 @@ impl Account {
             
             // Hard caps on total agents by tier
             // Free tier users are limited to a maximum of 2 agents total (1 included + 1 extra)
-            if self.subscription.as_ref().map_or(false, |s| s.tier == crate::billing::SubscriptionTier::Free) 
+            if self.subscription.as_ref().is_some_and(|s| s.tier == crate::billing::SubscriptionTier::Free) 
                 && current_agent_count >= 2 {
                 return false;
             }
             
             // Pro tier users can hire up to 5 agents total (included + extra)
-            if self.subscription.as_ref().map_or(false, |s| s.tier == crate::billing::SubscriptionTier::Pro) 
+            if self.subscription.as_ref().is_some_and(|s| s.tier == crate::billing::SubscriptionTier::Pro) 
                 && current_agent_count >= 5 {
                 return false;
             }
             
             // ProPlus users can hire up to 10 agents total
-            if self.subscription.as_ref().map_or(false, |s| s.tier == crate::billing::SubscriptionTier::ProPlus) 
+            if self.subscription.as_ref().is_some_and(|s| s.tier == crate::billing::SubscriptionTier::ProPlus) 
                 && current_agent_count >= 10 {
                 return false;
             }
             
             // Power users can hire up to 20 agents total
-            if self.subscription.as_ref().map_or(false, |s| s.tier == crate::billing::SubscriptionTier::Power) 
+            if self.subscription.as_ref().is_some_and(|s| s.tier == crate::billing::SubscriptionTier::Power) 
                 && current_agent_count >= 20 {
                 return false;
             }
             
             // PowerPlus users can hire up to 50 agents total
-            if self.subscription.as_ref().map_or(false, |s| s.tier == crate::billing::SubscriptionTier::PowerPlus) 
+            if self.subscription.as_ref().is_some_and(|s| s.tier == crate::billing::SubscriptionTier::PowerPlus) 
                 && current_agent_count >= 50 {
                 return false;
             }
@@ -549,7 +549,7 @@ impl AccountState {
                 // If the in the updated register equals the value in the Op it
                 // succeeded
                 if v.value() == update.op().value {
-                    return (true, v.value()) 
+                    (true, v.value()) 
                 // Otherwise, it could be that it's a concurrent update and was added
                 // to the DAG as a head
                 } else if reg.dag_contains(&update.hash()) && reg.is_head(&update.hash()) {
@@ -564,10 +564,10 @@ impl AccountState {
                     return (false, v.value()) 
                 }
             } else {
-                return (false, update.op().value) 
+                (false, update.op().value) 
             }
         } else {
-            return (false, update.op().value);
+            (false, update.op().value)
         }
     }
 

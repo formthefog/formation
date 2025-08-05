@@ -25,13 +25,13 @@ pub enum InstanceStatus {
 impl Display for InstanceStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            InstanceStatus::Building => writeln!(f, "{}", "Building"),
-            InstanceStatus::Built => writeln!(f, "{}", "Built"),
-            InstanceStatus::Created => writeln!(f, "{}", "Created"),
-            InstanceStatus::Started => writeln!(f, "{}", "Started"),
-            InstanceStatus::Stopped => writeln!(f, "{}", "Stopped"),
-            InstanceStatus::Killed => writeln!(f, "{}", "Killed"),
-            InstanceStatus::CriticalError => writeln!(f, "{}", "Critical Error"),
+            InstanceStatus::Building => writeln!(f, "Building"),
+            InstanceStatus::Built => writeln!(f, "Built"),
+            InstanceStatus::Created => writeln!(f, "Created"),
+            InstanceStatus::Started => writeln!(f, "Started"),
+            InstanceStatus::Stopped => writeln!(f, "Stopped"),
+            InstanceStatus::Killed => writeln!(f, "Killed"),
+            InstanceStatus::CriticalError => writeln!(f, "Critical Error"),
 
         }
     }
@@ -216,7 +216,7 @@ impl Instance {
         while n > 0 {
             if let Some(ref c) = &current {
                 let next = *c.previous_snapshot.clone(); 
-                if !next.is_none() {
+                if next.is_some() {
                     current = next;
                     n -= 1;
                 } else {
@@ -227,7 +227,7 @@ impl Instance {
             }
         }
 
-        return (current, n);
+        (current, n)
     }
 
     pub fn tags(&self) -> Vec<String> {
@@ -272,13 +272,13 @@ impl Instance {
 
     pub async fn get(id: &str) -> Option<Self> {
         let resp = Client::new()
-            .get(format!("http://127.0.0.1:3004/instance/{}/get", id))
+            .get(format!("http://127.0.0.1:3004/instance/{id}/get"))
             .send().await.ok()?
             .json::<Response<Self>>().await.ok()?;
 
         match resp {
-            Response::Success(Success::Some(instance)) => return Some(instance),
-            _ => return None,
+            Response::Success(Success::Some(instance)) => Some(instance),
+            _ => None,
         }
     }
 }
@@ -547,11 +547,7 @@ impl ScalingPolicy {
 
         // Define a buffer below the target to prevent oscillation
         // Only scale in if 15% below target
-        let scale_in_threshold = if self.target_cpu_utilization > 15 {
-            self.target_cpu_utilization - 15
-        } else {
-            0
-        };
+        let scale_in_threshold = self.target_cpu_utilization.saturating_sub(15);
 
         // Scale in if CPU utilization is below the threshold
         current_cpu_utilization < scale_in_threshold
@@ -1264,8 +1260,7 @@ impl InstanceCluster {
                     return Err(ScalingError {
                         error_type: "InvalidTargetInstances".to_string(),
                         message: format!(
-                            "Target instances ({}) must be greater than current instances ({})",
-                            target_instances, current_instances
+                            "Target instances ({target_instances}) must be greater than current instances ({current_instances})"
                         ),
                         phase: "Validating".to_string(),
                     });
@@ -1303,8 +1298,7 @@ impl InstanceCluster {
                     return Err(ScalingError {
                         error_type: "InvalidTargetInstances".to_string(),
                         message: format!(
-                            "Target instances ({}) must be less than current instances ({})",
-                            target_instances, current_instances
+                            "Target instances ({target_instances}) must be less than current instances ({current_instances})"
                         ),
                         phase: "Validating".to_string(),
                     });
@@ -1316,7 +1310,7 @@ impl InstanceCluster {
                         if !self.members.contains_key(id) {
                             return Err(ScalingError {
                                 error_type: "InvalidInstanceId".to_string(),
-                                message: format!("Instance {} not found in cluster", id),
+                                message: format!("Instance {id} not found in cluster"),
                                 phase: "Validating".to_string(),
                             });
                         }
@@ -1343,7 +1337,7 @@ impl InstanceCluster {
                     if !self.members.contains_key(id) {
                         return Err(ScalingError {
                             error_type: "InvalidInstanceId".to_string(),
-                            message: format!("Instance {} not found in cluster", id),
+                            message: format!("Instance {id} not found in cluster"),
                             phase: "Validating".to_string(),
                         });
                     }
@@ -1386,7 +1380,7 @@ impl InstanceCluster {
             // Skip members that don't have a valid IP
             if let Ok(formnet_ip) = member.instance_formnet_ip.to_string().parse::<std::net::IpAddr>() {
                 // Try to get metrics from this instance
-                let endpoint = format!("http://{}:63210/get", formnet_ip);
+                let endpoint = format!("http://{formnet_ip}:63210/get");
                 
                 // Make a blocking HTTP request - note this is not ideal in production
                 let client = reqwest::blocking::Client::new();
@@ -1505,7 +1499,7 @@ impl InstanceCluster {
                     Some(member) => member,
                     None => return Err(ScalingError {
                         error_type: "TemplateNotFound".to_string(),
-                        message: format!("Template instance {} not found in cluster", template_id),
+                        message: format!("Template instance {template_id} not found in cluster"),
                         phase: "Planning".to_string(),
                     }),
                 };
@@ -1695,7 +1689,7 @@ impl InstanceCluster {
                     Some(member) => member,
                     None => return Err(ScalingError {
                         error_type: "TemplateNotFound".to_string(),
-                        message: format!("Template instance {} not found in cluster", template_id),
+                        message: format!("Template instance {template_id} not found in cluster"),
                         phase: "Planning".to_string(),
                     }),
                 };
@@ -1772,15 +1766,14 @@ impl InstanceCluster {
     /// * `Err(ScalingError)` - If resource allocation fails
     fn allocate_resources_for_operation(&self, operation: &ScalingOperation) -> Result<Vec<String>, ScalingError> {
         // First, verify that we have a template if needed
-        if matches!(operation, ScalingOperation::ScaleOut { .. } | ScalingOperation::ReplaceInstances { .. }) {
-            if self.template_instance_id.is_none() {
+        if matches!(operation, ScalingOperation::ScaleOut { .. } | ScalingOperation::ReplaceInstances { .. })
+            && self.template_instance_id.is_none() {
                 return Err(ScalingError {
                     error_type: "NoTemplateInstance".to_string(),
                     message: "No template instance specified for this operation".to_string(),
                     phase: "ResourceAllocating".to_string(),
                 });
             }
-        }
         
         match operation {
             ScalingOperation::ScaleOut { target_instances } => {
@@ -1854,12 +1847,12 @@ impl InstanceCluster {
                 for i in 0..instances_to_add {
                     // Generate descriptive, unique IDs that follow a consistent pattern
                     // Include template ID, timestamp, and index for uniqueness
-                    let new_id = format!("{}-clone-{}-{}", template_id, timestamp, i);
+                    let new_id = format!("{template_id}-clone-{timestamp}-{i}");
                     
                     // Verify the ID doesn't already exist
                     if self.members.contains_key(&new_id) {
                         // If by chance it does exist, make it even more unique
-                        let truly_unique_id = format!("{}-{}", new_id, uuid::Uuid::new_v4().to_string()[0..8].to_string());
+                        let truly_unique_id = format!("{}-{}", new_id, &uuid::Uuid::new_v4().to_string()[0..8]);
                         instance_ids.push(truly_unique_id);
                     } else {
                         instance_ids.push(new_id);
@@ -1887,7 +1880,7 @@ impl InstanceCluster {
                         if !self.members.contains_key(id) {
                             return Err(ScalingError {
                                 error_type: "InstanceNotFound".to_string(),
-                                message: format!("Specified instance {} not found in cluster", id),
+                                message: format!("Specified instance {id} not found in cluster"),
                                 phase: "ResourceAllocating".to_string(),
                             });
                         }
@@ -1898,7 +1891,7 @@ impl InstanceCluster {
                         if ids.contains(template_id) {
                             return Err(ScalingError {
                                 error_type: "CannotRemoveTemplate".to_string(),
-                                message: format!("Cannot remove template instance {}", template_id),
+                                message: format!("Cannot remove template instance {template_id}"),
                                 phase: "ResourceAllocating".to_string(),
                             });
                         }
@@ -1931,7 +1924,7 @@ impl InstanceCluster {
                     if !self.members.contains_key(id) {
                         return Err(ScalingError {
                             error_type: "InstanceNotFound".to_string(),
-                            message: format!("Instance {} not found in cluster", id),
+                            message: format!("Instance {id} not found in cluster"),
                             phase: "ResourceAllocating".to_string(),
                         });
                     }
@@ -1942,7 +1935,7 @@ impl InstanceCluster {
                     if instance_ids.contains(template_id) {
                         return Err(ScalingError {
                             error_type: "CannotReplaceTemplate".to_string(),
-                            message: format!("Cannot replace template instance {}", template_id),
+                            message: format!("Cannot replace template instance {template_id}"),
                             phase: "ResourceAllocating".to_string(),
                         });
                     }
@@ -1989,12 +1982,12 @@ impl InstanceCluster {
                 
                 for (i, old_id) in instance_ids.iter().enumerate() {
                     // Use a naming convention that shows it's a replacement
-                    let new_id = format!("{}-replacement-{}-{}", old_id, timestamp, i);
+                    let new_id = format!("{old_id}-replacement-{timestamp}-{i}");
                     
                     // Check for the unlikely case that this ID already exists
                     if self.members.contains_key(&new_id) {
                         // Add uniqueness if needed
-                        let truly_unique_id = format!("{}-{}", new_id, uuid::Uuid::new_v4().to_string()[0..8].to_string());
+                        let truly_unique_id = format!("{}-{}", new_id, &uuid::Uuid::new_v4().to_string()[0..8]);
                         new_ids.push(truly_unique_id);
                     } else {
                         new_ids.push(new_id);
@@ -2045,7 +2038,7 @@ impl InstanceCluster {
         let previous_config = serde_json::to_string(self)
             .map_err(|e| ScalingError {
                 error_type: "SerializationError".to_string(),
-                message: format!("Failed to serialize current configuration: {}", e),
+                message: format!("Failed to serialize current configuration: {e}"),
                 phase: "InstancePreparing".to_string(),
             })?;
         
@@ -2059,7 +2052,7 @@ impl InstanceCluster {
                 } else {
                     Err(ScalingError {
                         error_type: "TemplateNotFound".to_string(),
-                        message: format!("Template instance {} not found in cluster", template_id),
+                        message: format!("Template instance {template_id} not found in cluster"),
                         phase: "InstancePreparing".to_string(),
                     })
                 }
@@ -2095,7 +2088,7 @@ impl InstanceCluster {
                     if self.members.contains_key(id) {
                         return Err(ScalingError {
                             error_type: "DuplicateInstanceId".to_string(),
-                            message: format!("Instance ID {} already exists in cluster", id),
+                            message: format!("Instance ID {id} already exists in cluster"),
                             phase: "InstancePreparing".to_string(),
                         });
                     }
@@ -2117,7 +2110,7 @@ impl InstanceCluster {
                     if !self.members.contains_key(id) {
                         return Err(ScalingError {
                             error_type: "InstanceNotFound".to_string(),
-                            message: format!("Instance {} not found in cluster", id),
+                            message: format!("Instance {id} not found in cluster"),
                             phase: "InstancePreparing".to_string(),
                         });
                     }
@@ -2128,7 +2121,7 @@ impl InstanceCluster {
                     if instance_ids.contains(template_id) {
                         return Err(ScalingError {
                             error_type: "CannotRemoveTemplate".to_string(),
-                            message: format!("Cannot remove template instance {}", template_id),
+                            message: format!("Cannot remove template instance {template_id}"),
                             phase: "InstancePreparing".to_string(),
                         });
                     }
@@ -2153,7 +2146,7 @@ impl InstanceCluster {
                     if !self.members.contains_key(id) {
                         return Err(ScalingError {
                             error_type: "InstanceNotFound".to_string(),
-                            message: format!("Instance {} not found in cluster", id),
+                            message: format!("Instance {id} not found in cluster"),
                             phase: "InstancePreparing".to_string(),
                         });
                     }
@@ -2164,7 +2157,7 @@ impl InstanceCluster {
                     if old_instance_ids.contains(template_id) {
                         return Err(ScalingError {
                             error_type: "CannotReplaceTemplate".to_string(),
-                            message: format!("Cannot replace template instance {}", template_id),
+                            message: format!("Cannot replace template instance {template_id}"),
                             phase: "InstancePreparing".to_string(),
                         });
                     }
@@ -2187,7 +2180,7 @@ impl InstanceCluster {
                     if self.members.contains_key(id) && !old_instance_ids.contains(id) {
                         return Err(ScalingError {
                             error_type: "DuplicateInstanceId".to_string(),
-                            message: format!("New instance ID {} already exists in cluster", id),
+                            message: format!("New instance ID {id} already exists in cluster"),
                             phase: "InstancePreparing".to_string(),
                         });
                     }
@@ -2236,7 +2229,7 @@ impl InstanceCluster {
                     Some(member) => member.clone(),
                     None => return Err(ScalingError {
                         error_type: "TemplateNotFound".to_string(),
-                        message: format!("Template instance {} not found in cluster", template_id),
+                        message: format!("Template instance {template_id} not found in cluster"),
                         phase: "Configuring".to_string(),
                     }),
                 };
@@ -2251,7 +2244,7 @@ impl InstanceCluster {
                 // Create and add new instances based on template
                 for i in 0..instances_to_add {
                     // Generate a unique ID for the new instance
-                    let new_id = format!("inst-{}-{}", template_id, i);
+                    let new_id = format!("inst-{template_id}-{i}");
                     
                     // Create IP address for the new instance (this would normally be allocated dynamically)
                     // In a real implementation, we would allocate these from the network provider
@@ -2331,7 +2324,7 @@ impl InstanceCluster {
                     if instances_to_remove.contains(template_id) {
                         return Err(ScalingError {
                             error_type: "CannotRemoveTemplate".to_string(),
-                            message: format!("Cannot remove template instance {}", template_id),
+                            message: format!("Cannot remove template instance {template_id}"),
                             phase: "Configuring".to_string(),
                         });
                     }
@@ -2342,7 +2335,7 @@ impl InstanceCluster {
                     if !self.members.contains_key(id) {
                         return Err(ScalingError {
                             error_type: "InstanceNotFound".to_string(),
-                            message: format!("Instance {} not found in cluster", id),
+                            message: format!("Instance {id} not found in cluster"),
                             phase: "Configuring".to_string(),
                         });
                     }
@@ -2388,7 +2381,7 @@ impl InstanceCluster {
                     Some(member) => member.clone(),
                     None => return Err(ScalingError {
                         error_type: "TemplateNotFound".to_string(),
-                        message: format!("Template instance {} not found in cluster", template_id),
+                        message: format!("Template instance {template_id} not found in cluster"),
                         phase: "Configuring".to_string(),
                     }),
                 };
@@ -2399,7 +2392,7 @@ impl InstanceCluster {
                     if !self.members.contains_key(id) {
                         return Err(ScalingError {
                             error_type: "InstanceNotFound".to_string(),
-                            message: format!("Instance {} not found in cluster", id),
+                            message: format!("Instance {id} not found in cluster"),
                             phase: "Configuring".to_string(),
                         });
                     }
@@ -2408,7 +2401,7 @@ impl InstanceCluster {
                     if id == &template_id {
                         return Err(ScalingError {
                             error_type: "CannotReplaceTemplate".to_string(),
-                            message: format!("Cannot replace template instance {}", template_id),
+                            message: format!("Cannot replace template instance {template_id}"),
                             phase: "Configuring".to_string(),
                         });
                     }
@@ -2429,9 +2422,9 @@ impl InstanceCluster {
                     .as_secs() as i64;
                 
                 // Create replacement instances
-                for (_, (old_id, old_ip)) in old_instances_data.iter().enumerate() {
+                for (old_id, old_ip) in old_instances_data.iter() {
                     // Generate a unique ID for the replacement instance
-                    let new_id = format!("replacement-{}-{}", old_id, now);
+                    let new_id = format!("replacement-{old_id}-{now}");
                     
                     // Create a new instance based on the template but preserving some properties from the old one
                     let new_member = ClusterMember {
@@ -2491,8 +2484,7 @@ impl InstanceCluster {
                     return Err(ScalingError {
                         error_type: "VerificationFailed".to_string(),
                         message: format!(
-                            "Expected {} instances, but found {}",
-                            target_instances, current_instances
+                            "Expected {target_instances} instances, but found {current_instances}"
                         ),
                         phase: "Verifying".to_string(),
                     });
@@ -2515,8 +2507,7 @@ impl InstanceCluster {
                     return Err(ScalingError {
                         error_type: "VerificationFailed".to_string(),
                         message: format!(
-                            "Expected {} instances, but found {}",
-                            target_instances, current_instances
+                            "Expected {target_instances} instances, but found {current_instances}"
                         ),
                         phase: "Verifying".to_string(),
                     });
@@ -2541,8 +2532,7 @@ impl InstanceCluster {
                     return Err(ScalingError {
                         error_type: "VerificationFailed".to_string(),
                         message: format!(
-                            "Expected {} instances after replacement, but found {}",
-                            original_instances, current_instances
+                            "Expected {original_instances} instances after replacement, but found {current_instances}"
                         ),
                         phase: "Verifying".to_string(),
                     });
@@ -2553,7 +2543,7 @@ impl InstanceCluster {
                     if self.members.contains_key(id) {
                         return Err(ScalingError {
                             error_type: "VerificationFailed".to_string(),
-                            message: format!("Instance {} was not replaced", id),
+                            message: format!("Instance {id} was not replaced"),
                             phase: "Verifying".to_string(),
                         });
                     }
@@ -2659,7 +2649,7 @@ impl InstanceCluster {
         let previous_config: InstanceCluster = serde_json::from_str(configs_json)
             .map_err(|e| ScalingError {
                 error_type: "DeserializationError".to_string(),
-                message: format!("Failed to deserialize previous configuration: {}", e),
+                message: format!("Failed to deserialize previous configuration: {e}"),
                 phase: "Rollback".to_string(),
             })?;
 
@@ -2717,7 +2707,7 @@ impl InstanceCluster {
         let previous_config: InstanceCluster = serde_json::from_str(config_json)
             .map_err(|e| ScalingError {
                 error_type: "DeserializationError".to_string(),
-                message: format!("Failed to deserialize previous cluster configuration: {}", e),
+                message: format!("Failed to deserialize previous cluster configuration: {e}"),
                 phase: "Rollback".to_string(),
             })?;
 
@@ -3154,8 +3144,8 @@ impl InstanceCluster {
                         }
                         
                         // Very basic resource estimation - in reality you would do more sophisticated checks
-                        let min_vcpus_needed = new_instances as u32 * 1; // Assume 1 vCPU per instance
-                        let min_memory_mb_needed = new_instances as u32 * 1024; // Assume 1 GB per instance
+                        let min_vcpus_needed = new_instances; // Assume 1 vCPU per instance
+                        let min_memory_mb_needed = new_instances * 1024; // Assume 1 GB per instance
                         
                         if available_resources.cpu_cores < min_vcpus_needed {
                             log::warn!("Not enough CPU resources available for scaling operation");
@@ -3192,8 +3182,8 @@ impl InstanceCluster {
                 
                 if replacement_count > 0 {
                     // Very basic resource estimation
-                    let min_vcpus_needed = replacement_count as u32 * 1; // Assume 1 vCPU per instance
-                    let min_memory_mb_needed = replacement_count as u32 * 1024; // Assume 1 GB per instance
+                    let min_vcpus_needed = replacement_count; // Assume 1 vCPU per instance
+                    let min_memory_mb_needed = replacement_count * 1024; // Assume 1 GB per instance
                     
                     if available_resources.cpu_cores < min_vcpus_needed {
                         log::warn!("Not enough CPU resources available for replacement operation");
@@ -3394,7 +3384,7 @@ impl InstanceCluster {
                 
                 record.metadata.insert("health_check_count".to_string(), (check_count + 1).to_string());
                 record.metadata.insert(format!("health_check_{}_time", check_count + 1), now.to_string());
-                record.metadata.insert(format!("health_check_{}_result", check_count + 1), format!("{:?}", check_result));
+                record.metadata.insert(format!("health_check_{}_result", check_count + 1), format!("{check_result:?}"));
                 
                 // If this was a failed health check that triggered a rollback, record additional information
                 match check_result {
@@ -3753,7 +3743,7 @@ impl InstanceCluster {
             
             resource_types
                 .entry(resource_type.to_string())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(resource_id.clone());
         }
         
@@ -3983,7 +3973,7 @@ impl InstanceMetadata {
     }
 
     pub fn deployed_by(&self) -> &str {
-        &self.annotations.deployed_by()
+        self.annotations.deployed_by()
     }
 
     pub fn network_id(&self) -> u16 {
@@ -4126,8 +4116,8 @@ impl InstanceState {
                 .expect("PANIC: Invalid SigningKey cannot recover ffrom Bytes");
         log::info!("Creating op...");
         let op = self.map.update(instance.instance_id().to_string(), add_ctx, |reg, _ctx| {
-            let op = reg.update(instance.into(), self.node_id.clone(), signing_key).expect("PANIC: Unable to sign updates");
-            op
+            
+            reg.update(instance, self.node_id.clone(), signing_key).expect("PANIC: Unable to sign updates")
         });
         log::info!("Op created, returning...");
         op
@@ -4155,7 +4145,7 @@ impl InstanceState {
                 // If the in the updated register equals the value in the Op it
                 // succeeded
                 if v.value() == update.op().value {
-                    return (true, v.value()) 
+                    (true, v.value()) 
                 // Otherwise, it could be that it's a concurrent update and was added
                 // to the DAG as a head
                 } else if reg.dag_contains(&update.hash()) && reg.is_head(&update.hash()) {
@@ -4170,10 +4160,10 @@ impl InstanceState {
                     return (false, v.value()) 
                 }
             } else {
-                return (false, update.op().value) 
+                (false, update.op().value) 
             }
         } else {
-            return (false, update.op().value);
+            (false, update.op().value)
         }
     }
 
@@ -4184,7 +4174,7 @@ impl InstanceState {
             }
         }
 
-        return None
+        None
     }
 
     pub fn get_instances_by_build_id(&self, build_id: String) -> Vec<Instance> {
@@ -4218,8 +4208,7 @@ impl InstanceState {
 
         Ok(instance_opt.ok_or(
             Box::new(
-                std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                std::io::Error::other(
                     format!("Unable to find instance with ip {ip}")
                 )
             )

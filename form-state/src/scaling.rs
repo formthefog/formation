@@ -349,6 +349,12 @@ impl Ord for ScalingManager {
     }
 }
 
+impl Default for ScalingManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ScalingManager {
     /// Creates a new ScalingManager with default settings
     pub fn new() -> Self {
@@ -917,7 +923,7 @@ impl ScalingManager {
             let failed_phase = ScalingPhase::Failed {
                 operation,
                 failed_at: now,
-                failure_reason: format!("Timeout after {} seconds", timeout_seconds),
+                failure_reason: format!("Timeout after {timeout_seconds} seconds"),
                 failure_phase: phase_name.clone(),
                 partial_results: None,
             };
@@ -932,7 +938,7 @@ impl ScalingManager {
                 record.successful = false;
                 record.error = Some(ScalingError {
                     error_type: "Timeout".to_string(),
-                    message: format!("Operation timed out in {} phase", phase_name),
+                    message: format!("Operation timed out in {phase_name} phase"),
                     phase: phase_name,
                 });
             }

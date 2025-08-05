@@ -26,6 +26,12 @@ pub struct RestorationVerificationResult {
     pub verified_at: i64,
 }
 
+impl Default for RestorationVerificationResult {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RestorationVerificationResult {
     /// Creates a new empty verification result
     pub fn new() -> Self {
@@ -65,15 +71,14 @@ impl RestorationVerificationResult {
         let total_count = self.verification_items.len();
 
         format!(
-            "Verification {}: {}/{} checks passed",
-            status, passed_count, total_count
+            "Verification {status}: {passed_count}/{total_count} checks passed"
         )
     }
     
     /// Returns a detailed summary of the verification result
     pub fn detailed_summary(&self) -> String {
         let mut summary = self.summary();
-        summary.push_str("\n");
+        summary.push('\n');
         
         for item in &self.verification_items {
             let status = if item.success { "SUCCESS" } else { "FAILED" };
@@ -171,7 +176,7 @@ pub fn verify_cluster_membership(
     // 2. Verify that all pre-operation members are present in the current cluster
     let mut missing_members = Vec::new();
     
-    for (id, _) in pre_operation_membership {
+    for id in pre_operation_membership.keys() {
         if !cluster.members.contains_key(id) {
             missing_members.push(id.clone());
         }
@@ -211,7 +216,7 @@ pub fn verify_cluster_membership(
             
             // Check instance_formnet_ip
             if current_member.instance_formnet_ip != pre_member.instance_formnet_ip {
-                mismatches.push(format!("instance_formnet_ip mismatch"));
+                mismatches.push("instance_formnet_ip mismatch".to_string());
             }
             
             // Check status
@@ -313,8 +318,7 @@ pub fn verify_network_configuration(
                     // For this simulation, we'll just verify the member has the same formnet_ip
                     if current_member.instance_formnet_ip != pre_member.instance_formnet_ip {
                         dns_mismatches.push(format!(
-                            "{}: DNS record IP mismatch for domain {}", 
-                            id, domain
+                            "{id}: DNS record IP mismatch for domain {domain}"
                         ));
                     }
                 }
@@ -363,7 +367,7 @@ pub fn verify_cluster_properties(
             result.add_item(
                 "Template instance existence",
                 true,
-                &format!("Template instance ID '{}' is a test template (valid for testing)", template_id)
+                &format!("Template instance ID '{template_id}' is a test template (valid for testing)")
             );
             true
         } else {
@@ -374,14 +378,14 @@ pub fn verify_cluster_properties(
                 result.add_item(
                     "Template instance existence",
                     false,
-                    &format!("Template instance ID '{}' does not exist in cluster members", template_id)
+                    &format!("Template instance ID '{template_id}' does not exist in cluster members")
                 );
                 false
             } else {
                 result.add_item(
                     "Template instance existence",
                     true,
-                    &format!("Template instance ID '{}' exists in cluster members", template_id)
+                    &format!("Template instance ID '{template_id}' exists in cluster members")
                 );
                 true
             }
@@ -413,7 +417,7 @@ pub fn verify_cluster_properties(
                 result.add_item(
                     "Scaling policy validity",
                     false,
-                    &format!("Scaling policy is invalid: {}", err)
+                    &format!("Scaling policy is invalid: {err}")
                 );
             }
         }
@@ -507,7 +511,7 @@ pub fn verify_resource_cleanup(
             
             resource_types
                 .entry(resource_type.to_string())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(resource_id.clone());
         }
         
@@ -525,7 +529,7 @@ pub fn verify_resource_cleanup(
             for instance_id in instance_ids {
                 if cluster.members.contains_key(instance_id) {
                     warn!("Instance {} was supposed to be cleaned up but is still in cluster members", instance_id);
-                    found_resources.push(format!("{} (still in members)", instance_id));
+                    found_resources.push(format!("{instance_id} (still in members)"));
                 } else {
                     debug!("Instance {} was correctly cleaned up", instance_id);
                 }
@@ -543,7 +547,7 @@ pub fn verify_resource_cleanup(
             // Check if this might be an instance ID without the proper prefix
             if cluster.members.contains_key(resource_id) {
                 warn!("Instance resource {} was supposed to be cleaned up but is still in cluster members", resource_id);
-                found_resources.push(format!("{} (still in members)", resource_id));
+                found_resources.push(format!("{resource_id} (still in members)"));
             }
         }
         
@@ -564,23 +568,23 @@ pub fn verify_resource_cleanup(
             let mut type_counts = Vec::new();
             
             if instance_count > 0 {
-                type_counts.push(format!("{} instance(s)", instance_count));
+                type_counts.push(format!("{instance_count} instance(s)"));
             }
             
             if volume_count > 0 {
-                type_counts.push(format!("{} volume(s)", volume_count));
+                type_counts.push(format!("{volume_count} volume(s)"));
             }
             
             if network_count > 0 {
-                type_counts.push(format!("{} network(s)", network_count));
+                type_counts.push(format!("{network_count} network(s)"));
             }
             
             if ip_count > 0 {
-                type_counts.push(format!("{} ip_allocation(s)", ip_count));
+                type_counts.push(format!("{ip_count} ip_allocation(s)"));
             }
             
             if unknown_count > 0 {
-                type_counts.push(format!("{} unknown resource(s)", unknown_count));
+                type_counts.push(format!("{unknown_count} unknown resource(s)"));
             }
             
             details = format!(

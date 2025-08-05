@@ -277,22 +277,22 @@ pub async fn add_credits(
         datastore.account_state.account_op(op);
         
         // Return success response
-        return (
+        (
             StatusCode::OK, 
             Json(json!({
                 "success": true,
                 "credits_added": request.amount,
                 "total_credits": account.available_credits()
             }))
-        );
+        )
     } else {
-        return (
+        (
             StatusCode::NOT_FOUND, 
             Json(json!({
                 "success": false,
                 "error": "Account not found"
             }))
-        );
+        )
     }
 }
 

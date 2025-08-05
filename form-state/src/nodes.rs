@@ -29,7 +29,7 @@ pub struct Node {
 
 impl Default for Node {
     fn default() -> Self {
-        let null_hex = hex::encode(&[0u8; 32]);
+        let null_hex = hex::encode([0u8; 32]);
         Self {
             node_id: null_hex.clone(),
             node_owner: null_hex.clone(),
@@ -235,10 +235,10 @@ impl NodeState {
         let op = self
             .map
             .update(node.node_id().to_string(), add_ctx, |reg, _ctx| {
-                let op = reg
-                    .update(node.into(), self.node_id.clone(), signing_key)
-                    .expect("Unable to sign node update");
-                op
+                
+                reg
+                    .update(node, self.node_id.clone(), signing_key)
+                    .expect("Unable to sign node update")
             });
         log::info!("Node op created, returning...");
         op
@@ -315,7 +315,7 @@ impl NodeState {
                 // If the in the updated register equals the value in the Op it
                 // succeeded
                 if v.value() == update.op().value {
-                    return (true, v.value());
+                    (true, v.value())
                 // Otherwise, it could be that it's a concurrent update and was added
                 // to the DAG as a head
                 } else if reg.dag_contains(&update.hash()) && reg.is_head(&update.hash()) {
@@ -330,10 +330,10 @@ impl NodeState {
                     return (false, v.value());
                 }
             } else {
-                return (false, update.op().value);
+                (false, update.op().value)
             }
         } else {
-            return (false, update.op().value);
+            (false, update.op().value)
         }
     }
 

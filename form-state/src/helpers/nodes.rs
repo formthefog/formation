@@ -40,18 +40,18 @@ pub async fn create_node(
                     {
                         log::info!("Node Op succesffully applied...");
                         let _ = write_datastore(&DB_HANDLE, &datastore.clone());
-                        return Json(Response::Success(Success::Some(v.into())));
+                        Json(Response::Success(Success::Some(v)))
                     } else {
                         log::info!("Node Op rejected...");
-                        return Json(Response::Failure {
+                        Json(Response::Failure {
                             reason: Some("update was rejected".to_string()),
-                        });
+                        })
                     }
                 }
                 crdts::map::Op::Rm { .. } => {
-                    return Json(Response::Failure {
+                    Json(Response::Failure {
                         reason: Some("Invalid Op type for Create Node".into()),
-                    });
+                    })
                 }
             }
         }
@@ -73,12 +73,12 @@ pub async fn create_node(
             datastore.node_state.node_op(map_op.clone());
             match &map_op {
                 crdts::map::Op::Rm { .. } => {
-                    return Json(Response::Failure {
+                    Json(Response::Failure {
                         reason: Some(
                             "Map generated RM context instead of Add context on Create request"
                                 .to_string(),
                         ),
-                    });
+                    })
                 }
                 crdts::map::Op::Up {
                     ref key, ref op, ..
@@ -95,23 +95,23 @@ pub async fn create_node(
                         {
                             Ok(()) => {
                                 let _ = write_datastore(&DB_HANDLE, &datastore.clone());
-                                return Json(Response::Success(Success::Some(v.into())));
+                                return Json(Response::Success(Success::Some(v)));
                             }
                             Err(e) => eprintln!("Error broadcasting Node Create Request: {e}"),
                         }
-                        return Json(Response::Success(Success::Some(v.into())));
+                        Json(Response::Success(Success::Some(v)))
                     } else {
-                        return Json(Response::Failure {
+                        Json(Response::Failure {
                             reason: Some("update was rejected".to_string()),
-                        });
+                        })
                     }
                 }
             }
         }
         _ => {
-            return Json(Response::Failure {
+            Json(Response::Failure {
                 reason: Some("Invalid request for create node".into()),
-            });
+            })
         }
     }
 }
@@ -135,18 +135,18 @@ pub async fn update_node(
                     {
                         log::info!("Node Op succesffully applied...");
                         let _ = write_datastore(&DB_HANDLE, &datastore.clone());
-                        return Json(Response::Success(Success::Some(v.into())));
+                        Json(Response::Success(Success::Some(v)))
                     } else {
                         log::info!("Node Op rejected...");
-                        return Json(Response::Failure {
+                        Json(Response::Failure {
                             reason: Some("update was rejected".to_string()),
-                        });
+                        })
                     }
                 }
                 crdts::map::Op::Rm { .. } => {
-                    return Json(Response::Failure {
+                    Json(Response::Failure {
                         reason: Some("Invalid Op type for Create Node".into()),
-                    });
+                    })
                 }
             }
         }
@@ -158,12 +158,12 @@ pub async fn update_node(
             datastore.node_state.node_op(map_op.clone());
             match &map_op {
                 crdts::map::Op::Rm { .. } => {
-                    return Json(Response::Failure {
+                    Json(Response::Failure {
                         reason: Some(
                             "Map generated RM context instead of Add context on Create request"
                                 .to_string(),
                         ),
-                    });
+                    })
                 }
                 crdts::map::Op::Up {
                     ref key, ref op, ..
@@ -175,28 +175,28 @@ pub async fn update_node(
                         log::info!("Map Op was successful, broadcasting...");
                         let request = NodeRequest::Op(map_op);
                         match datastore
-                            .broadcast::<Response<Node>>(request, "/v1/node/update")
+                            .broadcast::<Response<Node>>(request, "v1/node/update")
                             .await
                         {
                             Ok(()) => {
                                 let _ = write_datastore(&DB_HANDLE, &datastore.clone());
-                                return Json(Response::Success(Success::Some(v.into())));
+                                return Json(Response::Success(Success::Some(v)));
                             }
                             Err(e) => eprintln!("Error broadcasting Node Update Request: {e}"),
                         }
-                        return Json(Response::Success(Success::Some(v.into())));
+                        Json(Response::Success(Success::Some(v)))
                     } else {
-                        return Json(Response::Failure {
+                        Json(Response::Failure {
                             reason: Some("update was rejected".to_string()),
-                        });
+                        })
                     }
                 }
             }
         }
         _ => {
-            return Json(Response::Failure {
+            Json(Response::Failure {
                 reason: Some("Invalid request for Update Node".into()),
-            });
+            })
         }
     }
 }
@@ -212,13 +212,13 @@ pub async fn delete_node(
             log::info!("Delete Node request is an Op from another peer");
             match &map_op {
                 crdts::map::Op::Up { .. } => {
-                    return Json(Response::Failure {
+                    Json(Response::Failure {
                         reason: Some("Invalid Op type for delete dns".into()),
-                    });
+                    })
                 }
                 crdts::map::Op::Rm { .. } => {
                     datastore.node_state.node_op(map_op);
-                    return Json(Response::Success(Success::None));
+                    Json(Response::Success(Success::None))
                 }
             }
         }
@@ -234,29 +234,29 @@ pub async fn delete_node(
                     match datastore
                         .broadcast::<Response<Node>>(
                             request,
-                            &format!("/node/{}/delete", node_id.clone()),
+                            &format!("v1/node/{}/delete", node_id.clone()),
                         )
                         .await
                     {
                         Ok(()) => return Json(Response::Success(Success::None)),
                         Err(e) => eprintln!("Error broadcasting Delete Node request: {e}"),
                     }
-                    return Json(Response::Success(Success::None));
+                    Json(Response::Success(Success::None))
                 }
                 crdts::map::Op::Up { .. } => {
-                    return Json(Response::Failure {
+                    Json(Response::Failure {
                         reason: Some(
                             "Map generated Add context instead of Rm context on Delete request"
                                 .to_string(),
                         ),
-                    });
+                    })
                 }
             }
         }
         _ => {
-            return Json(Response::Failure {
+            Json(Response::Failure {
                 reason: Some("Invalid request for delete Node".into()),
-            });
+            })
         }
     }
 }
@@ -270,9 +270,9 @@ pub async fn get_node(
         return Json(Response::Success(Success::Some(node)));
     }
 
-    return Json(Response::Failure {
+    Json(Response::Failure {
         reason: Some(format!("Unable to find node with id: {node_id}")),
-    });
+    })
 }
 
 pub async fn get_node_metrics(
@@ -284,9 +284,9 @@ pub async fn get_node_metrics(
         return Json(Response::Success(Success::Some(node.metrics)));
     }
 
-    return Json(Response::Failure {
+    Json(Response::Failure {
         reason: Some(format!("Unable to node instance with id: {node_id}")),
-    });
+    })
 }
 
 pub async fn list_node_metrics(
@@ -300,13 +300,13 @@ pub async fn list_node_metrics(
         .filter_map(|ctx| {
             let (_, value) = ctx.val;
             match value.val() {
-                Some(node) => return Some(node.value().metrics.clone()),
-                None => return None,
+                Some(node) => Some(node.value().metrics),
+                None => None,
             }
         })
         .collect();
 
-    return Json(Response::Success(Success::List(list)));
+    Json(Response::Success(Success::List(list)))
 }
 
 pub async fn list_nodes(State(state): State<Arc<Mutex<DataStore>>>) -> Json<Response<Node>> {
@@ -317,12 +317,9 @@ pub async fn list_nodes(State(state): State<Arc<Mutex<DataStore>>>) -> Json<Resp
         .iter()
         .filter_map(|ctx| {
             let (_, value) = ctx.val;
-            match value.val() {
-                Some(node) => return Some(node.value()),
-                None => return None,
-            }
+            value.val().map(|node| node.value())
         })
         .collect();
 
-    return Json(Response::Success(Success::List(list)));
+    Json(Response::Success(Success::List(list)))
 }

@@ -100,8 +100,7 @@ impl BillingStore {
                 }
                 
                 return Err(BillingError::InsufficientCredits(
-                    format!("Account has insufficient credits: available={}, required={}", 
-                            available_credits, credit_cost)
+                    format!("Account has insufficient credits: available={available_credits}, required={credit_cost}")
                 ));
             }
             
@@ -112,8 +111,7 @@ impl BillingStore {
             }
             
             return Err(BillingError::InsufficientCredits(
-                format!("Account has inactive subscription and insufficient credits: available={}, required={}", 
-                        available_credits, credit_cost)
+                format!("Account has inactive subscription and insufficient credits: available={available_credits}, required={credit_cost}")
             ));
         }
         
@@ -124,8 +122,7 @@ impl BillingStore {
         }
         
         Err(BillingError::InsufficientCredits(
-            format!("Account has no subscription and insufficient credits: available={}, required={}", 
-                    available_credits, credit_cost)
+            format!("Account has no subscription and insufficient credits: available={available_credits}, required={credit_cost}")
         ))
     }
     

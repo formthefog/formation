@@ -10,7 +10,6 @@ use futures::stream::{self, StreamExt};
 use std::convert::Infallible;
 use reqwest::Client;
 use std::time::Duration;
-use chrono::Utc;
 use tokio_stream::StreamExt as TokioStreamExt;
 
 use crate::datastore::DataStore;
@@ -20,7 +19,7 @@ use crate::accounts::Account; // Assuming Account struct is here
 use crate::agent::AIAgent; // Corrected path and struct name
 use crate::instances::{Instance, InstanceStatus}; // Import InstanceStatus as well
 use std::net::IpAddr;
-use super::agent_response::{RunTaskResponse as AgentRunTaskResponse, UsageInfo as AgentUsageInfo, TaskStreamChunk, ApiError}; // Added TaskStreamChunk and ApiError
+use super::agent_response::{RunTaskResponse as AgentRunTaskResponse, UsageInfo as AgentUsageInfo, ApiError}; // Added TaskStreamChunk and ApiError
 use crate::billing::{SubscriptionStatus, SubscriptionTier}; // For subscription logic
 // Import error types if you have a specific one for billing/authz failures
 // use crate::error::GatewayError; 
@@ -33,7 +32,7 @@ pub async fn run_agent_task_handler(
 ) -> Result<AxumResponse, ApiError> {
     let caller_address_hex = recovered_address.as_hex();
     let agent_id = agent_id_from_path.clone();
-    let request_path = format!("/agents/{}/run_task", agent_id);
+    let request_path = format!("/agents/{agent_id}/run_task");
 
     log::info!(
         "RunTaskRequest for agent_id: {} from caller: {}, task: {:.50}...",
@@ -67,7 +66,7 @@ pub async fn run_agent_task_handler(
             },
             None => {
                 log::warn!("Agent with ID '{}' not found.", agent_id);
-                return Err(ApiError::new("AGENT_NOT_FOUND", &format!("Agent '{}' not found.", agent_id), StatusCode::NOT_FOUND.as_u16()).with_path(&request_path));
+                return Err(ApiError::new("AGENT_NOT_FOUND", &format!("Agent '{agent_id}' not found."), StatusCode::NOT_FOUND.as_u16()).with_path(&request_path));
             }
         }
 
@@ -76,7 +75,7 @@ pub async fn run_agent_task_handler(
         let mut denial_reason = String::new();
 
         let minimum_operational_credits: u64 = 1; 
-        if account.credits < minimum_operational_credits && account.subscription.as_ref().map_or(true, |sub_info| {
+        if account.credits < minimum_operational_credits && account.subscription.as_ref().is_none_or(|sub_info| {
             match sub_info.status {
                 SubscriptionStatus::Active | SubscriptionStatus::Trial | SubscriptionStatus::PastDue => false,
                 _ => true, 
@@ -86,12 +85,11 @@ pub async fn run_agent_task_handler(
             denial_reason = "Account has insufficient credits and no active/trialing subscription.".to_string();
         }
 
-        if eligible && agent_details.is_private {
-            if !agent_details.owner_id.eq_ignore_ascii_case(&caller_address_hex) {
+        if eligible && agent_details.is_private
+            && !agent_details.owner_id.eq_ignore_ascii_case(&caller_address_hex) {
                 eligible = false;
-                denial_reason = format!("Agent '{}' is private and you are not the owner or authorized.", agent_id);
+                denial_reason = format!("Agent '{agent_id}' is private and you are not the owner or authorized.");
             }
-        }
         
         if !eligible {
             log::warn!("Caller {} is not eligible for agent {}: {}", caller_address_hex, agent_id, denial_reason);
@@ -127,7 +125,7 @@ pub async fn run_agent_task_handler(
             },
             None => {
                 log::warn!("No running instance found for agent_id: {} (target build_id: {}).", agent_id, target_build_id);
-                return Err(ApiError::new("NO_AVAILABLE_INSTANCE", &format!("No available instance for agent '{}'. Please try again later.", agent_id), StatusCode::SERVICE_UNAVAILABLE.as_u16()).with_path(&request_path));
+                return Err(ApiError::new("NO_AVAILABLE_INSTANCE", &format!("No available instance for agent '{agent_id}'. Please try again later."), StatusCode::SERVICE_UNAVAILABLE.as_u16()).with_path(&request_path));
             }
         }
     }
@@ -138,7 +136,7 @@ pub async fn run_agent_task_handler(
         .timeout(Duration::from_secs(run_task_request.timeout_seconds().into()))
         .build()
         .unwrap_or_else(|_| Client::new());
-    let agent_target_url = format!("http://{}:{}{}", instance_formnet_ip, agent_task_port, agent_task_path);
+    let agent_target_url = format!("http://{instance_formnet_ip}:{agent_task_port}{agent_task_path}");
     log::info!("Proxying request for agent {} to URL: {}", agent_id, agent_target_url);
     let agent_response_result = client.post(&agent_target_url).json(&agent_payload).send().await;
 
@@ -173,12 +171,12 @@ pub async fn run_agent_task_handler(
                                                 log::info!("Captured UsageInfo from agent stream for {}: {:?}", agent_id_log_in_unfold, usage);
                                                 let mut usage_guard = usage_capture_in_unfold.lock().await;
                                                 *usage_guard = Some(usage);
-                                                let event = SseEvent::default().event("final_usage_info_received").data(json_part.to_string());
+                                                let event = SseEvent::default().event("final_usage_info_received").data(json_part);
                                                 Some((Ok::<_, Infallible>(event), stream))
                                             }
                                             Err(e) => {
                                                 log::error!("Failed to parse UsageInfo JSON from agent stream for {}: {}", agent_id_log_in_unfold, e);
-                                                let event = SseEvent::default().event("stream_error").data(format!("Failed to parse final usage info: {}", e));
+                                                let event = SseEvent::default().event("stream_error").data(format!("Failed to parse final usage info: {e}"));
                                                 Some((Ok::<_, Infallible>(event), stream))
                                             }
                                         }
@@ -189,7 +187,7 @@ pub async fn run_agent_task_handler(
                                 }
                                 Some(Err(e)) => {
                                     log::error!("Error in byte stream from agent {}: {}", agent_id_log_in_unfold, e);
-                                    let event = SseEvent::default().event("stream_error").data(format!("Agent stream read error: {}", e));
+                                    let event = SseEvent::default().event("stream_error").data(format!("Agent stream read error: {e}"));
                                     Some((Ok::<_, Infallible>(event), stream))
                                 }
                                 None => None,
@@ -232,7 +230,7 @@ pub async fn run_agent_task_handler(
                 }
             } else { 
                 let err_status = resp.status();
-                let err_body = resp.text().await.unwrap_or_else(|e| format!("Failed to read error body from agent: {}",e));
+                let err_body = resp.text().await.unwrap_or_else(|e| format!("Failed to read error body from agent: {e}"));
                 log::error!("Agent {} at {} responded with error: {} - {}", agent_id, agent_target_url, err_status, err_body);
                 Err(ApiError::new("AGENT_PROCESSING_ERROR", "Agent processing failed.", err_status.as_u16()).with_path(&request_path).with_details(json!(err_body)))
             }
@@ -276,7 +274,7 @@ async fn perform_billing(
 
     if let Some(cost) = usage.provider_cost {
         if cost < 0.0 {
-            validation_errors.push(format!("Provider cost ({}) is negative.", cost));
+            validation_errors.push(format!("Provider cost ({cost}) is negative."));
             is_valid_usage = false;
         }
     }

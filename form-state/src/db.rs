@@ -51,7 +51,7 @@ where
         let mut table = write_txn.open_table(ENTRIES_TABLE)?;
 
         // Store the clock
-        let clock_key = format!("{}/clock", map_name).into_bytes();
+        let clock_key = format!("{map_name}/clock").into_bytes();
         let clock_bytes = serialize(&map.clock)?;
         table.insert(&clock_key[..], &clock_bytes[..])?;
 
@@ -64,7 +64,7 @@ where
 
         // Store deferred operations (using a simple index for simplicity)
         for (idx, (vclock, keys)) in map.deferred.iter().enumerate() {
-            let deferred_key = format!("{}/deferred/{}", map_name, idx).into_bytes();
+            let deferred_key = format!("{map_name}/deferred/{idx}").into_bytes();
             let cloned_clock = (*vclock).clone();
             let deferred_bytes = serialize(&(cloned_clock, keys))?;
             table.insert(&deferred_key[..], &deferred_bytes[..])?;
@@ -88,7 +88,7 @@ where
     let table = read_txn.open_table(ENTRIES_TABLE)?;
 
     // Load the clock
-    let clock_key = format!("{}/clock", map_name).into_bytes();
+    let clock_key = format!("{map_name}/clock").into_bytes();
     let clock = match table.get(&clock_key[..])? {
         Some(bytes) => deserialize(bytes.value())?,
         None => VClock::new(), // Default if not found (e.g., first run)
@@ -96,7 +96,7 @@ where
 
     // Load the entries
     let mut entries = BTreeMap::new();
-    let entry_prefix = format!("{}/entries/", map_name).into_bytes();
+    let entry_prefix = format!("{map_name}/entries/").into_bytes();
     
     // Scan all keys and filter those that match the prefix
     for entry in table.iter()? {
@@ -115,7 +115,7 @@ where
         }
         
         let k_str = key_str.strip_prefix(&entry_prefix_str).ok_or(
-            Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Unable to strip prefix"))
+            Box::new(std::io::Error::other("Unable to strip prefix"))
         )?;
         let k: K = k_str.parse()?;
         let entry: Entry<V, A> = deserialize(value.value())?;
@@ -124,7 +124,7 @@ where
 
     // Load deferred operations
     let mut deferred = HashMap::new();
-    let deferred_prefix = format!("{}/deferred/", map_name).into_bytes();
+    let deferred_prefix = format!("{map_name}/deferred/").into_bytes();
     
     for entry in table.iter()? {
         let (key, value) = entry?;

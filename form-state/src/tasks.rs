@@ -11,7 +11,7 @@ use hex;
 use sha2::{Sha256, Digest as Sha2Digest};
 use crate::nodes::Node;
 use bincode;
-use tiny_keccak::{Hasher, Sha3};
+use tiny_keccak::Hasher;
 use log;
 
 pub type TaskId = String; // Should ideally be a uuid::Uuid type for guaranteed uniqueness.
@@ -39,7 +39,7 @@ impl std::str::FromStr for TaskStatus {
             "Completed" => Ok(TaskStatus::Completed),
             "Failed" => Ok(TaskStatus::Failed),
             "Cancelled" => Ok(TaskStatus::Cancelled),
-            _ => Err(format!("Unknown task status string: {}", s)),
+            _ => Err(format!("Unknown task status string: {s}")),
         }
     }
 }

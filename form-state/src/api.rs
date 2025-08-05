@@ -1,4 +1,4 @@
-use crate::auth::{global_admin_auth_middleware, AuthenticationContext, RecoveredAddress};
+use crate::auth::RecoveredAddress;
 use crate::datastore::{full_state, pong, process_message, DataStore};
 use crate::helpers::{
     account::*, agent::*, agent_gateway::run_agent_task_handler, instances::*, model::*,
@@ -132,7 +132,7 @@ async fn node_auth_middleware(
     let is_system_admin = datastore
         .account_state
         .get_account(&address_hex)
-        .map_or(false, |acc| acc.is_global_admin);
+        .is_some_and(|acc| acc.is_global_admin);
 
     if is_system_admin {
         log::info!(
@@ -555,8 +555,7 @@ async fn checked_agent_hire(
     // Check if the agent exists
     if datastore.agent_state.get_agent(&agent_id).is_none() {
         return Err(EligibilityError::OperationNotAllowed(format!(
-            "Agent not found: {}",
-            agent_id
+            "Agent not found: {agent_id}"
         )));
     }
 
@@ -571,8 +570,7 @@ async fn checked_agent_hire(
                 .update_account_local(new_account.clone());
             if let Err(e) = datastore.handle_account_op(op).await {
                 return Err(EligibilityError::OperationNotAllowed(format!(
-                    "Failed to create account: {}",
-                    e
+                    "Failed to create account: {e}"
                 )));
             }
             new_account
@@ -877,7 +875,7 @@ async fn list_admin_keys() -> impl IntoResponse {
         let normalized_addr = if cleaned.starts_with("0x") {
             cleaned.to_string()
         } else {
-            format!("0x{}", cleaned)
+            format!("0x{cleaned}")
         };
 
         let description = descriptions
@@ -1035,7 +1033,7 @@ async fn ensure_admin_account(
 
     let account_exists = datastore.account_state.get_account(&admin_key).is_some();
 
-    let mut account_to_save = if account_exists {
+    let account_to_save = if account_exists {
         let mut acc = datastore.account_state.get_account(&admin_key).unwrap(); // Safe unwrap due to check
         acc.is_global_admin = true;
         acc.updated_at = chrono::Utc::now().timestamp();
@@ -1115,14 +1113,14 @@ async fn check_task_responsibility(
             let is_responsible = task
                 .responsible_nodes
                 .as_ref()
-                .map_or(false, |nodes_set| nodes_set.contains(&node_id_to_check));
+                .is_some_and(|nodes_set| nodes_set.contains(&node_id_to_check));
 
             // Additionally, ensure the node actually has the capabilities for the task
             // This is a sanity check, as PoC should only select capable nodes.
             let node_is_capable = datastore
                 .node_state
                 .get_node(node_id_to_check.clone())
-                .map_or(false, |node| {
+                .is_some_and(|node| {
                     // Check against node.metadata.annotations.roles()
                     task.required_capabilities
                         .iter()
@@ -1236,7 +1234,7 @@ async fn devnet_apply_op_handler(
                     // The peer_op method in NetworkState should handle signature verification implicitly via map.apply.
                     datastore.network_state.peer_op(peer_op);
                     // Persist the entire datastore state after applying the op.
-                    match crate::db::write_datastore(&crate::datastore::DB_HANDLE, &*datastore) {
+                    match crate::db::write_datastore(&crate::datastore::DB_HANDLE, &datastore) {
                         // Pass datastore by reference
                         Ok(_) => {
                             log::info!("DEVNET: Successfully applied and persisted PeerOp.");
@@ -1271,7 +1269,7 @@ async fn devnet_apply_op_handler(
         "NodeOp" => match serde_json::from_str::<crate::nodes::NodeOp>(&payload.op_payload_json) {
             Ok(node_op) => {
                 datastore.node_state.node_op(node_op);
-                match crate::db::write_datastore(&crate::datastore::DB_HANDLE, &*datastore) {
+                match crate::db::write_datastore(&crate::datastore::DB_HANDLE, &datastore) {
                     Ok(_) => {
                         log::info!("DEVNET: Successfully applied and persisted NodeOp.");
                         (
@@ -1305,7 +1303,7 @@ async fn devnet_apply_op_handler(
             match serde_json::from_str::<crate::accounts::AccountOp>(&payload.op_payload_json) {
                 Ok(account_op) => {
                     datastore.account_state.account_op(account_op);
-                    match crate::db::write_datastore(&crate::datastore::DB_HANDLE, &*datastore) {
+                    match crate::db::write_datastore(&crate::datastore::DB_HANDLE, &datastore) {
                         Ok(_) => {
                             log::info!("DEVNET: Successfully applied and persisted AccountOp.");
                             (
@@ -1342,7 +1340,7 @@ async fn devnet_apply_op_handler(
             match serde_json::from_str::<crate::network::CidrOp<String>>(&payload.op_payload_json) {
                 Ok(cidr_op) => {
                     datastore.network_state.cidr_op(cidr_op);
-                    match crate::db::write_datastore(&crate::datastore::DB_HANDLE, &*datastore) {
+                    match crate::db::write_datastore(&crate::datastore::DB_HANDLE, &datastore) {
                         Ok(_) => {
                             log::info!("DEVNET: Successfully applied and persisted CidrOp.");
                             (
@@ -1378,7 +1376,7 @@ async fn devnet_apply_op_handler(
             {
                 Ok(assoc_op) => {
                     datastore.network_state.associations_op(assoc_op);
-                    match crate::db::write_datastore(&crate::datastore::DB_HANDLE, &*datastore) {
+                    match crate::db::write_datastore(&crate::datastore::DB_HANDLE, &datastore) {
                         Ok(_) => {
                             log::info!("DEVNET: Successfully applied and persisted AssocOp.");
                             (
@@ -1414,7 +1412,7 @@ async fn devnet_apply_op_handler(
         "DnsOp" => match serde_json::from_str::<crate::network::DnsOp>(&payload.op_payload_json) {
             Ok(dns_op) => {
                 datastore.network_state.dns_op(dns_op);
-                match crate::db::write_datastore(&crate::datastore::DB_HANDLE, &*datastore) {
+                match crate::db::write_datastore(&crate::datastore::DB_HANDLE, &datastore) {
                     Ok(_) => {
                         log::info!("DEVNET: Successfully applied and persisted DnsOp.");
                         (
@@ -1448,7 +1446,7 @@ async fn devnet_apply_op_handler(
             match serde_json::from_str::<crate::instances::InstanceOp>(&payload.op_payload_json) {
                 Ok(instance_op) => {
                     datastore.instance_state.instance_op(instance_op);
-                    match crate::db::write_datastore(&crate::datastore::DB_HANDLE, &*datastore) {
+                    match crate::db::write_datastore(&crate::datastore::DB_HANDLE, &datastore) {
                         Ok(_) => {
                             log::info!("DEVNET: Successfully applied and persisted InstanceOp.");
                             (
@@ -1490,7 +1488,7 @@ async fn devnet_apply_op_handler(
                     // If it were to be gossiped, it would also need the #[cfg] logic.
                     // For receiving, we just apply locally.
                     datastore.agent_state.agent_op(agent_op); // Directly apply to the map
-                    match crate::db::write_datastore(&crate::datastore::DB_HANDLE, &*datastore) {
+                    match crate::db::write_datastore(&crate::datastore::DB_HANDLE, &datastore) {
                         Ok(_) => {
                             log::info!("DEVNET: Successfully applied and persisted AgentOp.");
                             (
@@ -1527,7 +1525,7 @@ async fn devnet_apply_op_handler(
             match serde_json::from_str::<crate::model::ModelOp>(&payload.op_payload_json) {
                 Ok(model_op) => {
                     datastore.model_state.model_op(model_op); // Directly apply to the map
-                    match crate::db::write_datastore(&crate::datastore::DB_HANDLE, &*datastore) {
+                    match crate::db::write_datastore(&crate::datastore::DB_HANDLE, &datastore) {
                         Ok(_) => {
                             log::info!("DEVNET: Successfully applied and persisted ModelOp.");
                             (

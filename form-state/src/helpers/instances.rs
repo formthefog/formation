@@ -1,13 +1,13 @@
 use crate::datastore::DataStore;
 use crate::instances::*;
-use crate::auth::{RecoveredAddress, AuthenticationContext};
+use crate::auth::AuthenticationContext;
 use reqwest::Client;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use form_types::state::{Response, Success};
-use axum::{extract::{State, Path, ConnectInfo}, Json};
+use axum::{extract::{State, Path}, Json};
 use form_vm_metrics::system::SystemMetrics;
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 use serde_json::json;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -101,7 +101,7 @@ pub async fn create_instance(
                 );
             }
             
-            return (
+            (
                 StatusCode::CREATED,
                 Json(json!({
                     "success": true,
@@ -109,18 +109,18 @@ pub async fn create_instance(
                     "instance": instance,
                     "access_level": "user"
                 })),
-            );
+            )
         }
         _ => {
             // This shouldn't happen since middleware should handle authentication
             log::error!("create_instance: Unexpected authentication context: {:?}", auth_context);
-            return (
+            (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
                     "success": false,
                     "error": "Internal authentication error"
                 })),
-            );
+            )
         }
     }
 }
@@ -242,7 +242,7 @@ pub async fn update_instance(
             }
             
             log::info!("update_instance: Instance {} updated successfully.", instance_to_update.instance_id);
-            return (
+            (
                 StatusCode::OK, 
                 Json(json!({ 
                     "success": true, 
@@ -250,18 +250,18 @@ pub async fn update_instance(
                     "instance": instance_to_update,
                     "access_level": "user"
                 }))
-            );
+            )
         }
         _ => {
             // This shouldn't happen since middleware should handle authentication
             log::error!("update_instance: Unexpected authentication context: {:?}", auth_context);
-            return (
+            (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
                     "success": false,
                     "error": "Internal authentication error"
                 })),
-            );
+            )
         }
     }
 }
@@ -348,13 +348,13 @@ pub async fn get_instance(
         }
     }
 
-    return (
+    (
         StatusCode::NOT_FOUND,
         Json(json!({
             "success": false,
             "error": format!("Unable to find instance with id: {}", id)
         }))
-    );
+    )
 }
 
 pub async fn get_instance_by_build_id(
@@ -377,7 +377,7 @@ pub async fn get_instance_by_build_id(
         }
     }).collect();
 
-    return Json(Response::Success(Success::List(instances)));
+    Json(Response::Success(Success::List(instances)))
 }
 
 pub async fn get_instance_ips(
@@ -404,7 +404,7 @@ pub async fn get_instance_ips(
         inst.formnet_ip
     }).collect();
 
-    return Json(Response::Success(Success::List(ips)));
+    Json(Response::Success(Success::List(ips)))
 }
 
 pub async fn get_instance_metrics(
@@ -424,28 +424,28 @@ pub async fn get_instance_metrics(
                             Ok(resp) => {
                                 match resp.json::<SystemMetrics>().await {
                                     Ok(r) => {
-                                        return Json(Response::Success(Success::Some(r)))
+                                        Json(Response::Success(Success::Some(r)))
                                     }
                                     Err(e) => {
-                                        return Json(Response::Failure { reason: Some(format!("Unable to deserialize response from VM: {e}")) })
+                                        Json(Response::Failure { reason: Some(format!("Unable to deserialize response from VM: {e}")) })
                                     }
                                 }
                             }
                             Err(e) => {
-                                return Json(Response::Failure { reason: Some(e.to_string()) })
+                                Json(Response::Failure { reason: Some(e.to_string()) })
                             }
                     }
                 } else {
-                    return Json(Response::Failure { reason: Some("Instance has no formnet ip".to_string()) });
+                    Json(Response::Failure { reason: Some("Instance has no formnet ip".to_string()) })
                 }
             } else {
-                return Json(Response::Failure { reason: Some("Instance has not started".to_string()) });
+                Json(Response::Failure { reason: Some("Instance has not started".to_string()) })
             }
         } else {
-            return Json(Response::Failure { reason: Some("No record of instance in datastore".to_string()) });
+            Json(Response::Failure { reason: Some("No record of instance in datastore".to_string()) })
         }
     } else {
-        return Json(Response::Failure { reason: Some("No record of instance in datastore".to_string()) });
+        Json(Response::Failure { reason: Some("No record of instance in datastore".to_string()) })
     }
 }
 
@@ -455,12 +455,7 @@ pub async fn list_instance_metrics(
     let datastore = state.lock().await.instance_state.clone();
     let instances: Vec<Instance> = datastore.map().iter().filter_map(|ctx| {
         let (_, value) = ctx.val;
-        match value.val() {
-            Some(node) => {
-                Some(node.value())
-            }
-            None => return None
-        }
+        value.val().map(|node| node.value())
     }).collect(); 
 
     let mut metrics = vec![];
@@ -488,9 +483,9 @@ pub async fn list_instance_metrics(
     }
 
     if !metrics.is_empty() {
-        return Json(Response::Success(Success::List(metrics)))
+        Json(Response::Success(Success::List(metrics)))
     } else {
-        return Json(Response::Failure { reason: Some("Unable to collect any metrics from any instances".to_string()) });
+        Json(Response::Failure { reason: Some("Unable to collect any metrics from any instances".to_string()) })
     }
 }
 
@@ -505,10 +500,7 @@ pub async fn get_cluster_metrics(
         if let Some(val) = reg.val() {
             let instance = val.value();
             if instance.build_id == *id {
-                match instance.formnet_ip {
-                    Some(ip) => Some(format!("http://{ip}:63210/get")),
-                    None => None
-                }
+                instance.formnet_ip.map(|ip| format!("http://{ip}:63210/get"))
             } else {
                 None
             }
@@ -623,7 +615,7 @@ pub async fn delete_instance(
                     );
                 }
                 
-                return (
+                (
                     StatusCode::OK,
                     Json(json!({
                         "success": true,
@@ -631,28 +623,28 @@ pub async fn delete_instance(
                         "instance": instance_copy,
                         "access_level": "user"
                     })),
-                );
+                )
             }
             _ => {
                 // This shouldn't happen since middleware should handle authentication
                 log::error!("delete_instance: Unexpected authentication context: {:?}", auth_context);
-                return (
+                (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({
                         "success": false,
                         "error": "Internal authentication error"
                     })),
-                );
+                )
             }
         }
     } else {
-        return (
+        (
             StatusCode::NOT_FOUND,
             Json(json!({
                 "success": false,
                 "error": "Instance not found"
             })),
-        );
+        )
     }
 }
 
@@ -671,10 +663,7 @@ pub async fn list_instances(
     // Get all instances from the datastore
     let all_instances: Vec<Instance> = datastore.instance_state.map().iter().filter_map(|ctx| {
         let (_, value) = ctx.val;
-        match value.val() {
-            Some(node) => Some(node.value()),
-            None => None
-        }
+        value.val().map(|node| node.value())
     }).collect();
     
     // Admin bypass: Admins can see all instances
@@ -723,7 +712,7 @@ pub async fn list_instances(
                 .collect();
             
             log::info!("list_instances: User {} can access {} instances", authenticated_address, filtered_instances.len());
-            return (
+            (
                 StatusCode::OK,
                 Json(json!({
                     "success": true,
@@ -732,18 +721,18 @@ pub async fn list_instances(
                     "instances": filtered_instances,
                     "access_level": "user"
                 }))
-            );
+            )
         }
         _ => {
             // This shouldn't happen since middleware should handle authentication
             log::error!("list_instances: Unexpected authentication context: {:?}", auth_context);
-            return (
+            (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
                     "success": false,
                     "error": "Internal authentication error"
                 }))
-            );
+            )
         }
     }
 }
