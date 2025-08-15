@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::collections::BTreeMap;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Types of scaling operations that can be performed
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -359,17 +359,17 @@ impl ScalingManager {
     /// Creates a new ScalingManager with default settings
     pub fn new() -> Self {
         let mut phase_timeouts = std::collections::BTreeMap::new();
-        
+
         // Set default timeouts for each phase
-        phase_timeouts.insert("Requested".to_string(), 60);         // 1 minute
-        phase_timeouts.insert("Validating".to_string(), 60);        // 1 minute
-        phase_timeouts.insert("Planning".to_string(), 120);         // 2 minutes
+        phase_timeouts.insert("Requested".to_string(), 60); // 1 minute
+        phase_timeouts.insert("Validating".to_string(), 60); // 1 minute
+        phase_timeouts.insert("Planning".to_string(), 120); // 2 minutes
         phase_timeouts.insert("ResourceAllocating".to_string(), 300); // 5 minutes
         phase_timeouts.insert("InstancePreparing".to_string(), 600); // 10 minutes
-        phase_timeouts.insert("Configuring".to_string(), 300);      // 5 minutes
-        phase_timeouts.insert("Verifying".to_string(), 180);        // 3 minutes
-        phase_timeouts.insert("Finalizing".to_string(), 120);       // 2 minutes
-        
+        phase_timeouts.insert("Configuring".to_string(), 300); // 5 minutes
+        phase_timeouts.insert("Verifying".to_string(), 180); // 3 minutes
+        phase_timeouts.insert("Finalizing".to_string(), 120); // 2 minutes
+
         Self {
             current_phase: None,
             operation_history: Vec::new(),
@@ -380,28 +380,29 @@ impl ScalingManager {
                 .as_secs() as i64,
         }
     }
-    
+
     /// Returns a reference to the current phase, if any
     pub fn current_phase(&self) -> Option<&ScalingPhase> {
         self.current_phase.as_ref()
     }
-    
+
     /// Returns a mutable reference to the current phase, if any
     #[cfg(test)]
     pub fn current_phase_mut(&mut self) -> Option<&mut ScalingPhase> {
         self.current_phase.as_mut()
     }
-    
+
     /// Returns the history of scaling operations
     pub fn operation_history(&self) -> &[ScalingOperationRecord] {
         &self.operation_history
     }
-    
+
     /// Sets the timeout for a specific phase
     pub fn set_phase_timeout(&mut self, phase: &str, timeout_seconds: u64) {
-        self.phase_timeouts.insert(phase.to_string(), timeout_seconds);
+        self.phase_timeouts
+            .insert(phase.to_string(), timeout_seconds);
     }
-    
+
     /// Starts a new scaling operation
     ///
     /// This method creates a new Requested phase and sets it as the current phase.
@@ -421,21 +422,27 @@ impl ScalingManager {
             if !phase.is_terminal() {
                 return Err(ScalingError {
                     error_type: "ConcurrentOperation".to_string(),
-                    message: format!("Cannot start a new operation while in {} phase", phase.phase_name()),
+                    message: format!(
+                        "Cannot start a new operation while in {} phase",
+                        phase.phase_name()
+                    ),
                     phase: phase.phase_name().to_string(),
                 });
             }
         }
-        
+
         // Start a new operation
         let requested_phase = ScalingPhase::new_requested(operation.clone());
-        
+
         // Create operation ID as a timestamp-based string
-        let operation_id = format!("op-{}", SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or(Duration::from_secs(0))
-            .as_secs());
-        
+        let operation_id = format!(
+            "op-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or(Duration::from_secs(0))
+                .as_secs()
+        );
+
         // Record the start of the operation
         self.operation_history.push(ScalingOperationRecord {
             operation_id,
@@ -453,13 +460,13 @@ impl ScalingManager {
             phase_cluster_states: BTreeMap::new(),
             metadata: BTreeMap::new(),
         });
-        
+
         // Set the current phase
         self.current_phase = Some(requested_phase);
-        
+
         Ok(())
     }
-    
+
     /// Transitions to the Validating phase
     ///
     /// This method can only be called when in the Requested phase.
@@ -471,47 +478,52 @@ impl ScalingManager {
     pub fn transition_to_validating(&mut self) -> Result<(), ScalingError> {
         let current_phase = match &self.current_phase {
             Some(phase) => phase,
-            None => return Err(ScalingError {
-                error_type: "NoActiveOperation".to_string(),
-                message: "No active operation to transition".to_string(),
-                phase: "None".to_string(),
-            }),
+            None => {
+                return Err(ScalingError {
+                    error_type: "NoActiveOperation".to_string(),
+                    message: "No active operation to transition".to_string(),
+                    phase: "None".to_string(),
+                })
+            }
         };
-        
+
         // Ensure we're in the Requested phase
         if !matches!(current_phase, ScalingPhase::Requested { .. }) {
             return Err(ScalingError {
                 error_type: "InvalidTransition".to_string(),
-                message: format!("Cannot transition from {} to Validating", current_phase.phase_name()),
+                message: format!(
+                    "Cannot transition from {} to Validating",
+                    current_phase.phase_name()
+                ),
                 phase: current_phase.phase_name().to_string(),
             });
         }
-        
+
         // Get the operation from the current phase
         let operation = current_phase.operation().clone();
-        
+
         // Create the new phase
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::from_secs(0))
             .as_secs() as i64;
-        
+
         let validating_phase = ScalingPhase::Validating {
             operation,
             started_at: now,
         };
-        
+
         // Update the current phase
         self.current_phase = Some(validating_phase);
-        
+
         // Update the operation history
         if let Some(record) = self.operation_history.last_mut() {
             record.final_phase = "Validating".to_string();
         }
-        
+
         Ok(())
     }
-    
+
     /// Transitions to the Planning phase
     ///
     /// This method can only be called when in the Validating phase.
@@ -524,51 +536,59 @@ impl ScalingManager {
     ///
     /// * `Ok(())` if the transition was successful
     /// * `Err(ScalingError)` if the transition failed
-    pub fn transition_to_planning(&mut self, pre_metrics: Option<ScalingMetrics>) -> Result<(), ScalingError> {
+    pub fn transition_to_planning(
+        &mut self,
+        pre_metrics: Option<ScalingMetrics>,
+    ) -> Result<(), ScalingError> {
         let current_phase = match &self.current_phase {
             Some(phase) => phase,
-            None => return Err(ScalingError {
-                error_type: "NoActiveOperation".to_string(),
-                message: "No active operation to transition".to_string(),
-                phase: "None".to_string(),
-            }),
+            None => {
+                return Err(ScalingError {
+                    error_type: "NoActiveOperation".to_string(),
+                    message: "No active operation to transition".to_string(),
+                    phase: "None".to_string(),
+                })
+            }
         };
-        
+
         // Ensure we're in the Validating phase
         if !matches!(current_phase, ScalingPhase::Validating { .. }) {
             return Err(ScalingError {
                 error_type: "InvalidTransition".to_string(),
-                message: format!("Cannot transition from {} to Planning", current_phase.phase_name()),
+                message: format!(
+                    "Cannot transition from {} to Planning",
+                    current_phase.phase_name()
+                ),
                 phase: current_phase.phase_name().to_string(),
             });
         }
-        
+
         // Get the operation from the current phase
         let operation = current_phase.operation().clone();
-        
+
         // Create the new phase
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::from_secs(0))
             .as_secs() as i64;
-        
+
         let planning_phase = ScalingPhase::Planning {
             operation,
             planned_at: now,
             pre_metrics,
         };
-        
+
         // Update the current phase
         self.current_phase = Some(planning_phase);
-        
+
         // Update the operation history
         if let Some(record) = self.operation_history.last_mut() {
             record.final_phase = "Planning".to_string();
         }
-        
+
         Ok(())
     }
-    
+
     /// Transitions to the ResourceAllocating phase
     ///
     /// This method can only be called when in the Planning phase.
@@ -581,51 +601,59 @@ impl ScalingManager {
     ///
     /// * `Ok(())` if the transition was successful
     /// * `Err(ScalingError)` if the transition failed
-    pub fn transition_to_resource_allocating(&mut self, resources: Option<ScalingResources>) -> Result<(), ScalingError> {
+    pub fn transition_to_resource_allocating(
+        &mut self,
+        resources: Option<ScalingResources>,
+    ) -> Result<(), ScalingError> {
         let current_phase = match &self.current_phase {
             Some(phase) => phase,
-            None => return Err(ScalingError {
-                error_type: "NoActiveOperation".to_string(),
-                message: "No active operation to transition".to_string(),
-                phase: "None".to_string(),
-            }),
+            None => {
+                return Err(ScalingError {
+                    error_type: "NoActiveOperation".to_string(),
+                    message: "No active operation to transition".to_string(),
+                    phase: "None".to_string(),
+                })
+            }
         };
-        
+
         // Ensure we're in the Planning phase
         if !matches!(current_phase, ScalingPhase::Planning { .. }) {
             return Err(ScalingError {
                 error_type: "InvalidTransition".to_string(),
-                message: format!("Cannot transition from {} to ResourceAllocating", current_phase.phase_name()),
+                message: format!(
+                    "Cannot transition from {} to ResourceAllocating",
+                    current_phase.phase_name()
+                ),
                 phase: current_phase.phase_name().to_string(),
             });
         }
-        
+
         // Get the operation from the current phase
         let operation = current_phase.operation().clone();
-        
+
         // Create the new phase
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::from_secs(0))
             .as_secs() as i64;
-        
+
         let resource_allocating_phase = ScalingPhase::ResourceAllocating {
             operation,
             started_at: now,
             resources,
         };
-        
+
         // Update the current phase
         self.current_phase = Some(resource_allocating_phase);
-        
+
         // Update the operation history
         if let Some(record) = self.operation_history.last_mut() {
             record.final_phase = "ResourceAllocating".to_string();
         }
-        
+
         Ok(())
     }
-    
+
     /// Transitions to the InstancePreparing phase
     ///
     /// This method can only be called when in the ResourceAllocating phase.
@@ -638,51 +666,59 @@ impl ScalingManager {
     ///
     /// * `Ok(())` if the transition was successful
     /// * `Err(ScalingError)` if the transition failed
-    pub fn transition_to_instance_preparing(&mut self, instance_ids: Vec<String>) -> Result<(), ScalingError> {
+    pub fn transition_to_instance_preparing(
+        &mut self,
+        instance_ids: Vec<String>,
+    ) -> Result<(), ScalingError> {
         let current_phase = match &self.current_phase {
             Some(phase) => phase,
-            None => return Err(ScalingError {
-                error_type: "NoActiveOperation".to_string(),
-                message: "No active operation to transition".to_string(),
-                phase: "None".to_string(),
-            }),
+            None => {
+                return Err(ScalingError {
+                    error_type: "NoActiveOperation".to_string(),
+                    message: "No active operation to transition".to_string(),
+                    phase: "None".to_string(),
+                })
+            }
         };
-        
+
         // Ensure we're in the ResourceAllocating phase
         if !matches!(current_phase, ScalingPhase::ResourceAllocating { .. }) {
             return Err(ScalingError {
                 error_type: "InvalidTransition".to_string(),
-                message: format!("Cannot transition from {} to InstancePreparing", current_phase.phase_name()),
+                message: format!(
+                    "Cannot transition from {} to InstancePreparing",
+                    current_phase.phase_name()
+                ),
                 phase: current_phase.phase_name().to_string(),
             });
         }
-        
+
         // Get the operation from the current phase
         let operation = current_phase.operation().clone();
-        
+
         // Create the new phase
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::from_secs(0))
             .as_secs() as i64;
-        
+
         let instance_preparing_phase = ScalingPhase::InstancePreparing {
             operation,
             started_at: now,
             instance_ids,
         };
-        
+
         // Update the current phase
         self.current_phase = Some(instance_preparing_phase);
-        
+
         // Update the operation history
         if let Some(record) = self.operation_history.last_mut() {
             record.final_phase = "InstancePreparing".to_string();
         }
-        
+
         Ok(())
     }
-    
+
     /// Transitions to the Configuring phase
     ///
     /// This method can only be called when in the InstancePreparing phase.
@@ -695,51 +731,59 @@ impl ScalingManager {
     ///
     /// * `Ok(())` if the transition was successful
     /// * `Err(ScalingError)` if the transition failed
-    pub fn transition_to_configuring(&mut self, previous_config: Option<String>) -> Result<(), ScalingError> {
+    pub fn transition_to_configuring(
+        &mut self,
+        previous_config: Option<String>,
+    ) -> Result<(), ScalingError> {
         let current_phase = match &self.current_phase {
             Some(phase) => phase,
-            None => return Err(ScalingError {
-                error_type: "NoActiveOperation".to_string(),
-                message: "No active operation to transition".to_string(),
-                phase: "None".to_string(),
-            }),
+            None => {
+                return Err(ScalingError {
+                    error_type: "NoActiveOperation".to_string(),
+                    message: "No active operation to transition".to_string(),
+                    phase: "None".to_string(),
+                })
+            }
         };
-        
+
         // Ensure we're in the InstancePreparing phase
         if !matches!(current_phase, ScalingPhase::InstancePreparing { .. }) {
             return Err(ScalingError {
                 error_type: "InvalidTransition".to_string(),
-                message: format!("Cannot transition from {} to Configuring", current_phase.phase_name()),
+                message: format!(
+                    "Cannot transition from {} to Configuring",
+                    current_phase.phase_name()
+                ),
                 phase: current_phase.phase_name().to_string(),
             });
         }
-        
+
         // Get the operation from the current phase
         let operation = current_phase.operation().clone();
-        
+
         // Create the new phase
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::from_secs(0))
             .as_secs() as i64;
-        
+
         let configuring_phase = ScalingPhase::Configuring {
             operation,
             started_at: now,
             previous_config,
         };
-        
+
         // Update the current phase
         self.current_phase = Some(configuring_phase);
-        
+
         // Update the operation history
         if let Some(record) = self.operation_history.last_mut() {
             record.final_phase = "Configuring".to_string();
         }
-        
+
         Ok(())
     }
-    
+
     /// Transitions to the Verifying phase
     ///
     /// This method can only be called when in the Configuring phase.
@@ -751,48 +795,53 @@ impl ScalingManager {
     pub fn transition_to_verifying(&mut self) -> Result<(), ScalingError> {
         let current_phase = match &self.current_phase {
             Some(phase) => phase,
-            None => return Err(ScalingError {
-                error_type: "NoActiveOperation".to_string(),
-                message: "No active operation to transition".to_string(),
-                phase: "None".to_string(),
-            }),
+            None => {
+                return Err(ScalingError {
+                    error_type: "NoActiveOperation".to_string(),
+                    message: "No active operation to transition".to_string(),
+                    phase: "None".to_string(),
+                })
+            }
         };
-        
+
         // Ensure we're in the Configuring phase
         if !matches!(current_phase, ScalingPhase::Configuring { .. }) {
             return Err(ScalingError {
                 error_type: "InvalidTransition".to_string(),
-                message: format!("Cannot transition from {} to Verifying", current_phase.phase_name()),
+                message: format!(
+                    "Cannot transition from {} to Verifying",
+                    current_phase.phase_name()
+                ),
                 phase: current_phase.phase_name().to_string(),
             });
         }
-        
+
         // Get the operation from the current phase
         let operation = current_phase.operation().clone();
-        
+
         // Create the new phase
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::from_secs(0))
             .as_secs() as i64;
-        
+
         let verifying_phase = ScalingPhase::Verifying {
             operation,
             started_at: now,
             test_results: Vec::new(),
         };
-        
+
         // Update the current phase
         self.current_phase = Some(verifying_phase);
-        
+
         // Update the operation history
         if let Some(record) = self.operation_history.last_mut() {
             record.final_phase = "Verifying".to_string();
         }
-        
+
         Ok(())
     }
-    
+
     /// Adds a verification test result to the current Verifying phase
     ///
     /// # Arguments
@@ -803,27 +852,35 @@ impl ScalingManager {
     ///
     /// * `Ok(())` if the test result was added successfully
     /// * `Err(ScalingError)` if the operation is not in the Verifying phase
-    pub fn add_verification_result(&mut self, test_result: VerificationResult) -> Result<(), ScalingError> {
+    pub fn add_verification_result(
+        &mut self,
+        test_result: VerificationResult,
+    ) -> Result<(), ScalingError> {
         let current_phase = match &mut self.current_phase {
             Some(ScalingPhase::Verifying { test_results, .. }) => {
                 test_results.push(test_result);
                 return Ok(());
-            },
+            }
             Some(phase) => phase,
-            None => return Err(ScalingError {
-                error_type: "NoActiveOperation".to_string(),
-                message: "No active operation to add verification result to".to_string(),
-                phase: "None".to_string(),
-            }),
+            None => {
+                return Err(ScalingError {
+                    error_type: "NoActiveOperation".to_string(),
+                    message: "No active operation to add verification result to".to_string(),
+                    phase: "None".to_string(),
+                })
+            }
         };
-        
+
         Err(ScalingError {
             error_type: "InvalidPhase".to_string(),
-            message: format!("Cannot add verification result in {} phase", current_phase.phase_name()),
+            message: format!(
+                "Cannot add verification result in {} phase",
+                current_phase.phase_name()
+            ),
             phase: current_phase.phase_name().to_string(),
         })
     }
-    
+
     /// Transitions to the Finalizing phase
     ///
     /// This method can only be called when in the Verifying phase.
@@ -836,51 +893,59 @@ impl ScalingManager {
     ///
     /// * `Ok(())` if the transition was successful
     /// * `Err(ScalingError)` if the transition failed
-    pub fn transition_to_finalizing(&mut self, cleanup_tasks: Vec<String>) -> Result<(), ScalingError> {
+    pub fn transition_to_finalizing(
+        &mut self,
+        cleanup_tasks: Vec<String>,
+    ) -> Result<(), ScalingError> {
         let current_phase = match &self.current_phase {
             Some(phase) => phase,
-            None => return Err(ScalingError {
-                error_type: "NoActiveOperation".to_string(),
-                message: "No active operation to transition".to_string(),
-                phase: "None".to_string(),
-            }),
+            None => {
+                return Err(ScalingError {
+                    error_type: "NoActiveOperation".to_string(),
+                    message: "No active operation to transition".to_string(),
+                    phase: "None".to_string(),
+                })
+            }
         };
-        
+
         // Ensure we're in the Verifying phase
         if !matches!(current_phase, ScalingPhase::Verifying { .. }) {
             return Err(ScalingError {
                 error_type: "InvalidTransition".to_string(),
-                message: format!("Cannot transition from {} to Finalizing", current_phase.phase_name()),
+                message: format!(
+                    "Cannot transition from {} to Finalizing",
+                    current_phase.phase_name()
+                ),
                 phase: current_phase.phase_name().to_string(),
             });
         }
-        
+
         // Get the operation from the current phase
         let operation = current_phase.operation().clone();
-        
+
         // Create the new phase
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::from_secs(0))
             .as_secs() as i64;
-        
+
         let finalizing_phase = ScalingPhase::Finalizing {
             operation,
             started_at: now,
             cleanup_tasks,
         };
-        
+
         // Update the current phase
         self.current_phase = Some(finalizing_phase);
-        
+
         // Update the operation history
         if let Some(record) = self.operation_history.last_mut() {
             record.final_phase = "Finalizing".to_string();
         }
-        
+
         Ok(())
     }
-    
+
     /// Checks for phase timeouts and transitions to Failed if a timeout is detected
     ///
     /// # Returns
@@ -892,34 +957,34 @@ impl ScalingManager {
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::from_secs(0))
             .as_secs() as i64;
-        
+
         // Update the last check time
         self.last_check_time = now;
-        
+
         // Check if there's an active operation
         let current_phase = match &self.current_phase {
             Some(phase) if !phase.is_terminal() => phase,
             _ => return false, // No active operation or already in a terminal state
         };
-        
+
         // Get the start time of the current phase
         let start_time = match current_phase.start_time() {
             Some(time) => time,
             None => return false, // No start time (shouldn't happen for non-terminal states)
         };
-        
+
         // Get the timeout for the current phase
         let timeout_seconds = match self.phase_timeouts.get(current_phase.phase_name()) {
             Some(timeout) => *timeout,
             None => return false, // No timeout defined for this phase
         };
-        
+
         // Check if the phase has timed out
         if (now - start_time) > timeout_seconds as i64 {
             // Phase has timed out, transition to Failed
             let operation = current_phase.operation().clone();
             let phase_name = current_phase.phase_name().to_string();
-            
+
             let failed_phase = ScalingPhase::Failed {
                 operation,
                 failed_at: now,
@@ -927,10 +992,10 @@ impl ScalingManager {
                 failure_phase: phase_name.clone(),
                 partial_results: None,
             };
-            
+
             // Update the current phase
             self.current_phase = Some(failed_phase);
-            
+
             // Update the operation history
             if let Some(record) = self.operation_history.last_mut() {
                 record.final_phase = "Failed".to_string();
@@ -942,13 +1007,13 @@ impl ScalingManager {
                     phase: phase_name,
                 });
             }
-            
+
             return true;
         }
-        
+
         false
     }
-    
+
     /// Cancels the current scaling operation
     ///
     /// # Arguments
@@ -962,31 +1027,33 @@ impl ScalingManager {
     pub fn cancel_operation(&mut self, reason: &str) -> Result<(), ScalingError> {
         let current_phase = match &self.current_phase {
             Some(phase) if !phase.is_terminal() => phase,
-            _ => return Err(ScalingError {
-                error_type: "NoActiveOperation".to_string(),
-                message: "No active operation to cancel".to_string(),
-                phase: "None".to_string(),
-            }),
+            _ => {
+                return Err(ScalingError {
+                    error_type: "NoActiveOperation".to_string(),
+                    message: "No active operation to cancel".to_string(),
+                    phase: "None".to_string(),
+                })
+            }
         };
-        
+
         let operation = current_phase.operation().clone();
         let phase_name = current_phase.phase_name().to_string();
-        
+
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::from_secs(0))
             .as_secs() as i64;
-        
+
         let canceled_phase = ScalingPhase::Canceled {
             operation,
             canceled_at: now,
             cancellation_reason: reason.to_string(),
             phase_at_cancellation: phase_name,
         };
-        
+
         // Update the current phase
         self.current_phase = Some(canceled_phase);
-        
+
         // Update the operation history
         if let Some(record) = self.operation_history.last_mut() {
             record.final_phase = "Canceled".to_string();
@@ -994,10 +1061,10 @@ impl ScalingManager {
             record.successful = false;
             record.error = None; // Cancellation is not an error
         }
-        
+
         Ok(())
     }
-    
+
     /// Marks the current operation as failed
     ///
     /// # Arguments
@@ -1010,24 +1077,31 @@ impl ScalingManager {
     ///
     /// * `Ok(())` if the operation was marked as failed successfully
     /// * `Err(ScalingError)` if there was no active operation to fail
-    pub fn fail_operation(&mut self, error_type: &str, message: &str, partial_results: Option<String>) -> Result<(), ScalingError> {
+    pub fn fail_operation(
+        &mut self,
+        error_type: &str,
+        message: &str,
+        partial_results: Option<String>,
+    ) -> Result<(), ScalingError> {
         let current_phase = match &self.current_phase {
             Some(phase) if !phase.is_terminal() => phase,
-            _ => return Err(ScalingError {
-                error_type: "NoActiveOperation".to_string(),
-                message: "No active operation to fail".to_string(),
-                phase: "None".to_string(),
-            }),
+            _ => {
+                return Err(ScalingError {
+                    error_type: "NoActiveOperation".to_string(),
+                    message: "No active operation to fail".to_string(),
+                    phase: "None".to_string(),
+                })
+            }
         };
-        
+
         let operation = current_phase.operation().clone();
         let phase_name = current_phase.phase_name().to_string();
-        
+
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::from_secs(0))
             .as_secs() as i64;
-        
+
         let failed_phase = ScalingPhase::Failed {
             operation,
             failed_at: now,
@@ -1035,10 +1109,10 @@ impl ScalingManager {
             failure_phase: phase_name.clone(),
             partial_results,
         };
-        
+
         // Update the current phase
         self.current_phase = Some(failed_phase);
-        
+
         // Update the operation history
         if let Some(record) = self.operation_history.last_mut() {
             record.final_phase = "Failed".to_string();
@@ -1050,10 +1124,10 @@ impl ScalingManager {
                 phase: phase_name,
             });
         }
-        
+
         Ok(())
     }
-    
+
     /// Marks the current operation as completed successfully
     ///
     /// # Arguments
@@ -1064,45 +1138,50 @@ impl ScalingManager {
     ///
     /// * `Ok(())` if the operation was marked as completed successfully
     /// * `Err(ScalingError)` if there was no active operation to complete
-    pub fn complete_operation(&mut self, result_metrics: Option<ScalingMetrics>) -> Result<(), ScalingError> {
+    pub fn complete_operation(
+        &mut self,
+        result_metrics: Option<ScalingMetrics>,
+    ) -> Result<(), ScalingError> {
         let current_phase = match &self.current_phase {
             Some(phase) if !phase.is_terminal() => phase,
-            _ => return Err(ScalingError {
-                error_type: "NoActiveOperation".to_string(),
-                message: "No active operation to complete".to_string(),
-                phase: "None".to_string(),
-            }),
+            _ => {
+                return Err(ScalingError {
+                    error_type: "NoActiveOperation".to_string(),
+                    message: "No active operation to complete".to_string(),
+                    phase: "None".to_string(),
+                })
+            }
         };
-        
+
         let operation = current_phase.operation().clone();
-        
+
         // Compute the duration of the operation
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::from_secs(0))
             .as_secs() as i64;
-        
+
         let started_at = match &self.operation_history.last() {
             Some(record) => record.started_at,
             None => now, // Shouldn't happen, but handle it gracefully
         };
-        
+
         let duration_seconds = if now > started_at {
             (now - started_at) as u64
         } else {
             0
         };
-        
+
         let completed_phase = ScalingPhase::Completed {
             operation,
             completed_at: now,
             duration_seconds,
             result_metrics,
         };
-        
+
         // Update the current phase
         self.current_phase = Some(completed_phase);
-        
+
         // Update the operation history
         if let Some(record) = self.operation_history.last_mut() {
             record.final_phase = "Completed".to_string();
@@ -1110,7 +1189,7 @@ impl ScalingManager {
             record.successful = true;
             record.error = None;
         }
-        
+
         Ok(())
     }
 
@@ -1127,112 +1206,117 @@ impl ScalingManager {
     pub fn rollback_operation(&mut self) -> Result<(), ScalingError> {
         // Ensure we have a failed operation to roll back
         let (failure_phase, phase_data) = match &self.current_phase {
-            Some(ScalingPhase::Failed { 
-                failure_phase, 
-                ..
-            }) => {
+            Some(ScalingPhase::Failed { failure_phase, .. }) => {
                 // We have a failed operation, fetch the phase data
                 let phase_data = if let Some(record) = self.operation_history.last() {
-                    record.phase_history.iter()
+                    record
+                        .phase_history
+                        .iter()
                         .find(|phase| phase.phase_name == *failure_phase)
                         .map(|phase| phase.phase_data.clone())
                 } else {
                     None
                 };
-                
+
                 (failure_phase.clone(), phase_data)
-            },
-            _ => return Err(ScalingError {
-                error_type: "InvalidRollback".to_string(),
-                message: "Cannot roll back: no failed operation exists".to_string(),
-                phase: "None".to_string(),
-            }),
+            }
+            _ => {
+                return Err(ScalingError {
+                    error_type: "InvalidRollback".to_string(),
+                    message: "Cannot roll back: no failed operation exists".to_string(),
+                    phase: "None".to_string(),
+                })
+            }
         };
-        
+
         // Record rollback start
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::from_secs(0))
             .as_secs() as i64;
-        
+
         // Rollback metadata
         let mut rollback_metadata = BTreeMap::new();
         rollback_metadata.insert("rollback_started_at".to_string(), now.to_string());
         rollback_metadata.insert("rollback_status".to_string(), "in_progress".to_string());
-        
+
         // Execute the rollback based on the phase where failure occurred
         let rollback_result: Result<(), ScalingError> = match failure_phase.as_str() {
             "ResourceAllocating" => {
                 // For resource allocation failures, release any partially allocated resources
-                if let Some(PhaseData::ResourceAllocating { allocated_resource_ids, .. }) = phase_data {
+                if let Some(PhaseData::ResourceAllocating {
+                    allocated_resource_ids,
+                    ..
+                }) = phase_data
+                {
                     if !allocated_resource_ids.is_empty() {
                         // Log resource IDs that need to be released
                         rollback_metadata.insert(
-                            "resources_to_release".to_string(), 
-                            allocated_resource_ids.join(",")
+                            "resources_to_release".to_string(),
+                            allocated_resource_ids.join(","),
                         );
                     }
                 }
                 Ok(())
-            },
+            }
             "InstancePreparing" => {
                 // For instance preparation failures, restore instance configurations
-                if let Some(PhaseData::InstancePreparing { instance_configs, .. }) = phase_data {
+                if let Some(PhaseData::InstancePreparing {
+                    instance_configs, ..
+                }) = phase_data
+                {
                     if let Some(configs) = instance_configs {
                         // Store the configs that need to be restored
-                        rollback_metadata.insert(
-                            "configs_to_restore".to_string(), 
-                            configs
-                        );
+                        rollback_metadata.insert("configs_to_restore".to_string(), configs);
                     }
                 }
                 Ok(())
-            },
+            }
             "Configuring" => {
                 // For configuration failures, restore the previous configuration
-                if let Some(PhaseData::Configuring { previous_config, .. }) = phase_data {
+                if let Some(PhaseData::Configuring {
+                    previous_config, ..
+                }) = phase_data
+                {
                     if let Some(config) = previous_config {
                         // Store the previous configuration that needs to be restored
-                        rollback_metadata.insert(
-                            "config_to_restore".to_string(), 
-                            config
-                        );
+                        rollback_metadata.insert("config_to_restore".to_string(), config);
                     }
                 }
                 Ok(())
-            },
+            }
             _ => {
                 // For other phases, we don't need specific rollback actions
                 Ok(())
             }
         };
-        
+
         // Add final rollback status based on result
         match &rollback_result {
             Ok(_) => {
                 rollback_metadata.insert("rollback_status".to_string(), "completed".to_string());
                 rollback_metadata.insert("rollback_completed_at".to_string(), now.to_string());
-            },
+            }
             Err(err) => {
                 rollback_metadata.insert("rollback_status".to_string(), "failed".to_string());
                 rollback_metadata.insert("rollback_error".to_string(), err.message.clone());
             }
         }
-        
+
         // Update operation history with rollback metadata
         if let Some(record) = self.operation_history.last_mut() {
             for (key, value) in rollback_metadata {
                 record.metadata.insert(key, value);
             }
         }
-        
+
         rollback_result
     }
 
     /// Sets the last check time, primarily for testing purposes
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `time` - The time value to set (Unix timestamp in seconds)
     #[cfg(test)]
     pub fn set_last_check_time(&mut self, time: i64) {
@@ -1248,45 +1332,51 @@ impl ScalingManager {
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::from_secs(0))
             .as_secs() as i64;
-        
+
         // Check if there's an active operation
         let current_phase = match &self.current_phase {
             Some(phase) if !phase.is_terminal() => phase,
             Some(phase) => {
                 println!("DEBUG: Phase is terminal: {:?}", phase);
                 return false;
-            },
+            }
             None => {
                 println!("DEBUG: No active operation");
                 return false;
-            },
+            }
         };
-        
+
         println!("DEBUG: Current phase: {:?}", current_phase.phase_name());
-        
+
         // Get the start time of the current phase
         let start_time = match current_phase.start_time() {
             Some(time) => time,
             None => {
                 println!("DEBUG: No start time for phase");
                 return false;
-            },
+            }
         };
-        
-        println!("DEBUG: Phase start time: {}, current time: {}", start_time, now);
+
+        println!(
+            "DEBUG: Phase start time: {}, current time: {}",
+            start_time, now
+        );
         println!("DEBUG: Last check time: {}", self.last_check_time);
-        
+
         // Get the timeout for the current phase
         let timeout_seconds = match self.phase_timeouts.get(current_phase.phase_name()) {
             Some(timeout) => *timeout,
             None => {
-                println!("DEBUG: No timeout defined for phase {}", current_phase.phase_name());
+                println!(
+                    "DEBUG: No timeout defined for phase {}",
+                    current_phase.phase_name()
+                );
                 return false;
-            },
+            }
         };
-        
+
         println!("DEBUG: Phase timeout: {} seconds", timeout_seconds);
-        
+
         // For tests, use the last_check_time when determining if a timeout has occurred
         // This allows tests to artificially simulate time passing by setting last_check_time
         #[cfg(test)]
@@ -1297,17 +1387,21 @@ impl ScalingManager {
             let has_timed_out = artificial_elapsed > timeout_seconds as i64;
             println!("DEBUG: Real time elapsed: {} seconds, Artificial time elapsed: {} seconds, has timed out: {}", 
                       elapsed, artificial_elapsed, has_timed_out);
-            
+
             return has_timed_out;
         }
-        
+
         // For non-test builds, use the actual current time
         #[cfg(not(test))]
         {
             // Check if the phase has timed out
             let has_timed_out = (now - start_time) > timeout_seconds as i64;
-            println!("DEBUG: Time elapsed: {} seconds, has timed out: {}", now - start_time, has_timed_out);
-            
+            println!(
+                "DEBUG: Time elapsed: {} seconds, has timed out: {}",
+                now - start_time,
+                has_timed_out
+            );
+
             has_timed_out
         }
     }
@@ -1367,7 +1461,10 @@ impl ScalingPhase {
 
     /// Checks if the phase is a terminal state
     pub fn is_terminal(&self) -> bool {
-        matches!(self, Self::Completed { .. } | Self::Failed { .. } | Self::Canceled { .. })
+        matches!(
+            self,
+            Self::Completed { .. } | Self::Failed { .. } | Self::Canceled { .. }
+        )
     }
 
     /// Creates a new Requested phase with the current timestamp
@@ -1376,7 +1473,7 @@ impl ScalingPhase {
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::from_secs(0))
             .as_secs() as i64;
-        
+
         Self::Requested {
             operation,
             requested_at: now,
@@ -1389,37 +1486,37 @@ impl ScalingPhase {
         match self {
             ScalingPhase::Requested { requested_at, .. } => {
                 *requested_at = timestamp;
-            },
+            }
             ScalingPhase::Validating { started_at, .. } => {
                 *started_at = timestamp;
-            },
+            }
             ScalingPhase::Planning { planned_at, .. } => {
                 *planned_at = timestamp;
-            },
+            }
             ScalingPhase::ResourceAllocating { started_at, .. } => {
                 *started_at = timestamp;
-            },
+            }
             ScalingPhase::InstancePreparing { started_at, .. } => {
                 *started_at = timestamp;
-            },
+            }
             ScalingPhase::Configuring { started_at, .. } => {
                 *started_at = timestamp;
-            },
+            }
             ScalingPhase::Verifying { started_at, .. } => {
                 *started_at = timestamp;
-            },
+            }
             ScalingPhase::Finalizing { started_at, .. } => {
                 *started_at = timestamp;
-            },
+            }
             ScalingPhase::Completed { .. } => {
                 // No start time to modify for terminal phases
-            },
+            }
             ScalingPhase::Failed { .. } => {
                 // No start time to modify for terminal phases
-            },
+            }
             ScalingPhase::Canceled { .. } => {
                 // No start time to modify for terminal phases
-            },
+            }
         }
     }
 }
@@ -1428,124 +1525,135 @@ impl ScalingPhase {
 mod tests {
     use super::*;
     use std::thread;
-    
+
     #[test]
     fn test_scaling_manager_basic_operations() {
         // Create a new ScalingManager
         let mut manager = ScalingManager::new();
-        
+
         // Verify it starts with no active operations
         assert!(manager.current_phase().is_none());
         assert!(manager.operation_history().is_empty());
-        
+
         // Start a new scale-out operation
-        let operation = ScalingOperation::ScaleOut { target_instances: 5 };
+        let operation = ScalingOperation::ScaleOut {
+            target_instances: 5,
+        };
         assert!(manager.start_operation(operation.clone()).is_ok());
-        
+
         // Verify the operation was started correctly
         let phase = manager.current_phase().unwrap();
         match phase {
-            ScalingPhase::Requested { operation: op, .. } => {
-                match op {
-                    ScalingOperation::ScaleOut { target_instances } => {
-                        assert_eq!(*target_instances, 5);
-                    },
-                    _ => panic!("Wrong operation type"),
+            ScalingPhase::Requested { operation: op, .. } => match op {
+                ScalingOperation::ScaleOut { target_instances } => {
+                    assert_eq!(*target_instances, 5);
                 }
+                _ => panic!("Wrong operation type"),
             },
             _ => panic!("Wrong phase type"),
         }
-        
+
         // Verify operation history was updated
         assert_eq!(manager.operation_history().len(), 1);
         assert_eq!(manager.operation_history()[0].final_phase, "Requested");
         assert!(!manager.operation_history()[0].successful);
-        
+
         // Transition to Validating phase
         assert!(manager.transition_to_validating().is_ok());
-        
+
         // Verify the transition was successful
         match manager.current_phase().unwrap() {
-            ScalingPhase::Validating { .. } => {},
+            ScalingPhase::Validating { .. } => {}
             _ => panic!("Failed to transition to Validating"),
         }
-        
+
         // Verify operation history was updated
         assert_eq!(manager.operation_history()[0].final_phase, "Validating");
-        
+
         // Test cancellation
         assert!(manager.cancel_operation("Testing cancellation").is_ok());
-        
+
         // Verify the operation was canceled
         match manager.current_phase().unwrap() {
-            ScalingPhase::Canceled { 
-                cancellation_reason, 
-                phase_at_cancellation, 
-                .. 
+            ScalingPhase::Canceled {
+                cancellation_reason,
+                phase_at_cancellation,
+                ..
             } => {
                 assert_eq!(cancellation_reason, "Testing cancellation");
                 assert_eq!(phase_at_cancellation, "Validating");
-            },
+            }
             _ => panic!("Failed to cancel operation"),
         }
-        
+
         // Verify operation history was updated
         assert_eq!(manager.operation_history()[0].final_phase, "Canceled");
         assert!(manager.operation_history()[0].ended_at.is_some());
         assert!(!manager.operation_history()[0].successful);
         assert!(manager.operation_history()[0].error.is_none());
     }
-    
+
     #[test]
     fn test_timeout_detection() {
         // Create a manager with very short timeouts for testing
         let mut manager = ScalingManager::new();
         manager.set_phase_timeout("Requested", 1); // 1 second timeout
-        
+
         // Start an operation
-        let operation = ScalingOperation::ScaleOut { target_instances: 3 };
+        let operation = ScalingOperation::ScaleOut {
+            target_instances: 3,
+        };
         assert!(manager.start_operation(operation).is_ok());
-        
+
         // Sleep to trigger the timeout
         thread::sleep(std::time::Duration::from_secs(2));
-        
+
         // Check timeouts
         assert!(manager.check_timeouts());
-        
+
         // Verify the operation timed out
         match manager.current_phase().unwrap() {
-            ScalingPhase::Failed { 
-                failure_reason, 
-                failure_phase, 
-                .. 
+            ScalingPhase::Failed {
+                failure_reason,
+                failure_phase,
+                ..
             } => {
                 assert!(failure_reason.contains("Timeout"));
                 assert_eq!(failure_phase, "Requested");
-            },
+            }
             _ => panic!("Failed to detect timeout"),
         }
-        
+
         // Verify operation history was updated
         assert_eq!(manager.operation_history()[0].final_phase, "Failed");
         assert!(manager.operation_history()[0].error.is_some());
-        assert_eq!(manager.operation_history()[0].error.as_ref().unwrap().error_type, "Timeout");
+        assert_eq!(
+            manager.operation_history()[0]
+                .error
+                .as_ref()
+                .unwrap()
+                .error_type,
+            "Timeout"
+        );
     }
 
     #[test]
     fn test_rollback_operation() {
         // Create a manager
         let mut manager = ScalingManager::new();
-        
+
         // Start an operation
-        let operation = ScalingOperation::ScaleOut { target_instances: 5 };
+        let operation = ScalingOperation::ScaleOut {
+            target_instances: 5,
+        };
         assert!(manager.start_operation(operation.clone()).is_ok());
-        
+
         // Transition to Validating phase
         assert!(manager.transition_to_validating().is_ok());
-        
+
         // Transition to Planning phase
         assert!(manager.transition_to_planning(None).is_ok());
-        
+
         // Transition to ResourceAllocating phase
         let resources = ScalingResources {
             cpu_cores: 4,
@@ -1553,11 +1661,13 @@ mod tests {
             storage_gb: 50,
             network_bandwidth_mbps: 500,
         };
-        assert!(manager.transition_to_resource_allocating(Some(resources.clone())).is_ok());
-        
+        assert!(manager
+            .transition_to_resource_allocating(Some(resources.clone()))
+            .is_ok());
+
         // Simulate failure in this phase
         let resource_ids = vec!["resource-1".to_string(), "resource-2".to_string()];
-        
+
         // Manually insert phase data to test rollback
         if let Some(record) = manager.operation_history.last_mut() {
             record.phase_history.push(PhaseRecord {
@@ -1575,27 +1685,29 @@ mod tests {
                 },
             });
         }
-        
+
         // Fail the operation
-        assert!(manager.fail_operation("ResourceError", "Failed to allocate resources", None).is_ok());
-        
+        assert!(manager
+            .fail_operation("ResourceError", "Failed to allocate resources", None)
+            .is_ok());
+
         // Verify the operation is in the Failed state
         match manager.current_phase() {
             Some(ScalingPhase::Failed { failure_phase, .. }) => {
                 assert_eq!(failure_phase, "ResourceAllocating");
-            },
+            }
             _ => panic!("Operation should be in Failed state"),
         }
-        
+
         // Test rollback
         assert!(manager.rollback_operation().is_ok());
-        
+
         // Verify rollback metadata
         let record = manager.operation_history.last().unwrap();
         assert_eq!(record.metadata.get("rollback_status").unwrap(), "completed");
-        
+
         // Verify that resource IDs to release were logged
         let resources_to_release = record.metadata.get("resources_to_release").unwrap();
         assert_eq!(resources_to_release, "resource-1,resource-2");
     }
-} 
+}

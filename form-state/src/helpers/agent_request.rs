@@ -9,133 +9,133 @@ use uuid::Uuid;
 pub struct RunTaskRequest {
     /// ID of the agent to run (also extracted from URL path)
     pub agent_id: String,
-    
+
     /// Optional task ID for tracking (generated if not provided)
     pub task_id: Option<String>,
-    
+
     /// The prompt/task description to be executed
     pub task: String,
-    
+
     // Model configuration
     /// ID of the model to use (e.g., "gpt-4-turbo", "claude-3-opus")
     pub model_id: String,
-    
+
     /// Provider of the model (e.g., "openai", "anthropic", "formation")
     pub model_provider: String,
-    
+
     /// API key for the model provider (if not using Formation credits, agent might use this)
     pub provider_api_key: Option<String>,
-    
+
     // Knowledge retrieval configuration
     /// Whether to use semantic search for knowledge retrieval
     pub enable_semantic_search: Option<bool>,
-    
+
     /// Type of vector database to use (e.g., "lancedb", "pinecone")
     pub vector_db_type: Option<String>,
-    
+
     /// URLs to use as knowledge sources
     pub knowledge_urls: Option<Vec<String>>,
-    
+
     /// Raw text to use as knowledge source
     pub knowledge_text: Option<String>,
-    
+
     /// Type of knowledge source (e.g., "pdf_url", "web", "text")
     pub knowledge_source_type: Option<String>,
-    
+
     /// Provider for embeddings (e.g., "openai", "cohere")
     pub embedder_provider: Option<String>,
-    
+
     /// Embedding model to use
     pub embedder_model: Option<String>,
-    
+
     /// Dimensions for the embedder (required for local embedders)
     pub embedder_dimensions: Option<i32>,
-    
+
     // Chunking configuration
     /// Chunking strategy for knowledge sources
     pub chunking_strategy: Option<String>,
-    
+
     /// Maximum size of each chunk
     pub chunk_size: Option<i32>,
-    
+
     /// Number of characters to overlap between chunks
     pub chunk_overlap: Option<i32>,
-    
+
     /// Similarity threshold for semantic chunking
     pub similarity_threshold: Option<f32>,
-    
+
     // Storage and memory configuration
     /// Storage type (e.g., "sqlite", "postgres", "mongodb")
     pub storage_type: Option<String>,
-    
+
     /// Connection string or configuration for storage
     pub storage_connection: Option<String>,
-    
+
     /// Session ID for resuming conversations
     pub session_id: Option<String>,
-    
+
     /// User ID for personalization
     pub user_id: Option<String>,
-    
+
     /// Whether to enable chat history memory
     pub enable_chat_history: Option<bool>,
-    
+
     /// Whether to enable user-specific memories
     pub enable_user_memories: Option<bool>,
-    
+
     /// Whether to enable conversation summaries
     pub enable_summaries: Option<bool>,
-    
+
     /// Number of messages to keep in memory
     pub memory_depth: Option<i32>,
-    
+
     // Tool configuration
     /// Whether to enable web search tools
     pub enable_web_search: Option<bool>,
-    
+
     /// Whether to enable file manipulation tools
     pub enable_file_tools: Option<bool>,
-    
+
     /// Whether to enable mathematical tools
     pub enable_math_tools: Option<bool>,
-    
+
     /// Custom tool definitions (fama-ai format)
     pub custom_tools: Option<Vec<HashMap<String, serde_json::Value>>>,
-    
+
     // MCP parameters (Container management)
     /// List of MCP servers to connect to
     pub mcp_servers: Option<Vec<HashMap<String, serde_json::Value>>>,
-    
+
     /// Whether to enable filesystem MCP server
     pub use_filesystem_mcp: Option<bool>,
-    
+
     /// Root path for filesystem MCP server
     pub filesystem_root_path: Option<String>,
-    
+
     // Formation-specific extensions
     /// Whether to stream the response (default: true)
     pub streaming: Option<bool>,
-    
+
     /// Timeout in seconds (default: 300)
     pub timeout_seconds: Option<u32>,
-    
+
     // Memory configuration specific to Formation
     /// Detailed memory configuration
     pub memory_config: Option<MemoryConfig>,
-    
+
     /// Storage configuration for files/artifacts
     pub storage_config: Option<StorageConfig>,
-    
+
     /// Knowledge base configuration
     pub knowledge_base_config: Option<KnowledgeBaseConfig>,
-    
+
     // Formation agent tools
     /// Enabled tools list (Formation format)
     pub enabled_tools: Option<Vec<Tool>>,
-    
+
     /// Custom tools in Formation format
     pub formation_custom_tools: Option<Vec<CustomTool>>,
-    
+
     // Advanced Formation parameters
     /// Additional custom parameters
     pub custom_parameters: Option<HashMap<String, serde_json::Value>>,
@@ -146,25 +146,25 @@ pub struct RunTaskRequest {
 pub enum MemoryType {
     /// No persistent memory
     None,
-    
+
     /// Basic conversation memory
     Conversation,
-    
+
     /// Formation's persistent memory
     FormationPersistent,
-    
+
     /// Pinecone vector database
     PineconeVectorDB,
-    
+
     /// ChromaDB vector database
     ChromaDB,
-    
+
     /// LanceDB vector database
     LanceDB,
-    
+
     /// Qdrant vector database
     Qdrant,
-    
+
     /// Custom memory type
     Custom(String),
 }
@@ -207,16 +207,16 @@ impl FromStr for MemoryType {
 pub struct MemoryConfig {
     /// Type of memory to use
     pub memory_type: MemoryType,
-    
+
     /// Endpoint URL for the memory service
     pub endpoint: Option<String>,
-    
+
     /// API key for the memory service
     pub api_key: Option<String>,
-    
+
     /// Collection name in the memory service
     pub collection_name: Option<String>,
-    
+
     /// Conversation ID for this interaction
     pub conversation_id: Option<String>,
 }
@@ -226,19 +226,19 @@ pub struct MemoryConfig {
 pub enum StorageType {
     /// No storage
     None,
-    
+
     /// Formation's built-in storage
     FormationStorage,
-    
+
     /// Amazon S3 compatible storage
     S3,
-    
+
     /// Google Cloud Storage
     GCS,
-    
+
     /// Azure Blob Storage
     Azure,
-    
+
     /// Custom storage provider
     Custom(String),
 }
@@ -248,16 +248,16 @@ pub enum StorageType {
 pub struct StorageConfig {
     /// Type of storage to use
     pub storage_type: StorageType,
-    
+
     /// Endpoint URL for the storage service
     pub endpoint: Option<String>,
-    
+
     /// API key for the storage service
     pub api_key: Option<String>,
-    
+
     /// Bucket name in the storage service
     pub bucket_name: Option<String>,
-    
+
     /// Folder path within the bucket
     pub folder_path: Option<String>,
 }
@@ -267,19 +267,19 @@ pub struct StorageConfig {
 pub enum KnowledgeBaseType {
     /// No knowledge base
     None,
-    
+
     /// Formation's RAG system
     FormationRAG,
-    
+
     /// Pinecone knowledge base
     Pinecone,
-    
+
     /// Weaviate knowledge base
     Weaviate,
-    
+
     /// Qdrant knowledge base
     Qdrant,
-    
+
     /// Custom knowledge base
     Custom(String),
 }
@@ -289,13 +289,13 @@ pub enum KnowledgeBaseType {
 pub struct KnowledgeBaseConfig {
     /// Type of knowledge base
     pub kb_type: KnowledgeBaseType,
-    
+
     /// Endpoint URL for the knowledge base
     pub endpoint: Option<String>,
-    
+
     /// API key for the knowledge base
     pub api_key: Option<String>,
-    
+
     /// Index name in the knowledge base
     pub index_name: Option<String>,
 }
@@ -305,7 +305,7 @@ pub struct KnowledgeBaseConfig {
 pub struct Tool {
     /// ID of the tool to use
     pub tool_id: String,
-    
+
     /// Parameters to pass to the tool
     pub parameters: Option<HashMap<String, serde_json::Value>>,
 }
@@ -315,16 +315,16 @@ pub struct Tool {
 pub struct CustomTool {
     /// Name of the tool
     pub name: String,
-    
+
     /// Description of what the tool does
     pub description: String,
-    
+
     /// JSON schema for the tool's parameters
     pub parameters_schema: serde_json::Value,
-    
+
     /// Endpoint URL to call when using the tool
     pub endpoint: String,
-    
+
     /// Authentication token for the tool
     pub auth_token: Option<String>,
 }
@@ -334,7 +334,7 @@ pub struct CustomTool {
 pub struct HireAgentRequest {
     /// JWT token for authentication
     pub jwt: String,
-    
+
     /// Optional metadata for the hiring transaction
     pub metadata: Option<HashMap<String, String>>,
 }
@@ -342,24 +342,26 @@ pub struct HireAgentRequest {
 impl RunTaskRequest {
     /// Get a task ID, generating one if not present
     pub fn task_id(&self) -> String {
-        self.task_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string())
+        self.task_id
+            .clone()
+            .unwrap_or_else(|| Uuid::new_v4().to_string())
     }
-    
+
     /// Check if streaming is enabled (defaults to true)
     pub fn streaming(&self) -> bool {
         self.streaming.unwrap_or(true)
     }
-    
+
     /// Get timeout in seconds (defaults to 300s/5min)
     pub fn timeout_seconds(&self) -> u32 {
         self.timeout_seconds.unwrap_or(300)
     }
-    
+
     /// Convert to agent-specific request format if needed
     pub fn to_agent_specific_format(&self) -> serde_json::Value {
         serde_json::to_value(self).unwrap_or_default()
     }
-    
+
     /// Create a new request with minimal required fields
     pub fn new(agent_id: String, model_id: String, model_provider: String, task: String) -> Self {
         Self {
@@ -406,13 +408,13 @@ impl RunTaskRequest {
             custom_parameters: None,
         }
     }
-    
+
     /// Configure streaming option
     pub fn with_streaming(mut self, streaming: bool) -> Self {
         self.streaming = Some(streaming);
         self
     }
-    
+
     /// Set a custom timeout
     pub fn with_timeout(mut self, timeout_seconds: u32) -> Self {
         self.timeout_seconds = Some(timeout_seconds);
@@ -428,10 +430,10 @@ impl HireAgentRequest {
             metadata: None,
         }
     }
-    
+
     /// Add metadata to the request
     pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
         self.metadata = Some(metadata);
         self
     }
-} 
+}

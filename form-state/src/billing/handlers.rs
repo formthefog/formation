@@ -1,48 +1,48 @@
 //! API handlers for billing-related operations
-//! 
+//!
 //! This module provides handlers for:
 //! 1. Checking subscription status
 //! 2. Managing credits
 //! 3. Viewing usage statistics
 
 use axum::{
-    extract::{State, Json},
+    extract::{Json, State},
     http::StatusCode,
     response::IntoResponse,
 };
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
-use crate::datastore::DataStore;
-use crate::billing::{SubscriptionInfo, SubscriptionStatus, SubscriptionTier};
 use crate::auth::RecoveredAddress;
+use crate::billing::{SubscriptionInfo, SubscriptionStatus, SubscriptionTier};
+use crate::datastore::DataStore;
 
 /// Response for usage statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageResponse {
     /// Total agent requests
     pub total_agent_requests: u64,
-    
+
     /// Total tokens consumed
     pub total_tokens_consumed: u64,
-    
+
     /// Number of agents hired
     pub agents_hired: u32,
-    
+
     /// Usage breakdown by agent
     pub agent_usage: Vec<AgentUsage>,
-    
+
     /// Usage breakdown by model
     pub model_usage: Vec<ModelUsage>,
-    
+
     /// Available credits
     pub available_credits: u64,
-    
+
     /// Credits used in current period
     pub credits_used: u64,
-    
+
     /// Subscription details (if any)
     pub subscription: Option<SubscriptionInfo>,
 }
@@ -52,13 +52,13 @@ pub struct UsageResponse {
 pub struct AgentUsage {
     /// Agent ID
     pub agent_id: String,
-    
+
     /// Number of requests
     pub requests: u64,
-    
+
     /// Total tokens consumed (if applicable)
     pub tokens: Option<u64>,
-    
+
     /// Whether the agent is currently hired
     pub is_hired: bool,
 }
@@ -68,7 +68,7 @@ pub struct AgentUsage {
 pub struct ModelUsage {
     /// Model ID
     pub model_id: String,
-    
+
     /// Total tokens consumed
     pub tokens: u64,
 }
@@ -78,7 +78,7 @@ pub struct ModelUsage {
 pub struct AddCreditsRequest {
     /// Number of credits to add
     pub amount: u64,
-    
+
     /// Stripe payment intent ID (if available)
     pub payment_intent_id: Option<String>,
 }
@@ -88,28 +88,28 @@ pub struct AddCreditsRequest {
 pub struct SubscriptionResponse {
     /// Subscription tier
     pub tier: SubscriptionTier,
-    
+
     /// Subscription status
     pub status: SubscriptionStatus,
-    
+
     /// Maximum agents allowed
     pub max_agents: u32,
-    
+
     /// Currently hired agents
     pub current_agents: u32,
-    
+
     /// Inference credits per period
     pub inference_credits: u64,
-    
+
     /// Current period token usage
     pub current_period_tokens: u64,
-    
+
     /// When the current period started
     pub current_period_start: String,
-    
+
     /// When the current period ends
     pub current_period_end: String,
-    
+
     /// Whether the subscription will auto-renew
     pub auto_renew: bool,
 }
@@ -119,13 +119,13 @@ pub struct SubscriptionResponse {
 pub struct ApiProcessStripeCheckoutSession {
     /// Stripe checkout session ID
     pub session_id: String,
-    
+
     /// Account ID
     pub account_id: String,
-    
+
     /// Subscription info (optional)
     pub subscription_info: Option<SubscriptionInfo>,
-    
+
     /// Credits to add (optional)
     pub credits_added: Option<u64>,
 }
@@ -144,26 +144,27 @@ pub async fn get_subscription_status(
 ) -> Result<Json<SubscriptionResponse>, StatusCode> {
     // Get user ID from recovered address
     let user_id = recovered.as_hex();
-    
+
     // Get account information
     let datastore = state.lock().await;
-    let account = datastore.account_state.get_account(&user_id)
+    let account = datastore
+        .account_state
+        .get_account(&user_id)
         .ok_or(StatusCode::NOT_FOUND)?;
-    
+
     // Get subscription information
-    let subscription = account.subscription.clone()
-        .unwrap_or_else(|| {
-            // Default to free tier if no subscription exists
-            SubscriptionInfo::default()
-        });
-    
+    let subscription = account.subscription.clone().unwrap_or_else(|| {
+        // Default to free tier if no subscription exists
+        SubscriptionInfo::default()
+    });
+
     // Get usage information
     let current_tokens = if let Some(usage) = &account.usage {
         usage.current_usage().tokens_consumed
     } else {
         0
     };
-    
+
     // Convert to response format
     let response = SubscriptionResponse {
         tier: subscription.tier,
@@ -176,7 +177,7 @@ pub async fn get_subscription_status(
         current_period_end: subscription.current_period_end.to_rfc3339(),
         auto_renew: subscription.auto_renew,
     };
-    
+
     Ok(Json(response))
 }
 
@@ -187,12 +188,14 @@ pub async fn get_usage_stats(
 ) -> Result<Json<UsageResponse>, StatusCode> {
     // Get user ID from recovered address
     let user_id = recovered.as_hex();
-    
+
     // Get account information
     let datastore = state.lock().await;
-    let account = datastore.account_state.get_account(&user_id)
+    let account = datastore
+        .account_state
+        .get_account(&user_id)
         .ok_or(StatusCode::NOT_FOUND)?;
-    
+
     // Initialize response with default values
     let mut response = UsageResponse {
         total_agent_requests: 0,
@@ -204,14 +207,14 @@ pub async fn get_usage_stats(
         credits_used: 0,
         subscription: account.subscription.clone(),
     };
-    
+
     // Fill in usage statistics if available
     if let Some(usage) = &account.usage {
         let current = usage.current_usage();
-        
+
         response.total_agent_requests = current.agent_requests;
         response.total_tokens_consumed = current.tokens_consumed;
-        
+
         // Add agent usage - this would be more detailed in a real implementation
         for agent_id in &account.hired_agents {
             response.agent_usage.push(AgentUsage {
@@ -221,7 +224,7 @@ pub async fn get_usage_stats(
                 is_hired: true,
             });
         }
-        
+
         // Add model usage
         for (model_id, tokens) in &usage.model_usage {
             response.model_usage.push(ModelUsage {
@@ -229,12 +232,12 @@ pub async fn get_usage_stats(
                 tokens: tokens.input_tokens + tokens.output_tokens,
             });
         }
-        
+
         // Calculate credits used based on token consumption
         // This is a simplified calculation - real implementation would use price tiers
         response.credits_used = current.tokens_consumed / 100_000;
     }
-    
+
     Ok(Json(response))
 }
 
@@ -246,52 +249,54 @@ pub async fn add_credits(
 ) -> impl IntoResponse {
     // Get user ID from recovered address
     let user_id = recovered.as_hex();
-    
+
     // Validate payment with Stripe if payment_intent_id is provided
     if let Some(payment_id) = &request.payment_intent_id {
         // In a real implementation, we would verify the payment with Stripe
         // For now, we'll just assume it's valid
-        
+
         // Example of what Stripe verification might look like:
         /*
         let stripe_client = StripeClient::from_env().await
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to initialize Stripe".to_string()))?;
-            
+
         let is_valid = stripe_client.verify_payment(payment_id).await
             .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid payment".to_string()))?;
-            
+
         if !is_valid {
             return Err((StatusCode::BAD_REQUEST, "Payment verification failed".to_string()));
         }
         */
     }
-    
+
     // Add credits to the account
     let mut datastore = state.lock().await;
     if let Some(mut account) = datastore.account_state.get_account(&user_id) {
         // Add credits
         account.add_credits(request.amount);
-        
+
         // Update account in datastore
-        let op = datastore.account_state.update_account_local(account.clone());
+        let op = datastore
+            .account_state
+            .update_account_local(account.clone());
         datastore.account_state.account_op(op);
-        
+
         // Return success response
         (
-            StatusCode::OK, 
+            StatusCode::OK,
             Json(json!({
                 "success": true,
                 "credits_added": request.amount,
                 "total_credits": account.available_credits()
-            }))
+            })),
         )
     } else {
         (
-            StatusCode::NOT_FOUND, 
+            StatusCode::NOT_FOUND,
             Json(json!({
                 "success": false,
                 "error": "Account not found"
-            }))
+            })),
         )
     }
 }
@@ -302,22 +307,22 @@ pub async fn verify_subscription(
     req: Json<ApiVerifySubscription>,
 ) -> impl IntoResponse {
     let account_id = req.0.account_id;
-    
+
     // Get account from datastore
     let datastore = state.lock().await;
     let account = match datastore.account_state.get_account(&account_id) {
         Some(account) => account,
         None => {
             return (
-                StatusCode::NOT_FOUND, 
+                StatusCode::NOT_FOUND,
                 Json(json!({
                     "success": false,
                     "error": "Account not found"
-                }))
+                })),
             );
         }
     };
-    
+
     // Return the current subscription status
     (
         StatusCode::OK,
@@ -326,7 +331,7 @@ pub async fn verify_subscription(
             "subscription": account.subscription,
             "tier": account.subscription.as_ref().map(|s| s.tier).unwrap_or_default(),
             "credits": account.available_credits()
-        }))
+        })),
     )
 }
 
@@ -338,15 +343,15 @@ pub async fn stripe_webhook(
 ) -> impl IntoResponse {
     // In the new architecture, webhook handling happens in the frontend
     // This endpoint just receives the final processed data
-    
+
     // For now just return a success response
     (
-        StatusCode::OK, 
+        StatusCode::OK,
         Json(json!({
             "success": true,
             "received": true,
             "message": "Webhook processing should be done in frontend"
-        }))
+        })),
     )
 }
 
@@ -355,8 +360,11 @@ pub async fn process_stripe_checkout_session(
     State(state): State<Arc<Mutex<DataStore>>>,
     Json(request): Json<ApiProcessStripeCheckoutSession>,
 ) -> impl IntoResponse {
-    log::info!("Processing checkout session data for account {}", request.account_id);
-    
+    log::info!(
+        "Processing checkout session data for account {}",
+        request.account_id
+    );
+
     // Get the account from the datastore
     let mut datastore = state.lock().await;
     let mut account = match datastore.account_state.get_account(&request.account_id) {
@@ -368,19 +376,21 @@ pub async fn process_stripe_checkout_session(
                 Json(json!({
                     "success": false,
                     "error": "Account not found"
-                }))
+                })),
             );
         }
     };
-    
+
     // In the new architecture, checkout processing happens in the frontend
     // This endpoint just receives the processed data
-    
+
     // Example update for subscription
     if let Some(subscription_info) = request.subscription_info {
         account.subscription = Some(subscription_info);
-        
-        let op = datastore.account_state.update_account_local(account.clone());
+
+        let op = datastore
+            .account_state
+            .update_account_local(account.clone());
         if let Err(err) = datastore.handle_account_op(op).await {
             log::error!("Failed to update account: {}", err);
             return (
@@ -388,24 +398,26 @@ pub async fn process_stripe_checkout_session(
                 Json(json!({
                     "success": false,
                     "error": "Failed to update account"
-                }))
+                })),
             );
         }
-        
+
         return (
             StatusCode::OK,
             Json(json!({
                 "success": true,
                 "message": "Subscription updated"
-            }))
+            })),
         );
     }
-    
+
     // Example update for credits
     if let Some(credits) = request.credits_added {
         account.add_credits(credits);
-        
-        let op = datastore.account_state.update_account_local(account.clone());
+
+        let op = datastore
+            .account_state
+            .update_account_local(account.clone());
         if let Err(err) = datastore.handle_account_op(op).await {
             log::error!("Failed to update account: {}", err);
             return (
@@ -413,26 +425,26 @@ pub async fn process_stripe_checkout_session(
                 Json(json!({
                     "success": false,
                     "error": "Failed to update account"
-                }))
+                })),
             );
         }
-        
+
         return (
             StatusCode::OK,
             Json(json!({
                 "success": true,
                 "credits_added": credits,
                 "total_credits": account.available_credits()
-            }))
+            })),
         );
     }
-    
+
     // If neither subscription nor credits were provided
     (
         StatusCode::BAD_REQUEST,
         Json(json!({
             "success": false,
             "error": "No subscription or credits data provided"
-        }))
+        })),
     )
-} 
+}

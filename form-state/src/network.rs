@@ -1,16 +1,19 @@
-use std::{net::{IpAddr, SocketAddr}, time::{Duration, SystemTime}};
+use crate::Actor;
 use crdts::{bft_reg::Update, map::Op, merkle_reg::Sha3Hash, BFTReg, CmRDT, Map};
+use form_dns::store::FormDnsRecord;
+use hex;
 use ipnet::IpNet;
 use k256::ecdsa::SigningKey;
+use serde::{Deserialize, Serialize};
 use shared::{Association, AssociationContents, Cidr, CidrContents, Endpoint, Peer, PeerContents};
-use serde::{Serialize, Deserialize};
+use std::{
+    net::{IpAddr, SocketAddr},
+    time::{Duration, SystemTime},
+};
 use tiny_keccak::{Hasher, Sha3};
 use trust_dns_proto::rr::RecordType;
-use form_dns::store::FormDnsRecord;
-use crate::Actor;
-use hex;
 
-pub type PeerOp<T> = Op<String, BFTReg<CrdtPeer<T>, Actor>, Actor>; 
+pub type PeerOp<T> = Op<String, BFTReg<CrdtPeer<T>, Actor>, Actor>;
 pub type CidrOp<T> = Op<String, BFTReg<CrdtCidr<T>, Actor>, Actor>;
 pub type AssocOp<T> = Op<String, BFTReg<CrdtAssociation<T>, Actor>, Actor>;
 pub type DnsOp = Op<String, BFTReg<CrdtDnsRecord, Actor>, Actor>;
@@ -20,7 +23,7 @@ pub struct CrdtPeer<T: Clone> {
     pub(crate) id: String,
     pub(crate) name: String,
     pub(crate) ip: IpAddr,
-    pub(crate) cidr_id: T, 
+    pub(crate) cidr_id: T,
     pub(crate) public_key: String,
     pub(crate) endpoint: Option<Endpoint>,
     pub(crate) keepalive: Option<u16>,
@@ -50,9 +53,10 @@ impl From<PeerContents<String>> for CrdtPeer<String> {
             is_admin: value.is_admin,
             is_disabled: value.is_disabled,
             is_redeemed: value.is_redeemed,
-            invite_expires: value.invite_expires
-            .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
-            .map(|t| t.as_secs()),
+            invite_expires: value
+                .invite_expires
+                .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+                .map(|t| t.as_secs()),
             candidates: value.candidates,
         }
     }
@@ -60,7 +64,7 @@ impl From<PeerContents<String>> for CrdtPeer<String> {
 
 impl From<CrdtPeer<String>> for Peer<String> {
     fn from(value: CrdtPeer<String>) -> Self {
-        Peer{
+        Peer {
             id: value.id,
             contents: PeerContents {
                 name: value.name.into(),
@@ -72,10 +76,11 @@ impl From<CrdtPeer<String>> for Peer<String> {
                 is_admin: value.is_admin,
                 is_disabled: value.is_disabled,
                 is_redeemed: value.is_redeemed,
-                invite_expires: value.invite_expires.map(|time| {
-                SystemTime::UNIX_EPOCH + Duration::from_secs(time)}),
-                candidates: value.candidates
-            } 
+                invite_expires: value
+                    .invite_expires
+                    .map(|time| SystemTime::UNIX_EPOCH + Duration::from_secs(time)),
+                candidates: value.candidates,
+            },
         }
     }
 }
@@ -88,7 +93,7 @@ impl From<CrdtCidr<String>> for Cidr<String> {
                 name: value.name.clone(),
                 cidr: value.cidr,
                 parent: value.parent.clone(),
-            }
+            },
         }
     }
 }
@@ -99,8 +104,8 @@ impl From<CrdtAssociation<String>> for Association<String, (String, String)> {
             id: value.id,
             contents: AssociationContents {
                 cidr_id_1: value.cidr_1,
-                cidr_id_2: value.cidr_2
-            }
+                cidr_id_2: value.cidr_2,
+            },
         }
     }
 }
@@ -140,7 +145,7 @@ pub struct CrdtCidr<T: Clone> {
     pub(crate) id: String,
     pub(crate) name: String,
     pub(crate) cidr: IpNet,
-    pub(crate) parent: Option<T>
+    pub(crate) parent: Option<T>,
 }
 
 impl Sha3Hash for CrdtCidr<String> {
@@ -149,12 +154,11 @@ impl Sha3Hash for CrdtCidr<String> {
     }
 }
 
-
 impl<T: Clone> CrdtCidr<T> {
     pub fn id(&self) -> String {
         self.id.clone()
     }
-    
+
     pub fn name(&self) -> String {
         self.name.clone()
     }
@@ -169,22 +173,21 @@ impl<T: Clone> CrdtCidr<T> {
 }
 
 impl From<CidrContents<String>> for CrdtCidr<String> {
-    fn from(value: CidrContents<String>) -> Self { 
+    fn from(value: CidrContents<String>) -> Self {
         Self {
-            id:  value.name.clone(),
+            id: value.name.clone(),
             name: value.name,
             cidr: value.cidr,
             parent: value.parent,
         }
     }
-
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct CrdtAssociation<T: Clone> {
     pub(crate) id: (T, T),
     pub(crate) cidr_1: T,
-    pub(crate) cidr_2: T 
+    pub(crate) cidr_2: T,
 }
 
 impl Sha3Hash for CrdtAssociation<String> {
@@ -192,7 +195,6 @@ impl Sha3Hash for CrdtAssociation<String> {
         hasher.update(&serde_json::to_vec(self).unwrap())
     }
 }
-
 
 impl<T: Clone> CrdtAssociation<T> {
     pub fn id(&self) -> (T, T) {
@@ -213,7 +215,7 @@ impl From<AssociationContents<String>> for CrdtAssociation<String> {
         Self {
             id: (value.cidr_id_1.clone(), value.cidr_id_2.clone()),
             cidr_1: value.cidr_id_1,
-            cidr_2: value.cidr_id_2
+            cidr_2: value.cidr_id_2,
         }
     }
 }
@@ -257,51 +259,50 @@ impl CrdtDnsRecord {
     pub fn ssl_cert(&self) -> bool {
         self.ssl_cert
     }
-
 }
 
 impl From<FormDnsRecord> for CrdtDnsRecord {
     fn from(value: FormDnsRecord) -> Self {
-        CrdtDnsRecord { 
-            domain: value.domain, 
-            record_type: value.record_type, 
-            formnet_ip: value.formnet_ip, 
-            public_ip: value.public_ip, 
-            cname_target: value.cname_target, 
+        CrdtDnsRecord {
+            domain: value.domain,
+            record_type: value.record_type,
+            formnet_ip: value.formnet_ip,
+            public_ip: value.public_ip,
+            cname_target: value.cname_target,
             ttl: value.ttl,
-            ssl_cert: value.ssl_cert
+            ssl_cert: value.ssl_cert,
         }
     }
 }
 
 impl From<CrdtDnsRecord> for FormDnsRecord {
     fn from(value: CrdtDnsRecord) -> Self {
-        FormDnsRecord { 
-            domain: value.domain, 
-            record_type: value.record_type, 
-            formnet_ip: value.formnet_ip, 
-            public_ip: value.public_ip, 
-            cname_target: value.cname_target, 
+        FormDnsRecord {
+            domain: value.domain,
+            record_type: value.record_type,
+            formnet_ip: value.formnet_ip,
+            public_ip: value.public_ip,
+            cname_target: value.cname_target,
             ttl: value.ttl,
             ssl_cert: value.ssl_cert,
             verification_status: None,
-            verification_timestamp: None
+            verification_timestamp: None,
         }
     }
 }
 
 impl From<&CrdtDnsRecord> for FormDnsRecord {
     fn from(value: &CrdtDnsRecord) -> Self {
-        FormDnsRecord { 
-            domain: value.domain.clone(), 
-            record_type: value.record_type, 
-            formnet_ip: value.formnet_ip.clone(), 
-            public_ip: value.public_ip.clone(), 
-            cname_target: value.cname_target.clone(), 
+        FormDnsRecord {
+            domain: value.domain.clone(),
+            record_type: value.record_type,
+            formnet_ip: value.formnet_ip.clone(),
+            public_ip: value.public_ip.clone(),
+            cname_target: value.cname_target.clone(),
             ttl: value.ttl,
             ssl_cert: value.ssl_cert,
             verification_status: None,
-            verification_timestamp: None
+            verification_timestamp: None,
         }
     }
 }
@@ -314,7 +315,7 @@ impl Sha3Hash for CrdtDnsRecord {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DnsState {
-    pub zones: Map<String, BFTReg<CrdtDnsRecord, Actor>, Actor>
+    pub zones: Map<String, BFTReg<CrdtDnsRecord, Actor>, Actor>,
 }
 
 impl Default for DnsState {
@@ -325,9 +326,7 @@ impl Default for DnsState {
 
 impl DnsState {
     pub fn new() -> Self {
-        Self {
-            zones: Map::new()
-        }
+        Self { zones: Map::new() }
     }
 
     pub fn apply(&mut self, op: DnsOp) {
@@ -342,7 +341,7 @@ pub struct NetworkState {
     pub peers: Map<String, BFTReg<CrdtPeer<String>, Actor>, Actor>,
     pub cidrs: Map<String, BFTReg<CrdtCidr<String>, Actor>, Actor>,
     pub associations: Map<String, BFTReg<CrdtAssociation<String>, Actor>, Actor>,
-    pub dns_state: DnsState
+    pub dns_state: DnsState,
 }
 
 #[allow(dead_code, unused)]
@@ -359,7 +358,7 @@ impl NetworkState {
             peers: peer_map,
             cidrs: cidr_map,
             associations: associations_map,
-            dns_state: dns_map 
+            dns_state: dns_map,
         }
     }
 
@@ -369,13 +368,16 @@ impl NetworkState {
         log::info!("Decoding our private key...");
         let signing_key = SigningKey::from_slice(
             &hex::decode(self.pk.clone())
-                .expect("PANIC: Invalid SigningKey Cannot Decode from Hex"))
-                .expect("PANIC: Invalid SigningKey cannot recover ffrom Bytes");
+                .expect("PANIC: Invalid SigningKey Cannot Decode from Hex"),
+        )
+        .expect("PANIC: Invalid SigningKey cannot recover ffrom Bytes");
         log::info!("Creating op...");
-        let op = self.peers.update(peer.name.to_string(), add_ctx, |reg, ctx| {
-            
-            reg.update(peer.into(), self.node_id.clone(), signing_key).expect("PANIC: Unable to sign updates")
-        });
+        let op = self
+            .peers
+            .update(peer.name.to_string(), add_ctx, |reg, ctx| {
+                reg.update(peer.into(), self.node_id.clone(), signing_key)
+                    .expect("PANIC: Unable to sign updates")
+            });
         log::info!("Op created, returning...");
         op
     }
@@ -387,83 +389,100 @@ impl NetworkState {
         self.peers.rm(id, rm_ctx)
     }
 
-    pub fn update_cidr_local(&mut self, cidr: CidrContents<String>) ->  CidrOp<String> { 
+    pub fn update_cidr_local(&mut self, cidr: CidrContents<String>) -> CidrOp<String> {
         log::info!("Acquiring add ctx...");
         let add_ctx = self.cidrs.read_ctx().derive_add_ctx(self.node_id.clone());
         log::info!("Decoding our private key...");
         let signing_key = SigningKey::from_slice(
             &hex::decode(self.pk.clone())
-                .expect("PANIC: Invalid SigningKey Cannot Decode from Hex"))
-                .expect("PANIC: Invalid SigningKey cannot recover ffrom Bytes");
+                .expect("PANIC: Invalid SigningKey Cannot Decode from Hex"),
+        )
+        .expect("PANIC: Invalid SigningKey cannot recover ffrom Bytes");
         log::info!("Creating op...");
-        let op = self.cidrs.update(cidr.name.to_string(), add_ctx, |reg, ctx| {
-            
-            reg.update(cidr.into(), self.node_id.clone(), signing_key).expect("PANIC: Unable to sign updates")
-        });
+        let op = self
+            .cidrs
+            .update(cidr.name.to_string(), add_ctx, |reg, ctx| {
+                reg.update(cidr.into(), self.node_id.clone(), signing_key)
+                    .expect("PANIC: Unable to sign updates")
+            });
         log::info!("Op created, returning...");
         op
     }
 
-    pub fn remove_cidr_local(&mut self, id: String) -> CidrOp<String> { 
+    pub fn remove_cidr_local(&mut self, id: String) -> CidrOp<String> {
         let rm_ctx = self.cidrs.read_ctx().derive_rm_ctx();
         self.cidrs.rm(id, rm_ctx)
     }
 
-    pub fn update_association_local(&mut self, association: AssociationContents<String>) -> AssocOp<String> { 
+    pub fn update_association_local(
+        &mut self,
+        association: AssociationContents<String>,
+    ) -> AssocOp<String> {
         log::info!("Acquiring add ctx...");
-        let add_ctx = self.associations.read_ctx().derive_add_ctx(self.node_id.clone());
+        let add_ctx = self
+            .associations
+            .read_ctx()
+            .derive_add_ctx(self.node_id.clone());
         log::info!("Decoding our private key...");
         let signing_key = SigningKey::from_slice(
             &hex::decode(self.pk.clone())
-                .expect("PANIC: Invalid SigningKey Cannot Decode from Hex"))
-                .expect("PANIC: Invalid SigningKey cannot recover ffrom Bytes");
+                .expect("PANIC: Invalid SigningKey Cannot Decode from Hex"),
+        )
+        .expect("PANIC: Invalid SigningKey cannot recover ffrom Bytes");
         log::info!("Creating op...");
-        let op = self.associations.update(format!("{}-{}",association.cidr_id_1, association.cidr_id_2), add_ctx, |reg, ctx| {
-            
-            reg.update(association.into(), self.node_id.clone(), signing_key).expect("PANIC: Unable to sign updates")
-        });
+        let op = self.associations.update(
+            format!("{}-{}", association.cidr_id_1, association.cidr_id_2),
+            add_ctx,
+            |reg, ctx| {
+                reg.update(association.into(), self.node_id.clone(), signing_key)
+                    .expect("PANIC: Unable to sign updates")
+            },
+        );
         log::info!("Op created, returning...");
         op
     }
 
-    pub fn remove_association_local(&mut self, id: (String, String)) -> AssocOp<String> { 
+    pub fn remove_association_local(&mut self, id: (String, String)) -> AssocOp<String> {
         let rm_ctx = self.associations.read_ctx().derive_rm_ctx();
         let id = format!("{}-{}", id.0, id.1);
         self.associations.rm(id, rm_ctx)
     }
-
 
     pub fn peer_op(&mut self, op: PeerOp<String>) -> Option<(String, String)> {
         log::info!("Applying peer op");
         self.peers.apply(op.clone());
         match op {
             Op::Up { dot, key, op } => Some((dot.actor, key)),
-            Op::Rm { clock, keyset } => None
+            Op::Rm { clock, keyset } => None,
         }
     }
 
-    pub fn peer_op_success(&self, key: String, update: Update<CrdtPeer<String>, String>) -> (bool, CrdtPeer<String>) {
+    pub fn peer_op_success(
+        &self,
+        key: String,
+        update: Update<CrdtPeer<String>, String>,
+    ) -> (bool, CrdtPeer<String>) {
         if let Some(reg) = self.peers.get(&key).val {
             if let Some(v) = reg.val() {
                 // If the in the updated register equals the value in the Op it
                 // succeeded
                 if v.value() == update.op().value {
-                    (true, v.value()) 
+                    (true, v.value())
                 // Otherwise, it could be that it's a concurrent update and was added
                 // to the DAG as a head
                 } else if reg.dag_contains(&update.hash()) && reg.is_head(&update.hash()) {
-                    return (true, v.value()) 
+                    return (true, v.value());
                 // Otherwise, we could be missing a child, and this particular update
                 // is orphaned, if so we should requst the child we are missing from
                 // the actor who shared this update
                 } else if reg.is_orphaned(&update.hash()) {
-                    return (true, v.value())
+                    return (true, v.value());
                 // Otherwise it was a no-op for some reason
                 } else {
-                    return (false, v.value()) 
+                    return (false, v.value());
                 }
             } else {
-                (false, update.op().value) 
+                (false, update.op().value)
             }
         } else {
             (false, update.op().value)
@@ -471,16 +490,12 @@ impl NetworkState {
     }
 
     pub fn get_peer_by_ip(&self, ip: String) -> Option<CrdtPeer<String>> {
-        if let Some(ctx) = self.peers.values().find(|ctx| {
-            match ctx.val.val() {
-                None => false,
-                Some(node) => {
-                    node.value().ip().to_string() == ip
-                }
-            }
+        if let Some(ctx) = self.peers.values().find(|ctx| match ctx.val.val() {
+            None => false,
+            Some(node) => node.value().ip().to_string() == ip,
         }) {
             if let Some(node) = ctx.val.val() {
-                return Some(node.value())
+                return Some(node.value());
             }
         }
 
@@ -491,28 +506,32 @@ impl NetworkState {
         self.cidrs.apply(op);
     }
 
-    pub fn cidr_op_success(&self, key: String, update: Update<CrdtCidr<String>, String>) -> (bool, CrdtCidr<String>) {
+    pub fn cidr_op_success(
+        &self,
+        key: String,
+        update: Update<CrdtCidr<String>, String>,
+    ) -> (bool, CrdtCidr<String>) {
         if let Some(reg) = self.cidrs.get(&key).val {
             if let Some(v) = reg.val() {
                 // If the in the updated register equals the value in the Op it
                 // succeeded
                 if v.value() == update.op().value {
-                    (true, v.value()) 
+                    (true, v.value())
                 // Otherwise, it could be that it's a concurrent update and was added
                 // to the DAG as a head
                 } else if reg.dag_contains(&update.hash()) && reg.is_head(&update.hash()) {
-                    return (true, v.value()) 
+                    return (true, v.value());
                 // Otherwise, we could be missing a child, and this particular update
                 // is orphaned, if so we should requst the child we are missing from
                 // the actor who shared this update
                 } else if reg.is_orphaned(&update.hash()) {
-                    return (true, v.value())
+                    return (true, v.value());
                 // Otherwise it was a no-op for some reason
                 } else {
-                    return (false, v.value()) 
+                    return (false, v.value());
                 }
             } else {
-                (false, update.op().value) 
+                (false, update.op().value)
             }
         } else {
             (false, update.op().value)
@@ -523,52 +542,64 @@ impl NetworkState {
         self.associations.apply(op);
     }
 
-    pub fn associations_op_success(&self, key: String, update: Update<CrdtAssociation<String>, String>) -> (bool, CrdtAssociation<String>) {
+    pub fn associations_op_success(
+        &self,
+        key: String,
+        update: Update<CrdtAssociation<String>, String>,
+    ) -> (bool, CrdtAssociation<String>) {
         if let Some(reg) = self.associations.get(&key).val {
             if let Some(v) = reg.val() {
                 // If the in the updated register equals the value in the Op it
                 // succeeded
                 if v.value() == update.op().value {
-                    (true, v.value()) 
+                    (true, v.value())
                 // Otherwise, it could be that it's a concurrent update and was added
                 // to the DAG as a head
                 } else if reg.dag_contains(&update.hash()) && reg.is_head(&update.hash()) {
-                    return (true, v.value()) 
+                    return (true, v.value());
                 // Otherwise, we could be missing a child, and this particular update
                 // is orphaned, if so we should requst the child we are missing from
                 // the actor who shared this update
                 } else if reg.is_orphaned(&update.hash()) {
-                    return (true, v.value())
+                    return (true, v.value());
                 // Otherwise it was a no-op for some reason
                 } else {
-                    return (false, v.value()) 
+                    return (false, v.value());
                 }
             } else {
-                (false, update.op().value) 
+                (false, update.op().value)
             }
         } else {
             (false, update.op().value)
         }
     }
 
-    pub fn update_dns_local(&mut self, dns: FormDnsRecord) -> DnsOp { 
+    pub fn update_dns_local(&mut self, dns: FormDnsRecord) -> DnsOp {
         log::info!("Acquiring add ctx...");
-        let add_ctx = self.dns_state.zones.read_ctx().derive_add_ctx(self.node_id.clone());
+        let add_ctx = self
+            .dns_state
+            .zones
+            .read_ctx()
+            .derive_add_ctx(self.node_id.clone());
         log::info!("Decoding our private key...");
         let signing_key = SigningKey::from_slice(
             &hex::decode(self.pk.clone())
-                .expect("PANIC: Invalid SigningKey Cannot Decode from Hex"))
-                .expect("PANIC: Invalid SigningKey cannot recover ffrom Bytes");
+                .expect("PANIC: Invalid SigningKey Cannot Decode from Hex"),
+        )
+        .expect("PANIC: Invalid SigningKey cannot recover ffrom Bytes");
         log::info!("Creating op...");
-        let op = self.dns_state.zones.update(dns.domain.clone(), add_ctx, |reg, ctx| {
-            
-            reg.update(dns.into(), self.node_id.clone(), signing_key).expect("PANIC: Unable to sign updates")
-        });
+        let op = self
+            .dns_state
+            .zones
+            .update(dns.domain.clone(), add_ctx, |reg, ctx| {
+                reg.update(dns.into(), self.node_id.clone(), signing_key)
+                    .expect("PANIC: Unable to sign updates")
+            });
         log::info!("Op created, returning...");
         op
     }
 
-    pub fn remove_dns_local(&mut self, domain: String) -> DnsOp { 
+    pub fn remove_dns_local(&mut self, domain: String) -> DnsOp {
         log::info!("Acquiring remove context...");
         let rm_ctx = self.dns_state.zones.read_ctx().derive_rm_ctx();
         log::info!("Building Rm Op...");
@@ -579,28 +610,32 @@ impl NetworkState {
         self.dns_state.apply(op);
     }
 
-    pub fn dns_op_success(&self, domain: String, update: Update<CrdtDnsRecord, String>) -> (bool, CrdtDnsRecord) {
+    pub fn dns_op_success(
+        &self,
+        domain: String,
+        update: Update<CrdtDnsRecord, String>,
+    ) -> (bool, CrdtDnsRecord) {
         if let Some(reg) = self.dns_state.zones.get(&domain).val {
             if let Some(v) = reg.val() {
                 // If the in the updated register equals the value in the Op it
                 // succeeded
                 if v.value() == update.op().value {
-                    (true, v.value()) 
+                    (true, v.value())
                 // Otherwise, it could be that it's a concurrent update and was added
                 // to the DAG as a head
                 } else if reg.dag_contains(&update.hash()) && reg.is_head(&update.hash()) {
-                    return (true, v.value()) 
+                    return (true, v.value());
                 // Otherwise, we could be missing a child, and this particular update
                 // is orphaned, if so we should requst the child we are missing from
                 // the actor who shared this update
                 } else if reg.is_orphaned(&update.hash()) {
-                    return (true, v.value())
+                    return (true, v.value());
                 // Otherwise it was a no-op for some reason
                 } else {
-                    return (false, v.value()) 
+                    return (false, v.value());
                 }
             } else {
-                (false, update.op().value) 
+                (false, update.op().value)
             }
         } else {
             (false, update.op().value)
@@ -638,17 +673,18 @@ impl NetworkState {
             // Get the peer value if available
             if let Some(peer_val) = item.val.1.val() {
                 let peer = peer_val.value();
-                
+
                 // Check if this peer is an admin and if its address matches
                 if peer.is_admin() {
                     // Match against the peer's public key (assumed to be an address)
                     if peer.id().to_lowercase() == address.to_lowercase() {
                         return true;
                     }
-                    
+
                     // Also check the IP address as hex if this is a hex string (Ethereum address)
                     // This is a temporary solution for compatibility
-                    if let Ok(peer_addr_bytes) = hex::decode(peer.ip().to_string().replace(".", "")) {
+                    if let Ok(peer_addr_bytes) = hex::decode(peer.ip().to_string().replace(".", ""))
+                    {
                         let peer_addr_hex = hex::encode(peer_addr_bytes);
                         if peer_addr_hex.to_lowercase() == address.to_lowercase() {
                             return true;
@@ -657,7 +693,7 @@ impl NetworkState {
                 }
             }
         }
-        
+
         false
     }
 }
@@ -665,12 +701,12 @@ impl NetworkState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shared::{PeerContents, Hostname};
-    use std::str::FromStr;
-    use std::net::IpAddr;
-    use k256::ecdsa::SigningKey;
     use alloy_primitives::Address;
     use hex;
+    use k256::ecdsa::SigningKey;
+    use shared::{Hostname, PeerContents};
+    use std::net::IpAddr;
+    use std::str::FromStr;
 
     #[test]
     fn test_insert_peer() -> Result<(), Box<dyn std::error::Error>> {

@@ -1,6 +1,6 @@
 use axum::{
-    routing::{get, post, delete},
-    Json, Router, http::StatusCode, response::IntoResponse, extract::Path,
+    routing::{post},
+    Json, Router, response::IntoResponse, extract::Path,
     response::sse::{Event, Sse},
     response::Response,
 };
@@ -10,6 +10,8 @@ use uuid::Uuid;
 use serde_json;
 use tokio_stream::wrappers::ReceiverStream;
 use futures::stream::StreamExt;
+
+use crate::auth::auth_middleware;
 
 // Dummy types
 #[derive(Debug, Serialize, Deserialize)]
@@ -123,12 +125,13 @@ lazy_static::lazy_static! {
 
 pub fn router() -> Router {
     Router::new()
-        .route("/chat/completions", get(list_chat_completions))
+        // .route("/chat/completions", get(list_chat_completions))
         .route("/chat/completions", post(create_chat_completion))
         .route("/forwarded/chat/completions", post(handle_forwarded_chat_completion))
-        .route("/chat/completions/:completion_id", get(get_chat_completion))
-        .route("/chat/completions/:completion_id", post(update_chat_completion))
-        .route("/chat/completions/:completion_id", delete(delete_chat_completion))
+        .layer(axum::middleware::from_fn(auth_middleware))
+        // .route("/chat/completions/:completion_id", get(get_chat_completion))
+        // .route("/chat/completions/:completion_id", post(update_chat_completion))
+        // .route("/chat/completions/:completion_id", delete(delete_chat_completion))
 }
 
 // Helper function to extract address from the response
@@ -203,7 +206,7 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwar
         .filter(|msg| msg.role == "user")
         .next_back()
         .map(|msg| msg.content.clone())
-        .unwrap_or_else(|| "Hello".to_string());
+        .unwrap_or_else(|| "".to_string());
 
     // Get sampling parameters
     let max_new_tokens = request.max_tokens.unwrap_or(100);
@@ -218,7 +221,7 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwar
         Ok(response) => {
             if !response.status().is_success() {
                 return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({
                         "success": false,
                         "error": format!("Form-state API returned status: {}", response.status())
@@ -230,7 +233,7 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwar
                 Ok(node_response) => {
                     if !node_response.success {
                         return (
-                            StatusCode::SERVICE_UNAVAILABLE,
+                            axum::http::StatusCode::SERVICE_UNAVAILABLE,
                             Json(serde_json::json!({
                                 "success": false,
                                 "error": "No nodes available for this model"
@@ -243,7 +246,7 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwar
                         Some(addr) => addr,
                         None => {
                             return (
-                                StatusCode::INTERNAL_SERVER_ERROR,
+                                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                                 Json(serde_json::json!({
                                     "success": false,
                                     "error": "Invalid node address format"
@@ -256,7 +259,7 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwar
                     if let Some(from) = forwarded_from {
                         if node_address != "localhost" {
                             return (
-                                StatusCode::SERVICE_UNAVAILABLE,
+                                axum::http::StatusCode::SERVICE_UNAVAILABLE,
                                 Json(serde_json::json!({
                                     "success": false,
                                     "error": format!("Model not available on this node (forwarded from {})", from)
@@ -294,7 +297,7 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwar
                         Ok(inference_response) => {
                             if !inference_response.status().is_success() {
                                 return (
-                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                                     Json(serde_json::json!({
                                         "success": false,
                                         "error": format!("Model inference failed with status: {} (URL: {})", inference_response.status(), inference_url)
@@ -413,7 +416,7 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwar
                         }
                         Err(e) => {
                             (
-                                StatusCode::INTERNAL_SERVER_ERROR,
+                                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                                 Json(serde_json::json!({
                                     "success": false,
                                     "error": format!("Failed to make inference request to {}: {}", inference_url, e)
@@ -424,7 +427,7 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwar
                 }
                 Err(e) => {
                     (
-                        StatusCode::INTERNAL_SERVER_ERROR,
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                         Json(serde_json::json!({
                             "success": false,
                             "error": format!("Failed to parse form-state response: {}", e)
@@ -435,7 +438,7 @@ async fn handle_streaming_chat_completion(request: ChatCompletionRequest, forwar
         }
         Err(e) => {
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({
                     "success": false,
                     "error": format!("Failed to fetch model node from form-state: {}", e)
@@ -506,7 +509,7 @@ async fn forward_streaming_request_to_node(request: ChatCompletionRequest, targe
                         match serde_json::from_str::<serde_json::Value>(&error_text) {
                             Ok(json) => Json(json).into_response(),
                             Err(_) => (
-                                StatusCode::INTERNAL_SERVER_ERROR,
+                                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                                 Json(serde_json::json!({
                                     "success": false,
                                     "error": format!("Forwarded error: {}", error_text)
@@ -516,7 +519,7 @@ async fn forward_streaming_request_to_node(request: ChatCompletionRequest, targe
                     }
                     Err(e) => {
                         (
-                            StatusCode::INTERNAL_SERVER_ERROR,
+                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                             Json(serde_json::json!({
                                 "success": false,
                                 "error": format!("Failed to read forwarded error response: {}", e)
@@ -528,7 +531,7 @@ async fn forward_streaming_request_to_node(request: ChatCompletionRequest, targe
         }
         Err(e) => {
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({
                     "success": false,
                     "error": format!("Failed to forward streaming request to {}: {}", target_node, e)

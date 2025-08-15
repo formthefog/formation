@@ -10,10 +10,10 @@ use axum::{routing::get, Router};
 pub fn api_router() -> Router {
     Router::new()
         .merge(root_router())
-        .merge(assistants::router())
-        .merge(audio::router())
+        // .merge(assistants::router())
+        // .merge(audio::router())
         .merge(chat::router())
-        .merge(embeddings::router())
+        // .merge(embeddings::router())
         .merge(models::router())
 }
 

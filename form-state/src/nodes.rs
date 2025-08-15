@@ -235,9 +235,7 @@ impl NodeState {
         let op = self
             .map
             .update(node.node_id().to_string(), add_ctx, |reg, _ctx| {
-                
-                reg
-                    .update(node, self.node_id.clone(), signing_key)
+                reg.update(node, self.node_id.clone(), signing_key)
                     .expect("Unable to sign node update")
             });
         log::info!("Node op created, returning...");

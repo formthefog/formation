@@ -1,5 +1,6 @@
 use crate::auth::AuthenticationContext;
-use crate::datastore::DataStore;
+use crate::datastore::{DataStore, ModelRequest, DB_HANDLE};
+use crate::db::write_datastore;
 use crate::model::{AIModel, ModelId};
 use crate::nodes::NodeId;
 use axum::{
@@ -11,9 +12,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 // Round robin counter for load balancing
 static ROUND_ROBIN_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -59,7 +60,7 @@ pub async fn create_model(
                 model.owner_id = model.owner_id.clone();
 
                 let op = datastore.model_state.update_model_local(model.clone());
-                if let Err(e) = datastore.handle_model_op(op).await {
+                if let Err(e) = datastore.handle_model_op(op.clone()).await {
                     return (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(json!({
@@ -67,6 +68,43 @@ pub async fn create_model(
                             "access_level": "admin"
                         })),
                     );
+                }
+
+                // Validate that we're only forwarding Op::Up operations to update endpoints
+                match &op {
+                    crdts::map::Op::Rm { .. } => {
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(json!({
+                                "error": "Model create operation generated Op::Rm instead of Op::Up",
+                                "access_level": "admin"
+                            })),
+                        );
+                    }
+                    crdts::map::Op::Up { .. } => {
+                        // This is the expected case - continue with broadcasting
+                    }
+                }
+
+                // Broadcast the model operation
+                let request = ModelRequest::Op(op);
+                match datastore
+                    .broadcast::<serde_json::Value>(request, "v1/model/create")
+                    .await
+                {
+                    Ok(()) => {
+                        let _ = write_datastore(&DB_HANDLE, &datastore.clone());
+                        return (
+                            StatusCode::CREATED,
+                            Json(json!({
+                                "status": "success",
+                                "model": model,
+                                "access_level": "admin",
+                                "created_by": auth_context.description()
+                            })),
+                        );
+                    }
+                    Err(e) => eprintln!("Error broadcasting Model Create Request: {e}"),
                 }
 
                 return (
@@ -94,7 +132,7 @@ pub async fn create_model(
                     );
 
                     let op = datastore.model_state.update_model_local(model.clone());
-                    if let Err(e) = datastore.handle_model_op(op).await {
+                    if let Err(e) = datastore.handle_model_op(op.clone()).await {
                         return (
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(json!({
@@ -102,6 +140,42 @@ pub async fn create_model(
                                 "access_level": "user"
                             })),
                         );
+                    }
+
+                    // Validate that we're only forwarding Op::Up operations to update endpoints
+                    match &op {
+                        crdts::map::Op::Rm { .. } => {
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(json!({
+                                    "error": "Model create operation generated Op::Rm instead of Op::Up",
+                                    "access_level": "user"
+                                })),
+                            );
+                        }
+                        crdts::map::Op::Up { .. } => {
+                            // This is the expected case - continue with broadcasting
+                        }
+                    }
+
+                    // Broadcast the model operation
+                    let request = ModelRequest::Op(op);
+                    match datastore
+                        .broadcast::<serde_json::Value>(request, "v1/model/create")
+                        .await
+                    {
+                        Ok(()) => {
+                            let _ = write_datastore(&DB_HANDLE, &datastore.clone());
+                            return (
+                                StatusCode::CREATED,
+                                Json(json!({
+                                    "status": "success",
+                                    "model": model,
+                                    "access_level": "user"
+                                })),
+                            );
+                        }
+                        Err(e) => eprintln!("Error broadcasting Model Create Request: {e}"),
                     }
 
                     (
@@ -166,7 +240,7 @@ pub async fn update_model(
                     );
 
                     let op = datastore.model_state.update_model_local(model.clone());
-                    if let Err(e) = datastore.handle_model_op(op).await {
+                    if let Err(e) = datastore.handle_model_op(op.clone()).await {
                         return (
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(json!({
@@ -174,6 +248,43 @@ pub async fn update_model(
                                 "access_level": "admin"
                             })),
                         );
+                    }
+
+                    // Validate that we're only forwarding Op::Up operations to update endpoints
+                    match &op {
+                        crdts::map::Op::Rm { .. } => {
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(json!({
+                                    "error": "Model update operation generated Op::Rm instead of Op::Up",
+                                    "access_level": "admin"
+                                })),
+                            );
+                        }
+                        crdts::map::Op::Up { .. } => {
+                            // This is the expected case - continue with broadcasting
+                        }
+                    }
+
+                    // Broadcast the model operation
+                    let request = ModelRequest::Op(op);
+                    match datastore
+                        .broadcast::<serde_json::Value>(request, "v1/model/update")
+                        .await
+                    {
+                        Ok(()) => {
+                            let _ = write_datastore(&DB_HANDLE, &datastore.clone());
+                            return (
+                                StatusCode::OK,
+                                Json(json!({
+                                    "status": "success",
+                                    "model": model,
+                                    "access_level": "admin",
+                                    "updated_by": auth_context.description()
+                                })),
+                            );
+                        }
+                        Err(e) => eprintln!("Error broadcasting Model Update Request: {e}"),
                     }
 
                     return (
@@ -216,7 +327,7 @@ pub async fn update_model(
                         );
 
                         let op = datastore.model_state.update_model_local(model.clone());
-                        if let Err(e) = datastore.handle_model_op(op).await {
+                        if let Err(e) = datastore.handle_model_op(op.clone()).await {
                             return (
                                 StatusCode::INTERNAL_SERVER_ERROR,
                                 Json(json!({
@@ -224,6 +335,42 @@ pub async fn update_model(
                                     "access_level": "user"
                                 })),
                             );
+                        }
+
+                        // Validate that we're only forwarding Op::Up operations to update endpoints
+                        match &op {
+                            crdts::map::Op::Rm { .. } => {
+                                return (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    Json(json!({
+                                        "error": "Model update operation generated Op::Rm instead of Op::Up",
+                                        "access_level": "user"
+                                    })),
+                                );
+                            }
+                            crdts::map::Op::Up { .. } => {
+                                // This is the expected case - continue with broadcasting
+                            }
+                        }
+
+                        // Broadcast the model operation
+                        let request = ModelRequest::Op(op);
+                        match datastore
+                            .broadcast::<serde_json::Value>(request, "v1/model/update")
+                            .await
+                        {
+                            Ok(()) => {
+                                let _ = write_datastore(&DB_HANDLE, &datastore.clone());
+                                return (
+                                    StatusCode::OK,
+                                    Json(json!({
+                                        "status": "success",
+                                        "model": model,
+                                        "access_level": "user"
+                                    })),
+                                );
+                            }
+                            Err(e) => eprintln!("Error broadcasting Model Update Request: {e}"),
                         }
 
                         (
@@ -330,16 +477,50 @@ pub async fn add_node_to_model(
             // Create and apply the model update
             let op = datastore
                 .model_state
-                .add_node_to_model(model_id, node_id, port);
+                .add_node_to_model(model_id.clone(), node_id, port);
             match op {
                 Some(op) => {
-                    if let Err(e) = datastore.handle_model_op(op).await {
+                    if let Err(e) = datastore.handle_model_op(op.clone()).await {
                         return (
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(json!({
                                 "error": format!("Failed to add node to model: {}", e)
                             })),
                         );
+                    }
+
+                    // Validate that we're only forwarding Op::Up operations to update endpoints
+                    match &op {
+                        crdts::map::Op::Rm { .. } => {
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(json!({
+                                    "error": "Add node operation generated Op::Rm instead of Op::Up"
+                                })),
+                            );
+                        }
+                        crdts::map::Op::Up { .. } => {
+                            // This is the expected case - continue with broadcasting
+                        }
+                    }
+
+                    // Broadcast the model operation
+                    let request = ModelRequest::Op(op);
+                    match datastore
+                        .broadcast::<serde_json::Value>(request, &format!("v1/model/{}/add-node", model_id))
+                        .await
+                    {
+                        Ok(()) => {
+                            let _ = write_datastore(&DB_HANDLE, &datastore.clone());
+                            return (
+                                StatusCode::OK,
+                                Json(json!({
+                                    "status": "success",
+                                    "message": "Node added to model successfully"
+                                })),
+                            );
+                        }
+                        Err(e) => eprintln!("Error broadcasting Add Node to Model Request: {e}"),
                     }
 
                     return (
@@ -390,18 +571,55 @@ pub async fn add_node_to_model(
                     );
 
                     // Create and apply the model update
-                    let op = datastore
-                        .model_state
-                        .add_node_to_model(model_id, node_id, port);
+                    let op =
+                        datastore
+                            .model_state
+                            .add_node_to_model(model_id.clone(), node_id, port);
                     match op {
                         Some(op) => {
-                            if let Err(e) = datastore.handle_model_op(op).await {
+                            if let Err(e) = datastore.handle_model_op(op.clone()).await {
                                 return (
                                     StatusCode::INTERNAL_SERVER_ERROR,
                                     Json(json!({
                                         "error": format!("Failed to add node to model: {}", e)
                                     })),
                                 );
+                            }
+
+                            // Validate that we're only forwarding Op::Up operations to update endpoints
+                            match &op {
+                                crdts::map::Op::Rm { .. } => {
+                                    return (
+                                        StatusCode::INTERNAL_SERVER_ERROR,
+                                        Json(json!({
+                                            "error": "Add node operation generated Op::Rm instead of Op::Up"
+                                        })),
+                                    );
+                                }
+                                crdts::map::Op::Up { .. } => {
+                                    // This is the expected case - continue with broadcasting
+                                }
+                            }
+
+                            // Broadcast the model operation
+                            let request = ModelRequest::Op(op);
+                            match datastore
+                                .broadcast::<serde_json::Value>(request, &format!("v1/model/{}/add-node", model_id))
+                                .await
+                            {
+                                Ok(()) => {
+                                    let _ = write_datastore(&DB_HANDLE, &datastore.clone());
+                                    return (
+                                        StatusCode::OK,
+                                        Json(json!({
+                                            "status": "success",
+                                            "message": "Node added to model successfully"
+                                        })),
+                                    );
+                                }
+                                Err(e) => {
+                                    eprintln!("Error broadcasting Add Node to Model Request: {e}")
+                                }
                             }
 
                             (
@@ -412,14 +630,12 @@ pub async fn add_node_to_model(
                                 })),
                             )
                         }
-                        None => {
-                            (
-                                StatusCode::BAD_REQUEST,
-                                Json(json!({
-                                    "error": "Failed to add node to model"
-                                })),
-                            )
-                        }
+                        None => (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({
+                                "error": "Failed to add node to model"
+                            })),
+                        ),
                     }
                 }
                 _ => {
@@ -510,13 +726,49 @@ pub async fn remove_node_from_model(
                 .remove_node_from_model(&model_id, &node_id);
             match op {
                 Some(op) => {
-                    if let Err(e) = datastore.handle_model_op(op).await {
+                    if let Err(e) = datastore.handle_model_op(op.clone()).await {
                         return (
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(json!({
                                 "error": format!("Failed to remove node from model: {}", e)
                             })),
                         );
+                    }
+
+                    // Validate that we're only forwarding Op::Up operations to update endpoints
+                    match &op {
+                        crdts::map::Op::Rm { .. } => {
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(json!({
+                                    "error": "Remove node operation generated Op::Rm instead of Op::Up"
+                                })),
+                            );
+                        }
+                        crdts::map::Op::Up { .. } => {
+                            // This is the expected case - continue with broadcasting
+                        }
+                    }
+
+                    // Broadcast the model operation
+                    let request = ModelRequest::Op(op);
+                    match datastore
+                        .broadcast::<serde_json::Value>(request, &format!("v1/model/{}/remove-node", model_id))
+                        .await
+                    {
+                        Ok(()) => {
+                            let _ = write_datastore(&DB_HANDLE, &datastore.clone());
+                            return (
+                                StatusCode::OK,
+                                Json(json!({
+                                    "status": "success",
+                                    "message": "Node removed from model successfully"
+                                })),
+                            );
+                        }
+                        Err(e) => {
+                            eprintln!("Error broadcasting Remove Node from Model Request: {e}")
+                        }
                     }
 
                     return (
@@ -572,13 +824,49 @@ pub async fn remove_node_from_model(
                         .remove_node_from_model(&model_id, &node_id);
                     match op {
                         Some(op) => {
-                            if let Err(e) = datastore.handle_model_op(op).await {
+                            if let Err(e) = datastore.handle_model_op(op.clone()).await {
                                 return (
                                     StatusCode::INTERNAL_SERVER_ERROR,
                                     Json(json!({
                                         "error": format!("Failed to remove node from model: {}", e)
                                     })),
                                 );
+                            }
+
+                            // Validate that we're only forwarding Op::Up operations to update endpoints
+                            match &op {
+                                crdts::map::Op::Rm { .. } => {
+                                    return (
+                                        StatusCode::INTERNAL_SERVER_ERROR,
+                                        Json(json!({
+                                            "error": "Remove node operation generated Op::Rm instead of Op::Up"
+                                        })),
+                                    );
+                                }
+                                crdts::map::Op::Up { .. } => {
+                                    // This is the expected case - continue with broadcasting
+                                }
+                            }
+
+                            // Broadcast the model operation
+                            let request = ModelRequest::Op(op);
+                            match datastore
+                                .broadcast::<serde_json::Value>(request, &format!("v1/model/{}/remove-node", model_id))
+                                .await
+                            {
+                                Ok(()) => {
+                                    let _ = write_datastore(&DB_HANDLE, &datastore.clone());
+                                    return (
+                                        StatusCode::OK,
+                                        Json(json!({
+                                            "status": "success",
+                                            "message": "Node removed from model successfully"
+                                        })),
+                                    );
+                                }
+                                Err(e) => eprintln!(
+                                    "Error broadcasting Remove Node from Model Request: {e}"
+                                ),
                             }
 
                             (
@@ -710,7 +998,7 @@ pub async fn delete_model(
 
             // Delete the model
             let op = datastore.model_state.remove_model_local(model_id.clone());
-            if let Err(e) = datastore.handle_model_op(op).await {
+            if let Err(e) = datastore.handle_model_op(op.clone()).await {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({
@@ -718,6 +1006,31 @@ pub async fn delete_model(
                         "access_level": "admin"
                     })),
                 );
+            }
+
+            // Broadcast the model operation
+            let request = ModelRequest::Op(op);
+            match datastore
+                .broadcast::<serde_json::Value>(
+                    request,
+                    &format!("v1/model/{}/delete", model_id.clone()),
+                )
+                .await
+            {
+                Ok(()) => {
+                    let _ = write_datastore(&DB_HANDLE, &datastore.clone());
+                    return (
+                        StatusCode::OK,
+                        Json(json!({
+                            "status": "success",
+                            "message": format!("Model deleted successfully by admin {}", auth_context.description()),
+                            "model": model_copy,
+                            "access_level": "admin",
+                            "deleted_by": auth_context.description()
+                        })),
+                    );
+                }
+                Err(e) => eprintln!("Error broadcasting Model Delete Request: {e}"),
             }
 
             return (
@@ -763,7 +1076,7 @@ pub async fn delete_model(
 
                 // Delete the model
                 let op = datastore.model_state.remove_model_local(model_id.clone());
-                if let Err(e) = datastore.handle_model_op(op).await {
+                if let Err(e) = datastore.handle_model_op(op.clone()).await {
                     return (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(json!({
@@ -771,6 +1084,30 @@ pub async fn delete_model(
                             "access_level": "user"
                         })),
                     );
+                }
+
+                // Broadcast the model operation
+                let request = ModelRequest::Op(op);
+                match datastore
+                    .broadcast::<serde_json::Value>(
+                        request,
+                        &format!("v1/model/{}/delete", model_id.clone()),
+                    )
+                    .await
+                {
+                    Ok(()) => {
+                        let _ = write_datastore(&DB_HANDLE, &datastore.clone());
+                        return (
+                            StatusCode::OK,
+                            Json(json!({
+                                "status": "success",
+                                "message": "Model deleted successfully",
+                                "model": model_copy,
+                                "access_level": "user"
+                            })),
+                        );
+                    }
+                    Err(e) => eprintln!("Error broadcasting Model Delete Request: {e}"),
                 }
 
                 (
@@ -827,13 +1164,12 @@ pub async fn get_model(
             // Check authorization if the model is private
             if model.is_private {
                 let is_authorized = match &auth_context {
-                    AuthenticationContext::Admin { .. } => { true },
-                    AuthenticationContext::Localhost { .. } => { true },
+                    AuthenticationContext::Admin { .. } => true,
+                    AuthenticationContext::Localhost { .. } => true,
                     AuthenticationContext::User { address, .. } => {
-                                    model.owner_id == address.as_hex()
-
+                        model.owner_id == address.as_hex()
                     }
-                    _ => { false },
+                    _ => false,
                 };
 
                 if !is_authorized {
@@ -991,13 +1327,13 @@ pub async fn find_node_for_model(
                     auth_context.description(),
                     model_id
                 );
-            },
+            }
             AuthenticationContext::Localhost { .. } => {
                 log::info!(
                     "model_inference: Localhost using private model {} for inference",
                     model_id
                 );
-            },
+            }
             AuthenticationContext::User { address, .. } => {
                 // Check if user is the owner, has authorization, or is an admin
                 let account = datastore.account_state.get_account(&address.as_hex());
@@ -1063,7 +1399,9 @@ pub async fn find_node_for_model(
             }
 
             // Otherwise, return the selected remote node
-            if let Some(round_robin_node) = datastore.node_state.get_node(round_robin_node_id.clone()) {
+            if let Some(round_robin_node) =
+                datastore.node_state.get_node(round_robin_node_id.clone())
+            {
                 log::info!(
                     "Round robin load balancing: Selected remote node {} (index {}/{}) for model {}",
                     round_robin_node_id,
@@ -1323,9 +1661,11 @@ mod tests {
 
             // Verify round robin pattern: 0, 1, 2, 0, 1, 2, ...
             let expected_index = i % node_count;
-            assert_eq!(node_index, expected_index,
+            assert_eq!(
+                node_index, expected_index,
                 "Round robin failed at iteration {}: expected {}, got {}",
-                i, expected_index, node_index);
+                i, expected_index, node_index
+            );
         }
     }
 }

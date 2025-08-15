@@ -1,48 +1,48 @@
 pub mod ecdsa;
 
 pub use ecdsa::{
-    RecoveredAddress,
-    OptionalRecoveredAddress,
-    SignatureError,
-    ecdsa_auth_middleware,
     active_node_auth_middleware,
-    global_admin_auth_middleware,
+    add_runtime_admin_key,
+    check_authorization,
+    clear_runtime_admin_keys,
+    create_auth_context_for_operation,
+    ecdsa_auth_middleware,
+    extract_owner_from_payload,
+    extract_resource_id,
     extract_signature_parts,
-    recover_address,
+    get_runtime_admin_key_stats,
+    global_admin_auth_middleware,
     is_admin_key,
-    AuthenticationContext,
+    list_runtime_admin_keys,
+    log_admin_operation,
+    log_authorization_decision,
+    log_authorization_failure,
+    log_security_event,
+    recover_address,
+    remove_runtime_admin_key,
+    validate_resource_ownership,
     AdminRecoveredAddress,
+    AuthenticationContext,
+    AuthorizationContext,
     // Authorization helper types and functions
     AuthorizationError,
-    ResourceType,
     OperationType,
-    AuthorizationContext,
-    check_authorization,
-    extract_owner_from_payload,
-    validate_resource_ownership,
-    extract_resource_id,
-    log_authorization_decision,
-    log_admin_operation,
-    log_security_event,
-    log_authorization_failure,
-    create_auth_context_for_operation,
+    OptionalRecoveredAddress,
+    RecoveredAddress,
+    ResourceType,
     // Runtime admin key management functions (Sub-sub-task 3.4.1.3)
     RuntimeAdminKeys,
-    add_runtime_admin_key,
-    remove_runtime_admin_key,
-    list_runtime_admin_keys,
-    clear_runtime_admin_keys,
-    get_runtime_admin_key_stats,
+    SignatureError,
 };
 
 // Placeholder implementations to make the codebase compile
 // These will be replaced with ECDSA-based authentication
-use serde::{Serialize, Deserialize};
 use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
+use serde::{Deserialize, Serialize};
 
 // JWT Claims placeholder
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,7 +57,7 @@ impl DynamicClaims {
     pub fn user_role(&self) -> Option<UserRole> {
         self.role.as_ref().and_then(|r| r.parse().ok())
     }
-    
+
     pub fn email(&self) -> Option<&str> {
         self.email.as_deref()
     }
@@ -77,14 +77,14 @@ impl IntoResponse for AuthError {
         let status = match self {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Forbidden => StatusCode::FORBIDDEN,
-            Self::InvalidToken => StatusCode::UNAUTHORIZED, 
+            Self::InvalidToken => StatusCode::UNAUTHORIZED,
             Self::MissingClaims => StatusCode::UNAUTHORIZED,
         };
-        
+
         let body = Json(serde_json::json!({
             "error": format!("{:?}", self)
         }));
-        
+
         (status, body).into_response()
     }
 }
@@ -99,7 +99,7 @@ pub enum UserRole {
 
 impl std::str::FromStr for UserRole {
     type Err = ();
-    
+
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "admin" => Ok(Self::Admin),
@@ -111,7 +111,10 @@ impl std::str::FromStr for UserRole {
 }
 
 // Path access verification helper
-pub fn verify_project_path_access(claims: &DynamicClaims, project_id: &str) -> Result<(), AuthError> {
+pub fn verify_project_path_access(
+    claims: &DynamicClaims,
+    project_id: &str,
+) -> Result<(), AuthError> {
     // In a real implementation, this would check project access
     // For now, just allow access
     Ok(())

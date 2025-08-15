@@ -1,10 +1,10 @@
-pub mod network;
 pub mod account;
-pub mod instances;
 pub mod agent;
-pub mod model;
-pub mod dns;
-pub mod nodes;
+pub mod agent_gateway;
 pub mod agent_request;
 pub mod agent_response;
-pub mod agent_gateway;
+pub mod dns;
+pub mod instances;
+pub mod model;
+pub mod network;
+pub mod nodes;

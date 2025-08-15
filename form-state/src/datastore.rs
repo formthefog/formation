@@ -1,19 +1,42 @@
-use std::{collections::{HashMap, HashSet}, path::PathBuf, sync::Arc};
+use crate::{
+    accounts::{Account, AccountOp, AccountState, AuthorizationLevel},
+    agent::{AIAgent, AgentMap, AgentOp, AgentState},
+    db::{open_db, write_datastore, DbHandle},
+    instances::{ClusterMember, Instance, InstanceOp, InstanceState},
+    model::{AIModel, ModelMap, ModelOp, ModelState},
+    network::{
+        AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState,
+        PeerOp,
+    },
+    nodes::{Node, NodeOp, NodeState},
+    tasks::{Task, TaskId, TaskOp, TaskState, TaskStatus},
+};
 use axum::{extract::State, Json};
-use form_dns::{api::{DomainRequest, DomainResponse}, store::FormDnsRecord};
+use crdts::{map::Op, BFTReg, CmRDT, CvRDT, Map};
+use form_dns::{
+    api::{DomainRequest, DomainResponse},
+    store::FormDnsRecord,
+};
+use form_node_metrics::{
+    capabilities::NodeCapabilities, capacity::NodeCapacity, metrics::NodeMetrics,
+    NodeMetricsRequest,
+};
 use form_p2p::queue::{QueueResponse, QUEUE_PORT};
+use hex;
+use lazy_static::lazy_static;
 use rand::{seq::SliceRandom, thread_rng};
 use reqwest::Client;
-use form_node_metrics::{capabilities::NodeCapabilities, capacity::NodeCapacity, metrics::NodeMetrics, NodeMetricsRequest};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 use shared::{AssociationContents, Cidr, CidrContents, PeerContents};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    sync::Arc,
+};
 use tiny_keccak::Hasher;
 use tokio::sync::Mutex;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use crdts::{map::Op, BFTReg, CvRDT, Map, CmRDT};
-use crate::{accounts::{Account, AccountOp, AccountState, AuthorizationLevel}, agent::{AIAgent, AgentMap, AgentOp, AgentState}, db::{open_db, write_datastore, DbHandle}, instances::{ClusterMember, Instance, InstanceOp, InstanceState}, model::{AIModel, ModelMap, ModelOp, ModelState}, network::{AssocOp, CidrOp, CrdtAssociation, CrdtCidr, CrdtDnsRecord, CrdtPeer, DnsOp, NetworkState, PeerOp}, nodes::{Node, NodeOp, NodeState}, tasks::{TaskState, Task, TaskOp, TaskStatus, TaskId}};
-use lazy_static::lazy_static;
-use hex;
+use url::Host;
 
 lazy_static! {
     pub static ref DB_HANDLE: DbHandle = open_db(PathBuf::from("db/form.db"));
@@ -41,7 +64,7 @@ impl From<NetworkState> for MergeableNetworkState {
             peers: value.peers.clone(),
             cidrs: value.cidrs.clone(),
             assocs: value.associations.clone(),
-            dns: value.dns_state.zones.clone()
+            dns: value.dns_state.zones.clone(),
         }
     }
 }
@@ -56,7 +79,7 @@ pub struct MergeableState {
     nodes: NodeMap,
     accounts: AccountMap,
     agents: AgentMap,
-    models: ModelMap
+    models: ModelMap,
 }
 
 impl From<DataStore> for MergeableState {
@@ -102,7 +125,6 @@ pub enum CidrRequest {
     Delete(String),
 }
 
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum AssocRequest {
     Op(AssocOp<String>),
@@ -115,7 +137,7 @@ pub enum DnsRequest {
     Op(DnsOp),
     Create(FormDnsRecord),
     Update(FormDnsRecord),
-    Delete(String)
+    Delete(String),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -126,12 +148,12 @@ pub enum InstanceRequest {
     Delete(String),
     AddClusterMember {
         build_id: String,
-        cluster_member: ClusterMember
+        cluster_member: ClusterMember,
     },
     RemoveClusterMember {
         build_id: String,
         cluster_member_id: String,
-    }
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -208,15 +230,17 @@ pub enum ModelRequest {
 pub enum TaskRequest {
     Op(TaskOp),
     Create(Task),
-    UpdateStatus { // For a node to report progress/completion/failure
+    UpdateStatus {
+        // For a node to report progress/completion/failure
         task_id: TaskId,
         status: TaskStatus,
         progress: Option<u8>,
         result_info: Option<String>,
     },
-    AssignNode { // For an admin/scheduler to assign a node
+    AssignNode {
+        // For an admin/scheduler to assign a node
         task_id: TaskId,
-        node_id: Option<String>, // Option to unassign
+        node_id: Option<String>,                 // Option to unassign
         status_after_assign: Option<TaskStatus>, // e.g., PoCAssigned or Claimed
     },
     // Add other specific update requests as needed, e.g., UpdateResponsibleNodes
@@ -232,7 +256,6 @@ impl DataStore {
         let model_state = ModelState::new(node_id.clone(), pk.clone());
         let task_state = TaskState::new(node_id.clone(), pk.clone());
 
-
         Self {
             network_state,
             instance_state,
@@ -244,11 +267,7 @@ impl DataStore {
         }
     }
 
-    pub fn new_from_state(
-        node_id: String,
-        pk: String,
-        other: MergeableState,
-    ) -> Self {
+    pub fn new_from_state(node_id: String, pk: String, other: MergeableState) -> Self {
         log::info!("Building new datastore from state...");
         let mut local = Self::new(node_id, pk);
         local.network_state.peers.merge(other.peers);
@@ -266,35 +285,39 @@ impl DataStore {
 
     pub fn get_all_users(&self) -> HashMap<String, CrdtPeer<String>> {
         log::info!("Getting all peers from datastore network state...");
-        self.network_state.peers.iter().filter_map(|item| {
-            match item.val.1.val() {
+        self.network_state
+            .peers
+            .iter()
+            .filter_map(|item| match item.val.1.val() {
                 Some(v) => Some((item.val.0.clone(), v.value().clone())),
-                None => None
-            }
-        }).collect()
+                None => None,
+            })
+            .collect()
     }
 
     pub fn get_all_cidrs(&self) -> HashMap<String, CrdtCidr<String>> {
         log::info!("Getting all cidrs from datastore network state...");
         log::info!("CIDRS: {:?}", self.network_state.cidrs);
-        self.network_state.cidrs.iter().filter_map(|item| {
-            match item.val.1.val() {
+        self.network_state
+            .cidrs
+            .iter()
+            .filter_map(|item| match item.val.1.val() {
                 Some(v) => Some((item.val.0.clone(), v.value().clone())),
-                None => None
-            }
-        }).collect()
+                None => None,
+            })
+            .collect()
     }
 
     pub fn get_all_assocs(&self) -> HashMap<String, CrdtAssociation<String>> {
         log::info!("Getting all associations from datastore network state...");
-        self.network_state.associations.iter().filter_map(|item| {
-            match item.val.1.val() {
-                Some(v) => {
-                    Some((item.val.0.clone(), v.value().clone()))
-                },
-                None => None
-            }
-        }).collect()
+        self.network_state
+            .associations
+            .iter()
+            .filter_map(|item| match item.val.1.val() {
+                Some(v) => Some((item.val.0.clone(), v.value().clone())),
+                None => None,
+            })
+            .collect()
     }
 
     pub fn get_relationships(&self, cidr_id: String) -> Vec<(Cidr<String>, Cidr<String>)> {
@@ -302,32 +325,36 @@ impl DataStore {
         let mut assoc_ids = self.get_all_assocs();
         assoc_ids.retain(|k, _| *k == cidr_id);
         let ids: HashSet<String> = assoc_ids.keys().cloned().collect();
-        ids.iter().filter_map(|id| {
-            let split: Vec<&str> = id.split("-").collect();
-            let cidr_id_1 = split[0];
-            let cidr_id_2 = split[1];
-            let cidr_1 = self.network_state.cidrs.get(&cidr_id_1.to_string()).val;
-            let cidr_2 = self.network_state.cidrs.get(&cidr_id_2.to_string()).val;
-            match (cidr_1, cidr_2) {
-                (Some(reg_1), Some(reg_2)) => {
-                    let val1 = reg_1.val();
-                    let val2 = reg_2.val();
-                    match (val1, val2) {
-                        (Some(node1), Some(node2)) => {
-                            Some((node1.value().into(), node2.value().into()))
+        ids.iter()
+            .filter_map(|id| {
+                let split: Vec<&str> = id.split("-").collect();
+                let cidr_id_1 = split[0];
+                let cidr_id_2 = split[1];
+                let cidr_1 = self.network_state.cidrs.get(&cidr_id_1.to_string()).val;
+                let cidr_2 = self.network_state.cidrs.get(&cidr_id_2.to_string()).val;
+                match (cidr_1, cidr_2) {
+                    (Some(reg_1), Some(reg_2)) => {
+                        let val1 = reg_1.val();
+                        let val2 = reg_2.val();
+                        match (val1, val2) {
+                            (Some(node1), Some(node2)) => {
+                                Some((node1.value().into(), node2.value().into()))
+                            }
+                            _ => None,
                         }
-                        _ => None,
                     }
+                    _ => None,
                 }
-                _ => None,
-            }
-        }).collect()
+            })
+            .collect()
     }
 
     pub fn get_all_active_admin(&mut self) -> HashMap<String, CrdtPeer<String>> {
         log::info!("Getting all active admins from datastore network state...");
-        self.network_state.peers.iter().filter_map(|item| {
-            match item.val.1.val() {
+        self.network_state
+            .peers
+            .iter()
+            .filter_map(|item| match item.val.1.val() {
                 Some(v) => {
                     if v.value().is_admin() {
                         Some((item.val.0.clone(), v.value().clone()))
@@ -336,11 +363,14 @@ impl DataStore {
                     }
                 }
                 None => None,
-            }
-        }).collect()
+            })
+            .collect()
     }
 
-    pub async fn handle_peer_request(&mut self, peer_request: PeerRequest) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_peer_request(
+        &mut self,
+        peer_request: PeerRequest,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         match peer_request {
             PeerRequest::Op(op) => self.handle_peer_op(op).await?,
             PeerRequest::Join(join) => self.handle_peer_join(join).await?,
@@ -351,11 +381,15 @@ impl DataStore {
         Ok(())
     }
 
-    pub async fn handle_peer_op(&mut self, peer_op: PeerOp<String>) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_peer_op(
+        &mut self,
+        peer_op: PeerOp<String>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut op_applied_successfully = false;
         let op_to_propagate = peer_op; // Original op, will be cloned for propagation if needed, or for local apply
 
-        match &op_to_propagate { // Match on reference to the original op
+        match &op_to_propagate {
+            // Match on reference to the original op
             Op::Up { dot: _, key, op } => {
                 // Apply a clone locally, original op_to_propagate can still be used for gossip
                 self.network_state.peer_op(op_to_propagate.clone());
@@ -364,7 +398,9 @@ impl DataStore {
                     op_applied_successfully = true;
                 } else {
                     log::error!("Peer Op::Up failed to apply locally or was a no-op.");
-                    return Err(Box::new(std::io::Error::other("Peer Op::Up failed local application")));
+                    return Err(Box::new(std::io::Error::other(
+                        "Peer Op::Up failed local application",
+                    )));
                 }
             }
             Op::Rm { .. } => {
@@ -378,13 +414,21 @@ impl DataStore {
         if op_applied_successfully {
             #[cfg(feature = "devnet")]
             {
-                log::info!("devnet mode: PeerOp applied locally. Gossiping directly with op: {:?}", op_to_propagate);
+                log::info!(
+                    "devnet mode: PeerOp applied locally. Gossiping directly with op: {:?}",
+                    op_to_propagate
+                );
                 self.gossip_op_directly(&op_to_propagate, "PeerOp").await?;
             }
             #[cfg(not(feature = "devnet"))]
             {
                 log::info!("production mode: Queuing PeerOp ({:?}).", op_to_propagate);
-                DataStore::write_to_queue(crate::datastore::PeerRequest::Op(op_to_propagate.clone()), 0, "global_crdt_ops".to_string()).await?;
+                DataStore::write_to_queue(
+                    crate::datastore::PeerRequest::Op(op_to_propagate.clone()),
+                    0,
+                    "global_crdt_ops".to_string(),
+                )
+                .await?;
             }
             write_datastore(&DB_HANDLE, &self.clone())?;
         }
@@ -392,28 +436,40 @@ impl DataStore {
         Ok(())
     }
 
-    pub async fn handle_peer_join(&mut self, contents: PeerContents<String>) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_peer_join(
+        &mut self,
+        contents: PeerContents<String>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let op = self.network_state.update_peer_local(contents);
         self.handle_peer_op(op).await?;
 
         Ok(())
     }
 
-    pub async fn handle_peer_update(&mut self, contents: PeerContents<String>) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_peer_update(
+        &mut self,
+        contents: PeerContents<String>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let op = self.network_state.update_peer_local(contents);
         self.handle_peer_op(op).await?;
 
         Ok(())
     }
 
-    pub async fn handle_peer_delete(&mut self, id: String) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_peer_delete(
+        &mut self,
+        id: String,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let op = self.network_state.remove_peer_local(id);
         self.handle_peer_op(op).await?;
 
         Ok(())
     }
 
-    pub async fn handle_cidr_request(&mut self, cidr_request: CidrRequest) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_cidr_request(
+        &mut self,
+        cidr_request: CidrRequest,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         match cidr_request {
             CidrRequest::Op(op) => self.handle_cidr_op(op).await?,
             CidrRequest::Create(create) => self.handle_cidr_create(create).await?,
@@ -424,7 +480,10 @@ impl DataStore {
         Ok(())
     }
 
-    pub async fn handle_cidr_op(&mut self, cidr_op: CidrOp<String>) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_cidr_op(
+        &mut self,
+        cidr_op: CidrOp<String>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut op_applied_successfully = false;
         let op_to_propagate = cidr_op.clone(); // Clone for propagation
 
@@ -436,7 +495,9 @@ impl DataStore {
                     op_applied_successfully = true;
                 } else {
                     log::error!("CIDR Op::Up failed to apply locally or was a no-op.");
-                    return Err(Box::new(std::io::Error::other("CIDR Op::Up failed local application")));
+                    return Err(Box::new(std::io::Error::other(
+                        "CIDR Op::Up failed local application",
+                    )));
                 }
             }
             Op::Rm { .. } => {
@@ -449,41 +510,61 @@ impl DataStore {
         if op_applied_successfully {
             #[cfg(feature = "devnet")]
             {
-                log::info!("devnet mode: CIDR Op applied locally. Gossiping directly with op: {:?}", op_to_propagate);
+                log::info!(
+                    "devnet mode: CIDR Op applied locally. Gossiping directly with op: {:?}",
+                    op_to_propagate
+                );
                 self.gossip_op_directly(&op_to_propagate, "CidrOp").await?;
             }
             #[cfg(not(feature = "devnet"))]
             {
                 log::info!("production mode: Queuing CIDR Op ({:?}).", op_to_propagate);
-                DataStore::write_to_queue(crate::datastore::CidrRequest::Op(op_to_propagate.clone()), 1, "global_crdt_ops".to_string()).await?;
+                DataStore::write_to_queue(
+                    crate::datastore::CidrRequest::Op(op_to_propagate.clone()),
+                    1,
+                    "global_crdt_ops".to_string(),
+                )
+                .await?;
             }
             write_datastore(&DB_HANDLE, &self.clone())?;
         }
         Ok(())
     }
 
-    pub async fn handle_cidr_create(&mut self, create: CidrContents<String>) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_cidr_create(
+        &mut self,
+        create: CidrContents<String>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let op = self.network_state.update_cidr_local(create);
         self.handle_cidr_op(op).await?;
 
         Ok(())
     }
 
-    pub async fn handle_cidr_update(&mut self, update: CidrContents<String>) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_cidr_update(
+        &mut self,
+        update: CidrContents<String>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let op = self.network_state.update_cidr_local(update);
         self.handle_cidr_op(op).await?;
 
         Ok(())
     }
 
-    pub async fn handle_cidr_delete(&mut self, delete: String) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_cidr_delete(
+        &mut self,
+        delete: String,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let op = self.network_state.remove_cidr_local(delete);
         self.handle_cidr_op(op).await?;
 
         Ok(())
     }
 
-    pub async fn handle_assoc_request(&mut self, assoc_request: AssocRequest) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_assoc_request(
+        &mut self,
+        assoc_request: AssocRequest,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         match assoc_request {
             AssocRequest::Op(op) => self.handle_assoc_op(op).await?,
             AssocRequest::Create(create) => self.handle_assoc_create(create).await?,
@@ -492,19 +573,27 @@ impl DataStore {
         Ok(())
     }
 
-    pub async fn handle_assoc_op(&mut self, assoc_op: AssocOp<String>) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_assoc_op(
+        &mut self,
+        assoc_op: AssocOp<String>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut op_applied_successfully = false;
         let op_to_propagate = assoc_op.clone(); // Clone for propagation
 
         match &assoc_op {
             Op::Up { dot: _, key, op } => {
                 self.network_state.associations_op(assoc_op.clone()); // Apply locally
-                if let (true, _) = self.network_state.associations_op_success(key.clone(), op.clone()) {
+                if let (true, _) = self
+                    .network_state
+                    .associations_op_success(key.clone(), op.clone())
+                {
                     log::info!("Assoc Op::Up successfully applied locally.");
                     op_applied_successfully = true;
                 } else {
                     log::error!("Assoc Op::Up failed to apply locally or was a no-op.");
-                    return Err(Box::new(std::io::Error::other("Assoc Op::Up failed local application")));
+                    return Err(Box::new(std::io::Error::other(
+                        "Assoc Op::Up failed local application",
+                    )));
                 }
             }
             Op::Rm { .. } => {
@@ -517,39 +606,56 @@ impl DataStore {
         if op_applied_successfully {
             #[cfg(feature = "devnet")]
             {
-                log::info!("devnet mode: Assoc Op applied locally. Gossiping directly with op: {:?}", op_to_propagate);
+                log::info!(
+                    "devnet mode: Assoc Op applied locally. Gossiping directly with op: {:?}",
+                    op_to_propagate
+                );
                 self.gossip_op_directly(&op_to_propagate, "AssocOp").await?;
             }
             #[cfg(not(feature = "devnet"))]
             {
                 log::info!("production mode: Queuing Assoc Op ({:?}).", op_to_propagate);
-                DataStore::write_to_queue(crate::datastore::AssocRequest::Op(op_to_propagate.clone()), 2, "global_crdt_ops".to_string()).await?;
+                DataStore::write_to_queue(
+                    crate::datastore::AssocRequest::Op(op_to_propagate.clone()),
+                    2,
+                    "global_crdt_ops".to_string(),
+                )
+                .await?;
             }
             write_datastore(&DB_HANDLE, &self.clone())?;
         }
         Ok(())
     }
 
-    pub async fn handle_assoc_create(&mut self, create: AssociationContents<String>) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_assoc_create(
+        &mut self,
+        create: AssociationContents<String>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let op = self.network_state.update_association_local(create);
         self.handle_assoc_op(op).await?;
 
         Ok(())
     }
 
-    pub async fn handle_assoc_delete(&mut self, delete: (String, String)) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_assoc_delete(
+        &mut self,
+        delete: (String, String),
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let op = self.network_state.remove_association_local(delete);
         self.handle_assoc_op(op).await?;
 
         Ok(())
     }
 
-    pub async fn handle_dns_request(&mut self, dns_request: DnsRequest) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_dns_request(
+        &mut self,
+        dns_request: DnsRequest,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         match dns_request {
             DnsRequest::Op(op) => self.handle_dns_op(op).await?,
             DnsRequest::Create(create) => self.handle_dns_create(create).await?,
             DnsRequest::Update(update) => self.handle_dns_update(update).await?,
-            DnsRequest::Delete(domain) => self.handle_dns_delete(domain).await?
+            DnsRequest::Delete(domain) => self.handle_dns_delete(domain).await?,
         }
 
         Ok(())
@@ -567,7 +673,9 @@ impl DataStore {
                     op_applied_successfully = true;
                 } else {
                     log::error!("DNS Op::Up failed to apply locally or was a no-op.");
-                    return Err(Box::new(std::io::Error::other("DNS Op::Up failed local application")));
+                    return Err(Box::new(std::io::Error::other(
+                        "DNS Op::Up failed local application",
+                    )));
                 }
             }
             Op::Rm { .. } => {
@@ -580,20 +688,31 @@ impl DataStore {
         if op_applied_successfully {
             #[cfg(feature = "devnet")]
             {
-                log::info!("devnet mode: DNS Op applied locally. Gossiping directly with op: {:?}", op_to_propagate);
+                log::info!(
+                    "devnet mode: DNS Op applied locally. Gossiping directly with op: {:?}",
+                    op_to_propagate
+                );
                 self.gossip_op_directly(&op_to_propagate, "DnsOp").await?;
             }
             #[cfg(not(feature = "devnet"))]
             {
                 log::info!("production mode: Queuing DNS Op ({:?}).", op_to_propagate);
-                DataStore::write_to_queue(crate::datastore::DnsRequest::Op(op_to_propagate.clone()), 3, "global_crdt_ops".to_string()).await?;
+                DataStore::write_to_queue(
+                    crate::datastore::DnsRequest::Op(op_to_propagate.clone()),
+                    3,
+                    "global_crdt_ops".to_string(),
+                )
+                .await?;
             }
             write_datastore(&DB_HANDLE, &self.clone())?;
         }
         Ok(())
     }
 
-    pub async fn handle_dns_create(&mut self, create: FormDnsRecord) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_dns_create(
+        &mut self,
+        create: FormDnsRecord,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let op = self.network_state.update_dns_local(create.clone());
         self.handle_dns_op(op).await?;
         let instance_ips = create.formnet_ip.clone();
@@ -602,7 +721,6 @@ impl DataStore {
             let mut instance = self.instance_state.get_instance_by_ip(ip.ip())?;
             instance.dns_record = Some(create.clone());
             self.handle_instance_update(instance).await?;
-
         }
         let mut ip_addr = create.formnet_ip.clone();
         ip_addr.extend(create.public_ip.clone());
@@ -617,13 +735,18 @@ impl DataStore {
         Client::new()
             .post("http://127.0.0.1:3005/record/create")
             .json(&request)
-            .send().await?
-            .json::<DomainResponse>().await?;
+            .send()
+            .await?
+            .json::<DomainResponse>()
+            .await?;
 
         Ok(())
     }
 
-    pub async fn handle_dns_update(&mut self, update: FormDnsRecord) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_dns_update(
+        &mut self,
+        update: FormDnsRecord,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let op = self.network_state.update_dns_local(update.clone());
         self.handle_dns_op(op).await?;
 
@@ -648,10 +771,8 @@ impl DataStore {
 
                 record.ssl_cert = update.ssl_cert;
                 record.ttl = update.ttl;
-
             }
             self.handle_instance_update(instance).await?;
-
         }
         let mut ip_addr = update.formnet_ip.clone();
         ip_addr.extend(update.public_ip.clone());
@@ -664,34 +785,59 @@ impl DataStore {
         };
 
         Client::new()
-            .post(format!("http://127.0.0.1:3005/record/{}/update", update.domain))
+            .post(format!(
+                "http://127.0.0.1:3005/record/{}/update",
+                update.domain
+            ))
             .json(&request)
-            .send().await?
-            .json::<DomainResponse>().await?;
+            .send()
+            .await?
+            .json::<DomainResponse>()
+            .await?;
 
         Ok(())
     }
 
-    pub async fn handle_dns_delete(&mut self, delete: String) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_dns_delete(
+        &mut self,
+        delete: String,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let op = self.network_state.remove_dns_local(delete.clone());
         self.handle_dns_op(op).await?;
 
         Client::new()
             .post(format!("http://127.0.0.1:3005/record/{delete}/delete"))
-            .send().await?
-            .json::<DomainResponse>().await?;
+            .send()
+            .await?
+            .json::<DomainResponse>()
+            .await?;
 
         Ok(())
     }
 
-    pub async fn handle_instance_request(&mut self, instance_request: InstanceRequest) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_instance_request(
+        &mut self,
+        instance_request: InstanceRequest,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         match instance_request {
             InstanceRequest::Op(op) => self.handle_instance_op(op).await?,
             InstanceRequest::Create(create) => self.handle_instance_create(create).await?,
             InstanceRequest::Update(update) => self.handle_instance_update(update).await?,
             InstanceRequest::Delete(id) => self.handle_instance_delete(id).await?,
-            InstanceRequest::AddClusterMember { build_id, cluster_member }  => self.handle_add_cluster_member(build_id, cluster_member).await?,
-            InstanceRequest::RemoveClusterMember { build_id, cluster_member_id }  => self.handle_remove_cluster_member(build_id, cluster_member_id).await?,
+            InstanceRequest::AddClusterMember {
+                build_id,
+                cluster_member,
+            } => {
+                self.handle_add_cluster_member(build_id, cluster_member)
+                    .await?
+            }
+            InstanceRequest::RemoveClusterMember {
+                build_id,
+                cluster_member_id,
+            } => {
+                self.handle_remove_cluster_member(build_id, cluster_member_id)
+                    .await?
+            }
         }
 
         Ok(())
@@ -700,7 +846,7 @@ impl DataStore {
     pub async fn handle_add_cluster_member(
         &mut self,
         build_id: String,
-        cluster_member: ClusterMember
+        cluster_member: ClusterMember,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let mut instances = self.instance_state.get_instances_by_build_id(build_id);
         let iter_mut = instances.iter_mut();
@@ -715,7 +861,7 @@ impl DataStore {
     pub async fn handle_remove_cluster_member(
         &mut self,
         build_id: String,
-        cluster_member_id: String
+        cluster_member_id: String,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let mut instances = self.instance_state.get_instances_by_build_id(build_id);
         let iter_mut = instances.iter_mut();
@@ -727,19 +873,27 @@ impl DataStore {
         Ok(())
     }
 
-    pub async fn handle_instance_op(&mut self, instance_op: InstanceOp) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_instance_op(
+        &mut self,
+        instance_op: InstanceOp,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut op_applied_successfully = false;
         let op_to_propagate = instance_op.clone(); // Clone for propagation
 
         match &instance_op {
             Op::Up { dot: _, key, op } => {
                 self.instance_state.instance_op(instance_op.clone()); // Apply locally
-                if let (true, _) = self.instance_state.instance_op_success(key.clone(), op.clone()) {
+                if let (true, _) = self
+                    .instance_state
+                    .instance_op_success(key.clone(), op.clone())
+                {
                     log::info!("Instance Op::Up successfully applied locally.");
                     op_applied_successfully = true;
                 } else {
                     log::error!("Instance Op::Up failed to apply locally or was a no-op.");
-                    return Err(Box::new(std::io::Error::other("Instance Op::Up failed local application")));
+                    return Err(Box::new(std::io::Error::other(
+                        "Instance Op::Up failed local application",
+                    )));
                 }
             }
             Op::Rm { .. } => {
@@ -752,41 +906,65 @@ impl DataStore {
         if op_applied_successfully {
             #[cfg(feature = "devnet")]
             {
-                log::info!("devnet mode: Instance Op applied locally. Gossiping directly with op: {:?}", op_to_propagate);
-                self.gossip_op_directly(&op_to_propagate, "InstanceOp").await?;
+                log::info!(
+                    "devnet mode: Instance Op applied locally. Gossiping directly with op: {:?}",
+                    op_to_propagate
+                );
+                self.gossip_op_directly(&op_to_propagate, "InstanceOp")
+                    .await?;
             }
             #[cfg(not(feature = "devnet"))]
             {
-                log::info!("production mode: Queuing Instance Op ({:?}).", op_to_propagate);
-                DataStore::write_to_queue(crate::datastore::InstanceRequest::Op(op_to_propagate.clone()), 4, "global_crdt_ops".to_string()).await?;
+                log::info!(
+                    "production mode: Queuing Instance Op ({:?}).",
+                    op_to_propagate
+                );
+                DataStore::write_to_queue(
+                    crate::datastore::InstanceRequest::Op(op_to_propagate.clone()),
+                    4,
+                    "global_crdt_ops".to_string(),
+                )
+                .await?;
             }
             write_datastore(&DB_HANDLE, &self.clone())?;
         }
         Ok(())
     }
 
-    pub async fn handle_instance_create(&mut self, create: Instance) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_instance_create(
+        &mut self,
+        create: Instance,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let op = self.instance_state.update_instance_local(create);
         self.handle_instance_op(op).await?;
 
         Ok(())
     }
 
-    pub async fn handle_instance_update(&mut self, update: Instance) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_instance_update(
+        &mut self,
+        update: Instance,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let op = self.instance_state.update_instance_local(update);
         self.handle_instance_op(op).await?;
 
         Ok(())
     }
 
-    pub async fn handle_instance_delete(&mut self, delete: String) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_instance_delete(
+        &mut self,
+        delete: String,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let op = self.instance_state.remove_instance_local(delete);
         self.handle_instance_op(op).await?;
 
         Ok(())
     }
 
-    async fn handle_node_request(&mut self, node_request: NodeRequest) -> Result<(), Box<dyn std::error::Error>> {
+    async fn handle_node_request(
+        &mut self,
+        node_request: NodeRequest,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         match node_request {
             NodeRequest::Op(op) => self.handle_node_op(op).await?,
             NodeRequest::Create(create) => self.handle_node_create(create).await?,
@@ -796,37 +974,79 @@ impl DataStore {
         Ok(())
     }
 
-    pub async fn handle_node_metrics_request(&mut self, node_metrics_request: NodeMetricsRequest) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_node_metrics_request(
+        &mut self,
+        node_metrics_request: NodeMetricsRequest,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         match node_metrics_request {
-            NodeMetricsRequest::SetInitialMetrics { node_id, node_capabilities, node_capacity } => self.handle_node_initial_metrics(node_id, node_capabilities, node_capacity).await?,
-            NodeMetricsRequest::Heartbeat { node_id, timestamp } => self.handle_node_heartbeat(node_id, timestamp).await?,
-            NodeMetricsRequest::UpdateMetrics { node_id, node_capacity, node_metrics } => self.handle_node_update_metrics(node_id, node_capacity, node_metrics).await?,
+            NodeMetricsRequest::SetInitialMetrics {
+                node_id,
+                node_capabilities,
+                node_capacity,
+            } => {
+                self.handle_node_initial_metrics(node_id, node_capabilities, node_capacity)
+                    .await?
+            }
+            NodeMetricsRequest::Heartbeat { node_id, timestamp } => {
+                self.handle_node_heartbeat(node_id, timestamp).await?
+            }
+            NodeMetricsRequest::UpdateMetrics {
+                node_id,
+                node_capacity,
+                node_metrics,
+            } => {
+                self.handle_node_update_metrics(node_id, node_capacity, node_metrics)
+                    .await?
+            }
         }
         Ok(())
     }
 
-    pub async fn handle_node_heartbeat(&mut self, node_id: String, timestamp: i64) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_node_heartbeat(
+        &mut self,
+        node_id: String,
+        timestamp: i64,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(node_op) = self.node_state.update_node_heartbeat(node_id, timestamp) {
             self.handle_node_op(node_op).await?;
         }
         Ok(())
     }
 
-    pub async fn handle_node_update_metrics(&mut self, node_id: String, node_capacity: NodeCapacity, node_metrics: NodeMetrics) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(node_op) = self.node_state.update_node_metrics(node_id, node_capacity, node_metrics) {
+    pub async fn handle_node_update_metrics(
+        &mut self,
+        node_id: String,
+        node_capacity: NodeCapacity,
+        node_metrics: NodeMetrics,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(node_op) =
+            self.node_state
+                .update_node_metrics(node_id, node_capacity, node_metrics)
+        {
             self.handle_node_op(node_op).await?;
         }
         Ok(())
     }
 
-    pub async fn handle_node_initial_metrics(&mut self, node_id: String, node_capabilities: NodeCapabilities, node_capacity: NodeCapacity) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(node_op) = self.node_state.set_initial_node_capabilities(node_id, node_capacity, node_capabilities) {
+    pub async fn handle_node_initial_metrics(
+        &mut self,
+        node_id: String,
+        node_capabilities: NodeCapabilities,
+        node_capacity: NodeCapacity,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(node_op) =
+            self.node_state
+                .set_initial_node_capabilities(node_id, node_capacity, node_capabilities)
+        {
             self.handle_node_op(node_op).await?;
         }
         Ok(())
     }
 
-    pub async fn handle_node_op(&mut self, node_op: NodeOp) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_node_op(
+        &mut self,
+        node_op: NodeOp,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut op_applied_successfully = false;
         let op_to_propagate = node_op.clone(); // Clone for propagation
 
@@ -838,7 +1058,9 @@ impl DataStore {
                     op_applied_successfully = true;
                 } else {
                     log::error!("Node Op::Up failed to apply locally or was a no-op.");
-                    return Err(Box::new(std::io::Error::other("Node Op::Up failed local application")));
+                    return Err(Box::new(std::io::Error::other(
+                        "Node Op::Up failed local application",
+                    )));
                 }
             }
             Op::Rm { .. } => {
@@ -851,34 +1073,51 @@ impl DataStore {
         if op_applied_successfully {
             #[cfg(feature = "devnet")]
             {
-                log::info!("devnet mode: Node Op applied locally. Gossiping directly with op: {:?}", op_to_propagate);
+                log::info!(
+                    "devnet mode: Node Op applied locally. Gossiping directly with op: {:?}",
+                    op_to_propagate
+                );
                 self.gossip_op_directly(&op_to_propagate, "NodeOp").await?;
             }
             #[cfg(not(feature = "devnet"))]
             {
                 log::info!("production mode: Queuing Node Op ({:?}).", op_to_propagate);
-                DataStore::write_to_queue(crate::datastore::NodeRequest::Op(op_to_propagate.clone()), 5, "global_crdt_ops".to_string()).await?;
+                DataStore::write_to_queue(
+                    crate::datastore::NodeRequest::Op(op_to_propagate.clone()),
+                    5,
+                    "global_crdt_ops".to_string(),
+                )
+                .await?;
             }
             write_datastore(&DB_HANDLE, &self.clone())?;
         }
         Ok(())
     }
 
-    pub async fn handle_node_create(&mut self, create: Node) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_node_create(
+        &mut self,
+        create: Node,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let op = self.node_state.update_node_local(create);
         self.handle_node_op(op).await?;
 
         Ok(())
     }
 
-    pub async fn handle_node_update(&mut self, update: Node) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_node_update(
+        &mut self,
+        update: Node,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let op = self.node_state.update_node_local(update);
         self.handle_node_op(op).await?;
 
         Ok(())
     }
 
-    pub async fn handle_node_delete(&mut self, delete: String) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_node_delete(
+        &mut self,
+        delete: String,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let op = self.node_state.remove_node_local(delete);
         self.handle_node_op(op).await?;
 
@@ -886,7 +1125,10 @@ impl DataStore {
     }
 
     // Account handler methods
-    pub async fn handle_account_request(&mut self, account_request: AccountRequest) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_account_request(
+        &mut self,
+        account_request: AccountRequest,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         match account_request {
             AccountRequest::Op(op) => {
                 self.handle_account_op(op).await?;
@@ -900,20 +1142,41 @@ impl DataStore {
             AccountRequest::Delete(delete) => {
                 self.handle_account_delete(delete).await?;
             }
-            AccountRequest::AddOwnedInstance { address, instance_id } => {
+            AccountRequest::AddOwnedInstance {
+                address,
+                instance_id,
+            } => {
                 self.handle_add_owned_instance(address, instance_id).await?;
             }
-            AccountRequest::RemoveOwnedInstance { address, instance_id } => {
-                self.handle_remove_owned_instance(address, instance_id).await?;
+            AccountRequest::RemoveOwnedInstance {
+                address,
+                instance_id,
+            } => {
+                self.handle_remove_owned_instance(address, instance_id)
+                    .await?;
             }
-            AccountRequest::AddAuthorization { address, instance_id, level } => {
-                self.handle_add_authorization(address, instance_id, level).await?;
+            AccountRequest::AddAuthorization {
+                address,
+                instance_id,
+                level,
+            } => {
+                self.handle_add_authorization(address, instance_id, level)
+                    .await?;
             }
-            AccountRequest::RemoveAuthorization { address, instance_id } => {
-                self.handle_remove_authorization(address, instance_id).await?;
+            AccountRequest::RemoveAuthorization {
+                address,
+                instance_id,
+            } => {
+                self.handle_remove_authorization(address, instance_id)
+                    .await?;
             }
-            AccountRequest::TransferOwnership { from_address, to_address, instance_id } => {
-                self.handle_transfer_ownership(from_address, to_address, instance_id).await?;
+            AccountRequest::TransferOwnership {
+                from_address,
+                to_address,
+                instance_id,
+            } => {
+                self.handle_transfer_ownership(from_address, to_address, instance_id)
+                    .await?;
             }
             AccountRequest::AddOwnedAgent { address, agent_id } => {
                 self.handle_add_owned_agent(address, agent_id).await?;
@@ -932,19 +1195,27 @@ impl DataStore {
         Ok(())
     }
 
-    pub async fn handle_account_op(&mut self, account_op: AccountOp) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_account_op(
+        &mut self,
+        account_op: AccountOp,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut op_applied_successfully = false;
         let op_to_propagate = account_op.clone(); // Clone for propagation
 
         match &account_op {
             Op::Up { dot: _, key, op } => {
                 self.account_state.account_op(account_op.clone()); // Apply locally
-                if let (true, _) = self.account_state.account_op_success(key.clone(), op.clone()) {
+                if let (true, _) = self
+                    .account_state
+                    .account_op_success(key.clone(), op.clone())
+                {
                     log::info!("Account Op::Up successfully applied locally.");
                     op_applied_successfully = true;
                 } else {
                     log::error!("Account Op::Up failed to apply locally or was a no-op.");
-                    return Err(Box::new(std::io::Error::other("Account Op::Up failed local application")));
+                    return Err(Box::new(std::io::Error::other(
+                        "Account Op::Up failed local application",
+                    )));
                 }
             }
             Op::Rm { .. } => {
@@ -957,35 +1228,58 @@ impl DataStore {
         if op_applied_successfully {
             #[cfg(feature = "devnet")]
             {
-                log::info!("devnet mode: Account Op applied locally. Gossiping directly with op: {:?}", op_to_propagate);
-                self.gossip_op_directly(&op_to_propagate, "AccountOp").await?;
+                log::info!(
+                    "devnet mode: Account Op applied locally. Gossiping directly with op: {:?}",
+                    op_to_propagate
+                );
+                self.gossip_op_directly(&op_to_propagate, "AccountOp")
+                    .await?;
             }
             #[cfg(not(feature = "devnet"))]
             {
-                log::info!("production mode: Queuing Account Op ({:?}).", op_to_propagate);
-                DataStore::write_to_queue(crate::datastore::AccountRequest::Op(op_to_propagate.clone()), 7, "global_crdt_ops".to_string()).await?;
+                log::info!(
+                    "production mode: Queuing Account Op ({:?}).",
+                    op_to_propagate
+                );
+                DataStore::write_to_queue(
+                    crate::datastore::AccountRequest::Op(op_to_propagate.clone()),
+                    7,
+                    "global_crdt_ops".to_string(),
+                )
+                .await?;
             }
             write_datastore(&DB_HANDLE, &self.clone())?;
         }
         Ok(())
     }
 
-    pub async fn handle_account_create(&mut self, create: Account) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_account_create(
+        &mut self,
+        create: Account,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let op = self.account_state.update_account_local(create);
         self.handle_account_op(op).await
     }
 
-    pub async fn handle_account_update(&mut self, update: Account) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_account_update(
+        &mut self,
+        update: Account,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let op = self.account_state.update_account_local(update);
         self.handle_account_op(op).await
     }
 
-    pub async fn handle_account_delete(&mut self, delete: String) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_account_delete(
+        &mut self,
+        delete: String,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // Check if account exists
-        if self.account_state.get_account(&delete) == None { return Err(Box::new(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("Account with address {delete} does not exist")
-        ))) };
+        if self.account_state.get_account(&delete).is_none() {
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Account with address {delete} does not exist"),
+            )));
+        };
 
         // Delete the account (remove it from the map)
         let op = self.account_state.remove_account_local(delete);
@@ -993,14 +1287,21 @@ impl DataStore {
         self.account_state.map.apply(op.clone());
 
         // Write to queue
-        if let Err(e) = DataStore::write_to_queue(AccountRequest::Op(op), 7, "global_crdt_ops".to_string()).await {
+        if let Err(e) =
+            DataStore::write_to_queue(AccountRequest::Op(op), 7, "global_crdt_ops".to_string())
+                .await
+        {
             log::error!("Error writing to queue: {}", e);
         }
 
         Ok(())
     }
 
-    pub async fn handle_add_owned_instance(&mut self, address: String, instance_id: String) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_add_owned_instance(
+        &mut self,
+        address: String,
+        instance_id: String,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(mut account) = self.account_state.get_account(&address) {
             account.add_owned_instance(instance_id);
             let op = self.account_state.update_account_local(account);
@@ -1009,7 +1310,11 @@ impl DataStore {
         Ok(())
     }
 
-    pub async fn handle_remove_owned_instance(&mut self, address: String, instance_id: String) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_remove_owned_instance(
+        &mut self,
+        address: String,
+        instance_id: String,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(mut account) = self.account_state.get_account(&address) {
             account.remove_owned_instance(&instance_id);
             let op = self.account_state.update_account_local(account);
@@ -1018,7 +1323,12 @@ impl DataStore {
         Ok(())
     }
 
-    pub async fn handle_add_authorization(&mut self, address: String, instance_id: String, level: AuthorizationLevel) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_add_authorization(
+        &mut self,
+        address: String,
+        instance_id: String,
+        level: AuthorizationLevel,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(mut account) = self.account_state.get_account(&address) {
             account.add_authorization(instance_id, level);
             let op = self.account_state.update_account_local(account);
@@ -1027,7 +1337,11 @@ impl DataStore {
         Ok(())
     }
 
-    pub async fn handle_remove_authorization(&mut self, address: String, instance_id: String) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_remove_authorization(
+        &mut self,
+        address: String,
+        instance_id: String,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(mut account) = self.account_state.get_account(&address) {
             account.remove_authorization(&instance_id);
             let op = self.account_state.update_account_local(account);
@@ -1036,7 +1350,12 @@ impl DataStore {
         Ok(())
     }
 
-    pub async fn handle_transfer_ownership(&mut self, from_address: String, to_address: String, instance_id: String) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_transfer_ownership(
+        &mut self,
+        from_address: String,
+        to_address: String,
+        instance_id: String,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // Check and update the accounts
         if let Some(mut account) = self.account_state.get_account(&from_address) {
             account.remove_owned_instance(&instance_id);
@@ -1059,7 +1378,11 @@ impl DataStore {
         Ok(())
     }
 
-    pub async fn handle_add_owned_agent(&mut self, address: String, agent_id: String) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_add_owned_agent(
+        &mut self,
+        address: String,
+        agent_id: String,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(mut account) = self.account_state.get_account(&address) {
             account.add_owned_agent(agent_id);
             let op = self.account_state.update_account_local(account);
@@ -1068,7 +1391,11 @@ impl DataStore {
         Ok(())
     }
 
-    pub async fn handle_remove_owned_agent(&mut self, address: String, agent_id: String) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_remove_owned_agent(
+        &mut self,
+        address: String,
+        agent_id: String,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(mut account) = self.account_state.get_account(&address) {
             account.remove_owned_agent(&agent_id);
             let op = self.account_state.update_account_local(account);
@@ -1077,7 +1404,11 @@ impl DataStore {
         Ok(())
     }
 
-    pub async fn handle_add_owned_model(&mut self, address: String, model_id: String) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_add_owned_model(
+        &mut self,
+        address: String,
+        model_id: String,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(mut account) = self.account_state.get_account(&address) {
             account.add_owned_model(model_id);
             let op = self.account_state.update_account_local(account);
@@ -1086,7 +1417,11 @@ impl DataStore {
         Ok(())
     }
 
-    pub async fn handle_remove_owned_model(&mut self, address: String, model_id: String) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_remove_owned_model(
+        &mut self,
+        address: String,
+        model_id: String,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(mut account) = self.account_state.get_account(&address) {
             account.remove_owned_model(&model_id);
             let op = self.account_state.update_account_local(account);
@@ -1095,7 +1430,10 @@ impl DataStore {
         Ok(())
     }
 
-    pub async fn handle_agent_request(&mut self, account_request: AgentRequest) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_agent_request(
+        &mut self,
+        account_request: AgentRequest,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         match account_request {
             AgentRequest::Op(op) => {
                 self.handle_agent_op(op).await?;
@@ -1114,22 +1452,33 @@ impl DataStore {
         Ok(())
     }
 
-    pub async fn handle_agent_create(&mut self, create: AIAgent) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_agent_create(
+        &mut self,
+        create: AIAgent,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let op = self.agent_state.update_agent_local(create);
         self.handle_agent_op(op).await
     }
 
-    pub async fn handle_agent_update(&mut self, update: AIAgent) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_agent_update(
+        &mut self,
+        update: AIAgent,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let op = self.agent_state.update_agent_local(update);
         self.handle_agent_op(op).await
     }
 
-    pub async fn handle_agent_delete(&mut self, delete: String) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_agent_delete(
+        &mut self,
+        delete: String,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // Check if account exists
-        if self.agent_state.get_agent(&delete) == None { return Err(Box::new(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("Account with address {delete} does not exist")
-        ))) };
+        if self.agent_state.get_agent(&delete).is_none() {
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Account with address {delete} does not exist"),
+            )));
+        };
 
         // Delete the account (remove it from the map)
         let op = self.agent_state.remove_agent_local(delete);
@@ -1137,19 +1486,27 @@ impl DataStore {
         self.agent_state.map.apply(op.clone());
 
         // Write to queue
-        if let Err(e) = DataStore::write_to_queue(AgentRequest::Op(op), 8, "global_crdt_ops".to_string()).await {
+        if let Err(e) =
+            DataStore::write_to_queue(AgentRequest::Op(op), 8, "global_crdt_ops".to_string()).await
+        {
             log::error!("Error writing to queue: {}", e);
         }
 
         Ok(())
     }
 
-    pub async fn handle_agent_op(&mut self, agent_op: AgentOp) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_agent_op(
+        &mut self,
+        agent_op: AgentOp,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         self.agent_state.map.apply(agent_op);
         Ok(())
     }
 
-    pub async fn handle_model_request(&mut self, model_request: ModelRequest) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_model_request(
+        &mut self,
+        model_request: ModelRequest,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         match model_request {
             ModelRequest::Op(op) => {
                 self.handle_model_op(op).await?;
@@ -1168,22 +1525,33 @@ impl DataStore {
         Ok(())
     }
 
-    pub async fn handle_model_create(&mut self, create: AIModel) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_model_create(
+        &mut self,
+        create: AIModel,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let op = self.model_state.update_model_local(create);
         self.handle_model_op(op).await
     }
 
-    pub async fn handle_model_update(&mut self, update: AIModel) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_model_update(
+        &mut self,
+        update: AIModel,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let op = self.model_state.update_model_local(update);
         self.handle_model_op(op).await
     }
 
-    pub async fn handle_model_delete(&mut self, delete: String) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_model_delete(
+        &mut self,
+        delete: String,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // Check if account exists
-        if self.model_state.get_model(&delete) == None { return Err(Box::new(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("Account with address {delete} does not exist")
-        ))) };
+        if self.model_state.get_model(&delete).is_none() {
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Account with address {delete} does not exist"),
+            )));
+        };
 
         // Delete the account (remove it from the map)
         let op = self.model_state.remove_model_local(delete);
@@ -1191,25 +1559,37 @@ impl DataStore {
         self.model_state.map.apply(op.clone());
 
         // Write to queue
-        if let Err(e) = DataStore::write_to_queue(ModelRequest::Op(op), 9, "global_crdt_ops".to_string()).await {
+        if let Err(e) =
+            DataStore::write_to_queue(ModelRequest::Op(op), 9, "global_crdt_ops".to_string()).await
+        {
             log::error!("Error writing to queue: {}", e);
         }
 
         Ok(())
     }
 
-    pub async fn handle_model_op(&mut self, model_op: ModelOp) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_model_op(
+        &mut self,
+        model_op: ModelOp,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         self.model_state.map.apply(model_op);
         Ok(())
     }
 
     // Task handler methods
-    pub async fn handle_task_request(&mut self, task_request: TaskRequest) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_task_request(
+        &mut self,
+        task_request: TaskRequest,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         match task_request {
             TaskRequest::Op(op) => self.handle_task_op(op).await?,
             TaskRequest::Create(mut task_to_create) => {
                 // Ensure initial status for PoC tasks
-                if matches!(task_to_create.task_variant, crate::tasks::TaskVariant::BuildImage(_) | crate::tasks::TaskVariant::LaunchInstance(_)) {
+                if matches!(
+                    task_to_create.task_variant,
+                    crate::tasks::TaskVariant::BuildImage(_)
+                        | crate::tasks::TaskVariant::LaunchInstance(_)
+                ) {
                     task_to_create.status = crate::tasks::TaskStatus::PendingPoCAssessment;
                 }
                 // TODO: task_id generation if not provided by client.
@@ -1221,7 +1601,11 @@ impl DataStore {
                 self.handle_task_op(op).await?;
 
                 // If it's a PoC eligible task, immediately determine responsible nodes and update it.
-                if matches!(task_to_create.task_variant, crate::tasks::TaskVariant::BuildImage(_) | crate::tasks::TaskVariant::LaunchInstance(_)) {
+                if matches!(
+                    task_to_create.task_variant,
+                    crate::tasks::TaskVariant::BuildImage(_)
+                        | crate::tasks::TaskVariant::LaunchInstance(_)
+                ) {
                     // Fetch the just-created task to ensure we have its latest CRDT state (though task_to_create is what we just put in)
                     // It might be cleaner if update_task_local returned the created task state or if handle_task_op did.
                     // For now, let's re-fetch or use task_to_create if we trust its state is what was persisted before gossip.
@@ -1230,24 +1614,43 @@ impl DataStore {
                     // We need all nodes from the datastore.
                     let all_nodes = self.node_state.list_nodes(); // Assuming list_nodes() exists and returns Vec<Node>
 
-                    let responsible_nodes = crate::tasks::determine_responsible_nodes(&task_to_create, &all_nodes, self);
+                    let responsible_nodes = crate::tasks::determine_responsible_nodes(
+                        &task_to_create,
+                        &all_nodes,
+                        self,
+                    );
 
-                    log::info!("PoC determined responsible nodes for task {}: {:?}", task_to_create.task_id, responsible_nodes);
+                    log::info!(
+                        "PoC determined responsible nodes for task {}: {:?}",
+                        task_to_create.task_id,
+                        responsible_nodes
+                    );
 
                     // Now, update the task with responsible_nodes and new status
-                    if let Some(mut task_to_update) = self.task_state.get_task(&task_to_create.task_id) { // Removed .cloned()
+                    if let Some(mut task_to_update) =
+                        self.task_state.get_task(&task_to_create.task_id)
+                    {
+                        // Removed .cloned()
                         task_to_update.responsible_nodes = Some(responsible_nodes);
                         task_to_update.status = crate::tasks::TaskStatus::PoCAssigned;
                         task_to_update.updated_at = chrono::Utc::now().timestamp();
                         let update_op = self.task_state.update_task_local(task_to_update);
                         self.handle_task_op(update_op).await?;
                     } else {
-                        log::error!("Failed to re-fetch task {} for PoC update.", task_to_create.task_id);
+                        log::error!(
+                            "Failed to re-fetch task {} for PoC update.",
+                            task_to_create.task_id
+                        );
                         // Not returning error here, as initial task creation succeeded. PoC can be retried.
                     }
                 }
             }
-            TaskRequest::UpdateStatus{ task_id, status, progress, result_info } => {
+            TaskRequest::UpdateStatus {
+                task_id,
+                status,
+                progress,
+                result_info,
+            } => {
                 if let Some(mut task) = self.task_state.get_task(&task_id) {
                     task.status = status;
                     task.progress = progress;
@@ -1256,11 +1659,18 @@ impl DataStore {
                     let op = self.task_state.update_task_local(task);
                     self.handle_task_op(op).await?;
                 } else {
-                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::NotFound, format!("Task not found: {task_id}"))));
+                    return Err(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!("Task not found: {task_id}"),
+                    )));
                 }
             }
-            TaskRequest::AssignNode{ task_id, node_id, status_after_assign } => {
-                 if let Some(mut task) = self.task_state.get_task(&task_id) {
+            TaskRequest::AssignNode {
+                task_id,
+                node_id,
+                status_after_assign,
+            } => {
+                if let Some(mut task) = self.task_state.get_task(&task_id) {
                     task.assigned_to_node_id = node_id;
                     if let Some(new_status) = status_after_assign {
                         task.status = new_status;
@@ -1269,27 +1679,42 @@ impl DataStore {
                     let op = self.task_state.update_task_local(task);
                     self.handle_task_op(op).await?;
                 } else {
-                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::NotFound, format!("Task not found: {task_id}"))));
+                    return Err(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!("Task not found: {task_id}"),
+                    )));
                 }
             }
         }
         Ok(())
     }
 
-    pub async fn handle_task_op(&mut self, task_op: TaskOp) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handle_task_op(
+        &mut self,
+        task_op: TaskOp,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut op_applied_successfully = false;
         let op_to_propagate = task_op.clone();
 
         match &task_op {
             Op::Up { dot: _, key, op } => {
                 self.task_state.task_op(task_op.clone()); // Apply locally, clone task_op as it's borrowed in match
-                // Using task_id from the successfully applied op for verification
-                if let (true, Some(_)) = self.task_state.task_op_success(&op.op().value.task_id, op) {
-                    log::info!("Task Op::Up successfully applied locally for task_id: {}", key);
+                                                          // Using task_id from the successfully applied op for verification
+                if let (true, Some(_)) = self.task_state.task_op_success(&op.op().value.task_id, op)
+                {
+                    log::info!(
+                        "Task Op::Up successfully applied locally for task_id: {}",
+                        key
+                    );
                     op_applied_successfully = true;
                 } else {
-                    log::error!("Task Op::Up failed to apply locally or was a no-op for task_id: {}.", key);
-                    return Err(Box::new(std::io::Error::other(format!("Task Op::Up failed local application for task_id: {key}"))));
+                    log::error!(
+                        "Task Op::Up failed to apply locally or was a no-op for task_id: {}.",
+                        key
+                    );
+                    return Err(Box::new(std::io::Error::other(format!(
+                        "Task Op::Up failed local application for task_id: {key}"
+                    ))));
                 }
             }
             Op::Rm { .. } => {
@@ -1302,13 +1727,21 @@ impl DataStore {
         if op_applied_successfully {
             #[cfg(feature = "devnet")]
             {
-                log::info!("devnet mode: Task Op applied locally. Gossiping directly with op: {:?}", op_to_propagate);
+                log::info!(
+                    "devnet mode: Task Op applied locally. Gossiping directly with op: {:?}",
+                    op_to_propagate
+                );
                 self.gossip_op_directly(&op_to_propagate, "TaskOp").await?;
             }
             #[cfg(not(feature = "devnet"))]
             {
                 log::info!("production mode: Queuing Task Op ({:?}).", op_to_propagate);
-                DataStore::write_to_queue(crate::datastore::TaskRequest::Op(op_to_propagate.clone()), 10, "global_crdt_ops".to_string()).await?;
+                DataStore::write_to_queue(
+                    crate::datastore::TaskRequest::Op(op_to_propagate.clone()),
+                    10,
+                    "global_crdt_ops".to_string(),
+                )
+                .await?;
             }
             write_datastore(&DB_HANDLE, &self.clone())?;
         }
@@ -1321,10 +1754,10 @@ impl DataStore {
         sub_topic: u8,
         topic_string: String, // New parameter
     ) -> Result<(), Box<dyn std::error::Error>> {
-        use reqwest::Client;
         use form_p2p::queue::{QueueRequest, QueueResponse, QUEUE_PORT};
-        use tiny_keccak::{Hasher, Sha3};
         use hex;
+        use reqwest::Client;
+        use tiny_keccak::{Hasher, Sha3};
 
         let mut hasher = Sha3::v256();
         let mut topic_hash_bytes = [0u8; 32];
@@ -1336,15 +1769,22 @@ impl DataStore {
 
         let request_payload = QueueRequest::Write {
             content: message_code,
-            topic: hex::encode(topic_hash_bytes)
+            topic: hex::encode(topic_hash_bytes),
         };
 
-        log::debug!("Writing to queue (topic: '{}', sub_topic: {}): {:?}", topic_string, sub_topic, request_payload);
+        log::debug!(
+            "Writing to queue (topic: '{}', sub_topic: {}): {:?}",
+            topic_string,
+            sub_topic,
+            request_payload
+        );
 
         match Client::new()
             .post(format!("http://127.0.0.1:{QUEUE_PORT}/queue/write_local"))
             .json(&request_payload)
-            .send().await {
+            .send()
+            .await
+        {
             Ok(response) => {
                 if response.status().is_success() {
                     match response.json::<QueueResponse>().await {
@@ -1369,7 +1809,12 @@ impl DataStore {
         sub_topic: u8,
         topic_string: String, // New parameter, used in log
     ) -> Result<(), Box<dyn std::error::Error>> {
-        log::info!("DEVNET MODE: Skipped queue write for topic '{}', subtopic {}. Message: {:?}", topic_string, sub_topic, serde_json::to_string(&message).unwrap_or_else(|_| "<serialization error>".to_string()));
+        log::info!(
+            "DEVNET MODE: Skipped queue write for topic '{}', subtopic {}. Message: {:?}",
+            topic_string,
+            sub_topic,
+            serde_json::to_string(&message).unwrap_or_else(|_| "<serialization error>".to_string())
+        );
         Ok(())
     }
 
@@ -1395,16 +1840,21 @@ impl DataStore {
 
         match Client::new()
             .get(endpoint.clone())
-            .send().await?
-            .json::<QueueResponse>().await? {
-                QueueResponse::List(list) => {
-                    log::info!("read from queue...");
-                    Ok(list)
-                },
-                QueueResponse::Failure { reason } => {
-                    Err(Box::new(std::io::Error::other(format!("{reason:?}"))))
-                },
-                _ => Err(Box::new(std::io::Error::other(format!("Invalid response variant for {endpoint}"))))
+            .send()
+            .await?
+            .json::<QueueResponse>()
+            .await?
+        {
+            QueueResponse::List(list) => {
+                log::info!("read from queue...");
+                Ok(list)
+            }
+            QueueResponse::Failure { reason } => {
+                Err(Box::new(std::io::Error::other(format!("{reason:?}"))))
+            }
+            _ => Err(Box::new(std::io::Error::other(format!(
+                "Invalid response variant for {endpoint}"
+            )))),
         }
     }
 
@@ -1421,43 +1871,53 @@ impl DataStore {
     pub async fn broadcast<R: DeserializeOwned>(
         &mut self,
         request: impl Serialize + Clone,
-        endpoint: &str
+        endpoint: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         log::info!("Bradcasting Op to all active admins...");
         let peers = self.get_all_active_admin();
         for (id, peer) in peers {
-
             if id == self.node_state.node_id {
-                continue
+                continue;
             }
 
             log::info!("Sending Op to all {id} at {}...", peer.ip().to_string());
 
-            if let Err(e) = self.send::<R>(&peer.ip().to_string(), endpoint, request.clone()).await {
-                eprintln!("Error sending {endpoint} request to {id}: {}: {e}", peer.ip());
+            if let Err(e) = self
+                .send::<R>(&peer.ip().to_string(), endpoint, request.clone())
+                .await
+            {
+                eprintln!(
+                    "Error sending {endpoint} request to {id}: {}: {e}",
+                    peer.ip()
+                );
             };
 
             log::info!("Successfully sent Op {id} at {}...", peer.ip().to_string());
-
         }
 
         Ok(())
     }
 
-    pub async fn send<R: DeserializeOwned>(&mut self, ip: &str, endpoint: &str, request: impl Serialize) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn send<R: DeserializeOwned>(
+        &mut self,
+        ip: &str,
+        endpoint: &str,
+        request: impl Serialize,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         match Client::new()
             .post(format!("http://{ip}:3004/{endpoint}"))
             .json(&request)
             .send()
-            .await {
-                Ok(resp) => match resp.json::<R>().await {
-                    Ok(_) => println!("Succesfully shared request with {ip}"),
-                    Err(e) => eprintln!("Unable to decode response to request from {ip}: {e}")
-                }
-                Err(e) => {
-                    eprintln!("Unable to share request with {ip}: {e}");
-                }
-            };
+            .await
+        {
+            Ok(resp) => match resp.json::<R>().await {
+                Ok(_) => println!("Succesfully shared request with {ip}"),
+                Err(e) => eprintln!("Unable to decode response to request from {ip}: {e}"),
+            },
+            Err(e) => {
+                eprintln!("Unable to share request with {ip}: {e}");
+            }
+        };
 
         Ok(())
     }
@@ -1466,18 +1926,19 @@ impl DataStore {
     async fn gossip_op_directly<O: Serialize + Clone + std::fmt::Debug>(
         &self,
         operation: &O,
-        op_type_description: &str
+        op_type_description: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        use k256::ecdsa::SigningKey;
+        use crate::api::DevnetGossipOpContainer;
         use k256::ecdsa::signature::Signer; // For sign_recoverable
-        use sha2::{Sha256, Digest as Sha2Digest}; // Import and alias Digest
-        use crate::api::DevnetGossipOpContainer; // Make sure this path is correct
+        use k256::ecdsa::SigningKey;
+        use sha2::{Digest as Sha2Digest, Sha256}; // Import and alias Digest // Make sure this path is correct
 
         log::info!("DEVNET: Gossiping {} directly.", op_type_description);
 
         let mut active_peer_api_endpoints: Vec<String> = Vec::new();
         for peer_entry in self.network_state.peers.iter() {
-            if let Some(peer_val_reg) = peer_entry.val.1.val() { // Corrected iteration
+            if let Some(peer_val_reg) = peer_entry.val.1.val() {
+                // Corrected iteration
                 let peer = peer_val_reg.value();
                 if !peer.is_disabled && peer.id != self.node_state.node_id {
                     if let Some(endpoint) = &peer.endpoint {
@@ -1487,22 +1948,37 @@ impl DataStore {
                                 active_peer_api_endpoints.push(api_endpoint_url);
                             }
                             Err(e) => {
-                                log::warn!("DEVNET: Failed to resolve endpoint for peer {}: {}", peer.id, e);
+                                log::warn!(
+                                    "DEVNET: Failed to resolve endpoint for peer {}: {}",
+                                    peer.id,
+                                    e
+                                );
                             }
                         }
                     } else {
-                        log::warn!("DEVNET: Peer {} has no endpoint, cannot gossip directly.", peer.id);
+                        log::warn!(
+                            "DEVNET: Peer {} has no endpoint, cannot gossip directly.",
+                            peer.id
+                        );
                     }
                 }
             }
         }
 
         if active_peer_api_endpoints.is_empty() {
-            log::info!("DEVNET: No active peers found to gossip {} to.", op_type_description);
+            log::info!(
+                "DEVNET: No active peers found to gossip {} to.",
+                op_type_description
+            );
             return Ok(());
         }
 
-        let signing_key = SigningKey::from_slice(&hex::decode(&self.pk).map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("Invalid hex for PK: {}", e))))?)?;
+        let signing_key = SigningKey::from_slice(&hex::decode(&self.pk).map_err(|e| {
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("Invalid hex for PK: {}", e),
+            ))
+        })?)?;
 
         let op_payload_json_string = serde_json::to_string(operation)?;
         let gossip_payload_container = DevnetGossipOpContainer {
@@ -1517,33 +1993,63 @@ impl DataStore {
         hasher.update(message_bytes_for_http);
         let message_hash_for_http = hasher.finalize();
 
-        let (signature, recovery_id) = signing_key.sign_recoverable(&message_hash_for_http)
-            .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to sign gossip message: {}", e))))?;
+        let (signature, recovery_id) = signing_key
+            .sign_recoverable(&message_hash_for_http)
+            .map_err(|e| {
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Failed to sign gossip message: {}", e),
+                ))
+            })?;
 
         let signature_hex = hex::encode(signature.to_bytes());
         let recovery_id_byte = recovery_id.to_byte();
         let message_hex_for_header = hex::encode(message_bytes_for_http);
-        let auth_header_value = format!("Signature {}.{}.{}", signature_hex, recovery_id_byte, message_hex_for_header);
+        let auth_header_value = format!(
+            "Signature {}.{}.{}",
+            signature_hex, recovery_id_byte, message_hex_for_header
+        );
 
         let client = reqwest::Client::new();
         for target_peer_base_url in active_peer_api_endpoints {
             let target_url = format!("{}/devnet_gossip/apply_op", target_peer_base_url);
-            log::debug!("DEVNET: Sending {} to {} with auth header", op_type_description, target_url);
+            log::debug!(
+                "DEVNET: Sending {} to {} with auth header",
+                op_type_description,
+                target_url
+            );
 
-            match client.post(&target_url)
+            match client
+                .post(&target_url)
                 .header(reqwest::header::AUTHORIZATION, &auth_header_value)
                 .json(&gossip_payload_container)
-                .send().await {
+                .send()
+                .await
+            {
                 Ok(response) => {
                     if response.status().is_success() {
-                        log::info!("DEVNET: Successfully gossiped {} to {}", op_type_description, target_url);
+                        log::info!(
+                            "DEVNET: Successfully gossiped {} to {}",
+                            op_type_description,
+                            target_url
+                        );
                     } else {
-                        log::error!("DEVNET: Failed to gossip {} to {}: Status: {}, Body: {:?}",
-                            op_type_description, target_url, response.status(), response.text().await.unwrap_or_default());
+                        log::error!(
+                            "DEVNET: Failed to gossip {} to {}: Status: {}, Body: {:?}",
+                            op_type_description,
+                            target_url,
+                            response.status(),
+                            response.text().await.unwrap_or_default()
+                        );
                     }
                 }
                 Err(e) => {
-                    log::error!("DEVNET: Error gossiping {} to {}: {}", op_type_description, target_url, e);
+                    log::error!(
+                        "DEVNET: Error gossiping {} to {}: {}",
+                        op_type_description,
+                        target_url,
+                        e
+                    );
                 }
             }
         }
@@ -1551,14 +2057,20 @@ impl DataStore {
     }
 
     // Method to dispatch a task to a specific responsible node
-    async fn dispatch_task_to_node(&self, task: &crate::tasks::Task, node: &crate::nodes::Node) -> Result<(), Box<dyn std::error::Error>> {
+    async fn dispatch_task_to_node(
+        &self,
+        task: &crate::tasks::Task,
+        node: &crate::nodes::Node,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         log::info!("Dispatching task {} to node {}", task.task_id, node.node_id);
 
         let client = reqwest::Client::new(); // Used for devnet direct HTTP calls
 
         match &task.task_variant {
             crate::tasks::TaskVariant::LaunchInstance(params) => {
-                if let Some(target_service_base_url) = node.metadata.annotations().vmm_service_api_endpoint() {
+                if let Some(target_service_base_url) =
+                    node.metadata.annotations().vmm_service_api_endpoint()
+                {
                     let launch_info = form_types::event::LaunchTaskInfo {
                         task_id: task.task_id.clone(),
                         instance_name: params.instance_name.clone(),
@@ -1569,28 +2081,44 @@ impl DataStore {
 
                     #[cfg(feature = "devnet")]
                     {
-                        let target_url = format!("{}/internal/dispatch_launch_task", target_service_base_url); // Assuming this endpoint on vmm-service
-                        log::info!("DEVNET: Dispatching LaunchInstance task {} to {} at {}", task.task_id, node.node_id, target_url);
+                        let target_url =
+                            format!("{}/internal/dispatch_launch_task", target_service_base_url); // Assuming this endpoint on vmm-service
+                        log::info!(
+                            "DEVNET: Dispatching LaunchInstance task {} to {} at {}",
+                            task.task_id,
+                            node.node_id,
+                            target_url
+                        );
 
                         // Prepare payload & sign request (similar to gossip_op_directly)
-                        let signing_key = k256::ecdsa::SigningKey::from_slice(&hex::decode(&self.pk)?)?;
+                        let signing_key =
+                            k256::ecdsa::SigningKey::from_slice(&hex::decode(&self.pk)?)?;
                         let message_to_sign = serde_json::to_string(&launch_info)?;
                         let mut hasher = sha2::Sha256::new();
                         hasher.update(message_to_sign.as_bytes());
                         let message_hash = hasher.finalize();
-                        let (signature, recovery_id) = signing_key.sign_recoverable(&message_hash)
-                            .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to sign dispatch message: {}", e))))?;
+                        let (signature, recovery_id) =
+                            signing_key.sign_recoverable(&message_hash).map_err(|e| {
+                                Box::new(std::io::Error::new(
+                                    std::io::ErrorKind::Other,
+                                    format!("Failed to sign dispatch message: {}", e),
+                                ))
+                            })?;
 
-                        let auth_header_value = format!("Signature {}.{}.{}",
+                        let auth_header_value = format!(
+                            "Signature {}.{}.{}",
                             hex::encode(signature.to_bytes()),
                             recovery_id.to_byte(),
                             hex::encode(message_to_sign.as_bytes())
                         );
 
-                        match client.post(&target_url)
+                        match client
+                            .post(&target_url)
                             .header(reqwest::header::AUTHORIZATION, auth_header_value)
                             .json(&launch_info)
-                            .send().await {
+                            .send()
+                            .await
+                        {
                             Ok(response) => {
                                 if response.status().is_success() {
                                     log::info!("DEVNET: Successfully dispatched LaunchInstance task {} to {}", task.task_id, target_url);
@@ -1600,20 +2128,35 @@ impl DataStore {
                                 }
                             }
                             Err(e) => {
-                                log::error!("DEVNET: Error dispatching LaunchInstance task {} to {}: {}", task.task_id, target_url, e);
+                                log::error!(
+                                    "DEVNET: Error dispatching LaunchInstance task {} to {}: {}",
+                                    task.task_id,
+                                    target_url,
+                                    e
+                                );
                             }
                         }
                     }
                     #[cfg(not(feature = "devnet"))]
                     {
-                        log::info!("PRODUCTION: Dispatching LaunchInstance task {} to node {} via queue", task.task_id, node.node_id);
+                        log::info!(
+                            "PRODUCTION: Dispatching LaunchInstance task {} to node {} via queue",
+                            task.task_id,
+                            node.node_id
+                        );
                         let vmm_event = form_types::VmmEvent::ProcessLaunchTask(launch_info); // launch_info was constructed above
 
                         // Define a node-specific topic for VMM tasks
                         let target_topic_string = format!("vmm_tasks_for_node_{}", node.node_id);
                         let vmm_task_sub_topic = 20; // Define a sub-topic for these events, e.g., 20
 
-                        if let Err(e) = DataStore::write_to_queue(vmm_event, vmm_task_sub_topic, target_topic_string.clone()).await {
+                        if let Err(e) = DataStore::write_to_queue(
+                            vmm_event,
+                            vmm_task_sub_topic,
+                            target_topic_string.clone(),
+                        )
+                        .await
+                        {
                             log::error!("PRODUCTION: Failed to queue LaunchInstance task {} for node {}: {}", task.task_id, node.node_id, e);
                             // Potentially update task state to an error here or retry later
                         } else {
@@ -1627,10 +2170,18 @@ impl DataStore {
                 }
             }
             crate::tasks::TaskVariant::BuildImage(_params) => {
-                log::info!("Dispatching BuildImage task {} to node {}", task.task_id, node.node_id);
-                if let Some(_endpoint_url) = node.metadata.annotations().pack_service_api_endpoint() {
+                log::info!(
+                    "Dispatching BuildImage task {} to node {}",
+                    task.task_id,
+                    node.node_id
+                );
+                if let Some(_endpoint_url) = node.metadata.annotations().pack_service_api_endpoint()
+                {
                     // TODO: Implement actual dispatch logic for BuildImage (incl. pre-processing, PackBuildRequest)
-                    log::warn!("DEVNET/PROD: Dispatch for BuildImage task {} TBD.", task.task_id);
+                    log::warn!(
+                        "DEVNET/PROD: Dispatch for BuildImage task {} TBD.",
+                        task.task_id
+                    );
                 } else {
                     log::warn!("Node {} is responsible for BuildImage task {} but has no pack_service_api_endpoint defined.", node.node_id, task.task_id);
                 }
@@ -1654,7 +2205,7 @@ pub async fn complete_bootstrap(State(state): State<Arc<Mutex<DataStore>>>) {
     let sample_size = if size < 10 {
         size
     } else {
-        ((size as f64)* 0.33).ceil() as usize
+        ((size as f64) * 0.33).ceil() as usize
     };
 
     let mut keys: Vec<&String> = operators.keys().collect();
@@ -1674,34 +2225,50 @@ pub async fn complete_bootstrap(State(state): State<Arc<Mutex<DataStore>>>) {
     tokio::spawn(async move {
         let sample_iter = sample.iter();
         for (id, peer) in sample_iter {
-            match client.get(
-                format!("http://{}:3004/v1/bootstrap/full_state", peer.ip())
-            ).send().await {
-                Ok(r) => match r.json::<MergeableState>().await {
-                    Ok(mergeable_state) => {
-                        let mut guard = state.lock().await;
-                        guard.network_state.peers.merge(mergeable_state.peers);
-                        guard.network_state.cidrs.merge(mergeable_state.cidrs);
-                        guard.network_state.associations.merge(mergeable_state.assocs);
-                        guard.network_state.dns_state.zones.merge(mergeable_state.dns);
-                        guard.instance_state.map.merge(mergeable_state.instances);
-                        guard.node_state.map.merge(mergeable_state.nodes);
-                        drop(guard);
-                    }
-                    Err(e) => {
-                        log::error!("Error attempting to deserialize mergeable state from {id} at {}: {e}", peer.ip());
+            match client
+                .get(format!("http://{}:3004/v1/bootstrap/full_state", peer.ip()))
+                .send()
+                .await
+            {
+                Ok(r) => {
+                    match r.json::<MergeableState>().await {
+                        Ok(mergeable_state) => {
+                            let mut guard = state.lock().await;
+                            guard.network_state.peers.merge(mergeable_state.peers);
+                            guard.network_state.cidrs.merge(mergeable_state.cidrs);
+                            guard
+                                .network_state
+                                .associations
+                                .merge(mergeable_state.assocs);
+                            guard
+                                .network_state
+                                .dns_state
+                                .zones
+                                .merge(mergeable_state.dns);
+                            guard.instance_state.map.merge(mergeable_state.instances);
+                            guard.node_state.map.merge(mergeable_state.nodes);
+                            drop(guard);
+                        }
+                        Err(e) => {
+                            log::error!("Error attempting to deserialize mergeable state from {id} at {}: {e}", peer.ip());
+                        }
                     }
                 }
                 Err(e) => {
-                    log::error!("Error attempting to get mergeable state from {id} at {}: {e}", peer.ip());
+                    log::error!(
+                        "Error attempting to get mergeable state from {id} at {}: {e}",
+                        peer.ip()
+                    );
                 }
             }
-
         }
     });
 }
 
-pub async fn process_message(message: Vec<u8>, state: Arc<Mutex<DataStore>>) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn process_message(
+    message: Vec<u8>,
+    state: Arc<Mutex<DataStore>>,
+) -> Result<(), Box<dyn std::error::Error>> {
     if message.is_empty() {
         return Err(Box::new(std::io::Error::other("Message was empty")));
     }
@@ -1716,53 +2283,55 @@ pub async fn process_message(message: Vec<u8>, state: Arc<Mutex<DataStore>>) -> 
             log::info!("Pulled peer request from queue, processing...");
             let peer_request: PeerRequest = serde_json::from_slice(payload)?;
             guard.handle_peer_request(peer_request).await?;
-        },
+        }
         1 => {
             log::info!("Pulled cidr request from queue, processing...");
             let cidr_request: CidrRequest = serde_json::from_slice(payload)?;
             guard.handle_cidr_request(cidr_request).await?;
-        },
+        }
         2 => {
             log::info!("Pulled assoc request from queue, processing...");
             let assoc_request: AssocRequest = serde_json::from_slice(payload)?;
             guard.handle_assoc_request(assoc_request).await?;
-        },
+        }
         3 => {
             log::info!("Pulled dns request from queue, processing...");
             let dns_request: DnsRequest = serde_json::from_slice(payload)?;
             guard.handle_dns_request(dns_request).await?;
-        },
+        }
         4 => {
             log::info!("Pulled instance request from queue, processing...");
             let instance_request: InstanceRequest = serde_json::from_slice(payload)?;
             guard.handle_instance_request(instance_request).await?;
-        },
+        }
         5 => {
             log::info!("Pulled node request from queue, processing...");
             let node_request: NodeRequest = serde_json::from_slice(payload)?;
             guard.handle_node_request(node_request).await?;
-        },
+        }
         6 => {
             log::info!("Pulled node metrics request from queue, processing...");
             let node_metrics_request: NodeMetricsRequest = serde_json::from_slice(payload)?;
-            guard.handle_node_metrics_request(node_metrics_request).await?;
-        },
+            guard
+                .handle_node_metrics_request(node_metrics_request)
+                .await?;
+        }
         7 => {
             log::info!("Pulled account request from queue, processing...");
             let account_request: AccountRequest = serde_json::from_slice(payload)?;
             guard.handle_account_request(account_request).await?;
-        },
+        }
         8 => {
             log::info!("Pulled agent request from queue, processing...");
             let agent_request: AgentRequest = serde_json::from_slice(payload)?;
             guard.handle_agent_request(agent_request).await?;
-        },
+        }
         9 => {
             log::info!("Pulled model request from queue, processing...");
             let model_request: ModelRequest = serde_json::from_slice(payload)?;
             guard.handle_model_request(model_request).await?;
         }
-        _ => unreachable!()
+        _ => unreachable!(),
     }
 
     drop(guard);
@@ -1775,18 +2344,19 @@ pub async fn pong() -> Json<Value> {
     Json(serde_json::json!({"ping":"pong"}))
 }
 
-pub async fn full_state(
-    State(state): State<Arc<Mutex<DataStore>>>,
-) -> Json<MergeableState> {
+pub async fn full_state(State(state): State<Arc<Mutex<DataStore>>>) -> Json<MergeableState> {
     log::info!("Received full state request, returning...");
     let datastore = state.lock().await.clone();
     Json(datastore.into())
 }
 
-pub async fn request_full_state(to_dial: &str, private_key: &str) -> Result<MergeableState, Box<dyn std::error::Error>> {
+pub async fn request_full_state(
+    to_dial: &str,
+    private_key: &str,
+) -> Result<MergeableState, Box<dyn std::error::Error>> {
     use k256::ecdsa::SigningKey;
-    use sha2::{Sha256, Digest};
     use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+    use sha2::{Digest, Sha256};
 
     // Create signing key from private key
     let signing_key = SigningKey::from_slice(&hex::decode(private_key)?)?;
@@ -1817,14 +2387,17 @@ pub async fn request_full_state(to_dial: &str, private_key: &str) -> Result<Merg
     headers.insert(
         AUTHORIZATION,
         HeaderValue::from_str(&auth_header_value)
-            .map_err(|e| format!("Invalid header value: {e}"))?
+            .map_err(|e| format!("Invalid header value: {e}"))?,
     );
 
     // Make authenticated request
     let resp = Client::new()
         .get(format!("http://{to_dial}:3004/v1/bootstrap/full_state"))
         .headers(headers)
-        .send().await?.json().await?;
+        .send()
+        .await?
+        .json()
+        .await?;
 
     println!("{resp:?}");
     Ok(resp)
@@ -1832,13 +2405,16 @@ pub async fn request_full_state(to_dial: &str, private_key: &str) -> Result<Merg
 
 #[cfg(test)]
 mod tests {
-    use crate::instances::{InstanceAnnotations, InstanceCluster, InstanceEncryption, InstanceMetadata, InstanceMonitoring, InstanceResources, InstanceSecurity, InstanceStatus};
+    use crate::instances::{
+        InstanceAnnotations, InstanceCluster, InstanceEncryption, InstanceMetadata,
+        InstanceMonitoring, InstanceResources, InstanceSecurity, InstanceStatus,
+    };
     use crate::nodes::{NodeAnnotations, NodeMetadata, NodeMonitoring};
 
     use super::*;
-    use k256::ecdsa::SigningKey;
     use crdts::{CmRDT, Map};
     use ipnet::IpNet;
+    use k256::ecdsa::SigningKey;
     use rand::thread_rng;
     use std::collections::BTreeMap;
     use std::str::FromStr;
@@ -1881,7 +2457,8 @@ mod tests {
         let peer_ctx = peers.read_ctx().derive_add_ctx(actor.clone());
         let peer_op = peers.update("peer1".to_string(), peer_ctx, |reg, _| {
             // update returns a signed op (or an error)
-            reg.update(fake_peer, actor.clone(), signing_key.clone()).expect("Unable to sign update, Panicking")
+            reg.update(fake_peer, actor.clone(), signing_key.clone())
+                .expect("Unable to sign update, Panicking")
         });
         peers.apply(peer_op);
 
@@ -1894,8 +2471,8 @@ mod tests {
         };
         let cidr_ctx = cidrs.read_ctx().derive_add_ctx(actor.clone());
         let cidr_op = cidrs.update("cidr1".to_string(), cidr_ctx, |reg, _| {
-            reg.update(fake_cidr, actor.clone(), signing_key.clone()).expect("Unable to sign update, Panicking")
-
+            reg.update(fake_cidr, actor.clone(), signing_key.clone())
+                .expect("Unable to sign update, Panicking")
         });
         cidrs.apply(cidr_op);
 
@@ -1907,8 +2484,8 @@ mod tests {
         };
         let assoc_ctx = assocs.read_ctx().derive_add_ctx(actor.clone());
         let assoc_op = assocs.update("assoc1".to_string(), assoc_ctx, |reg, _| {
-            reg.update(fake_assoc, actor.clone(), signing_key.clone()).expect("Unable to sign update, Panicking")
-
+            reg.update(fake_assoc, actor.clone(), signing_key.clone())
+                .expect("Unable to sign update, Panicking")
         });
         assocs.apply(assoc_op);
 
@@ -1924,8 +2501,8 @@ mod tests {
         };
         let dns_ctx = dns.read_ctx().derive_add_ctx(actor.clone());
         let dns_op = dns.update("example.com".to_string(), dns_ctx, |reg, _| {
-            reg.update(fake_dns, actor.clone(), signing_key.clone()).expect("Unable to sign update, Panicking")
-
+            reg.update(fake_dns, actor.clone(), signing_key.clone())
+                .expect("Unable to sign update, Panicking")
         });
         dns.apply(dns_op);
 
@@ -1981,8 +2558,8 @@ mod tests {
         };
         let inst_ctx = instances.read_ctx().derive_add_ctx(actor.clone());
         let inst_op = instances.update("instance1".to_string(), inst_ctx, |reg, _| {
-            reg.update(fake_instance, actor.clone(), signing_key.clone()).expect("Unable to sign update, Panicking")
-
+            reg.update(fake_instance, actor.clone(), signing_key.clone())
+                .expect("Unable to sign update, Panicking")
         });
         instances.apply(inst_op);
 
@@ -2003,7 +2580,7 @@ mod tests {
                 annotations: NodeAnnotations {
                     roles: vec!["compute".to_string()],
                     datacenter: "dc1".to_string(),
-                    vmm_service_api_endpoint: None, // Added field
+                    vmm_service_api_endpoint: None,  // Added field
                     pack_service_api_endpoint: None, // Added field
                 },
                 monitoring: NodeMonitoring {
@@ -2016,8 +2593,8 @@ mod tests {
         };
         let node_ctx = nodes.read_ctx().derive_add_ctx(actor.clone());
         let node_op = nodes.update("node1".to_string(), node_ctx, |reg, _| {
-            reg.update(fake_node, actor.clone(), signing_key.clone()).expect("Unable to sign update, Panicking")
-
+            reg.update(fake_node, actor.clone(), signing_key.clone())
+                .expect("Unable to sign update, Panicking")
         });
         nodes.apply(node_op);
 

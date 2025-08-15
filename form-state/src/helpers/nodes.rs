@@ -27,34 +27,6 @@ pub async fn create_node(
     };
 
     match request {
-        NodeRequest::Op(map_op) => {
-            log::info!("Create Node request is an Op from another peer");
-            match &map_op {
-                crdts::map::Op::Up {
-                    ref key, ref op, ..
-                } => {
-                    datastore.node_state.node_op(map_op.clone());
-                    if let (true, v) = datastore
-                        .node_state
-                        .node_op_success(key.clone(), op.clone())
-                    {
-                        log::info!("Node Op succesffully applied...");
-                        let _ = write_datastore(&DB_HANDLE, &datastore.clone());
-                        Json(Response::Success(Success::Some(v)))
-                    } else {
-                        log::info!("Node Op rejected...");
-                        Json(Response::Failure {
-                            reason: Some("update was rejected".to_string()),
-                        })
-                    }
-                }
-                crdts::map::Op::Rm { .. } => {
-                    Json(Response::Failure {
-                        reason: Some("Invalid Op type for Create Node".into()),
-                    })
-                }
-            }
-        }
         NodeRequest::Create(mut contents) => {
             log::info!("Create Node request was a direct request...");
 
@@ -72,14 +44,12 @@ pub async fn create_node(
             log::info!("Map op created... Applying...");
             datastore.node_state.node_op(map_op.clone());
             match &map_op {
-                crdts::map::Op::Rm { .. } => {
-                    Json(Response::Failure {
-                        reason: Some(
-                            "Map generated RM context instead of Add context on Create request"
-                                .to_string(),
-                        ),
-                    })
-                }
+                crdts::map::Op::Rm { .. } => Json(Response::Failure {
+                    reason: Some(
+                        "Map generated RM context instead of Add context on Create request"
+                            .to_string(),
+                    ),
+                }),
                 crdts::map::Op::Up {
                     ref key, ref op, ..
                 } => {
@@ -108,11 +78,9 @@ pub async fn create_node(
                 }
             }
         }
-        _ => {
-            Json(Response::Failure {
-                reason: Some("Invalid request for create node".into()),
-            })
-        }
+        _ => Json(Response::Failure {
+            reason: Some("Invalid request for create node".into()),
+        }),
     }
 }
 
@@ -143,11 +111,9 @@ pub async fn update_node(
                         })
                     }
                 }
-                crdts::map::Op::Rm { .. } => {
-                    Json(Response::Failure {
-                        reason: Some("Invalid Op type for Create Node".into()),
-                    })
-                }
+                crdts::map::Op::Rm { .. } => Json(Response::Failure {
+                    reason: Some("Invalid Op type for Create Node".into()),
+                }),
             }
         }
         NodeRequest::Update(contents) => {
@@ -157,14 +123,12 @@ pub async fn update_node(
             log::info!("Map op created... Applying...");
             datastore.node_state.node_op(map_op.clone());
             match &map_op {
-                crdts::map::Op::Rm { .. } => {
-                    Json(Response::Failure {
-                        reason: Some(
-                            "Map generated RM context instead of Add context on Create request"
-                                .to_string(),
-                        ),
-                    })
-                }
+                crdts::map::Op::Rm { .. } => Json(Response::Failure {
+                    reason: Some(
+                        "Map generated RM context instead of Add context on Create request"
+                            .to_string(),
+                    ),
+                }),
                 crdts::map::Op::Up {
                     ref key, ref op, ..
                 } => {
@@ -193,11 +157,9 @@ pub async fn update_node(
                 }
             }
         }
-        _ => {
-            Json(Response::Failure {
-                reason: Some("Invalid request for Update Node".into()),
-            })
-        }
+        _ => Json(Response::Failure {
+            reason: Some("Invalid request for Update Node".into()),
+        }),
     }
 }
 
@@ -211,11 +173,9 @@ pub async fn delete_node(
         NodeRequest::Op(map_op) => {
             log::info!("Delete Node request is an Op from another peer");
             match &map_op {
-                crdts::map::Op::Up { .. } => {
-                    Json(Response::Failure {
-                        reason: Some("Invalid Op type for delete dns".into()),
-                    })
-                }
+                crdts::map::Op::Up { .. } => Json(Response::Failure {
+                    reason: Some("Invalid Op type for delete dns".into()),
+                }),
                 crdts::map::Op::Rm { .. } => {
                     datastore.node_state.node_op(map_op);
                     Json(Response::Success(Success::None))
@@ -243,21 +203,17 @@ pub async fn delete_node(
                     }
                     Json(Response::Success(Success::None))
                 }
-                crdts::map::Op::Up { .. } => {
-                    Json(Response::Failure {
-                        reason: Some(
-                            "Map generated Add context instead of Rm context on Delete request"
-                                .to_string(),
-                        ),
-                    })
-                }
+                crdts::map::Op::Up { .. } => Json(Response::Failure {
+                    reason: Some(
+                        "Map generated Add context instead of Rm context on Delete request"
+                            .to_string(),
+                    ),
+                }),
             }
         }
-        _ => {
-            Json(Response::Failure {
-                reason: Some("Invalid request for delete Node".into()),
-            })
-        }
+        _ => Json(Response::Failure {
+            reason: Some("Invalid request for delete Node".into()),
+        }),
     }
 }
 
@@ -299,10 +255,7 @@ pub async fn list_node_metrics(
         .iter()
         .filter_map(|ctx| {
             let (_, value) = ctx.val;
-            match value.val() {
-                Some(node) => Some(node.value().metrics),
-                None => None,
-            }
+            value.val().map(|node| node.value().metrics)
         })
         .collect();
 

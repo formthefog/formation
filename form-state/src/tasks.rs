@@ -1,30 +1,30 @@
 // form-state/src/tasks.rs
 // This module will define Task related structs and enums for Proof of Claim tasks.
 
-use serde::{Serialize, Deserialize};
-use std::collections::BTreeSet;
-use chrono;
-use crdts::{map::Op, BFTReg, merkle_reg::Sha3Hash, CmRDT};
-use crate::Actor;
-use k256::ecdsa::SigningKey;
-use hex;
-use sha2::{Sha256, Digest as Sha2Digest};
 use crate::nodes::Node;
+use crate::Actor;
 use bincode;
-use tiny_keccak::Hasher;
+use chrono;
+use crdts::{map::Op, merkle_reg::Sha3Hash, BFTReg, CmRDT};
+use hex;
+use k256::ecdsa::SigningKey;
 use log;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest as Sha2Digest, Sha256};
+use std::collections::BTreeSet;
+use tiny_keccak::Hasher;
 
 pub type TaskId = String; // Should ideally be a uuid::Uuid type for guaranteed uniqueness.
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TaskStatus {
     PendingPoCAssessment, // Newly created, Proof of Claim assessment pending
-    PoCAssigned,          // Proof of Claim complete, responsible_nodes populated, awaiting pickup by a responsible node
-    Claimed,              // A responsible node has claimed it (optional intermediate state)
-    InProgress,           // Actively being worked on by an assigned node
-    Completed,            // Successfully finished
-    Failed,               // Execution failed
-    Cancelled,            // Cancelled by user/system before completion
+    PoCAssigned, // Proof of Claim complete, responsible_nodes populated, awaiting pickup by a responsible node
+    Claimed,     // A responsible node has claimed it (optional intermediate state)
+    InProgress,  // Actively being worked on by an assigned node
+    Completed,   // Successfully finished
+    Failed,      // Execution failed
+    Cancelled,   // Cancelled by user/system before completion
 }
 
 impl std::str::FromStr for TaskStatus {
@@ -45,30 +45,31 @@ impl std::str::FromStr for TaskStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct BuildImageParams { // Parameters to build an image artifact (e.g., a rootfs)
+pub struct BuildImageParams {
+    // Parameters to build an image artifact (e.g., a rootfs)
     pub output_artifact_name: String, // e.g., "my-app-rootfs"
     pub output_artifact_tag: String,  // e.g., "v1.2"
-    
+
     pub source_type: String, // e.g., "docker_context", "git_repo_with_script"
-    pub source_url: String, // URL to the source (git repo, tarball etc.)
+    pub source_url: String,  // URL to the source (git repo, tarball etc.)
     pub source_ref: Option<String>, // e.g., git branch, tag, commit hash
 
     pub build_script_path: Option<String>, // Path to a build script within the source_url context
     pub build_args: Option<std::collections::BTreeMap<String, String>>, // Args for the build script or Docker build
 
     // Information about where the built artifact should be stored/registered
-    pub target_registry_url: Option<String>, 
-    // The result of this task should ideally be an ID or path to the artifact 
+    pub target_registry_url: Option<String>,
+    // The result of this task should ideally be an ID or path to the artifact
     // and a generated/updated Formfile snippet describing this artifact.
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LaunchInstanceParams {
-    pub instance_name: String, 
+    pub instance_name: String,
     // The complete Formfile content as a string (JSON or YAML, to be parsed by VMM service)
     // This Formfile will specify the actual image paths (rootfs, kernel), resources, etc.
-    pub formfile_content: String, 
-    
+    pub formfile_content: String,
+
     // Optional runtime overrides if the VMM service supports them beyond Formfile specs
     pub runtime_env_vars: Option<std::collections::BTreeMap<String, String>>,
 }
@@ -123,7 +124,11 @@ impl crdts::merkle_reg::Sha3Hash for Task {
                 // If serialization fails, this is a critical issue for CRDT integrity.
                 // Panic here, or hash a known error sentinel and log verbosely.
                 // Hashing only task_id would be a very weak fallback.
-                log::error!("Failed to serialize Task for hashing: {}. Task ID: {}", e, self.task_id);
+                log::error!(
+                    "Failed to serialize Task for hashing: {}. Task ID: {}",
+                    e,
+                    self.task_id
+                );
                 hasher.update(self.task_id.as_bytes()); // Minimal fallback, but problematic
             }
         }
@@ -137,9 +142,9 @@ pub struct TaskState {
     // ID of the node that owns this instance of TaskState (for CRDT actor ID)
     // This might be less relevant if tasks are created by various actors (users/admins/mcp)
     // but good for consistency with other state objects if this node applies ops.
-    node_id: String, 
+    node_id: String,
     pk: String, // Private key of this node_id, for signing ops originated by this TaskState instance.
-    
+
     pub map: crdts::Map<TaskId, BFTReg<Task, Actor>, Actor>,
 }
 
@@ -157,10 +162,10 @@ impl TaskState {
     pub fn update_task_local(&mut self, task: Task) -> TaskOp {
         let add_ctx = self.map.read_ctx().derive_add_ctx(self.node_id.clone());
         let signing_key = SigningKey::from_slice(
-            &hex::decode(self.pk.clone())
-                .expect("TaskState: Invalid SigningKey Hex in pk field")
-        ).expect("TaskState: Invalid SigningKey bytes in pk field");
-        
+            &hex::decode(self.pk.clone()).expect("TaskState: Invalid SigningKey Hex in pk field"),
+        )
+        .expect("TaskState: Invalid SigningKey bytes in pk field");
+
         self.map.update(task.task_id.clone(), add_ctx, |reg, _ctx| {
             reg.update(task, self.node_id.clone(), signing_key)
                 .expect("TaskState: Unable to sign task update")
@@ -174,7 +179,8 @@ impl TaskState {
     }
 
     /// Apply an operation received from a peer.
-    pub fn task_op(&mut self, op: TaskOp) -> Option<(Actor, TaskId)> { // Changed return to match others like node_op
+    pub fn task_op(&mut self, op: TaskOp) -> Option<(Actor, TaskId)> {
+        // Changed return to match others like node_op
         self.map.apply(op.clone());
         match op {
             Op::Up { dot, key, op: _ } => Some((dot.actor, key)),
@@ -183,10 +189,15 @@ impl TaskState {
     }
 
     // Method to check if a task_op was successfully applied (useful for the caller like DataStore)
-    pub fn task_op_success(&self, task_id: &TaskId, update_op: &crdts::bft_reg::Update<Task, Actor>) -> (bool, Option<Task>) {
+    pub fn task_op_success(
+        &self,
+        task_id: &TaskId,
+        update_op: &crdts::bft_reg::Update<Task, Actor>,
+    ) -> (bool, Option<Task>) {
         if let Some(reg) = self.map.get(task_id).val {
             if let Some(v) = reg.val() {
-                if v.value().task_id == update_op.op().value.task_id { // Basic check
+                if v.value().task_id == update_op.op().value.task_id {
+                    // Basic check
                     return (true, Some(v.value()));
                 } else if reg.dag_contains(&update_op.hash()) && reg.is_head(&update_op.hash()) {
                     return (true, Some(v.value()));
@@ -201,15 +212,21 @@ impl TaskState {
 
     /// Retrieve a task by its ID.
     pub fn get_task(&self, task_id: &TaskId) -> Option<Task> {
-        self.map.get(task_id).val.and_then(|reg| reg.val().map(|v| v.value()))
+        self.map
+            .get(task_id)
+            .val
+            .and_then(|reg| reg.val().map(|v| v.value()))
     }
 
     /// List all tasks.
     pub fn list_tasks(&self) -> Vec<Task> {
-        self.map.iter().filter_map(|entry| {
-            let (_key, val_reg) = entry.val; // Destructure the tuple from IterEntry.val
-            val_reg.val().map(|v_ctx| v_ctx.value())
-        }).collect()
+        self.map
+            .iter()
+            .filter_map(|entry| {
+                let (_key, val_reg) = entry.val; // Destructure the tuple from IterEntry.val
+                val_reg.val().map(|v_ctx| v_ctx.value())
+            })
+            .collect()
     }
 }
 
@@ -241,37 +258,48 @@ pub fn calculate_poc_score(task_id: &str, node_id: &str) -> u64 {
         // This case should ideally not be reached if inputs are always SHA256 hashes
         // Returning 0 or u64::MAX could be fallback strategies for an unexpected hash length.
         // For now, panic might be better to indicate an issue with hash generation.
-        panic!("XOR result of hashes is unexpectedly short."); 
+        panic!("XOR result of hashes is unexpectedly short.");
     }
 }
 
 /// Determines the set of node_ids responsible for a task based on Proof of Claim.
 pub fn determine_responsible_nodes(
-    task: &Task, 
-    all_nodes: &[Node], 
+    task: &Task,
+    all_nodes: &[Node],
     _datastore: &crate::datastore::DataStore, // Marked as unused for now if all_nodes is sufficient
 ) -> BTreeSet<String> {
-    
     // 1. Filter nodes by required capabilities
-    let capable_nodes: Vec<&Node> = all_nodes.iter().filter(|node| {
-        // Check against node.metadata.annotations.roles()
-        task.required_capabilities.iter().all(|cap| node.metadata.annotations().roles().contains(cap))
-    }).collect();
+    let capable_nodes: Vec<&Node> = all_nodes
+        .iter()
+        .filter(|node| {
+            // Check against node.metadata.annotations.roles()
+            task.required_capabilities
+                .iter()
+                .all(|cap| node.metadata.annotations().roles().contains(cap))
+        })
+        .collect();
 
     if capable_nodes.is_empty() {
         return BTreeSet::new(); // No capable nodes found
     }
 
     // 2. Calculate PoC score for each capable node
-    let mut scored_nodes: Vec<(u64, &str)> = capable_nodes.iter().map(|node| {
-        (calculate_poc_score(&task.task_id, &node.node_id), node.node_id.as_str())
-    }).collect();
+    let mut scored_nodes: Vec<(u64, &str)> = capable_nodes
+        .iter()
+        .map(|node| {
+            (
+                calculate_poc_score(&task.task_id, &node.node_id),
+                node.node_id.as_str(),
+            )
+        })
+        .collect();
 
     // 3. Sort nodes by score (lowest first)
     scored_nodes.sort_by_key(|(score, _)| *score);
 
     // 4. Select the top `task.target_redundancy` nodes
-    let responsible_node_ids: BTreeSet<String> = scored_nodes.iter()
+    let responsible_node_ids: BTreeSet<String> = scored_nodes
+        .iter()
         .take(task.target_redundancy as usize)
         .map(|(_, node_id_str)| node_id_str.to_string())
         .collect();
@@ -279,4 +307,4 @@ pub fn determine_responsible_nodes(
     responsible_node_ids
 }
 
-// Further definitions will go here based on subsequent sub-tasks. 
+// Further definitions will go here based on subsequent sub-tasks.

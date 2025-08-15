@@ -253,9 +253,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .clone()
             .unwrap()
             .secret_key
-            .ok_or(Box::new(std::io::Error::other(
-                "Secret Key required",
-            )))?
+            .ok_or(Box::new(std::io::Error::other("Secret Key required")))?
     };
 
     log::info!("Acquired private key...");
@@ -281,7 +279,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if datastore.is_none() {
         if !&parser.to_dial.is_empty() {
-            let mut iter = parser.to_dial.iter();
+            let iter = parser.to_dial.iter();
             let mut state = None;
             for dial in iter {
                 log::info!("Attempting to dial {dial}");
@@ -295,7 +293,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             datastore = Some(ds)
         } else if config.is_some() && !config.clone().unwrap().bootstrap_nodes.is_empty() {
             let unwrapped_config = config.clone().unwrap();
-            let mut iter = unwrapped_config.bootstrap_nodes.iter();
+            let iter = unwrapped_config.bootstrap_nodes.iter();
             let mut state = None;
             for dial in iter {
                 log::info!("Attempting to dial {dial}");

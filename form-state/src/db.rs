@@ -1,14 +1,14 @@
-use redb::{Database, TableDefinition, ReadableTable};
-use std::path::PathBuf;
-use std::sync::Arc;
-use bincode::{serialize, deserialize};
-use serde::{Serialize, de::DeserializeOwned};
-use std::collections::{BTreeMap, HashMap, BTreeSet};
-use std::hash::Hash;
-use std::str::FromStr;
-use crdts::map::{Map, Entry};
+use bincode::{deserialize, serialize};
+use crdts::map::{Entry, Map};
 use crdts::VClock;
 use crdts::{CmRDT, ResetRemove};
+use redb::{Database, ReadableTable, TableDefinition};
+use serde::{de::DeserializeOwned, Serialize};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::hash::Hash;
+use std::path::PathBuf;
+use std::str::FromStr;
+use std::sync::Arc;
 
 use crate::datastore::DataStore;
 
@@ -26,21 +26,27 @@ pub fn open_db(path: PathBuf) -> DbHandle {
             std::fs::create_dir_all(parent).expect("Failed to create db directory");
         }
     }
-    
+
     let db = Database::create(&path).expect("Failed to open redb database");
-    
+
     // Create the tables if they don't exist
     let write_txn = db.begin_write().expect("Failed to begin write transaction");
     {
-        let _ = write_txn.open_table(ENTRIES_TABLE).expect("Failed to open entries table");
+        let _ = write_txn
+            .open_table(ENTRIES_TABLE)
+            .expect("Failed to open entries table");
     }
     write_txn.commit().expect("Failed to commit transaction");
-    
+
     Arc::new(db)
 }
 
 /// Stores a Map<K, V, A> to redb.
-pub fn store_map<K, V, A>(db: &Database, map_name: &str, map: &Map<K, V, A>) -> Result<(), Box<dyn std::error::Error>>
+pub fn store_map<K, V, A>(
+    db: &Database,
+    map_name: &str,
+    map: &Map<K, V, A>,
+) -> Result<(), Box<dyn std::error::Error>>
 where
     K: Serialize + Ord + ToString,
     V: Serialize + CmRDT + ResetRemove<A> + Clone + Default,
@@ -70,14 +76,17 @@ where
             table.insert(&deferred_key[..], &deferred_bytes[..])?;
         }
     }
-    
+
     // Write all changes atomically
     write_txn.commit()?;
     Ok(())
 }
 
 /// Loads a Map<K, V, A> from redb.
-pub fn load_map<K, V, A>(db: &Database, map_name: &str) -> Result<Map<K, V, A>, Box<dyn std::error::Error>>
+pub fn load_map<K, V, A>(
+    db: &Database,
+    map_name: &str,
+) -> Result<Map<K, V, A>, Box<dyn std::error::Error>>
 where
     K: DeserializeOwned + Ord + FromStr, // FromStr needed to parse keys
     <K as FromStr>::Err: std::fmt::Debug + std::error::Error + 'static, // Required for unwrap
@@ -97,26 +106,26 @@ where
     // Load the entries
     let mut entries = BTreeMap::new();
     let entry_prefix = format!("{map_name}/entries/").into_bytes();
-    
+
     // Scan all keys and filter those that match the prefix
     for entry in table.iter()? {
         let (key, value) = entry?;
         let key_bytes = key.value();
-        
+
         if !starts_with(key_bytes, &entry_prefix) {
             continue; // Not part of our prefix
         }
-        
+
         let key_str = String::from_utf8(key_bytes.to_vec())?;
         let entry_prefix_str = String::from_utf8(entry_prefix.clone())?;
-        
+
         if !key_str.starts_with(&entry_prefix_str) {
             continue;
         }
-        
-        let k_str = key_str.strip_prefix(&entry_prefix_str).ok_or(
-            Box::new(std::io::Error::other("Unable to strip prefix"))
-        )?;
+
+        let k_str = key_str
+            .strip_prefix(&entry_prefix_str)
+            .ok_or(Box::new(std::io::Error::other("Unable to strip prefix")))?;
         let k: K = k_str.parse()?;
         let entry: Entry<V, A> = deserialize(value.value())?;
         entries.insert(k, entry);
@@ -125,24 +134,23 @@ where
     // Load deferred operations
     let mut deferred = HashMap::new();
     let deferred_prefix = format!("{map_name}/deferred/").into_bytes();
-    
+
     for entry in table.iter()? {
         let (key, value) = entry?;
         let key_bytes = key.value();
-        
+
         if !starts_with(key_bytes, &deferred_prefix) {
             continue; // Not part of our prefix
         }
-        
+
         let key_str = String::from_utf8(key_bytes.to_vec())?;
         let deferred_prefix_str = String::from_utf8(deferred_prefix.clone())?;
-        
+
         if !key_str.starts_with(&deferred_prefix_str) {
             continue;
         }
-        
-        let (vclock, keys): (VClock<A>, BTreeSet<K>) =
-            deserialize(value.value())?;
+
+        let (vclock, keys): (VClock<A>, BTreeSet<K>) = deserialize(value.value())?;
         deferred.insert(vclock, keys);
     }
 
@@ -158,12 +166,27 @@ fn starts_with(bytes: &[u8], prefix: &[u8]) -> bool {
     bytes.len() >= prefix.len() && &bytes[..prefix.len()] == prefix
 }
 
-pub fn write_datastore(db: &Database, datastore: &DataStore) -> Result<(), Box<dyn std::error::Error>> {
+pub fn write_datastore(
+    db: &Database,
+    datastore: &DataStore,
+) -> Result<(), Box<dyn std::error::Error>> {
     store_map(db, "network_state/peers", &datastore.network_state.peers)?;
     store_map(db, "network_state/cidrs", &datastore.network_state.cidrs)?;
-    store_map(db, "network_state/assocs", &datastore.network_state.associations)?;
-    store_map(db, "network_state/dns", &datastore.network_state.dns_state.zones)?;
-    store_map(db, "instance_state/instances", &datastore.instance_state.map)?;
+    store_map(
+        db,
+        "network_state/assocs",
+        &datastore.network_state.associations,
+    )?;
+    store_map(
+        db,
+        "network_state/dns",
+        &datastore.network_state.dns_state.zones,
+    )?;
+    store_map(
+        db,
+        "instance_state/instances",
+        &datastore.instance_state.map,
+    )?;
     store_map(db, "node_state/nodes", &datastore.node_state.map)?;
 
     Ok(())

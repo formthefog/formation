@@ -1,10 +1,13 @@
 mod routes;
+mod auth;
 
-use axum::{Router, Server};
+use axum::Router;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use form_config::OperatorConfig;
 use clap::Parser;
+use auth::auth_middleware;
+use tokio::net::TcpListener;
 
 /// Command-line arguments
 #[derive(Parser, Debug)]
@@ -44,8 +47,6 @@ async fn main() {
     let addr = SocketAddr::from(([0, 0, 0, 0], config.form_inference_api_port));
     println!("Form Inference API listening on 0.0.0.0:{}", config.form_inference_api_port);
 
-    Server::bind(&addr)
-        .serve(app.into_make_service())
-        .await
-        .unwrap();
+    let listener = TcpListener::bind(addr).await.unwrap();
+    axum::serve(listener, app).await.unwrap();
 }

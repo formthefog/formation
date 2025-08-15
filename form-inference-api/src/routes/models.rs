@@ -1,6 +1,6 @@
 use axum::{
     routing::get,
-    Json, Router, http::StatusCode, response::IntoResponse,
+    Json, Router, response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
 use reqwest::Client;
@@ -187,7 +187,7 @@ async fn list_models() -> impl IntoResponse {
         Ok(response) => {
             if !response.status().is_success() {
                 return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({
                         "success": false,
                         "error": format!("Form-state API returned status: {}", response.status())
@@ -199,7 +199,7 @@ async fn list_models() -> impl IntoResponse {
                 Ok(models_response) => {
                     if !models_response.success {
                         return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
+                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                             Json(serde_json::json!({
                                 "success": false,
                                 "error": "Form-state API returned unsuccessful response"
@@ -271,7 +271,7 @@ async fn list_models() -> impl IntoResponse {
                         .collect();
 
                     (
-                        StatusCode::OK,
+                        axum::http::StatusCode::OK,
                         Json(serde_json::json!({
                             "success": true,
                             "models": converted_models,
@@ -281,7 +281,7 @@ async fn list_models() -> impl IntoResponse {
                 }
                 Err(e) => {
                     (
-                        StatusCode::INTERNAL_SERVER_ERROR,
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                         Json(serde_json::json!({
                             "success": false,
                             "error": format!("Failed to parse form-state response: {}", e)
@@ -292,7 +292,7 @@ async fn list_models() -> impl IntoResponse {
         }
         Err(e) => {
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({
                     "success": false,
                     "error": format!("Failed to fetch models from form-state: {}", e)
@@ -310,9 +310,9 @@ async fn retrieve_model(axum::extract::Path(model_id): axum::extract::Path<Strin
         .await
     {
         Ok(response) => {
-            if response.status() == StatusCode::NOT_FOUND {
+            if response.status() == reqwest::StatusCode::NOT_FOUND {
                 return (
-                    StatusCode::NOT_FOUND,
+                    axum::http::StatusCode::NOT_FOUND,
                     Json(serde_json::json!({
                         "success": false,
                         "error": format!("Model {} not found", model_id)
@@ -322,7 +322,7 @@ async fn retrieve_model(axum::extract::Path(model_id): axum::extract::Path<Strin
 
             if !response.status().is_success() {
                 return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({
                         "success": false,
                         "error": format!("Form-state API returned status: {}", response.status())
@@ -395,11 +395,11 @@ async fn retrieve_model(axum::extract::Path(model_id): axum::extract::Path<Strin
                                     nodes: form_state_model.nodes,
                                 };
 
-                                (StatusCode::OK, Json(serde_json::json!(converted_model)))
+                                (axum::http::StatusCode::OK, Json(serde_json::json!(converted_model)))
                             }
                             Err(e) => {
                                 (
-                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                                     Json(serde_json::json!({
                                         "success": false,
                                         "error": format!("Failed to parse model data: {}", e)
@@ -409,7 +409,7 @@ async fn retrieve_model(axum::extract::Path(model_id): axum::extract::Path<Strin
                         }
                     } else {
                         (
-                            StatusCode::INTERNAL_SERVER_ERROR,
+                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                             Json(serde_json::json!({
                                 "success": false,
                                 "error": "Invalid response format from form-state"
@@ -419,7 +419,7 @@ async fn retrieve_model(axum::extract::Path(model_id): axum::extract::Path<Strin
                 }
                 Err(e) => {
                     (
-                        StatusCode::INTERNAL_SERVER_ERROR,
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                         Json(serde_json::json!({
                             "success": false,
                             "error": format!("Failed to parse form-state response: {}", e)
@@ -430,7 +430,7 @@ async fn retrieve_model(axum::extract::Path(model_id): axum::extract::Path<Strin
         }
         Err(e) => {
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({
                     "success": false,
                     "error": format!("Failed to fetch model from form-state: {}", e)
