@@ -4,6 +4,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use reqwest::Client;
+use std::sync::Arc;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Model {
@@ -170,7 +171,7 @@ lazy_static::lazy_static! {
     static ref CLIENT: Client = Client::new();
 }
 
-pub fn router() -> Router {
+pub fn router() -> Router<Arc<String>> {
     Router::new()
         .route("/models", get(list_models))
         .route("/models/:model_id", get(retrieve_model))

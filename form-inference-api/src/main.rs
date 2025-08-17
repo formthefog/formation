@@ -8,6 +8,7 @@ use form_config::OperatorConfig;
 use clap::Parser;
 use auth::auth_middleware;
 use tokio::net::TcpListener;
+use std::sync::Arc;
 
 /// Command-line arguments
 #[derive(Parser, Debug)]
@@ -39,9 +40,19 @@ async fn main() {
         }
     };
 
-    // Build our application with routes
+    // Extract the secret key for route handlers
+    let secret_key = match config.secret_key {
+        Some(key) => key,
+        None => {
+            eprintln!("No secret key found in operator configuration");
+            std::process::exit(1);
+        }
+    };
+
+    // Build our application with routes and state
     let app = Router::new()
-        .merge(routes::api_router());
+        .merge(routes::api_router())
+        .with_state(Arc::new(secret_key));
 
     // Run the app on the configured port
     let addr = SocketAddr::from(([0, 0, 0, 0], config.form_inference_api_port));
