@@ -337,7 +337,7 @@ async fn handle_streaming_chat_completion(
                     }
 
                     // Build the inference URL for localhost
-                    let inference_url: String = format!("http://127.0.0.1:{}/chat/completions", node_response.port);
+                    let inference_url: String = format!("http://127.0.0.1:{}/v1/chat/completions", node_response.port);
 
                     // Pass through the entire original request to the model's /chat/completions endpoint
                     // This preserves all parameters and follows the standard OpenAI-compatible format
@@ -574,7 +574,7 @@ async fn handle_non_streaming_chat_completion(
                     }
 
                     // Build the inference URL for localhost
-                    let inference_url = format!("http://127.0.0.1:{}/chat/completions", node_response.port);
+                    let inference_url = format!("http://127.0.0.1:{}/v1/chat/completions", node_response.port);
 
                     // Pass through the entire original request to the model's /chat/completions endpoint
                     // This preserves all parameters and follows the standard OpenAI-compatible format
