@@ -337,23 +337,14 @@ async fn handle_streaming_chat_completion(
                     }
 
                     // Build the inference URL for localhost
-                    let inference_url = format!("http://127.0.0.1:{}/generate", node_response.port);
+                    let inference_url: String = format!("http://127.0.0.1:{}/chat/completions", node_response.port);
 
-                    let inference_request = ModelInferenceRequest {
-                        text: text.clone(),
-                        sampling_params: SamplingParams {
-                            max_new_tokens,
-                            temperature,
-                        },
-                        stream: stream,
-                        stop_at_limit: false,
-                    };
-
-                    // Make streaming request to the model
+                    // Pass through the entire original request to the model's /chat/completions endpoint
+                    // This preserves all parameters and follows the standard OpenAI-compatible format
                     match CLIENT
                         .post(&inference_url)
                         .header("Content-Type", "application/json")
-                        .json(&inference_request)
+                        .json(&request) // Send the entire original request
                         .send()
                         .await
                     {
@@ -369,6 +360,8 @@ async fn handle_streaming_chat_completion(
                             }
 
                             // Handle streaming response from the model
+                            // The model should return standard chat completion SSE events
+                            // We'll forward them directly if they're properly formatted, or convert them if needed
                             let completion_id = format!("chatcmpl_{}", Uuid::new_v4().simple());
                             let created = std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
@@ -379,41 +372,28 @@ async fn handle_streaming_chat_completion(
 
                             // Spawn task to handle streaming from model
                             tokio::spawn(async move {
-                                // Send initial event with role
-                                let initial_event = StreamingChatCompletion {
-                                    id: completion_id.clone(),
-                                    model: model_id.clone(),
-                                    choices: vec![
-                                        StreamingChatChoice {
-                                            index: 0,
-                                            delta: StreamingDelta {
-                                                role: Some("assistant".to_string()),
-                                                content: None,
-                                            },
-                                            finish_reason: None,
-                                        }
-                                    ],
-                                    created,
-                                    object: "chat.completion.chunk".to_string(),
-                                };
+                                // Stream the response from the model
+                                let mut stream = inference_response.bytes_stream();
 
-                                if let Ok(()) = tx.send(Ok(Event::default().json_data(initial_event).unwrap())).await {
-                                    // Stream the response from the model
-                                    let mut stream = inference_response.bytes_stream();
-
-                                    while let Some(chunk_result) = stream.next().await {
-                                        match chunk_result {
-                                            Ok(chunk) => {
-                                                // Parse the chunk as SSE data
-                                                if let Ok(chunk_str) = String::from_utf8(chunk.to_vec()) {
-                                                    // Handle SSE format: "data: {...}\n\n"
-                                                    for line in chunk_str.lines() {
-                                                        if let Some(data) = line.strip_prefix("data: ") {
-                                                            // Remove "data: " prefix
-                                                            if data != "[DONE]" {
-                                                                // Parse the JSON data from the model
-                                                                if let Ok(model_data) = serde_json::from_str::<serde_json::Value>(data) {
-                                                                    // Extract text from model response
+                                while let Some(chunk_result) = stream.next().await {
+                                    match chunk_result {
+                                        Ok(chunk) => {
+                                            // Parse the chunk as SSE data
+                                            if let Ok(chunk_str) = String::from_utf8(chunk.to_vec()) {
+                                                // Handle SSE format: "data: {...}\n\n"
+                                                for line in chunk_str.lines() {
+                                                    if let Some(data) = line.strip_prefix("data: ") {
+                                                        // Remove "data: " prefix
+                                                        if data != "[DONE]" {
+                                                            // Parse the JSON data from the model
+                                                            if let Ok(model_data) = serde_json::from_str::<serde_json::Value>(data) {
+                                                                // Check if this is already a proper chat completion chunk
+                                                                if model_data.get("choices").is_some() && model_data.get("object").is_some() {
+                                                                    // Model returned a proper chat completion chunk, forward it directly
+                                                                    let event = Event::default().json_data(model_data).unwrap();
+                                                                    let _ = tx.send(Ok(event)).await;
+                                                                } else {
+                                                                    // Model returned a different format, try to convert it
                                                                     if let Some(text) = model_data.get("text").and_then(|t| t.as_str()) {
                                                                         let content_event = StreamingChatCompletion {
                                                                             id: completion_id.clone(),
@@ -432,44 +412,41 @@ async fn handle_streaming_chat_completion(
                                                                             object: "chat.completion.chunk".to_string(),
                                                                         };
 
-                                                                        if let Ok(()) = tx.send(Ok(Event::default().json_data(content_event).unwrap())).await {
-                                                                            // Small delay to simulate streaming
-                                                                            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-                                                                        } else {
-                                                                            break;
-                                                                        }
+                                                                        let event = Event::default().json_data(content_event).unwrap();
+                                                                        let _ = tx.send(Ok(event)).await;
                                                                     }
                                                                 }
-                                                            } else {
-                                                                // Model finished
-                                                                let final_event = StreamingChatCompletion {
-                                                                    id: completion_id.clone(),
-                                                                    model: model_id.clone(),
-                                                                    choices: vec![
-                                                                        StreamingChatChoice {
-                                                                            index: 0,
-                                                                            delta: StreamingDelta {
-                                                                                role: None,
-                                                                                content: None,
-                                                                            },
-                                                                            finish_reason: Some("stop".to_string()),
-                                                                        }
-                                                                    ],
-                                                                    created,
-                                                                    object: "chat.completion.chunk".to_string(),
-                                                                };
-
-                                                                let _ = tx.send(Ok(Event::default().json_data(final_event).unwrap())).await;
-                                                                break;
                                                             }
+                                                        } else {
+                                                            // Model finished
+                                                            let final_event = StreamingChatCompletion {
+                                                                id: completion_id.clone(),
+                                                                model: model_id.clone(),
+                                                                choices: vec![
+                                                                    StreamingChatChoice {
+                                                                        index: 0,
+                                                                        delta: StreamingDelta {
+                                                                            role: None,
+                                                                            content: None,
+                                                                        },
+                                                                        finish_reason: Some("stop".to_string()),
+                                                                    }
+                                                                ],
+                                                                created,
+                                                                object: "chat.completion.chunk".to_string(),
+                                                            };
+
+                                                            let event = Event::default().json_data(final_event).unwrap();
+                                                            let _ = tx.send(Ok(event)).await;
+                                                            break;
                                                         }
                                                     }
                                                 }
                                             }
-                                            Err(e) => {
-                                                eprintln!("Error reading stream chunk: {e}");
-                                                break;
-                                            }
+                                        }
+                                        Err(e) => {
+                                            eprintln!("Error reading stream chunk: {e}");
+                                            break;
                                         }
                                     }
                                 }
@@ -597,23 +574,14 @@ async fn handle_non_streaming_chat_completion(
                     }
 
                     // Build the inference URL for localhost
-                    let inference_url = format!("http://127.0.0.1:{}/generate", node_response.port);
+                    let inference_url = format!("http://127.0.0.1:{}/chat/completions", node_response.port);
 
-                    let inference_request = ModelInferenceRequest {
-                        text: text.clone(),
-                        sampling_params: SamplingParams {
-                            max_new_tokens,
-                            temperature,
-                        },
-                        stream: stream,
-                        stop_at_limit: false,
-                    };
-
-                    // Make non-streaming request to the model
+                    // Pass through the entire original request to the model's /chat/completions endpoint
+                    // This preserves all parameters and follows the standard OpenAI-compatible format
                     match CLIENT
                         .post(&inference_url)
                         .header("Content-Type", "application/json")
-                        .json(&inference_request)
+                        .json(&request) // Send the entire original request
                         .send()
                         .await
                     {
@@ -629,37 +597,62 @@ async fn handle_non_streaming_chat_completion(
                             }
 
                             // Handle non-streaming response from the model
-                            match inference_response.json::<ModelInferenceResponse>().await {
+                            // The model should return a standard chat completion response
+                            match inference_response.json::<serde_json::Value>().await {
                                 Ok(model_response) => {
-                                    let completion_id = format!("chatcmpl_{}", Uuid::new_v4().simple());
-                                    let created = std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap()
-                                        .as_secs();
+                                    // Check if the model returned a proper chat completion response
+                                    if let Some(choices) = model_response.get("choices").and_then(|c| c.as_array()) {
+                                        if !choices.is_empty() {
+                                            // Model returned a proper chat completion response, pass it through
+                                            Json(model_response).into_response()
+                                        } else {
+                                            // No choices in response
+                                            (
+                                                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                                                Json(serde_json::json!({
+                                                    "success": false,
+                                                    "error": "Model returned empty choices array"
+                                                }))
+                                            ).into_response()
+                                        }
+                                    } else {
+                                        // Model didn't return a proper chat completion response
+                                        // Try to extract text from the response and create a proper format
+                                        if let Some(text) = model_response.get("text").and_then(|t| t.as_str()) {
+                                            let completion_id = format!("chatcmpl_{}", Uuid::new_v4().simple());
+                                            let created = std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap()
+                                                .as_secs();
 
-                                    // Create a proper non-streaming chat completion response
-                                    let completion = ChatCompletion {
-                                        id: completion_id,
-                                        model: model_id,
-                                        choices: vec![
-                                            ChatChoice {
-                                                index: 0,
-                                                message: ChatMessage {
-                                                    role: "assistant".to_string(),
-                                                    content: model_response.text,
-                                                },
-                                            }
-                                        ],
-                                    };
+                                            // Create a proper non-streaming chat completion response
+                                            let completion = ChatCompletion {
+                                                id: completion_id,
+                                                model: model_id,
+                                                choices: vec![
+                                                    ChatChoice {
+                                                        index: 0,
+                                                        message: ChatMessage {
+                                                            role: "assistant".to_string(),
+                                                            content: text.to_string(),
+                                                        },
+                                                    }
+                                                ],
+                                            };
 
-                                    Json(completion).into_response()
+                                            Json(completion).into_response()
+                                        } else {
+                                            // Fallback: return the raw model response
+                                            Json(model_response).into_response()
+                                        }
+                                    }
                                 }
                                 Err(e) => {
                                     (
                                         axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                                         Json(serde_json::json!({
                                             "success": false,
-                                            "error": format!("Failed to parse model inference response: {}", e)
+                                            "error": format!("Failed to parse model response: {}", e)
                                         }))
                                     ).into_response()
                                 }
