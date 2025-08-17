@@ -19,6 +19,35 @@ use uuid::Uuid;
 
 use crate::auth::auth_middleware;
 
+/// Modify the request to prepend a prompt as a system message if it exists
+/// This allows users to provide a prompt that gets added as a system message
+fn modify_request_with_prompt(mut request: serde_json::Value) -> serde_json::Value {
+    // Extract the prompt value first to avoid borrow conflicts
+    let prompt_opt = request.get("prompt").and_then(|p| p.as_str()).map(|s| s.to_string());
+
+    // Check if there's a "prompt" field in the request
+    if let Some(prompt) = prompt_opt {
+        // Get the current messages array
+        if let Some(messages) = request.get_mut("messages") {
+            if let Some(messages_array) = messages.as_array_mut() {
+                // Create a new system message with the prompt content
+                let system_message = serde_json::json!({
+                    "role": "system",
+                    "content": prompt
+                });
+
+                // Insert the system message at the beginning of the messages array
+                messages_array.insert(0, system_message);
+            }
+        }
+
+        // Remove the "prompt" field from the request since it's now a system message
+        request.as_object_mut().and_then(|obj| obj.remove("prompt"));
+    }
+
+    request
+}
+
 // Dummy types
 #[derive(Debug, Serialize, Deserialize)]
 struct ChatCompletion {
@@ -210,16 +239,19 @@ async fn create_chat_completion(
     State(secret_key): State<Arc<String>>,
     Json(request): Json<serde_json::Value>,
 ) -> Response {
-    let stream = request
+    // Modify the request to prepend any prompt as a system message
+    let modified_request = modify_request_with_prompt(request);
+
+    let stream = modified_request
         .get("stream")
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
 
     // Check if this is a streaming request
     if stream {
-        handle_streaming_chat_completion(request, None, secret_key).await
+        handle_streaming_chat_completion(modified_request, None, secret_key).await
     } else {
-        handle_non_streaming_chat_completion(request, None, secret_key).await
+        handle_non_streaming_chat_completion(modified_request, None, secret_key).await
     }
 }
 
@@ -230,16 +262,19 @@ async fn handle_forwarded_chat_completion(
     // Extract the original request from the forwarded request
     let original_request: serde_json::Value = request.original_request;
 
+    // Modify the request to prepend any prompt as a system message
+    let modified_request = modify_request_with_prompt(original_request);
+
     // Check if this is a streaming request
-    let is_streaming = original_request
+    let is_streaming = modified_request
         .get("stream")
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
 
     if is_streaming {
-        handle_streaming_chat_completion(original_request, request.forwarded_from, secret_key).await
+        handle_streaming_chat_completion(modified_request, request.forwarded_from, secret_key).await
     } else {
-        handle_non_streaming_chat_completion(original_request, request.forwarded_from, secret_key)
+        handle_non_streaming_chat_completion(modified_request, request.forwarded_from, secret_key)
             .await
     }
 }
