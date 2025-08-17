@@ -1,14 +1,13 @@
-mod routes;
 mod auth;
+mod routes;
 
 use axum::Router;
+use clap::Parser;
+use form_config::OperatorConfig;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use form_config::OperatorConfig;
-use clap::Parser;
-use auth::auth_middleware;
-use tokio::net::TcpListener;
 use std::sync::Arc;
+use tokio::net::TcpListener;
 
 /// Command-line arguments
 #[derive(Parser, Debug)]
@@ -19,7 +18,9 @@ struct Args {
     config: PathBuf,
 }
 
-fn load_operator_config(config_path: PathBuf) -> Result<OperatorConfig, Box<dyn std::error::Error>> {
+fn load_operator_config(
+    config_path: PathBuf,
+) -> Result<OperatorConfig, Box<dyn std::error::Error>> {
     if config_path.exists() {
         Ok(OperatorConfig::from_file(config_path, false, None)?)
     } else {
@@ -56,7 +57,10 @@ async fn main() {
 
     // Run the app on the configured port
     let addr = SocketAddr::from(([0, 0, 0, 0], config.form_inference_api_port));
-    println!("Form Inference API listening on 0.0.0.0:{}", config.form_inference_api_port);
+    println!(
+        "Form Inference API listening on 0.0.0.0:{}",
+        config.form_inference_api_port
+    );
 
     let listener = TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();

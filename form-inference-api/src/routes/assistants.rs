@@ -1,5 +1,5 @@
 use axum::{
-    routing::{get, post, delete},
+    routing::{delete, get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -29,13 +29,11 @@ pub fn router() -> Router {
 
 // Handler functions with minimal implementations
 async fn list_assistants() -> Json<Vec<Assistant>> {
-    Json(vec![
-        Assistant {
-            id: "asst_abc123".to_string(),
-            name: "Example Assistant".to_string(),
-            model: "gpt-4".to_string(),
-        }
-    ])
+    Json(vec![Assistant {
+        id: "asst_abc123".to_string(),
+        name: "Example Assistant".to_string(),
+        model: "gpt-4".to_string(),
+    }])
 }
 
 async fn create_assistant() -> Json<Assistant> {

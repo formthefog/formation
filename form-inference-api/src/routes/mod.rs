@@ -20,8 +20,7 @@ pub fn api_router() -> Router<Arc<String>> {
 
 /// Root router with basic info endpoint
 fn root_router() -> Router<Arc<String>> {
-    Router::new()
-        .route("/", get(root))
+    Router::new().route("/", get(root))
 }
 
 async fn root() -> &'static str {

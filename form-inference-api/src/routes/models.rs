@@ -1,9 +1,6 @@
-use axum::{
-    routing::get,
-    Json, Router, response::IntoResponse,
-};
-use serde::{Deserialize, Serialize};
+use axum::{response::IntoResponse, routing::get, Json, Router};
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -180,11 +177,7 @@ pub fn router() -> Router<Arc<String>> {
 // Handler functions with proper form-state integration
 async fn list_models() -> impl IntoResponse {
     // Fetch models from form-state API
-    match CLIENT
-        .get("http://localhost:3004/v1/models")
-        .send()
-        .await
-    {
+    match CLIENT.get("http://localhost:3004/v1/models").send().await {
         Ok(response) => {
             if !response.status().is_success() {
                 return (
@@ -192,7 +185,7 @@ async fn list_models() -> impl IntoResponse {
                     Json(serde_json::json!({
                         "success": false,
                         "error": format!("Form-state API returned status: {}", response.status())
-                    }))
+                    })),
                 );
             }
 
@@ -204,12 +197,13 @@ async fn list_models() -> impl IntoResponse {
                             Json(serde_json::json!({
                                 "success": false,
                                 "error": "Form-state API returned unsuccessful response"
-                            }))
+                            })),
                         );
                     }
 
                     // Convert form-state models to our format
-                    let converted_models: Vec<Model> = models_response.models
+                    let converted_models: Vec<Model> = models_response
+                        .models
                         .into_iter()
                         .map(|form_state_model| Model {
                             model_id: form_state_model.model_id,
@@ -236,18 +230,30 @@ async fn list_models() -> impl IntoResponse {
                             weights_size_bytes: form_state_model.weights_size_bytes,
                             resource_requirements: ResourceRequirements {
                                 min_vcpus: form_state_model.resource_requirements.min_vcpus,
-                                recommended_vcpus: form_state_model.resource_requirements.recommended_vcpus,
+                                recommended_vcpus: form_state_model
+                                    .resource_requirements
+                                    .recommended_vcpus,
                                 min_memory_mb: form_state_model.resource_requirements.min_memory_mb,
-                                recommended_memory_mb: form_state_model.resource_requirements.recommended_memory_mb,
+                                recommended_memory_mb: form_state_model
+                                    .resource_requirements
+                                    .recommended_memory_mb,
                                 min_disk_gb: form_state_model.resource_requirements.min_disk_gb,
-                                recommended_disk_gb: form_state_model.resource_requirements.recommended_disk_gb,
+                                recommended_disk_gb: form_state_model
+                                    .resource_requirements
+                                    .recommended_disk_gb,
                                 requires_gpu: form_state_model.resource_requirements.requires_gpu,
                                 min_vram_gb: form_state_model.resource_requirements.min_vram_gb,
-                                recommended_vram_gb: form_state_model.resource_requirements.recommended_vram_gb,
+                                recommended_vram_gb: form_state_model
+                                    .resource_requirements
+                                    .recommended_vram_gb,
                                 cuda_cores: form_state_model.resource_requirements.cuda_cores,
                                 tensor_cores: form_state_model.resource_requirements.tensor_cores,
-                                required_cpu_extensions: form_state_model.resource_requirements.required_cpu_extensions,
-                                required_cuda_version: form_state_model.resource_requirements.required_cuda_version,
+                                required_cpu_extensions: form_state_model
+                                    .resource_requirements
+                                    .required_cpu_extensions,
+                                required_cuda_version: form_state_model
+                                    .resource_requirements
+                                    .required_cuda_version,
                             },
                             capabilities: form_state_model.capabilities,
                             average_rating: form_state_model.average_rating,
@@ -264,7 +270,9 @@ async fn list_models() -> impl IntoResponse {
                                 track_tokens: form_state_model.usage_tracking.track_tokens,
                                 track_requests: form_state_model.usage_tracking.track_requests,
                                 enable_royalties: form_state_model.usage_tracking.enable_royalties,
-                                royalty_percentage: form_state_model.usage_tracking.royalty_percentage,
+                                royalty_percentage: form_state_model
+                                    .usage_tracking
+                                    .royalty_percentage,
                                 custom_metrics: form_state_model.usage_tracking.custom_metrics,
                             },
                             nodes: form_state_model.nodes,
@@ -277,33 +285,31 @@ async fn list_models() -> impl IntoResponse {
                             "success": true,
                             "models": converted_models,
                             "total": converted_models.len()
-                        }))
+                        })),
                     )
                 }
-                Err(e) => {
-                    (
-                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({
-                            "success": false,
-                            "error": format!("Failed to parse form-state response: {}", e)
-                        }))
-                    )
-                }
+                Err(e) => (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "success": false,
+                        "error": format!("Failed to parse form-state response: {}", e)
+                    })),
+                ),
             }
         }
-        Err(e) => {
-            (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "success": false,
-                    "error": format!("Failed to fetch models from form-state: {}", e)
-                }))
-            )
-        }
+        Err(e) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "success": false,
+                "error": format!("Failed to fetch models from form-state: {}", e)
+            })),
+        ),
     }
 }
 
-async fn retrieve_model(axum::extract::Path(model_id): axum::extract::Path<String>) -> impl IntoResponse {
+async fn retrieve_model(
+    axum::extract::Path(model_id): axum::extract::Path<String>,
+) -> impl IntoResponse {
     // Fetch specific model from form-state API
     match CLIENT
         .get(format!("http://localhost:3004/v1/models/{model_id}"))
@@ -317,7 +323,7 @@ async fn retrieve_model(axum::extract::Path(model_id): axum::extract::Path<Strin
                     Json(serde_json::json!({
                         "success": false,
                         "error": format!("Model {} not found", model_id)
-                    }))
+                    })),
                 );
             }
 
@@ -327,7 +333,7 @@ async fn retrieve_model(axum::extract::Path(model_id): axum::extract::Path<Strin
                     Json(serde_json::json!({
                         "success": false,
                         "error": format!("Form-state API returned status: {}", response.status())
-                    }))
+                    })),
                 );
             }
 
@@ -351,8 +357,10 @@ async fn retrieve_model(axum::extract::Path(model_id): axum::extract::Path<Strin
                                     parameters: form_state_model.parameters,
                                     quantization: form_state_model.quantization,
                                     context_length: form_state_model.context_length,
-                                    input_tokens_per_second: form_state_model.input_tokens_per_second,
-                                    output_tokens_per_second: form_state_model.output_tokens_per_second,
+                                    input_tokens_per_second: form_state_model
+                                        .input_tokens_per_second,
+                                    output_tokens_per_second: form_state_model
+                                        .output_tokens_per_second,
                                     tags: form_state_model.tags,
                                     created_at: form_state_model.created_at,
                                     updated_at: form_state_model.updated_at,
@@ -362,18 +370,42 @@ async fn retrieve_model(axum::extract::Path(model_id): axum::extract::Path<Strin
                                     weights_size_bytes: form_state_model.weights_size_bytes,
                                     resource_requirements: ResourceRequirements {
                                         min_vcpus: form_state_model.resource_requirements.min_vcpus,
-                                        recommended_vcpus: form_state_model.resource_requirements.recommended_vcpus,
-                                        min_memory_mb: form_state_model.resource_requirements.min_memory_mb,
-                                        recommended_memory_mb: form_state_model.resource_requirements.recommended_memory_mb,
-                                        min_disk_gb: form_state_model.resource_requirements.min_disk_gb,
-                                        recommended_disk_gb: form_state_model.resource_requirements.recommended_disk_gb,
-                                        requires_gpu: form_state_model.resource_requirements.requires_gpu,
-                                        min_vram_gb: form_state_model.resource_requirements.min_vram_gb,
-                                        recommended_vram_gb: form_state_model.resource_requirements.recommended_vram_gb,
-                                        cuda_cores: form_state_model.resource_requirements.cuda_cores,
-                                        tensor_cores: form_state_model.resource_requirements.tensor_cores,
-                                        required_cpu_extensions: form_state_model.resource_requirements.required_cpu_extensions,
-                                        required_cuda_version: form_state_model.resource_requirements.required_cuda_version,
+                                        recommended_vcpus: form_state_model
+                                            .resource_requirements
+                                            .recommended_vcpus,
+                                        min_memory_mb: form_state_model
+                                            .resource_requirements
+                                            .min_memory_mb,
+                                        recommended_memory_mb: form_state_model
+                                            .resource_requirements
+                                            .recommended_memory_mb,
+                                        min_disk_gb: form_state_model
+                                            .resource_requirements
+                                            .min_disk_gb,
+                                        recommended_disk_gb: form_state_model
+                                            .resource_requirements
+                                            .recommended_disk_gb,
+                                        requires_gpu: form_state_model
+                                            .resource_requirements
+                                            .requires_gpu,
+                                        min_vram_gb: form_state_model
+                                            .resource_requirements
+                                            .min_vram_gb,
+                                        recommended_vram_gb: form_state_model
+                                            .resource_requirements
+                                            .recommended_vram_gb,
+                                        cuda_cores: form_state_model
+                                            .resource_requirements
+                                            .cuda_cores,
+                                        tensor_cores: form_state_model
+                                            .resource_requirements
+                                            .tensor_cores,
+                                        required_cpu_extensions: form_state_model
+                                            .resource_requirements
+                                            .required_cpu_extensions,
+                                        required_cuda_version: form_state_model
+                                            .resource_requirements
+                                            .required_cuda_version,
                                     },
                                     capabilities: form_state_model.capabilities,
                                     average_rating: form_state_model.average_rating,
@@ -388,25 +420,34 @@ async fn retrieve_model(axum::extract::Path(model_id): axum::extract::Path<Strin
                                     price_per_1m_tokens: form_state_model.price_per_1m_tokens,
                                     usage_tracking: UsageTracking {
                                         track_tokens: form_state_model.usage_tracking.track_tokens,
-                                        track_requests: form_state_model.usage_tracking.track_requests,
-                                        enable_royalties: form_state_model.usage_tracking.enable_royalties,
-                                        royalty_percentage: form_state_model.usage_tracking.royalty_percentage,
-                                        custom_metrics: form_state_model.usage_tracking.custom_metrics,
+                                        track_requests: form_state_model
+                                            .usage_tracking
+                                            .track_requests,
+                                        enable_royalties: form_state_model
+                                            .usage_tracking
+                                            .enable_royalties,
+                                        royalty_percentage: form_state_model
+                                            .usage_tracking
+                                            .royalty_percentage,
+                                        custom_metrics: form_state_model
+                                            .usage_tracking
+                                            .custom_metrics,
                                     },
                                     nodes: form_state_model.nodes,
                                 };
 
-                                (axum::http::StatusCode::OK, Json(serde_json::json!(converted_model)))
-                            }
-                            Err(e) => {
                                 (
-                                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                                    Json(serde_json::json!({
-                                        "success": false,
-                                        "error": format!("Failed to parse model data: {}", e)
-                                    }))
+                                    axum::http::StatusCode::OK,
+                                    Json(serde_json::json!(converted_model)),
                                 )
                             }
+                            Err(e) => (
+                                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(serde_json::json!({
+                                    "success": false,
+                                    "error": format!("Failed to parse model data: {}", e)
+                                })),
+                            ),
                         }
                     } else {
                         (
@@ -414,29 +455,25 @@ async fn retrieve_model(axum::extract::Path(model_id): axum::extract::Path<Strin
                             Json(serde_json::json!({
                                 "success": false,
                                 "error": "Invalid response format from form-state"
-                            }))
+                            })),
                         )
                     }
                 }
-                Err(e) => {
-                    (
-                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({
-                            "success": false,
-                            "error": format!("Failed to parse form-state response: {}", e)
-                        }))
-                    )
-                }
+                Err(e) => (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "success": false,
+                        "error": format!("Failed to parse form-state response: {}", e)
+                    })),
+                ),
             }
         }
-        Err(e) => {
-            (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "success": false,
-                    "error": format!("Failed to fetch model from form-state: {}", e)
-                }))
-            )
-        }
+        Err(e) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "success": false,
+                "error": format!("Failed to fetch model from form-state: {}", e)
+            })),
+        ),
     }
 }

@@ -1,19 +1,21 @@
 use axum::{
-    routing::{post},
-    Json, Router, response::IntoResponse, extract::Path, extract::State,
+    extract::State,
     response::sse::{Event, Sse},
+    response::IntoResponse,
     response::Response,
+    routing::post,
+    Json, Router,
 };
-use serde::{Deserialize, Serialize};
-use reqwest::Client;
-use uuid::Uuid;
-use serde_json;
-use tokio_stream::wrappers::ReceiverStream;
 use futures::stream::StreamExt;
-use k256::ecdsa::{SigningKey, signature::Signer};
-use sha2::{Digest, Sha256};
 use hex;
+use k256::ecdsa::SigningKey;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use serde_json;
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
+use tokio_stream::wrappers::ReceiverStream;
+use uuid::Uuid;
 
 use crate::auth::auth_middleware;
 
@@ -140,7 +142,10 @@ fn create_forwarded_request_signature(
     let recovery_id_byte = recovery_id.to_byte();
     let message_hex = hex::encode(message.as_bytes());
 
-    let auth_header = format!("Signature {}.{}.{}", signature_hex, recovery_id_byte, message_hex);
+    let auth_header = format!(
+        "Signature {}.{}.{}",
+        signature_hex, recovery_id_byte, message_hex
+    );
 
     Ok(auth_header)
 }
@@ -149,11 +154,14 @@ pub fn router() -> Router<Arc<String>> {
     Router::new()
         // .route("/chat/completions", get(list_chat_completions))
         .route("/chat/completions", post(create_chat_completion))
-        .route("/forwarded/chat/completions", post(handle_forwarded_chat_completion))
+        .route(
+            "/forwarded/chat/completions",
+            post(handle_forwarded_chat_completion),
+        )
         .layer(axum::middleware::from_fn(auth_middleware))
-        // .route("/chat/completions/:completion_id", get(get_chat_completion))
-        // .route("/chat/completions/:completion_id", post(update_chat_completion))
-        // .route("/chat/completions/:completion_id", delete(delete_chat_completion))
+    // .route("/chat/completions/:completion_id", get(get_chat_completion))
+    // .route("/chat/completions/:completion_id", post(update_chat_completion))
+    // .route("/chat/completions/:completion_id", delete(delete_chat_completion))
 }
 
 // Helper function to extract address from the response
@@ -185,45 +193,27 @@ async fn get_current_node_ip() -> String {
 
 // Handler functions with minimal implementations
 async fn list_chat_completions() -> Json<Vec<ChatCompletion>> {
-    Json(vec![
-        ChatCompletion {
-            id: "chatcmpl_abc123".to_string(),
-            model: "gpt-4".to_string(),
-            choices: vec![
-                ChatChoice {
-                    index: 0,
-                    message: ChatMessage {
-                        role: "assistant".to_string(),
-                        content: "Hello! How can I help you today?".to_string(),
-                    },
-                }
-            ],
-        }
-    ])
+    Json(vec![ChatCompletion {
+        id: "chatcmpl_abc123".to_string(),
+        model: "gpt-4".to_string(),
+        choices: vec![ChatChoice {
+            index: 0,
+            message: ChatMessage {
+                role: "assistant".to_string(),
+                content: "Hello! How can I help you today?".to_string(),
+            },
+        }],
+    }])
 }
 
 async fn create_chat_completion(
     State(secret_key): State<Arc<String>>,
-    Json(request): Json<serde_json::Value>
+    Json(request): Json<serde_json::Value>,
 ) -> Response {
-    // Extract the model ID from the request
-    let model_id = request.get("model").and_then(|v| v.as_str()).unwrap_or("").to_string();
-
-    // Get the last user message as the text for inference
-    let text = request.get("messages").and_then(|v| {
-        v.as_array()
-            .and_then(|arr| {
-                arr.iter()
-                    .rev() // Reverse to find last user message
-                    .find(|msg| msg.get("role").and_then(|r| r.as_str()) == Some("user"))
-                    .and_then(|msg| msg.get("content").and_then(|c| c.as_str()))
-            })
-    }).map_or("".to_string(), |s| s.to_string());
-
-    // Get sampling parameters
-    let max_new_tokens = request.get("max_tokens").and_then(|v| v.as_u64()).unwrap_or(100) as u32;
-    let temperature = request.get("temperature").and_then(|v| v.as_f64()).unwrap_or(0.7) as f32;
-    let stream = request.get("stream").and_then(|v| v.as_bool()).unwrap_or(true);
+    let stream = request
+        .get("stream")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
 
     // Check if this is a streaming request
     if stream {
@@ -235,49 +225,42 @@ async fn create_chat_completion(
 
 async fn handle_forwarded_chat_completion(
     State(secret_key): State<Arc<String>>,
-    Json(request): Json<ForwardedChatCompletionRequest>
+    Json(request): Json<ForwardedChatCompletionRequest>,
 ) -> Response {
     // Extract the original request from the forwarded request
     let original_request: serde_json::Value = request.original_request;
 
     // Check if this is a streaming request
-    let is_streaming = original_request.get("stream").and_then(|v| v.as_bool()).unwrap_or(true);
+    let is_streaming = original_request
+        .get("stream")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
 
     if is_streaming {
         handle_streaming_chat_completion(original_request, request.forwarded_from, secret_key).await
     } else {
-        handle_non_streaming_chat_completion(original_request, request.forwarded_from, secret_key).await
+        handle_non_streaming_chat_completion(original_request, request.forwarded_from, secret_key)
+            .await
     }
 }
 
 async fn handle_streaming_chat_completion(
     request: serde_json::Value,
     forwarded_from: Option<String>,
-    secret_key: Arc<String>
+    secret_key: Arc<String>,
 ) -> Response {
-
     // Extract the model ID from the request
-    let model_id = request.get("model").and_then(|v| v.as_str()).unwrap_or("").to_string();
-
-    // Get the last user message as the text for inference
-    let text = request.get("messages").and_then(|v| {
-        v.as_array()
-            .and_then(|arr| {
-                arr.iter()
-                    .rev() // Reverse to find last user message
-                    .find(|msg| msg.get("role").and_then(|r| r.as_str()) == Some("user"))
-                    .and_then(|msg| msg.get("content").and_then(|c| c.as_str()))
-            })
-    }).map_or("".to_string(), |s| s.to_string());
-
-    // Get sampling parameters
-    let max_new_tokens = request.get("max_tokens").and_then(|v| v.as_u64()).unwrap_or(100) as u32;
-    let temperature = request.get("temperature").and_then(|v| v.as_f64()).unwrap_or(0.7) as f32;
-    let stream = request.get("stream").and_then(|v| v.as_bool()).unwrap_or(true);
+    let model_id = request
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     // Call form-state to get the node for this model
     match CLIENT
-        .get(format!("http://localhost:3004/v1/models/{model_id}/get_node"))
+        .get(format!(
+            "http://localhost:3004/v1/models/{model_id}/get_node"
+        ))
         .send()
         .await
     {
@@ -288,8 +271,9 @@ async fn handle_streaming_chat_completion(
                     Json(serde_json::json!({
                         "success": false,
                         "error": format!("Form-state API returned status: {}", response.status())
-                    }))
-                ).into_response();
+                    })),
+                )
+                    .into_response();
             }
 
             match response.json::<FormStateNodeResponse>().await {
@@ -300,8 +284,9 @@ async fn handle_streaming_chat_completion(
                             Json(serde_json::json!({
                                 "success": false,
                                 "error": "No nodes available for this model"
-                            }))
-                        ).into_response();
+                            })),
+                        )
+                            .into_response();
                     }
 
                     // Extract the node address
@@ -313,8 +298,9 @@ async fn handle_streaming_chat_completion(
                                 Json(serde_json::json!({
                                     "success": false,
                                     "error": "Invalid node address format"
-                                }))
-                            ).into_response();
+                                })),
+                            )
+                                .into_response();
                         }
                     };
 
@@ -333,11 +319,19 @@ async fn handle_streaming_chat_completion(
 
                     // If the address is not localhost, forward to that node
                     if node_address != "localhost" {
-                        return forward_streaming_request_to_node(request, &node_address, secret_key).await;
+                        return forward_streaming_request_to_node(
+                            request,
+                            &node_address,
+                            secret_key,
+                        )
+                        .await;
                     }
 
                     // Build the inference URL for localhost
-                    let inference_url: String = format!("http://127.0.0.1:{}/v1/chat/completions", node_response.port);
+                    let inference_url: String = format!(
+                        "http://127.0.0.1:{}/v1/chat/completions",
+                        node_response.port
+                    );
 
                     // Pass through the entire original request to the model's /chat/completions endpoint
                     // This preserves all parameters and follows the standard OpenAI-compatible format
@@ -465,56 +459,44 @@ async fn handle_streaming_chat_completion(
                         }
                     }
                 }
-                Err(e) => {
-                    (
-                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({
-                            "success": false,
-                            "error": format!("Failed to parse form-state response: {}", e)
-                        }))
-                    ).into_response()
-                }
+                Err(e) => (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "success": false,
+                        "error": format!("Failed to parse form-state response: {}", e)
+                    })),
+                )
+                    .into_response(),
             }
         }
-        Err(e) => {
-            (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "success": false,
-                    "error": format!("Failed to fetch model node from form-state: {}", e)
-                }))
-            ).into_response()
-        }
+        Err(e) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "success": false,
+                "error": format!("Failed to fetch model node from form-state: {}", e)
+            })),
+        )
+            .into_response(),
     }
 }
 
 async fn handle_non_streaming_chat_completion(
     request: serde_json::Value,
     forwarded_from: Option<String>,
-    secret_key: Arc<String>
+    secret_key: Arc<String>,
 ) -> Response {
     // Extract the model ID from the request
-    let model_id = request.get("model").and_then(|v| v.as_str()).unwrap_or("").to_string();
-
-    // Get the last user message as the text for inference
-    let text = request.get("messages").and_then(|v| {
-        v.as_array()
-            .and_then(|arr| {
-                arr.iter()
-                    .rev() // Reverse to find last user message
-                    .find(|msg| msg.get("role").and_then(|r| r.as_str()) == Some("user"))
-                    .and_then(|msg| msg.get("content").and_then(|c| c.as_str()))
-            })
-    }).map_or("".to_string(), |s| s.to_string());
-
-    // Get sampling parameters
-    let max_new_tokens = request.get("max_tokens").and_then(|v| v.as_u64()).unwrap_or(100) as u32;
-    let temperature = request.get("temperature").and_then(|v| v.as_f64()).unwrap_or(0.7) as f32;
-    let stream = request.get("stream").and_then(|v| v.as_bool()).unwrap_or(true);
+    let model_id = request
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     // Call form-state to get the node for this model
     match CLIENT
-        .get(format!("http://localhost:3004/v1/models/{model_id}/get_node"))
+        .get(format!(
+            "http://localhost:3004/v1/models/{model_id}/get_node"
+        ))
         .send()
         .await
     {
@@ -525,8 +507,9 @@ async fn handle_non_streaming_chat_completion(
                     Json(serde_json::json!({
                         "success": false,
                         "error": format!("Form-state API returned status: {}", response.status())
-                    }))
-                ).into_response();
+                    })),
+                )
+                    .into_response();
             }
 
             match response.json::<FormStateNodeResponse>().await {
@@ -537,8 +520,9 @@ async fn handle_non_streaming_chat_completion(
                             Json(serde_json::json!({
                                 "success": false,
                                 "error": "No nodes available for this model"
-                            }))
-                        ).into_response();
+                            })),
+                        )
+                            .into_response();
                     }
 
                     // Extract the node address
@@ -550,8 +534,9 @@ async fn handle_non_streaming_chat_completion(
                                 Json(serde_json::json!({
                                     "success": false,
                                     "error": "Invalid node address format"
-                                }))
-                            ).into_response();
+                                })),
+                            )
+                                .into_response();
                         }
                     };
 
@@ -570,11 +555,19 @@ async fn handle_non_streaming_chat_completion(
 
                     // If the address is not localhost, forward to that node
                     if node_address != "localhost" {
-                        return forward_streaming_request_to_node(request, &node_address, secret_key).await;
+                        return forward_streaming_request_to_node(
+                            request,
+                            &node_address,
+                            secret_key,
+                        )
+                        .await;
                     }
 
                     // Build the inference URL for localhost
-                    let inference_url = format!("http://127.0.0.1:{}/v1/chat/completions", node_response.port);
+                    let inference_url = format!(
+                        "http://127.0.0.1:{}/v1/chat/completions",
+                        node_response.port
+                    );
 
                     // Pass through the entire original request to the model's /chat/completions endpoint
                     // This preserves all parameters and follows the standard OpenAI-compatible format
@@ -669,30 +662,32 @@ async fn handle_non_streaming_chat_completion(
                         }
                     }
                 }
-                Err(e) => {
-                    (
-                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({
-                            "success": false,
-                            "error": format!("Failed to parse form-state response: {}", e)
-                        }))
-                    ).into_response()
-                }
+                Err(e) => (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "success": false,
+                        "error": format!("Failed to parse form-state response: {}", e)
+                    })),
+                )
+                    .into_response(),
             }
         }
-        Err(e) => {
-            (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "success": false,
-                    "error": format!("Failed to fetch model node from form-state: {}", e)
-                }))
-            ).into_response()
-        }
+        Err(e) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "success": false,
+                "error": format!("Failed to fetch model node from form-state: {}", e)
+            })),
+        )
+            .into_response(),
     }
 }
 
-async fn forward_streaming_request_to_node(request: serde_json::Value, target_node: &str, secret_key: Arc<String>) -> Response {
+async fn forward_streaming_request_to_node(
+    request: serde_json::Value,
+    target_node: &str,
+    secret_key: Arc<String>,
+) -> Response {
     let current_node_ip = get_current_node_ip().await;
 
     // Create forwarded request with all original parameters
@@ -719,8 +714,9 @@ async fn forward_streaming_request_to_node(request: serde_json::Value, target_no
                 Json(serde_json::json!({
                     "success": false,
                     "error": format!("Failed to create authentication signature: {}", e)
-                }))
-            ).into_response();
+                })),
+            )
+                .into_response();
         }
     };
 
@@ -735,7 +731,10 @@ async fn forward_streaming_request_to_node(request: serde_json::Value, target_no
         Ok(response) => {
             if response.status().is_success() {
                 // Check if the original request was streaming
-                let is_streaming = request.get("stream").and_then(|v| v.as_bool()).unwrap_or(true);
+                let is_streaming = request
+                    .get("stream")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
 
                 if is_streaming {
                     // Forward the streaming response directly
@@ -771,15 +770,14 @@ async fn forward_streaming_request_to_node(request: serde_json::Value, target_no
                     // For non-streaming requests, return the JSON response directly
                     match response.json::<serde_json::Value>().await {
                         Ok(json) => Json(json).into_response(),
-                        Err(e) => {
-                            (
-                                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(serde_json::json!({
-                                    "success": false,
-                                    "error": format!("Failed to parse forwarded response: {}", e)
-                                }))
-                            ).into_response()
-                        }
+                        Err(e) => (
+                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({
+                                "success": false,
+                                "error": format!("Failed to parse forwarded response: {}", e)
+                            })),
+                        )
+                            .into_response(),
                     }
                 }
             } else {
@@ -793,31 +791,30 @@ async fn forward_streaming_request_to_node(request: serde_json::Value, target_no
                                 Json(serde_json::json!({
                                     "success": false,
                                     "error": format!("Forwarded error: {}", error_text)
-                                }))
-                            ).into_response()
+                                })),
+                            )
+                                .into_response(),
                         }
                     }
-                    Err(e) => {
-                        (
-                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(serde_json::json!({
-                                "success": false,
-                                "error": format!("Failed to read forwarded error response: {}", e)
-                            }))
-                        ).into_response()
-                    }
+                    Err(e) => (
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({
+                            "success": false,
+                            "error": format!("Failed to read forwarded error response: {}", e)
+                        })),
+                    )
+                        .into_response(),
                 }
             }
         }
-        Err(e) => {
-            (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "success": false,
-                    "error": format!("Failed to forward request to {}: {}", target_node, e)
-                }))
-            ).into_response()
-        }
+        Err(e) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "success": false,
+                "error": format!("Failed to forward request to {}: {}", target_node, e)
+            })),
+        )
+            .into_response(),
     }
 }
 
@@ -838,43 +835,4 @@ fn create_forwarded_request_signature_for_node(
 
     // Sign the message
     create_forwarded_request_signature(secret_key, &message)
-}
-
-async fn get_chat_completion(Path(completion_id): Path<String>) -> Json<ChatCompletion> {
-    Json(ChatCompletion {
-        id: completion_id,
-        model: "gpt-4".to_string(),
-        choices: vec![
-            ChatChoice {
-                index: 0,
-                message: ChatMessage {
-                    role: "assistant".to_string(),
-                    content: "Hello! How can I help you today?".to_string(),
-                },
-            }
-        ],
-    })
-}
-
-async fn update_chat_completion() -> Json<ChatCompletion> {
-    Json(ChatCompletion {
-        id: "chatcmpl_abc123".to_string(),
-        model: "gpt-4".to_string(),
-        choices: vec![
-            ChatChoice {
-                index: 0,
-                message: ChatMessage {
-                    role: "assistant".to_string(),
-                    content: "Updated chat completion.".to_string(),
-                },
-            }
-        ],
-    })
-}
-
-async fn delete_chat_completion() -> Json<DeleteResponse> {
-    Json(DeleteResponse {
-        id: "chatcmpl_abc123".to_string(),
-        deleted: true,
-    })
 }

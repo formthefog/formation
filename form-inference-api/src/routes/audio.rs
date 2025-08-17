@@ -1,7 +1,4 @@
-use axum::{
-    routing::post,
-    Json, Router,
-};
+use axum::{routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 
 // Dummy types
