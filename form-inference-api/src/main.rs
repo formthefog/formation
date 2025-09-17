@@ -1,4 +1,5 @@
 mod auth;
+mod cache;
 mod routes;
 
 use axum::Router;
@@ -8,6 +9,14 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::net::TcpListener;
+use cache::InferenceCache;
+
+/// Shared application state
+#[derive(Clone)]
+pub struct AppState {
+    pub secret_key: Arc<String>,
+    pub cache: Arc<InferenceCache>,
+}
 
 /// Command-line arguments
 #[derive(Parser, Debug)]
@@ -50,10 +59,19 @@ async fn main() {
         }
     };
 
+    // Create the cache
+    let cache = Arc::new(InferenceCache::new());
+
+    // Create shared application state
+    let app_state = AppState {
+        secret_key: Arc::new(secret_key),
+        cache,
+    };
+
     // Build our application with routes and state
     let app = Router::new()
         .merge(routes::api_router())
-        .with_state(Arc::new(secret_key));
+        .with_state(app_state);
 
     // Run the app on the configured port
     let addr = SocketAddr::from(([0, 0, 0, 0], config.form_inference_api_port));

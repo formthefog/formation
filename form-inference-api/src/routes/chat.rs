@@ -3,7 +3,7 @@ use axum::{
     response::sse::{Event, Sse},
     response::IntoResponse,
     response::Response,
-    routing::post,
+    routing::{get, post},
     Json, Router,
 };
 use futures::stream::StreamExt;
@@ -13,11 +13,12 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json;
 use sha2::{Digest, Sha256};
-use std::sync::Arc;
 use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 
 use crate::auth::auth_middleware;
+use crate::AppState;
+use crate::cache::{StreamingChunk, cached_streaming_to_events, cached_non_streaming_to_json};
 
 /// Modify the request to prepend a prompt as a system message if it exists
 /// This allows users to provide a prompt that gets added as a system message
@@ -119,7 +120,7 @@ struct ModelInferenceResponse {
 }
 
 // Streaming response types
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct StreamingChatCompletion {
     id: String,
     model: String,
@@ -128,14 +129,14 @@ struct StreamingChatCompletion {
     object: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct StreamingChatChoice {
     index: usize,
     delta: StreamingDelta,
     finish_reason: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct StreamingDelta {
     role: Option<String>,
     content: Option<String>,
@@ -179,7 +180,7 @@ fn create_forwarded_request_signature(
     Ok(auth_header)
 }
 
-pub fn router() -> Router<Arc<String>> {
+pub fn router() -> Router<AppState> {
     Router::new()
         // .route("/chat/completions", get(list_chat_completions))
         .route("/chat/completions", post(create_chat_completion))
@@ -187,6 +188,7 @@ pub fn router() -> Router<Arc<String>> {
             "/forwarded/chat/completions",
             post(handle_forwarded_chat_completion),
         )
+        .route("/cache/stats", get(get_cache_stats))
         .layer(axum::middleware::from_fn(auth_middleware))
     // .route("/chat/completions/:completion_id", get(get_chat_completion))
     // .route("/chat/completions/:completion_id", post(update_chat_completion))
@@ -236,7 +238,7 @@ async fn list_chat_completions() -> Json<Vec<ChatCompletion>> {
 }
 
 async fn create_chat_completion(
-    State(secret_key): State<Arc<String>>,
+    State(app_state): State<AppState>,
     Json(request): Json<serde_json::Value>,
 ) -> Response {
     // Modify the request to prepend any prompt as a system message
@@ -249,14 +251,14 @@ async fn create_chat_completion(
 
     // Check if this is a streaming request
     if stream {
-        handle_streaming_chat_completion(modified_request, None, secret_key).await
+        handle_streaming_chat_completion(modified_request, None, app_state).await
     } else {
-        handle_non_streaming_chat_completion(modified_request, None, secret_key).await
+        handle_non_streaming_chat_completion(modified_request, None, app_state).await
     }
 }
 
 async fn handle_forwarded_chat_completion(
-    State(secret_key): State<Arc<String>>,
+    State(app_state): State<AppState>,
     Json(request): Json<ForwardedChatCompletionRequest>,
 ) -> Response {
     // Extract the original request from the forwarded request
@@ -272,9 +274,9 @@ async fn handle_forwarded_chat_completion(
         .unwrap_or(true);
 
     if is_streaming {
-        handle_streaming_chat_completion(modified_request, request.forwarded_from, secret_key).await
+        handle_streaming_chat_completion(modified_request, request.forwarded_from, app_state).await
     } else {
-        handle_non_streaming_chat_completion(modified_request, request.forwarded_from, secret_key)
+        handle_non_streaming_chat_completion(modified_request, request.forwarded_from, app_state)
             .await
     }
 }
@@ -282,7 +284,7 @@ async fn handle_forwarded_chat_completion(
 async fn handle_streaming_chat_completion(
     request: serde_json::Value,
     forwarded_from: Option<String>,
-    secret_key: Arc<String>,
+    app_state: AppState,
 ) -> Response {
     // Extract the model ID from the request
     let model_id = request
@@ -290,6 +292,32 @@ async fn handle_streaming_chat_completion(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+
+    // Check cache first
+    if let Some(cached_entry) = app_state.cache.get_cached_response(&request) {
+        if cached_entry.is_streaming {
+            // Return cached streaming response
+            let completion_id = format!("chatcmpl_{}", Uuid::new_v4().simple());
+            match cached_streaming_to_events(&cached_entry, &completion_id) {
+                Ok(events) => {
+                    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, std::io::Error>>(100);
+
+                    // Send cached events
+                    tokio::spawn(async move {
+                        for event in events {
+                            let _ = tx.send(Ok(event)).await;
+                        }
+                    });
+
+                    return Sse::new(ReceiverStream::new(rx)).into_response();
+                }
+                Err(e) => {
+                    eprintln!("Error converting cached streaming response: {}", e);
+                    // Fall through to normal processing
+                }
+            }
+        }
+    }
 
     // Call form-state to get the node for this model
     match CLIENT
@@ -357,7 +385,7 @@ async fn handle_streaming_chat_completion(
                         return forward_streaming_request_to_node(
                             request,
                             &node_address,
-                            secret_key,
+                            app_state,
                         )
                         .await;
                     }
@@ -399,6 +427,11 @@ async fn handle_streaming_chat_completion(
 
                             let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, std::io::Error>>(100);
 
+                            // Collect chunks for caching
+                            let mut cached_chunks = Vec::new();
+                            let cache = app_state.cache.clone();
+                            let request_for_cache = request.clone();
+
                             // Spawn task to handle streaming from model
                             tokio::spawn(async move {
                                 // Stream the response from the model
@@ -419,8 +452,14 @@ async fn handle_streaming_chat_completion(
                                                                 // Check if this is already a proper chat completion chunk
                                                                 if model_data.get("choices").is_some() && model_data.get("object").is_some() {
                                                                     // Model returned a proper chat completion chunk, forward it directly
-                                                                    let event = Event::default().json_data(model_data).unwrap();
+                                                                    let event = Event::default().json_data(model_data.clone()).unwrap();
                                                                     let _ = tx.send(Ok(event)).await;
+
+                                                                    // Cache this chunk
+                                                                    cached_chunks.push(StreamingChunk {
+                                                                        data: serde_json::to_string(&model_data).unwrap_or_default(),
+                                                                        is_final: false,
+                                                                    });
                                                                 } else {
                                                                     // Model returned a different format, try to convert it
                                                                     if let Some(text) = model_data.get("text").and_then(|t| t.as_str()) {
@@ -441,8 +480,14 @@ async fn handle_streaming_chat_completion(
                                                                             object: "chat.completion.chunk".to_string(),
                                                                         };
 
-                                                                        let event = Event::default().json_data(content_event).unwrap();
+                                                                        let event = Event::default().json_data(content_event.clone()).unwrap();
                                                                         let _ = tx.send(Ok(event)).await;
+
+                                                                        // Cache this chunk
+                                                                        cached_chunks.push(StreamingChunk {
+                                                                            data: serde_json::to_string(&content_event).unwrap_or_default(),
+                                                                            is_final: false,
+                                                                        });
                                                                     }
                                                                 }
                                                             }
@@ -465,8 +510,23 @@ async fn handle_streaming_chat_completion(
                                                                 object: "chat.completion.chunk".to_string(),
                                                             };
 
-                                                            let event = Event::default().json_data(final_event).unwrap();
+                                                            let event = Event::default().json_data(final_event.clone()).unwrap();
                                                             let _ = tx.send(Ok(event)).await;
+
+                                                            // Cache final chunk
+                                                            cached_chunks.push(StreamingChunk {
+                                                                data: serde_json::to_string(&final_event).unwrap_or_default(),
+                                                                is_final: true,
+                                                            });
+
+                                                            // Store the complete response in cache (5 minutes TTL)
+                                                            let _ = cache.store_streaming_response(
+                                                                &request_for_cache,
+                                                                &model_id,
+                                                                cached_chunks.clone(),
+                                                                5, // 5 minutes TTL
+                                                            ).await;
+
                                                             break;
                                                         }
                                                     }
@@ -518,7 +578,7 @@ async fn handle_streaming_chat_completion(
 async fn handle_non_streaming_chat_completion(
     request: serde_json::Value,
     forwarded_from: Option<String>,
-    secret_key: Arc<String>,
+    app_state: AppState,
 ) -> Response {
     // Extract the model ID from the request
     let model_id = request
@@ -526,6 +586,22 @@ async fn handle_non_streaming_chat_completion(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+
+    // Check cache first
+    if let Some(cached_entry) = app_state.cache.get_cached_response(&request) {
+        if !cached_entry.is_streaming {
+            // Return cached non-streaming response
+            match cached_non_streaming_to_json(&cached_entry) {
+                Ok(response) => {
+                    return Json(response).into_response();
+                }
+                Err(e) => {
+                    eprintln!("Error converting cached non-streaming response: {}", e);
+                    // Fall through to normal processing
+                }
+            }
+        }
+    }
 
     // Call form-state to get the node for this model
     match CLIENT
@@ -593,7 +669,7 @@ async fn handle_non_streaming_chat_completion(
                         return forward_streaming_request_to_node(
                             request,
                             &node_address,
-                            secret_key,
+                            app_state,
                         )
                         .await;
                     }
@@ -632,6 +708,14 @@ async fn handle_non_streaming_chat_completion(
                                     if let Some(choices) = model_response.get("choices").and_then(|c| c.as_array()) {
                                         if !choices.is_empty() {
                                             // Model returned a proper chat completion response, pass it through
+                                            // Cache the response (5 minutes TTL)
+                                            let _ = app_state.cache.store_non_streaming_response(
+                                                &request,
+                                                &model_id,
+                                                model_response.clone(),
+                                                5, // 5 minutes TTL
+                                            ).await;
+
                                             Json(model_response).into_response()
                                         } else {
                                             // No choices in response
@@ -648,15 +732,15 @@ async fn handle_non_streaming_chat_completion(
                                         // Try to extract text from the response and create a proper format
                                         if let Some(text) = model_response.get("text").and_then(|t| t.as_str()) {
                                             let completion_id = format!("chatcmpl_{}", Uuid::new_v4().simple());
-                                            let created = std::time::SystemTime::now()
+                                            let _created = std::time::SystemTime::now()
                                                 .duration_since(std::time::UNIX_EPOCH)
                                                 .unwrap()
                                                 .as_secs();
 
                                             // Create a proper non-streaming chat completion response
                                             let completion = ChatCompletion {
-                                                id: completion_id,
-                                                model: model_id,
+                                                id: completion_id.clone(),
+                                                model: model_id.clone(),
                                                 choices: vec![
                                                     ChatChoice {
                                                         index: 0,
@@ -667,6 +751,15 @@ async fn handle_non_streaming_chat_completion(
                                                     }
                                                 ],
                                             };
+
+                                            // Cache the response (5 minutes TTL)
+                                            let completion_json = serde_json::to_value(&completion).unwrap_or_default();
+                                            let _ = app_state.cache.store_non_streaming_response(
+                                                &request,
+                                                &model_id,
+                                                completion_json.clone(),
+                                                5, // 5 minutes TTL
+                                            ).await;
 
                                             Json(completion).into_response()
                                         } else {
@@ -721,7 +814,7 @@ async fn handle_non_streaming_chat_completion(
 async fn forward_streaming_request_to_node(
     request: serde_json::Value,
     target_node: &str,
-    secret_key: Arc<String>,
+    app_state: AppState,
 ) -> Response {
     let current_node_ip = get_current_node_ip().await;
 
@@ -739,7 +832,7 @@ async fn forward_streaming_request_to_node(
     let auth_header = match create_forwarded_request_signature_for_node(
         &forwarded_request,
         target_node,
-        secret_key.as_str(),
+        app_state.secret_key.as_str(),
     ) {
         Ok(header) => header,
         Err(e) => {
@@ -870,4 +963,19 @@ fn create_forwarded_request_signature_for_node(
 
     // Sign the message
     create_forwarded_request_signature(secret_key, &message)
+}
+
+/// Get cache statistics
+async fn get_cache_stats(State(app_state): State<AppState>) -> Json<serde_json::Value> {
+    let stats = app_state.cache.get_stats();
+    Json(serde_json::json!({
+        "total_entries": stats.total_entries,
+        "active_entries": stats.active_entries,
+        "expired_entries": stats.expired_entries,
+        "cache_hit_rate": if stats.total_entries > 0 {
+            (stats.active_entries as f64 / stats.total_entries as f64) * 100.0
+        } else {
+            0.0
+        }
+    }))
 }
