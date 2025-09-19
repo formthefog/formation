@@ -156,6 +156,12 @@ impl InferenceCache {
         self.entries.contains_key(&cache_key)
     }
 
+    /// Remove a cache entry for a given request (useful for invalidating corrupted entries)
+    pub fn invalidate_entry(&self, request: &serde_json::Value) {
+        let cache_key = self.generate_cache_key(request);
+        self.entries.remove(&cache_key);
+    }
+
     /// Start the background cleanup task
     fn start_cleanup_task(&self) {
         let entries = self.entries.clone();

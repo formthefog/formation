@@ -122,26 +122,44 @@ async fn create_image_generation(
     // Convert to serde_json::Value for caching and forwarding
     let request_json = serde_json::to_value(&request).unwrap_or_default();
 
+    // Debug: Log the request
+    println!("Request: {:?}", request_json);
+
     // Check cache first
     if let Some(cached_entry) = app_state.cache.get_cached_response(&request_json) {
+        println!("Cache hit - entry.is_streaming: {}, entry.id: {}", cached_entry.is_streaming, cached_entry.id);
         if !cached_entry.is_streaming {
             match cached_non_streaming_to_json(&cached_entry) {
                 Ok(response) => {
-                    return Json(response).into_response();
+                    println!("Successfully converted cached response, returning. Response size: {} bytes",
+                        serde_json::to_string(&response).map(|s| s.len()).unwrap_or(0));
+
+                    // Validate the response has the expected structure
+                    if response.is_object() {
+                        println!("Cached response validated, returning to client");
+                        return Json(response).into_response();
+                    } else {
+                        eprintln!("Cached response is not a valid JSON object, invalidating cache entry");
+                        // Remove invalid cache entry and fall through
+                        app_state.cache.invalidate_entry(&request_json);
+                    }
                 }
                 Err(e) => {
                     eprintln!("Error converting cached image response: {}", e);
-                    // Fall through to normal processing
+                    eprintln!("Cached entry data type: {:?}", std::mem::discriminant(&cached_entry.response_data));
+                    // Remove corrupted cache entry and fall through
+                    app_state.cache.invalidate_entry(&request_json);
                 }
             }
+        } else {
+            println!("Cached entry is streaming, falling through to normal processing");
         }
+    } else {
+        println!("Cache miss");
     }
+    let model_id = "stablediffusion";
 
-    // For image generation, we need to determine which model to use
-    // This is a simplified approach - in practice, you'd want to query form-state
-    // for models that support image generation
-    let model_id = "stable-diffusion-xl"; // Placeholder model ID
-
+    println!("Cache check complete, proceeding to handle_image_generation");
     handle_image_generation(request_json, None, app_state, model_id).await
 }
 
@@ -328,13 +346,15 @@ async fn handle_image_generation(
 
                             match inference_response.json::<serde_json::Value>().await {
                                 Ok(model_response) => {
+                                    println!("Successfully received model response, caching and returning");
                                     // Cache the response (5 minutes TTL)
-                                    let _ = app_state.cache.store_non_streaming_response(
+                                    let cache_id = app_state.cache.store_non_streaming_response(
                                         &request,
                                         model_id,
                                         model_response.clone(),
                                         5, // 5 minutes TTL
                                     ).await;
+                                    println!("Response cached with ID: {}", cache_id);
 
                                     Json(model_response).into_response()
                                 }
