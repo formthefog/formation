@@ -11,7 +11,6 @@ use serde_json;
 
 use crate::auth::auth_middleware;
 use crate::AppState;
-use crate::cache::cached_non_streaming_to_json;
 
 // Image generation request types
 #[derive(Debug, Serialize, Deserialize)]
@@ -119,30 +118,15 @@ async fn create_image_generation(
     State(app_state): State<AppState>,
     Json(request): Json<ImageGenerationRequest>,
 ) -> Response {
-    // Convert to serde_json::Value for caching and forwarding
+    // Convert to serde_json::Value for forwarding
     let request_json = serde_json::to_value(&request).unwrap_or_default();
 
     // Debug: Log the request
     println!("Request: {:?}", request_json);
 
-    // TEMPORARY: Disable cache to test if the issue is cache-specific
-    // Check cache first
-    if let Some(cached_entry) = app_state.cache.get_cached_response(&request_json) {
-        println!("Cache hit - entry.is_streaming: {}, entry.id: {}", cached_entry.is_streaming, cached_entry.id);
-        println!("TEMPORARILY BYPASSING CACHE - removing cache entry and proceeding with fresh request");
-        app_state.cache.invalidate_entry(&request_json);
-        // Fall through to normal processing
-    } else {
-        println!("Cache miss");
-    }
-
-    // COMMENTED OUT CACHE HANDLING FOR DEBUGGING
-    /*
-    Original cache handling code commented out for debugging
-    */
     let model_id = "stablediffusion";
 
-    println!("Cache check complete, proceeding to handle_image_generation");
+    println!("Proceeding directly to handle_image_generation (caching disabled)");
     handle_image_generation(request_json, None, app_state, model_id).await
 }
 
@@ -152,20 +136,6 @@ async fn create_image_edit(
     Json(request): Json<ImageEditRequest>,
 ) -> Response {
     let request_json = serde_json::to_value(&request).unwrap_or_default();
-
-    // Check cache first
-    if let Some(cached_entry) = app_state.cache.get_cached_response(&request_json) {
-        if !cached_entry.is_streaming {
-            match cached_non_streaming_to_json(&cached_entry) {
-                Ok(response) => {
-                    return Json(response).into_response();
-                }
-                Err(e) => {
-                    eprintln!("Error converting cached image edit response: {}", e);
-                }
-            }
-        }
-    }
 
     let model_id = "stable-diffusion-xl"; // Placeholder model ID
     handle_image_edit(request_json, None, app_state, model_id).await
@@ -177,20 +147,6 @@ async fn create_image_variations(
     Json(request): Json<ImageVariationsRequest>,
 ) -> Response {
     let request_json = serde_json::to_value(&request).unwrap_or_default();
-
-    // Check cache first
-    if let Some(cached_entry) = app_state.cache.get_cached_response(&request_json) {
-        if !cached_entry.is_streaming {
-            match cached_non_streaming_to_json(&cached_entry) {
-                Ok(response) => {
-                    return Json(response).into_response();
-                }
-                Err(e) => {
-                    eprintln!("Error converting cached image variations response: {}", e);
-                }
-            }
-        }
-    }
 
     let model_id = "stable-diffusion-xl"; // Placeholder model ID
     handle_image_variations(request_json, None, app_state, model_id).await
@@ -329,31 +285,12 @@ async fn handle_image_generation(
 
                             match inference_response.json::<serde_json::Value>().await {
                                 Ok(model_response) => {
-                                    println!("Successfully received model response, caching and returning");
-                                    // Cache the response (5 minutes TTL)
-                                    let cache_id = app_state.cache.store_non_streaming_response(
-                                        &request,
-                                        model_id,
-                                        model_response.clone(),
-                                        5, // 5 minutes TTL
-                                    ).await;
-                                    println!("Response cached with ID: {}", cache_id);
-                                    println!("Fresh response size: {} bytes",
+                                    println!("Successfully received model response, returning without caching");
+                                    println!("Response size: {} bytes",
                                         serde_json::to_string(&model_response).map(|s| s.len()).unwrap_or(0));
-                                    println!("Fresh response keys: {:?}", model_response.as_object().map(|obj| obj.keys().collect::<Vec<_>>()));
+                                    println!("Response keys: {:?}", model_response.as_object().map(|obj| obj.keys().collect::<Vec<_>>()));
 
-                                    let json_response = Json(model_response);
-                                    println!("Fresh JSON response created successfully");
-                                    let mut http_response = json_response.into_response();
-                                    println!("Fresh HTTP response created successfully");
-
-                                    // Ensure proper content-type header
-                                    http_response.headers_mut().insert(
-                                        axum::http::header::CONTENT_TYPE,
-                                        axum::http::HeaderValue::from_static("application/json")
-                                    );
-                                    println!("Fresh response Content-Type header set, returning");
-                                    http_response
+                                    Json(model_response).into_response()
                                 }
                                 Err(e) => (
                                     axum::http::StatusCode::INTERNAL_SERVER_ERROR,
@@ -497,12 +434,6 @@ async fn handle_image_edit(
 
                             match inference_response.json::<serde_json::Value>().await {
                                 Ok(model_response) => {
-                                    let _ = app_state.cache.store_non_streaming_response(
-                                        &request,
-                                        model_id,
-                                        model_response.clone(),
-                                        5,
-                                    ).await;
 
                                     Json(model_response).into_response()
                                 }
@@ -648,12 +579,6 @@ async fn handle_image_variations(
 
                             match inference_response.json::<serde_json::Value>().await {
                                 Ok(model_response) => {
-                                    let _ = app_state.cache.store_non_streaming_response(
-                                        &request,
-                                        model_id,
-                                        model_response.clone(),
-                                        5,
-                                    ).await;
 
                                     Json(model_response).into_response()
                                 }
