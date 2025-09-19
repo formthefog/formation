@@ -125,69 +125,21 @@ async fn create_image_generation(
     // Debug: Log the request
     println!("Request: {:?}", request_json);
 
+    // TEMPORARY: Disable cache to test if the issue is cache-specific
     // Check cache first
     if let Some(cached_entry) = app_state.cache.get_cached_response(&request_json) {
         println!("Cache hit - entry.is_streaming: {}, entry.id: {}", cached_entry.is_streaming, cached_entry.id);
-        if !cached_entry.is_streaming {
-            match cached_non_streaming_to_json(&cached_entry) {
-                Ok(response) => {
-                    println!("Successfully converted cached response, returning. Response size: {} bytes",
-                        serde_json::to_string(&response).map(|s| s.len()).unwrap_or(0));
-
-                    // Validate the response has the expected structure
-                    if response.is_object() {
-                        println!("Cached response validated, returning to client");
-                        println!("Response keys: {:?}", response.as_object().map(|obj| obj.keys().collect::<Vec<_>>()));
-
-                        // Create the response explicitly to ensure proper HTTP headers
-                        println!("About to serialize cached response to JSON string");
-
-                        // Serialize to string first to avoid potential issues with large JSON objects
-                        match serde_json::to_string(&response) {
-                            Ok(json_string) => {
-                                println!("Successfully serialized cached response to JSON string");
-
-                                // Create response directly from string
-                                let http_response = axum::http::Response::builder()
-                                    .status(axum::http::StatusCode::OK)
-                                    .header(axum::http::header::CONTENT_TYPE, "application/json")
-                                    .body(json_string)
-                                    .unwrap_or_else(|e| {
-                                        eprintln!("Failed to build HTTP response: {}", e);
-                                        axum::http::Response::builder()
-                                            .status(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
-                                            .body("Internal server error".to_string())
-                                            .unwrap()
-                                    });
-
-                                println!("HTTP response built successfully, returning cached response");
-                                return http_response.into_response();
-                            }
-                            Err(e) => {
-                                eprintln!("Failed to serialize cached response to JSON: {}", e);
-                                // Remove corrupted cache entry and fall through
-                                app_state.cache.invalidate_entry(&request_json);
-                            }
-                        }
-                    } else {
-                        eprintln!("Cached response is not a valid JSON object, invalidating cache entry");
-                        // Remove invalid cache entry and fall through
-                        app_state.cache.invalidate_entry(&request_json);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Error converting cached image response: {}", e);
-                    eprintln!("Cached entry data type: {:?}", std::mem::discriminant(&cached_entry.response_data));
-                    // Remove corrupted cache entry and fall through
-                    app_state.cache.invalidate_entry(&request_json);
-                }
-            }
-        } else {
-            println!("Cached entry is streaming, falling through to normal processing");
-        }
+        println!("TEMPORARILY BYPASSING CACHE - removing cache entry and proceeding with fresh request");
+        app_state.cache.invalidate_entry(&request_json);
+        // Fall through to normal processing
     } else {
         println!("Cache miss");
     }
+
+    // COMMENTED OUT CACHE HANDLING FOR DEBUGGING
+    /*
+    Original cache handling code commented out for debugging
+    */
     let model_id = "stablediffusion";
 
     println!("Cache check complete, proceeding to handle_image_generation");
