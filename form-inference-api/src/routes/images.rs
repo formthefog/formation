@@ -137,7 +137,38 @@ async fn create_image_generation(
                     // Validate the response has the expected structure
                     if response.is_object() {
                         println!("Cached response validated, returning to client");
-                        return Json(response).into_response();
+                        println!("Response keys: {:?}", response.as_object().map(|obj| obj.keys().collect::<Vec<_>>()));
+
+                        // Create the response explicitly to ensure proper HTTP headers
+                        println!("About to serialize cached response to JSON string");
+
+                        // Serialize to string first to avoid potential issues with large JSON objects
+                        match serde_json::to_string(&response) {
+                            Ok(json_string) => {
+                                println!("Successfully serialized cached response to JSON string");
+
+                                // Create response directly from string
+                                let http_response = axum::http::Response::builder()
+                                    .status(axum::http::StatusCode::OK)
+                                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                                    .body(json_string)
+                                    .unwrap_or_else(|e| {
+                                        eprintln!("Failed to build HTTP response: {}", e);
+                                        axum::http::Response::builder()
+                                            .status(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
+                                            .body("Internal server error".to_string())
+                                            .unwrap()
+                                    });
+
+                                println!("HTTP response built successfully, returning cached response");
+                                return http_response.into_response();
+                            }
+                            Err(e) => {
+                                eprintln!("Failed to serialize cached response to JSON: {}", e);
+                                // Remove corrupted cache entry and fall through
+                                app_state.cache.invalidate_entry(&request_json);
+                            }
+                        }
                     } else {
                         eprintln!("Cached response is not a valid JSON object, invalidating cache entry");
                         // Remove invalid cache entry and fall through
@@ -355,8 +386,22 @@ async fn handle_image_generation(
                                         5, // 5 minutes TTL
                                     ).await;
                                     println!("Response cached with ID: {}", cache_id);
+                                    println!("Fresh response size: {} bytes",
+                                        serde_json::to_string(&model_response).map(|s| s.len()).unwrap_or(0));
+                                    println!("Fresh response keys: {:?}", model_response.as_object().map(|obj| obj.keys().collect::<Vec<_>>()));
 
-                                    Json(model_response).into_response()
+                                    let json_response = Json(model_response);
+                                    println!("Fresh JSON response created successfully");
+                                    let mut http_response = json_response.into_response();
+                                    println!("Fresh HTTP response created successfully");
+
+                                    // Ensure proper content-type header
+                                    http_response.headers_mut().insert(
+                                        axum::http::header::CONTENT_TYPE,
+                                        axum::http::HeaderValue::from_static("application/json")
+                                    );
+                                    println!("Fresh response Content-Type header set, returning");
+                                    http_response
                                 }
                                 Err(e) => (
                                     axum::http::StatusCode::INTERNAL_SERVER_ERROR,
