@@ -285,11 +285,6 @@ async fn handle_image_generation(
 
                             match inference_response.json::<serde_json::Value>().await {
                                 Ok(model_response) => {
-                                    println!("Successfully received model response, returning without caching");
-                                    println!("Response size: {} bytes",
-                                        serde_json::to_string(&model_response).map(|s| s.len()).unwrap_or(0));
-                                    println!("Response keys: {:?}", model_response.as_object().map(|obj| obj.keys().collect::<Vec<_>>()));
-
                                     Json(model_response).into_response()
                                 }
                                 Err(e) => (
@@ -579,7 +574,6 @@ async fn handle_image_variations(
 
                             match inference_response.json::<serde_json::Value>().await {
                                 Ok(model_response) => {
-
                                     Json(model_response).into_response()
                                 }
                                 Err(e) => (
